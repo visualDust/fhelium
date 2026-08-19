@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "project": "fhelium",
+  "platform": "manylinux_2_28_x86_64",
+  "python_abis": [
+    "cp312-cp312",
+    "cp313-cp313"
+  ],
+  "scikit_build_core_version": "1.0.3",
+  "jsonschema_version": "4.26.0",
+  "builder_image": "quay.io/pypa/manylinux_2_28_x86_64@sha256:f854c50adf7b7a325bc4794316f3758d387a41d61f9e2ebca0f26c7dc8f761d4",
+  "builder_dockerfile_by_environment": {
+    "cpu": "packaging/manylinux_2_28.Dockerfile",
+    "cuda-12.9": "packaging/manylinux_2_28_cuda12_9.Dockerfile",
+    "cuda-13.0": "packaging/manylinux_2_28_cuda13.Dockerfile"
+  },
+  "configurations": [
+    {
+      "id": "torch213-cu130",
+      "role": "current-cuda",
+      "torch_requirement": "torch==2.13.0+cu130",
+      "torch_index_url": "https://download.pytorch.org/whl/cu130",
+      "torch_runtime_version": "2.13.0+cu130",
+      "torch_cuda_version": "13.0",
+      "torch_cxx11_abi": true,
+      "native_backends": [
+        "cpu",
+        "cuda"
+      ],
+      "toolkit_version": "13.0.3",
+      "toolkit_rpms": [
+        "cuda-compiler-13-0-13.0.3-1",
+        "cuda-cudart-devel-13-0-13.0.88-1"
+      ],
+      "cuda_architectures": [
+        "80",
+        "86",
+        "89",
+        "90",
+        "100",
+        "120"
+      ],
+      "expected_cuda_runtime_soname": "libcudart.so.13"
+    },
+    {
+      "id": "torch212-cu129",
+      "role": "previous-cuda",
+      "torch_requirement": "torch==2.12.1+cu129",
+      "torch_index_url": "https://download.pytorch.org/whl/cu129",
+      "torch_runtime_version": "2.12.1+cu129",
+      "torch_cuda_version": "12.9",
+      "torch_cxx11_abi": true,
+      "native_backends": [
+        "cpu",
+        "cuda"
+      ],
+      "toolkit_version": "12.9.1",
+      "toolkit_rpms": [
+        "cuda-compiler-12-9-12.9.1-1",
+        "cuda-cudart-devel-12-9-12.9.79-1"
+      ],
+      "cuda_architectures": [
+        "80",
+        "86",
+        "89",
+        "90",
+        "100",
+        "120"
+      ],
+      "expected_cuda_runtime_soname": "libcudart.so.12"
+    },
+    {
+      "id": "torch213-cpu",
+      "role": "current-cpu",
+      "torch_requirement": "torch==2.13.0+cpu",
+      "torch_index_url": "https://download.pytorch.org/whl/cpu",
+      "torch_runtime_version": "2.13.0+cpu",
+      "torch_cuda_version": null,
+      "torch_cxx11_abi": true,
+      "native_backends": [
+        "cpu"
+      ],
+      "toolkit_version": null,
+      "toolkit_rpms": [],
+      "cuda_architectures": [],
+      "expected_cuda_runtime_soname": null
+    },
+    {
+      "id": "torch212-cpu",
+      "role": "previous-cpu",
+      "torch_requirement": "torch==2.12.1+cpu",
+      "torch_index_url": "https://download.pytorch.org/whl/cpu",
+      "torch_runtime_version": "2.12.1+cpu",
+      "torch_cuda_version": null,
+      "torch_cxx11_abi": true,
+      "native_backends": [
+        "cpu"
+      ],
+      "toolkit_version": null,
+      "toolkit_rpms": [],
+      "cuda_architectures": [],
+      "expected_cuda_runtime_soname": null
+    }
+  ],
+  "artifact_base_url": "https://download.fhelium.550w.host/artifacts",
+  "publication": "static-simple-repository",
+  "simple_index_base_url": "https://download.fhelium.550w.host"
+}

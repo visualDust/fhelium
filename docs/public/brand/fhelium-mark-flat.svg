@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">FHElium helium-3 nucleus mark, flat color</title>
+  <desc id="desc">A flat-color fallback for the FHElium helium-3 nucleus mark.</desc>
+  <g transform="rotate(-12.7 128 128)">
+    <circle cx="104" cy="91" r="60" fill="#3152C7" fill-opacity="0.92" />
+    <circle cx="158" cy="127" r="57" fill="#E39A13" fill-opacity="0.90" />
+    <circle cx="103" cy="154" r="60" fill="#3152C7" fill-opacity="0.92" />
+  </g>
+</svg>

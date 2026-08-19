@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 256" role="img" aria-labelledby="title desc">
+  <title id="title">FHElium horizontal lockup, primary light-text</title>
+  <desc id="desc">The FHElium helium-3 nucleus mark followed by the outlined FHElium name.</desc>
+  <defs>
+    <radialGradient id="proton" cx="48%" cy="46%" r="62%">
+      <stop offset="0" stop-color="#E39A13" stop-opacity="0.40" />
+      <stop offset="0.42" stop-color="#6677CF" stop-opacity="0.76" />
+      <stop offset="1" stop-color="#3152C7" stop-opacity="1" />
+    </radialGradient>
+    <radialGradient id="neutron" cx="44%" cy="46%" r="64%">
+      <stop offset="0" stop-color="#3152C7" stop-opacity="0.42" />
+      <stop offset="0.44" stop-color="#B88A5A" stop-opacity="0.78" />
+      <stop offset="1" stop-color="#E39A13" stop-opacity="1" />
+    </radialGradient>
+  </defs>
+  <g transform="translate(16 32) scale(0.75)">
+    <g transform="rotate(-12.7 128 128)">
+      <circle cx="104" cy="91" r="60" fill="url(#proton)" />
+      <circle cx="158" cy="127" r="57" fill="url(#neutron)" />
+      <circle cx="103" cy="154" r="60" fill="url(#proton)" />
+    </g>
+  </g>
+  <g transform="translate(224 184) scale(0.075 -0.075)" fill="#FFFFFF">
+    <path d="M135 0H440V572H1049V821H440V1237H1115V1490H135Z" transform="translate(0 0)" />
+    <path d="M135 0H440V635H1089V0H1395V1490H1089V888H440V1490H135Z" transform="translate(1202 0)" />
+    <path d="M135 0H1134V253H440V628H1080V877H440V1237H1132V1490H135Z" transform="translate(2732 0)" />
+    <path d="M428 1490H128V0H428Z" transform="translate(3976 0)" />
+    <path d="M128 0H428V1118H128ZM278 1264C368 1264 443 1332 443 1418C443 1503 368 1572 278 1572C187 1572 113 1503 113 1418C113 1332 187 1264 278 1264Z" transform="translate(4531 0)" />
+    <path d="M513 -14C683 -14 797 74 860 232L864 0H1148V1118H847V471C847 323 757 237 630 237C504 237 428 320 428 459V1118H128V407C128 145 281 -14 513 -14Z" transform="translate(5086 0)" />
+    <path d="M128 0H428V676C428 810 509 884 615 884C717 884 789 814 789 705V0H1079V688C1079 805 1149 884 1263 884C1364 884 1440 823 1440 697V0H1741V754C1741 997 1589 1135 1384 1135C1230 1135 1088 1056 1025 884C973 1054 880 1135 737 1135C603 1135 478 1064 418 901L406 1118H128Z" transform="translate(6361 0)" />
+  </g>
+</svg>

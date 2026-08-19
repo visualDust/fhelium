@@ -1,0 +1,57 @@
+minimum_pre_commit_version: "4.0.0"
+
+# Published Benchmark v1 reports are content-addressed outputs validated by the
+# versioned publisher. Generic hooks should not parse or rewrite these large
+# immutable files.
+exclude: |
+  (?x)^(
+    third_party/|
+    docs/public/benchmarks/v1/(catalog\.json|runs/sha256-[0-9a-f]{64}\.json)
+  )$
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-ast
+      - id: check-case-conflict
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-toml
+      - id: check-yaml
+      - id: debug-statements
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: fix-byte-order-marker
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: trailing-whitespace
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.22
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright
+        entry: pyright
+        language: system
+        pass_filenames: false
+        files: ^(fhelium|scripts)/.*\.py$
+
+  - repo: https://github.com/cheshirekow/cmake-format-precommit
+    rev: v0.6.13
+    hooks:
+      - id: cmake-format
+
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v22.1.8
+    hooks:
+      - id: clang-format
+        types_or: [c++, c, cuda]

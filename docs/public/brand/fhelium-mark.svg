@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">FHElium helium-3 nucleus mark</title>
+  <desc id="desc">Three overlapping fields abstract the helium-3 nucleus: two protons and one neutron.</desc>
+  <defs>
+    <radialGradient id="proton" cx="48%" cy="46%" r="62%">
+      <stop offset="0" stop-color="#E39A13" stop-opacity="0.40" />
+      <stop offset="0.42" stop-color="#6677CF" stop-opacity="0.76" />
+      <stop offset="1" stop-color="#3152C7" stop-opacity="1" />
+    </radialGradient>
+    <radialGradient id="neutron" cx="44%" cy="46%" r="64%">
+      <stop offset="0" stop-color="#3152C7" stop-opacity="0.42" />
+      <stop offset="0.44" stop-color="#B88A5A" stop-opacity="0.78" />
+      <stop offset="1" stop-color="#E39A13" stop-opacity="1" />
+    </radialGradient>
+  </defs>
+  <g transform="rotate(-12.7 128 128)">
+    <circle cx="104" cy="91" r="60" fill="url(#proton)" />
+    <circle cx="158" cy="127" r="57" fill="url(#neutron)" />
+    <circle cx="103" cy="154" r="60" fill="url(#proton)" />
+  </g>
+</svg>

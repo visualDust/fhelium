@@ -1,0 +1,15 @@
+.git
+.gitignore
+.venv
+build
+dist
+release-output
+docs/.vitepress/cache
+docs/.vitepress/dist
+docs/node_modules
+experiments
+node_modules
+third_party/triton-csprng
+**/__pycache__
+**/*.pyc
+**/*.so

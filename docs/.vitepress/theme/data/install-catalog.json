@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "fhelium_version": "0.10.0",
+  "torch_distributions": [
+    {
+      "os": "linux-x86_64",
+      "torch": "2.13",
+      "compute": "cuda-130",
+      "requirement": "torch==2.13.0+cu130",
+      "index_url": "https://download.pytorch.org/whl/cu130"
+    },
+    {
+      "os": "linux-x86_64",
+      "torch": "2.12",
+      "compute": "cuda-129",
+      "requirement": "torch==2.12.1+cu129",
+      "index_url": "https://download.pytorch.org/whl/cu129"
+    },
+    {
+      "os": "linux-x86_64",
+      "torch": "2.13",
+      "compute": "cpu",
+      "requirement": "torch==2.13.0+cpu",
+      "index_url": "https://download.pytorch.org/whl/cpu"
+    },
+    {
+      "os": "macos-arm64",
+      "torch": "2.13",
+      "compute": "cpu",
+      "requirement": "torch==2.13.0",
+      "index_url": "https://download.pytorch.org/whl/cpu"
+    },
+    {
+      "os": "linux-x86_64",
+      "torch": "2.12",
+      "compute": "cpu",
+      "requirement": "torch==2.12.1+cpu",
+      "index_url": "https://download.pytorch.org/whl/cpu"
+    },
+    {
+      "os": "macos-arm64",
+      "torch": "2.12",
+      "compute": "cpu",
+      "requirement": "torch==2.12.1",
+      "index_url": "https://download.pytorch.org/whl/cpu"
+    }
+  ],
+  "binary_recipes": [
+    {
+      "os": "linux-x86_64",
+      "method": "prebuilt-pip",
+      "torch": "2.13",
+      "compute": "cuda-130",
+      "configuration": "torch213-cu130",
+      "fhelium_version": "0.10.0",
+      "simple_index_url": "https://download.fhelium.550w.host/torch213-cu130/simple/",
+      "published": false
+    },
+    {
+      "os": "linux-x86_64",
+      "method": "prebuilt-pip",
+      "torch": "2.12",
+      "compute": "cuda-129",
+      "configuration": "torch212-cu129",
+      "fhelium_version": "0.10.0",
+      "simple_index_url": "https://download.fhelium.550w.host/torch212-cu129/simple/",
+      "published": false
+    },
+    {
+      "os": "linux-x86_64",
+      "method": "prebuilt-pip",
+      "torch": "2.13",
+      "compute": "cpu",
+      "configuration": "torch213-cpu",
+      "fhelium_version": "0.10.0",
+      "simple_index_url": "https://download.fhelium.550w.host/torch213-cpu/simple/",
+      "published": false
+    },
+    {
+      "os": "linux-x86_64",
+      "method": "prebuilt-pip",
+      "torch": "2.12",
+      "compute": "cpu",
+      "configuration": "torch212-cpu",
+      "fhelium_version": "0.10.0",
+      "simple_index_url": "https://download.fhelium.550w.host/torch212-cpu/simple/",
+      "published": false
+    }
+  ],
+  "source_profiles": [
+    {
+      "os": "linux-x86_64",
+      "method": "source-pip",
+      "native_backend_by_compute": {
+        "cpu": "CPU",
+        "cuda": "CPU+CUDA"
+      }
+    },
+    {
+      "os": "macos-arm64",
+      "method": "source-pip",
+      "native_backend_by_compute": {
+        "cpu": "CPU"
+      }
+    },
+    {
+      "os": "linux-x86_64",
+      "method": "source-github",
+      "native_backend_by_compute": {
+        "cpu": "CPU",
+        "cuda": "CPU+CUDA"
+      }
+    },
+    {
+      "os": "macos-arm64",
+      "method": "source-github",
+      "native_backend_by_compute": {
+        "cpu": "CPU"
+      }
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="610" viewBox="0 0 1100 610" role="img" aria-labelledby="title desc">
+<title id="title">Example NTT backend recommendation on an NVIDIA RTX PRO 6000 Blackwell GPU</title>
+<desc id="desc">Two horizontal bar charts compare normalized latency gaps for kernel and CKKS primitive suites. Kernel group8 and radix16 are nearly tied. CKKS group16, radix16, and group8 are all within the three-percent near-tie band, so the stable group8 fallback is retained.</desc>
+<style>
+  .bg { fill:#ffffff; } .panel { fill:#f7faf9; stroke:#d8e2df; }
+  .title { fill:#14211f; font:700 25px system-ui,sans-serif; }
+  .subtitle { fill:#52615e; font:15px system-ui,sans-serif; }
+  .ptitle { fill:#14211f; font:700 19px system-ui,sans-serif; }
+  .label { fill:#253431; font:15px ui-monospace,SFMono-Regular,monospace; }
+  .value { fill:#253431; font:13px ui-monospace,SFMono-Regular,monospace; }
+  .axis { fill:#60706d; font:12px system-ui,sans-serif; }
+  .grid { stroke:#d7e1df; stroke-width:1; } .threshold { stroke:#d97706; stroke-width:2; stroke-dasharray:6 5; }
+  .note { fill:#8a4b04; font:600 13px system-ui,sans-serif; }
+  .decision { fill:#14211f; font:600 15px system-ui,sans-serif; }
+  @media (prefers-color-scheme: dark) {
+    .bg { fill:#161918; } .panel { fill:#1e2422; stroke:#394440; }
+    .title,.ptitle,.decision { fill:#edf5f2; } .subtitle,.axis { fill:#aab8b4; }
+    .label,.value { fill:#d5e1de; } .grid { stroke:#3a4642; } .note { fill:#f0ad4e; }
+  }
+</style>
+<rect class="bg" width="100%" height="100%" rx="14"/>
+<text class="title" x="55" y="48">What a recommendation can look like</text>
+<text class="subtitle" x="55" y="75">RTX PRO 6000 Blackwell · logN = 16 · scale_bits = 40 · lower gap is better · 3 repetitions × 10 timed runs</text>
+<rect class="panel" x="70" y="102" width="445" height="405" rx="12"/><text class="ptitle" x="92" y="136">Kernel screening suite</text><line class="grid" x1="185.0" y1="165" x2="185.0" y2="398"/><text class="axis" x="185.0" y="418" text-anchor="middle">0%</text><line class="threshold" x1="276.5" y1="165" x2="276.5" y2="398"/><text class="axis" x="276.5" y="418" text-anchor="middle">3%</text><line class="grid" x1="337.5" y1="165" x2="337.5" y2="398"/><text class="axis" x="337.5" y="418" text-anchor="middle">5%</text><line class="grid" x1="490.0" y1="165" x2="490.0" y2="398"/><text class="axis" x="490.0" y="418" text-anchor="middle">10%</text><text class="note" x="282.5" y="157">near-tie threshold</text><text class="label" x="172" y="189" text-anchor="end">group8</text><rect x="185" y="172" width="2.5" height="23" rx="4" fill="#d97706"/><text class="value" x="194.5" y="189">0.00%</text><circle cx="96" cy="183.5" r="4.5" fill="#d97706"/><text class="label" x="172" y="238" text-anchor="end">radix16</text><rect x="185" y="221" width="14.3" height="23" rx="4" fill="#16a394"/><text class="value" x="206.3" y="238">0.47%</text><text class="label" x="172" y="287" text-anchor="end">group16</text><rect x="185" y="270" width="36.6" height="23" rx="4" fill="#7b8b96"/><text class="value" x="228.6" y="287">1.20%</text><text class="label" x="172" y="336" text-anchor="end">group4</text><rect x="185" y="319" width="162.9" height="23" rx="4" fill="#7b8b96"/><text class="value" x="354.9" y="336">5.34%</text><text class="label" x="172" y="385" text-anchor="end">radix4</text><rect x="185" y="368" width="278.2" height="23" rx="4" fill="#7b8b96"/><text class="value" x="470.2" y="385">9.12%</text><rect class="panel" x="585" y="102" width="445" height="405" rx="12"/><text class="ptitle" x="607" y="136">CKKS primitive suite</text><line class="grid" x1="700.0" y1="165" x2="700.0" y2="398"/><text class="axis" x="700.0" y="418" text-anchor="middle">0%</text><line class="threshold" x1="791.5" y1="165" x2="791.5" y2="398"/><text class="axis" x="791.5" y="418" text-anchor="middle">3%</text><line class="grid" x1="852.5" y1="165" x2="852.5" y2="398"/><text class="axis" x="852.5" y="418" text-anchor="middle">5%</text><line class="grid" x1="1005.0" y1="165" x2="1005.0" y2="398"/><text class="axis" x="1005.0" y="418" text-anchor="middle">10%</text><text class="note" x="797.5" y="157">near-tie threshold</text><text class="label" x="687" y="189" text-anchor="end">group16</text><rect x="700" y="172" width="2.5" height="23" rx="4" fill="#007a72"/><text class="value" x="709.5" y="189">0.00%</text><text class="label" x="687" y="238" text-anchor="end">radix16</text><rect x="700" y="221" width="2.5" height="23" rx="4" fill="#16a394"/><text class="value" x="709.5" y="238">0.02%</text><text class="label" x="687" y="287" text-anchor="end">group8</text><rect x="700" y="270" width="61.3" height="23" rx="4" fill="#d97706"/><text class="value" x="768.3" y="287">2.01%</text><circle cx="611" cy="281.5" r="4.5" fill="#d97706"/><text class="label" x="687" y="336" text-anchor="end">group4</text><rect x="700" y="319" width="75.0" height="23" rx="4" fill="#7b8b96"/><text class="value" x="782.0" y="336">2.46%</text><text class="label" x="687" y="385" text-anchor="end">radix4</text><rect x="700" y="368" width="100.0" height="23" rx="4" fill="#7b8b96"/><text class="value" x="807.0" y="385">3.28%</text>
+<rect x="70" y="532" width="960" height="55" rx="10" fill="#007a72" opacity="0.11"/>
+<text class="decision" x="92" y="555">Example decision:</text>
+<text class="subtitle" x="225" y="555">both suites place group8 inside the 3% near-tie set, so retain the stable group8 fallback.</text>
+<text class="subtitle" x="92" y="578">The chart is evidence for this GPU and software stack—not a portable default claim.</text>
+</svg>

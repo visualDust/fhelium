@@ -1,0 +1,450 @@
+name: Release FHElium
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag matching pyproject.toml
+        required: true
+        type: string
+      initialize_repository:
+        description: Establish empty Simple Repository roots
+        required: true
+        default: false
+        type: boolean
+      prerelease:
+        description: Mark the GitHub Release as a pre-release
+        required: true
+        default: false
+        type: boolean
+
+run-name: Release ${{ inputs.tag }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fhelium-release
+  cancel-in-progress: false
+
+env:
+  RELEASE_OUTPUT: ${{ github.workspace }}/release-output
+
+jobs:
+  build-and-prepare:
+    runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      source_commit: ${{ steps.version.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - name: Validate immutable release ref
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          source_commit=$(git rev-parse HEAD)
+          version=$(python packaging/validate_release_ref.py \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$source_commit" \
+            --remote origin)
+          git tag --points-at HEAD | grep -Fx "$RELEASE_TAG"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'source_commit=%s\n' "$source_commit" >> "$GITHUB_OUTPUT"
+          python -m pip install \
+            "jsonschema==4.26.0" \
+            "scikit-build-core==1.0.3"
+          python packaging/release_matrix.py validate
+      - name: Verify source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          configuration_json=$(python packaging/release_matrix.py show torch213-cu130)
+          torch_requirement=$(python -c \
+            'import json,sys; print(json.load(sys.stdin)["torch_requirement"])' \
+            <<<"$configuration_json")
+          torch_index_url=$(python -c \
+            'import json,sys; print(json.load(sys.stdin)["torch_index_url"])' \
+            <<<"$configuration_json")
+          python -m pip install \
+            --index-url "$torch_index_url" \
+            "$torch_requirement"
+          python -m pip install --group dev --no-build-isolation
+          python -m pip install \
+            --editable . \
+            --no-build-isolation \
+            --no-cache-dir \
+            --verbose
+          python -m ruff check fhelium tests examples scripts packaging
+          python -m ruff format --check fhelium tests examples scripts packaging
+          python -m pyright
+          python -m pytest -q
+          npm --prefix docs ci
+          npm --prefix docs run build
+          git diff --check
+      - name: Build release wheels
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RELEASE_OUTPUT"
+          docker build \
+            --file packaging/manylinux_2_28.Dockerfile \
+            --tag fhelium-manylinux-cpu \
+            .
+          docker build \
+            --file packaging/manylinux_2_28_cuda12_9.Dockerfile \
+            --tag fhelium-manylinux-cuda-12.9 \
+            .
+          docker build \
+            --file packaging/manylinux_2_28_cuda13.Dockerfile \
+            --tag fhelium-manylinux-cuda-13.0 \
+            .
+          for configuration in \
+            torch213-cu130 torch212-cu129 torch213-cpu torch212-cpu; do
+            for python_abi in cp312-cp312 cp313-cp313; do
+              python packaging/build_release.py \
+                --configuration "$configuration" \
+                --python-abi "$python_abi" \
+                --output "$RELEASE_OUTPUT" \
+                --smoke
+            done
+          done
+      - name: Execute native CUDA validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          for configuration in torch213-cu130 torch212-cu129; do
+            for python_abi in cp312-cp312 cp313-cp313; do
+              case "$python_abi" in
+                cp312-cp312) python_bin=python3.12 ;;
+                cp313-cp313) python_bin=python3.13 ;;
+              esac
+              wheel=$(find \
+                "$RELEASE_OUTPUT/$configuration/$python_abi/wheelhouse" \
+                -maxdepth 1 -type f -name '*.whl' -print -quit)
+              test -n "$wheel"
+              python packaging/validate_cuda_wheel.py \
+                "$wheel" \
+                --configuration "$configuration" \
+                --python "$python_bin"
+            done
+          done
+      - name: Build source distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install "build==1.5.0" "twine==6.2.0"
+          python -m build --sdist --no-isolation --outdir "$RELEASE_OUTPUT/sdist"
+          python -m twine check "$RELEASE_OUTPUT"/sdist/*
+          rm -rf "$RUNNER_TEMP/sdist-wheel"
+          mkdir -p "$RUNNER_TEMP/sdist-wheel"
+          CMAKE_ARGS='-DFHELIUM_NATIVE_BACKENDS=CPU' \
+            python -m pip wheel \
+              "$RELEASE_OUTPUT"/sdist/fhelium-*.tar.gz \
+              --no-build-isolation \
+              --no-deps \
+              --no-cache-dir \
+              --wheel-dir "$RUNNER_TEMP/sdist-wheel"
+      - name: Prepare static repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          python packaging/prepare_static_index.py \
+            --input "$RELEASE_OUTPUT" \
+            --output "$RELEASE_OUTPUT/prepared-site" \
+            --prepared-at "$(git show -s --format=%cI HEAD)"
+          merge_args=()
+          if [ '${{ inputs.initialize_repository }}' = true ]; then
+            merge_args+=(--allow-missing-repository)
+          fi
+          python packaging/merge_published_indexes.py \
+            "$RELEASE_OUTPUT/prepared-site" "${merge_args[@]}"
+          python packaging/validate_static_index.py \
+            "$RELEASE_OUTPUT/prepared-site" \
+            --source-commit "$(git rev-parse HEAD)"
+      - name: Preserve release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fhelium-${{ inputs.tag }}
+          path: |
+            ${{ env.RELEASE_OUTPUT }}/sdist/*
+            ${{ env.RELEASE_OUTPUT }}/prepared-site/**
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: build-and-prepare
+    runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.build-and-prepare.outputs.source_commit }}
+          fetch-depth: 0
+      - name: Restore release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: fhelium-${{ inputs.tag }}
+          path: ${{ env.RELEASE_OUTPUT }}
+      - name: Install publication clients
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install "awscli==1.46.0" "twine==6.2.0"
+      - name: Validate restored repository
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_COMMIT: ${{ needs.build-and-prepare.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          python packaging/validate_release_ref.py \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --remote origin
+          python packaging/validate_static_index.py \
+            "$RELEASE_OUTPUT/prepared-site" \
+            --source-commit "$(git rev-parse HEAD)"
+          python -m twine check "$RELEASE_OUTPUT"/sdist/*
+      - name: Validate public Simple Repository routing
+        shell: bash
+        env:
+          INITIALIZE_REPOSITORY: ${{ inputs.initialize_repository }}
+        run: |
+          set -euo pipefail
+          if [ "$INITIALIZE_REPOSITORY" = true ]; then
+            python packaging/validate_repository_routing.py \
+              --expect-empty-or-matching \
+              "$RELEASE_OUTPUT/prepared-site"
+          else
+            python packaging/validate_repository_routing.py
+          fi
+      - name: Publish immutable release objects to R2
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          FHELIUM_R2_ENDPOINT_URL: ${{ vars.R2_ENDPOINT_URL }}
+          FHELIUM_R2_BUCKET: ${{ vars.R2_BUCKET }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_COMMIT: ${{ needs.build-and-prepare.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          python packaging/validate_release_ref.py \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --remote origin
+          python packaging/publish_static_index.py \
+            "$RELEASE_OUTPUT/prepared-site" \
+            --phase artifacts
+          python packaging/verify_public_release.py \
+            "$RELEASE_OUTPUT/prepared-site/release-manifest.json"
+      - name: Validate PyPI release identity
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_COMMIT: ${{ needs.build-and-prepare.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          python packaging/validate_release_ref.py \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --remote origin
+          python packaging/verify_pypi_release.py \
+            "$RELEASE_OUTPUT"/sdist/fhelium-*.tar.gz \
+            --allow-missing
+      - name: Publish source distribution to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: release-output/sdist/
+          print-hash: true
+          skip-existing: true
+      - name: Verify PyPI release identity
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_COMMIT: ${{ needs.build-and-prepare.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          python packaging/validate_release_ref.py \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --remote origin
+          python packaging/verify_pypi_release.py \
+            "$RELEASE_OUTPUT"/sdist/fhelium-*.tar.gz \
+            --attempts 24 \
+            --interval 5
+      - name: Publish cumulative Simple Repository indexes
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          FHELIUM_R2_ENDPOINT_URL: ${{ vars.R2_ENDPOINT_URL }}
+          FHELIUM_R2_BUCKET: ${{ vars.R2_BUCKET }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_COMMIT: ${{ needs.build-and-prepare.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          python packaging/validate_release_ref.py \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --remote origin
+          python packaging/publish_static_index.py \
+            "$RELEASE_OUTPUT/prepared-site" \
+            --phase indexes
+      - name: Verify public package indexes
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ needs.build-and-prepare.outputs.version }}'
+          for configuration in \
+            torch213-cu130 torch212-cu129 torch213-cpu torch212-cpu; do
+            configuration_json=$(
+              python packaging/release_matrix.py show "$configuration"
+            )
+            torch_requirement=$(python -c \
+              'import json,sys; print(json.load(sys.stdin)["torch_requirement"])' \
+              <<<"$configuration_json")
+            torch_index_url=$(python -c \
+              'import json,sys; print(json.load(sys.stdin)["torch_index_url"])' \
+              <<<"$configuration_json")
+            expected_backends=$(python -c \
+              'import json,sys; print(",".join(json.load(sys.stdin)["native_backends"]))' \
+              <<<"$configuration_json")
+            expected_torch=$(python -c \
+              'import json,sys; print(json.load(sys.stdin)["torch_runtime_version"])' \
+              <<<"$configuration_json")
+            for python_abi in cp312-cp312 cp313-cp313; do
+              case "$python_abi" in
+                cp312-cp312) python_bin=python3.12 ;;
+                cp313-cp313) python_bin=python3.13 ;;
+              esac
+              environment="$RUNNER_TEMP/public-$configuration-$python_abi"
+              rm -rf "$environment"
+              "$python_bin" -m venv "$environment"
+              "$environment/bin/python" -m pip install \
+                --index-url "$torch_index_url" \
+                "$torch_requirement"
+              for attempt in $(seq 1 24); do
+                if "$environment/bin/python" -m pip install \
+                  --only-binary=fhelium \
+                  --extra-index-url \
+                  "https://download.fhelium.550w.host/$configuration/simple/" \
+                  "fhelium==$version"; then
+                  break
+                fi
+                test "$attempt" -lt 24
+                sleep 10
+              done
+              EXPECTED_BACKENDS="$expected_backends" \
+              EXPECTED_TORCH="$expected_torch" \
+              EXPECTED_VERSION="$version" \
+                "$environment/bin/python" -I - <<'PY'
+          import os
+
+          import torch
+          import fhelium
+          from fhelium.native import native_status
+
+          assert fhelium.__version__ == os.environ["EXPECTED_VERSION"]
+          assert str(torch.__version__) == os.environ["EXPECTED_TORCH"]
+          status = native_status()
+          assert status.available, status
+          assert set(status.backends) == set(
+              os.environ["EXPECTED_BACKENDS"].split(",")
+          ), status
+          lhs = torch.tensor([[[1, 2, 3, 4]]], dtype=torch.int64)
+          parameters = torch.zeros((8, 1), dtype=torch.int64)
+          parameters[0, 0] = 34
+          actual = torch.ops.fhelium_rns_ops.add_canonical(
+              lhs, lhs, parameters
+          )
+          expected = torch.tensor([[[2, 4, 6, 8]]], dtype=torch.int64)
+          assert torch.equal(actual, expected)
+          PY
+            done
+          done
+  publish-github-release:
+    needs: [build-and-prepare, publish]
+    runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.build-and-prepare.outputs.source_commit }}
+          fetch-depth: 0
+      - name: Restore release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: fhelium-${{ inputs.tag }}
+          path: ${{ env.RELEASE_OUTPUT }}
+      - name: Prepare installation-catalog patch
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_COMMIT: ${{ needs.build-and-prepare.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          python packaging/validate_release_ref.py \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --remote origin
+          git switch --detach
+          cp \
+            "$RELEASE_OUTPUT/prepared-site/install-catalog.json" \
+            docs/.vitepress/theme/data/install-catalog.json
+          git config user.name github-actions[bot]
+          git config user.email \
+            41898282+github-actions[bot]@users.noreply.github.com
+          git add docs/.vitepress/theme/data/install-catalog.json
+          git commit -m "docs: publish FHElium $RELEASE_TAG install recipes"
+          git format-patch -1 HEAD \
+            --stdout \
+            > "$RELEASE_OUTPUT/install-catalog.patch"
+          git switch --detach "$SOURCE_COMMIT"
+      - name: Publish GitHub release record
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE_COMMIT: ${{ needs.build-and-prepare.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          python packaging/validate_release_ref.py \
+            --tag "$RELEASE_TAG" \
+            --source-commit "$SOURCE_COMMIT" \
+            --remote origin
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" \
+              "$RELEASE_OUTPUT"/sdist/* \
+              "$RELEASE_OUTPUT/prepared-site/release-manifest.json" \
+              "$RELEASE_OUTPUT/install-catalog.patch" \
+              --clobber
+          else
+            release_flags=()
+            if [ "$PRERELEASE" = true ]; then
+              release_flags+=(--prerelease)
+            fi
+            gh release create "$RELEASE_TAG" \
+              "$RELEASE_OUTPUT"/sdist/* \
+              "$RELEASE_OUTPUT/prepared-site/release-manifest.json" \
+              "$RELEASE_OUTPUT/install-catalog.patch" \
+              --verify-tag \
+              --generate-notes \
+              --title "FHElium $RELEASE_TAG" \
+              "${release_flags[@]}"
+          fi
+          gh release edit "$RELEASE_TAG" \
+            --prerelease="$PRERELEASE"

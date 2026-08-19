@@ -1,0 +1,121 @@
+[project]
+name = "fhelium"
+version = "0.10.0"
+description = "A tensor-native CKKS framework for fully homomorphic encryption on CPU and NVIDIA CUDA with Python and PyTorch."
+authors = [
+    { name = "Gavin Gong", email = "gavin@gong.host" },
+    { name = "PuQing", email = "me@puqing.work" },
+]
+maintainers = [
+    { name = "Gavin Gong", email = "gavin@gong.host" },
+    { name = "PuQing", email = "me@puqing.work" },
+]
+requires-python = ">=3.12,<3.14"
+readme = "README.md"
+license = "MIT"
+keywords = [
+    "ckks",
+    "cryptography",
+    "encrypted computation",
+    "fhe",
+    "fully homomorphic encryption",
+    "homomorphic encryption",
+    "pytorch",
+    "tensor computing",
+    "cpu",
+    "cuda",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C++",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Security :: Cryptography",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dynamic = ["dependencies"]
+[project.urls]
+Homepage = "https://fhelium.550w.host"
+Documentation = "https://fhelium.550w.host"
+Repository = "https://github.com/VisualDust/fhelium"
+Issues = "https://github.com/VisualDust/fhelium/issues"
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+build-dir = "build/{wheel_tag}/{state}"
+cmake.args = ["-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"]
+build.verbose = true
+wheel.install-dir = "fhelium"
+wheel.packages = ["fhelium"]
+sdist.exclude = ["cloudflare/**", "third_party/triton-csprng/**"]
+
+[[tool.dynamic-metadata]]
+provider = { path = "scripts", module = "release_dependencies" }
+field = "dependencies"
+
+[build-system]
+requires = [
+    "scikit-build-core>=1.0.3",
+]
+build-backend = "scikit_build_core.build"
+
+
+[project.scripts]
+fhelium = "fhelium._cli.main:cli"
+
+
+[tool.ruff]
+exclude = ["./build"]
+line-length = 80
+target-version = "py312"
+
+[tool.ruff.format]
+# Prevent change to double quotes by some users use ruff format
+quote-style = "preserve"
+
+[tool.ruff.lint]
+unfixable = ["NPY001"]
+ignore = [
+    # Module level import not at top of file
+    "E402",
+    # Line too long (82 > 79 characters)
+    "E501",
+    # Do not assign a lambda expression, use a def
+    "E731",
+    # Do not use variables named ‘l’, ‘O’, or ‘I’
+    "E741",
+    # `name` may be undefined, or defined from star imports: `module`
+    "F405",
+    # Local variable name is assigned to but never used
+    "F841",
+    # It not met the "Explicit is better than implicit" rule
+    "UP015",
+]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+known-first-party = ["fhelium"]
+
+[tool.pyright]
+include = ["fhelium", "scripts"]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+reportMissingImports = "error"
+reportMissingTypeStubs = "none"
+
+[dependency-groups]
+dev = [
+    "pre-commit==4.5.1",
+    "pyright==1.1.411",
+    "pytest==9.1.1",
+    "ruff==0.15.22",
+]

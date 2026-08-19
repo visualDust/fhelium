@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: >-
+  If you use FHElium in research or software, please cite the software using
+  the metadata in this file.
+title: "FHElium: A Cross-Stack CKKS Research Framework for CPU and CUDA"
+type: software
+abstract: >-
+  FHElium is an open-source, cross-stack CKKS research framework with Python
+  APIs, a typed PyTorch frontend, and native CPU and CUDA execution. It uses
+  dense process-local tensors, typed cryptographic state transitions,
+  inspectable program transformation, runtime resource mechanisms, and
+  programmer-controlled SPMD communication.
+authors:
+  - family-names: Gong
+    given-names: Zhaoting
+    alias: VisualDust
+    email: gavin@gong.host
+  - family-names: Liang
+    given-names: Jiaming
+    email: me@puqing.work
+  - family-names: Ran
+    given-names: Ran
+  - family-names: Wen
+    given-names: Wujie
+version: 0.10.0
+date-released: 2026-08-19
+repository-code: "https://github.com/VisualDust/fhelium"
+url: "https://fhelium.550w.host"
+license: MIT
+keywords:
+  - CKKS
+  - fully homomorphic encryption
+  - CUDA
+  - PyTorch
+  - multi-GPU
+  - privacy-preserving machine learning

@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fhelium-package-index",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-13",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "download.fhelium.550w.host",
+      "custom_domain": true
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FHELIUM_RELEASES",
+      "bucket_name": "fhelium-releases"
+    }
+  ]
+}

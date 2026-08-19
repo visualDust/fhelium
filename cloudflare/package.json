@@ -1,0 +1,14 @@
+{
+  "name": "fhelium-package-index-worker",
+  "private": true,
+  "scripts": {
+    "check": "tsc --noEmit && wrangler deploy --dry-run --outdir dist",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260813.1",
+    "typescript": "5.9.3",
+    "wrangler": "4.123.0"
+  }
+}

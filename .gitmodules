@@ -1,0 +1,3 @@
+[submodule "third_party/triton-csprng"]
+	path = third_party/triton-csprng
+	url = https://github.com/VisualDust/triton-csprng.git

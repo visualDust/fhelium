@@ -1,0 +1,29 @@
+CompileFlags:
+  Compiler: clang++
+  CompilationDatabase: .
+  Add:
+    - -x
+    - cuda
+    - "-std=c++17"
+    - "--cuda-gpu-arch=sm_86"
+  Remove:
+    # strip CUDA fatbin args
+    - "-Xfatbin*"
+    - "-Xcompiler*"
+    - "-Xcudafe*"
+    - "-rdc=*"
+    - "-gpu=*"
+    - "--diag_suppress*"
+    # strip CUDA arch flags
+    - "-gencode*"
+    - "--generate-code*"
+    # strip gcc's -fcoroutines
+    - -fcoroutines
+    # strip CUDA flags unknown to clang
+    - "-rdc=true"
+    - "-ccbin*"
+    - "--compiler-options*"
+    - "--expt-extended-lambda"
+    - "--expt-relaxed-constexpr"
+    - "-forward-unknown-to-host-compiler"
+    - "-Werror=cross-execution-space-call"

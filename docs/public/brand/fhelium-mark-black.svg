@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">FHElium helium-3 nucleus mark, black</title>
+  <desc id="desc">A fixed dark monochrome FHElium helium-3 nucleus mark with three fully opaque, sequentially overlapping fields and continuous white outlines.</desc>
+  <g transform="rotate(-12.7 128 128)" fill="#181B26" stroke="#FFFFFF" stroke-width="5">
+    <circle cx="104" cy="91" r="60" />
+    <circle cx="158" cy="127" r="57" />
+    <circle cx="103" cy="154" r="60" />
+  </g>
+</svg>

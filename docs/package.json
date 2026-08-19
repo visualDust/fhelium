@@ -1,0 +1,23 @@
+{
+  "name": "fhelium-documentation",
+  "private": true,
+  "scripts": {
+    "generate": "python3 ../scripts/generate_api_docs.py",
+    "typecheck": "vue-tsc --noEmit",
+    "dev": "npm run generate && vitepress dev .",
+    "build": "npm run typecheck && npm run generate && vitepress build .",
+    "preview": "vitepress preview ."
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "markdown-it-mathjax3": "4.3.2",
+    "mermaid": "11.16.0",
+    "typescript": "5.9.3",
+    "vitepress": "1.6.4",
+    "vue-tsc": "3.3.7"
+  },
+  "dependencies": {
+    "@vercel/analytics": "2.0.1",
+    "@vercel/speed-insights": "2.0.0"
+  }
+}

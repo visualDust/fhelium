@@ -1,0 +1,22 @@
+{
+    "folders": [
+        {
+            "name": "fhelium",
+            "path": "."
+        },
+        {
+            "name": "benchmarks",
+            "path": "fhelium/benchmarks"
+        },
+        {
+            "name": "experimental",
+            "path": "fhelium/experimental"
+        },
+        {
+            "name": "docs",
+            "path": "docs"
+        }
+    ],
+    "settings": {
+    }
+}

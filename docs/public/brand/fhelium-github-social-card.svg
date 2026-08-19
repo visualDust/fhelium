@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">FHElium GitHub social preview</title>
+  <desc id="desc">FHElium, FHE built from the tensor up, with Python, PyTorch, CPU, and CUDA.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b0d13"/>
+      <stop offset="0.58" stop-color="#111622"/>
+      <stop offset="1" stop-color="#151b2b"/>
+    </linearGradient>
+    <radialGradient id="blue" cx="44%" cy="40%" r="68%">
+      <stop offset="0" stop-color="#f0ad31" stop-opacity="0.36"/>
+      <stop offset="0.38" stop-color="#8295ef" stop-opacity="0.80"/>
+      <stop offset="1" stop-color="#3152c7"/>
+    </radialGradient>
+    <radialGradient id="amber" cx="40%" cy="42%" r="70%">
+      <stop offset="0" stop-color="#667ee6" stop-opacity="0.40"/>
+      <stop offset="0.42" stop-color="#d5a45f" stop-opacity="0.84"/>
+      <stop offset="1" stop-color="#e39a13"/>
+    </radialGradient>
+    <radialGradient id="halo" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#6f88f2" stop-opacity="0.22"/>
+      <stop offset="0.58" stop-color="#3152c7" stop-opacity="0.09"/>
+      <stop offset="1" stop-color="#3152c7" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#cbd4ff" stroke-opacity="0.035" stroke-width="1"/>
+    </pattern>
+    <filter id="shadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#background)"/>
+  <rect width="1280" height="640" fill="url(#grid)"/>
+  <path d="M0 1H1280" stroke="#7588dd" stroke-opacity="0.34" stroke-width="2"/>
+  <path d="M0 639H1280" stroke="#e39a13" stroke-opacity="0.27" stroke-width="2"/>
+
+  <g transform="translate(805 55)">
+    <circle cx="220" cy="255" r="285" fill="url(#halo)"/>
+    <g transform="rotate(-12.7 220 255)">
+      <circle cx="176" cy="188" r="121" fill="#4669e3" opacity="0.22" filter="url(#shadow)"/>
+      <circle cx="282" cy="257" r="115" fill="#e39a13" opacity="0.20" filter="url(#shadow)"/>
+      <circle cx="174" cy="319" r="121" fill="#4669e3" opacity="0.22" filter="url(#shadow)"/>
+      <circle cx="176" cy="188" r="121" fill="url(#blue)"/>
+      <circle cx="282" cy="257" r="115" fill="url(#amber)"/>
+      <circle cx="174" cy="319" r="121" fill="url(#blue)"/>
+    </g>
+  </g>
+
+  <g font-family="Inter, 'Segoe UI', sans-serif">
+    <g transform="translate(80 82)">
+      <circle cx="13" cy="13" r="12" fill="#3152c7"/>
+      <circle cx="24" cy="20" r="11" fill="#e39a13" fill-opacity="0.92"/>
+      <circle cx="13" cy="27" r="12" fill="#6f86e7" fill-opacity="0.92"/>
+      <text x="52" y="30" fill="#f4f6ff" font-size="34" font-weight="700" letter-spacing="-1">FHElium</text>
+    </g>
+
+    <text x="80" y="244" fill="#f4f6ff" font-size="70" font-weight="750" letter-spacing="-3.2">FHE, built from</text>
+    <text x="80" y="323" fill="#f4f6ff" font-size="70" font-weight="750" letter-spacing="-3.2">the tensor up.</text>
+    <rect x="81" y="355" width="72" height="5" rx="2.5" fill="#e39a13"/>
+    <rect x="159" y="355" width="150" height="5" rx="2.5" fill="#526edf"/>
+
+    <text x="82" y="410" fill="#b7c0d7" font-size="25" font-weight="450" letter-spacing="0.1">Tensor-native CKKS for inspectable encrypted execution.</text>
+
+    <g transform="translate(80 509)" fill="none" stroke="#77819a" stroke-opacity="0.62">
+      <rect x="0" y="0" width="116" height="46" rx="23"/>
+      <rect x="130" y="0" width="132" height="46" rx="23"/>
+      <rect x="276" y="0" width="91" height="46" rx="23"/>
+      <rect x="381" y="0" width="107" height="46" rx="23"/>
+    </g>
+    <g fill="#dbe0ee" font-size="18" font-weight="560" text-anchor="middle">
+      <text x="138" y="539">Python</text>
+      <text x="276" y="539">PyTorch</text>
+      <text x="401.5" y="539">CPU</text>
+      <text x="514.5" y="539">CUDA</text>
+    </g>
+    <text x="82" y="601" fill="#77819a" font-size="17" font-weight="500" letter-spacing="0.4">github.com/VisualDust/fhelium</text>
+  </g>
+</svg>

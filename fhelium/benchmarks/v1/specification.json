@@ -1,0 +1,375 @@
+{
+  "benchmark_version": "v1",
+  "title": "FHElium Benchmark v1",
+  "description": "Measures one immutable five-case CKKS specification on either CPU or CUDA: depth-aware public operations, indexed radix-2 NTT operations, fixed 16x16 plaintext/ciphertext and ciphertext/ciphertext matrix products, and affine/degree-four polynomial methods. Every case uses the same parameters on both execution backends; no composite score is defined.",
+  "cases": [
+    {
+      "id": "ckks-depth-aware-single-operations",
+      "title": "Depth-aware CKKS single operations",
+      "category": "Single operations",
+      "benchmark": "ckks-depth-aware-single-operations",
+      "workload_id": "ckks-depth-aware-single-operations",
+      "profile": "core",
+      "parameters": {
+        "preset": "slots8192-scale40-levels7-int64",
+        "logN": 14,
+        "scale_bits": 40,
+        "num_scale_primes": 7,
+        "num_p_primes": 1,
+        "ntt_backend": "radix2_indexed",
+        "levels": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "operations": [
+          "encrypt",
+          "decrypt",
+          "coefficient_domain_to_ntt_domain",
+          "ntt_domain_to_coefficient_domain",
+          "add",
+          "add_plaintext",
+          "multiply_plaintext",
+          "multiply",
+          "relinearize",
+          "rotate_with_key",
+          "rescale_to_next_level",
+          "mod_switch_to_next_level"
+        ],
+        "ciphertext_modulus_basis": "Q",
+        "rotation_step": 1,
+        "rescale_rounding": "nearest",
+        "seed": 20260807,
+        "nonce": 0,
+        "warmup": 1,
+        "runs": 3,
+        "include_raw_samples": true
+      },
+      "requirements": {
+        "native_backends_any": [
+          "cpu",
+          "cuda"
+        ]
+      },
+      "comparison": {
+        "axis": [
+          "operation",
+          "entry_level"
+        ],
+        "portal_highlight": {
+          "label": "CT \u00d7 CT multiply \u00b7 level 0",
+          "operation": "multiply",
+          "entry_level": 0,
+          "metric": "depth-aware-ckks-operation-latency"
+        }
+      },
+      "unavailable_reason": null
+    },
+    {
+      "id": "indexed-ntt-operations",
+      "title": "Indexed radix-2 NTT operations",
+      "category": "NTT operations",
+      "benchmark": "indexed-ntt-operations",
+      "workload_id": "indexed-ntt-operations",
+      "profile": "core",
+      "parameters": {
+        "preset": "slots8192-scale40-levels7-int64",
+        "ntt_backend": "radix2_indexed",
+        "entry_levels": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "modulus_bases": [
+          "Q",
+          "QP"
+        ],
+        "operations": [
+          "forward_ntt",
+          "inverse_ntt",
+          "roundtrip"
+        ],
+        "seed": 20260807,
+        "warmup": 1,
+        "runs": 3,
+        "include_raw_samples": true
+      },
+      "requirements": {
+        "native_backends_any": [
+          "cpu",
+          "cuda"
+        ]
+      },
+      "comparison": {
+        "axis": [
+          "entry_level",
+          "modulus_basis",
+          "operation"
+        ],
+        "portal_highlight": {
+          "label": "Forward NTT \u00b7 level 0 Q",
+          "metric": "indexed-ntt-latency",
+          "entry_level": 0,
+          "modulus_basis": "Q",
+          "operation": "forward_ntt"
+        }
+      },
+      "unavailable_reason": null
+    },
+    {
+      "id": "dense-matmul-ptct",
+      "title": "Plaintext \u00d7 ciphertext dense matrix multiplication",
+      "category": "Matrix multiplication",
+      "benchmark": "dense-matrix-multiplication-ptct",
+      "workload_id": "dense-matrix-multiplication-ptct",
+      "profile": "core",
+      "parameters": {
+        "preset": "slots8192-scale40-levels7-int64",
+        "ntt_backend": "radix2_indexed",
+        "matrix_shape": [
+          16,
+          16
+        ],
+        "input_seed": 20260807,
+        "packing": "cyclic-diagonal-left-periodic-column-right",
+        "column_schedule": "sequential-unbatched",
+        "correctness_atol": 3e-05,
+        "warmup": 0,
+        "runs": 1,
+        "include_raw_samples": true
+      },
+      "requirements": {
+        "native_backends_any": [
+          "cpu",
+          "cuda"
+        ]
+      },
+      "comparison": {
+        "portal_highlight": {
+          "label": "PT \u00d7 CT 16\u00d716",
+          "metric": "dense-matrix-multiplication-latency",
+          "phase": "end-to-end"
+        }
+      },
+      "unavailable_reason": null
+    },
+    {
+      "id": "dense-matmul-ctct",
+      "title": "Ciphertext \u00d7 ciphertext dense matrix multiplication",
+      "category": "Matrix multiplication",
+      "benchmark": "dense-matrix-multiplication-ctct",
+      "workload_id": "dense-matrix-multiplication-ctct",
+      "profile": "core",
+      "parameters": {
+        "preset": "slots8192-scale40-levels7-int64",
+        "ntt_backend": "radix2_indexed",
+        "matrix_shape": [
+          16,
+          16
+        ],
+        "input_seed": 20260807,
+        "packing": "cyclic-diagonal-left-periodic-column-right",
+        "column_schedule": "sequential-unbatched",
+        "correctness_atol": 3e-05,
+        "warmup": 0,
+        "runs": 1,
+        "include_raw_samples": true
+      },
+      "requirements": {
+        "native_backends_any": [
+          "cpu",
+          "cuda"
+        ]
+      },
+      "comparison": {
+        "portal_highlight": {
+          "label": "CT \u00d7 CT 16\u00d716",
+          "metric": "dense-matrix-multiplication-latency",
+          "phase": "end-to-end"
+        }
+      },
+      "unavailable_reason": null
+    },
+    {
+      "id": "polynomial-method-matrix",
+      "title": "Affine and degree-four polynomial methods",
+      "category": "Polynomial evaluation",
+      "benchmark": "polynomial-evaluation",
+      "workload_id": "polynomial-evaluation",
+      "profile": "core",
+      "parameters": {
+        "preset": "slots8192-scale40-levels7-int64",
+        "ntt_backend": "radix2_indexed",
+        "input_range": [
+          -1.0,
+          1.0
+        ],
+        "entry_level": 0,
+        "entry_scale": 1099511627776.0,
+        "rng_seed": 20260807,
+        "rng_nonce": 0,
+        "method_cases": [
+          {
+            "id": "affine-d1-balanced",
+            "polynomial_id": "affine-d1",
+            "basis": "power",
+            "degree": 1,
+            "coefficients_ascending": [
+              0.125,
+              0.75
+            ],
+            "domain": [
+              -1.0,
+              1.0
+            ],
+            "method": "balanced-power",
+            "evaluator": "BalancedPowerEvaluator",
+            "baby_step": null,
+            "entry_level": 0,
+            "required_levels": 1,
+            "predicted_exit_level": 1,
+            "operation_inventory": {
+              "ciphertext_multiplications": 0,
+              "coefficient_multiplications": 1,
+              "alignment_multiplications": 0,
+              "relinearizations": 0,
+              "rescale_operations": 1,
+              "total_multiplications": 1
+            }
+          },
+          {
+            "id": "dense-power-d4-balanced",
+            "polynomial_id": "dense-power-d4",
+            "basis": "power",
+            "degree": 4,
+            "coefficients_ascending": [
+              0.01,
+              0.2,
+              -0.3,
+              0.125,
+              -0.0625
+            ],
+            "domain": [
+              -1.0,
+              1.0
+            ],
+            "method": "balanced-power",
+            "evaluator": "BalancedPowerEvaluator",
+            "baby_step": null,
+            "entry_level": 0,
+            "required_levels": 3,
+            "predicted_exit_level": 3,
+            "operation_inventory": {
+              "ciphertext_multiplications": 3,
+              "coefficient_multiplications": 4,
+              "alignment_multiplications": 3,
+              "relinearizations": 3,
+              "rescale_operations": 10,
+              "total_multiplications": 10
+            }
+          },
+          {
+            "id": "dense-power-d4-horner",
+            "polynomial_id": "dense-power-d4",
+            "basis": "power",
+            "degree": 4,
+            "coefficients_ascending": [
+              0.01,
+              0.2,
+              -0.3,
+              0.125,
+              -0.0625
+            ],
+            "domain": [
+              -1.0,
+              1.0
+            ],
+            "method": "corrected-horner",
+            "evaluator": "HornerPowerEvaluator",
+            "baby_step": null,
+            "entry_level": 0,
+            "required_levels": 4,
+            "predicted_exit_level": 4,
+            "operation_inventory": {
+              "ciphertext_multiplications": 3,
+              "coefficient_multiplications": 1,
+              "alignment_multiplications": 3,
+              "relinearizations": 3,
+              "rescale_operations": 7,
+              "total_multiplications": 7
+            }
+          },
+          {
+            "id": "dense-power-d4-paterson-stockmeyer-k2",
+            "polynomial_id": "dense-power-d4",
+            "basis": "power",
+            "degree": 4,
+            "coefficients_ascending": [
+              0.01,
+              0.2,
+              -0.3,
+              0.125,
+              -0.0625
+            ],
+            "domain": [
+              -1.0,
+              1.0
+            ],
+            "method": "paterson-stockmeyer",
+            "evaluator": "PatersonStockmeyerPowerEvaluator",
+            "baby_step": 2,
+            "entry_level": 0,
+            "required_levels": 3,
+            "predicted_exit_level": 3,
+            "operation_inventory": {
+              "ciphertext_multiplications": 2,
+              "coefficient_multiplications": 3,
+              "alignment_multiplications": 4,
+              "relinearizations": 2,
+              "rescale_operations": 9,
+              "total_multiplications": 9
+            }
+          }
+        ],
+        "correctness_limits": {
+          "affine-d1-balanced": 8e-06,
+          "dense-power-d4-balanced": 1.4e-05,
+          "dense-power-d4-horner": 1.2e-05,
+          "dense-power-d4-paterson-stockmeyer-k2": 1.2e-05
+        },
+        "correctness_limit_policy": "retained-method-specific-ceilings-pending-cross-backend-calibration",
+        "warmup": 0,
+        "runs": 2,
+        "include_raw_samples": true
+      },
+      "requirements": {
+        "native_backends_any": [
+          "cpu",
+          "cuda"
+        ]
+      },
+      "comparison": {
+        "axis": [
+          "case_id",
+          "method_id"
+        ],
+        "portal_highlight": {
+          "label": "Degree 4 \u00b7 PS k=2",
+          "case_id": "dense-power-d4",
+          "method_id": "dense-power-d4-paterson-stockmeyer-k2",
+          "metric": "polynomial-evaluation-latency"
+        }
+      },
+      "unavailable_reason": null
+    }
+  ],
+  "manifest_sha256": "5b9ce22abf59cb5b37dcc59062e2f856df40584470082fd0a4c6f08ee9b81c4b"
+}
