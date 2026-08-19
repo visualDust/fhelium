@@ -54,7 +54,7 @@
       "configuration": "torch213-cu130",
       "fhelium_version": "0.10.0",
       "simple_index_url": "https://download.fhelium.550w.host/torch213-cu130/simple/",
-      "published": false
+      "published": true
     },
     {
       "os": "linux-x86_64",
@@ -64,7 +64,7 @@
       "configuration": "torch212-cu129",
       "fhelium_version": "0.10.0",
       "simple_index_url": "https://download.fhelium.550w.host/torch212-cu129/simple/",
-      "published": false
+      "published": true
     },
     {
       "os": "linux-x86_64",
@@ -74,7 +74,7 @@
       "configuration": "torch213-cpu",
       "fhelium_version": "0.10.0",
       "simple_index_url": "https://download.fhelium.550w.host/torch213-cpu/simple/",
-      "published": false
+      "published": true
     },
     {
       "os": "linux-x86_64",
@@ -84,7 +84,7 @@
       "configuration": "torch212-cpu",
       "fhelium_version": "0.10.0",
       "simple_index_url": "https://download.fhelium.550w.host/torch212-cpu/simple/",
-      "published": false
+      "published": true
     }
   ],
   "source_profiles": [
