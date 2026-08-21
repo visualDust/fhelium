@@ -61,7 +61,7 @@ reuse NTT-domain operands or delay relinearization. With default-scale inputs,
 the product carries scale $\Delta^2$; the post-relinearization rescale consumes
 one level and records the actual scale $\Delta^2/q_0$.
 
-## 5. Rotate with an exact key
+## 5. Rotate with a direct key
 
 ```python
 rotation_key = engine.rotation_key(1)
@@ -78,7 +78,7 @@ sum_clear = engine.decrypt_message(ct_sum)[: engine.num_slots]
 torch.testing.assert_close(sum_clear, x + y, atol=2e-5, rtol=0)
 ```
 
-CKKS is approximate. Validate results with an chosen numerical tolerance appropriate
+CKKS is approximate. Validate results with a chosen numerical tolerance appropriate
 for the scale, depth, input range, and workload.
 
 ## Complete runnable source

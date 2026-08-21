@@ -105,7 +105,7 @@ def main() -> None:
         dtype=torch.float64,
     )
 
-    # Construct live exact FHElium values before transferring their logical
+    # Construct live FHElium values before transferring their logical
     # ownership to the manager.
     weight = engine.prepare_plaintext_for_multiplication(
         engine.encode(weight_message, level=0),

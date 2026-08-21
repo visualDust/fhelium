@@ -42,7 +42,7 @@ Two pronunciations are accepted:
 | **“philium”** | /ˈfɪliəm/ | Compact conversational reading |
 | **“F-helium”** | /ˌɛf ˈhiːliəm/ | Letter-by-letter reading that emphasizes FHE |
 
-Written technical material should retain the exact `FHElium` capitalization
+Written technical material should retain the prescribed `FHElium` capitalization
 regardless of the spoken form.
 
 ## Shape

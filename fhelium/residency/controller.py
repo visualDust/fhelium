@@ -1192,7 +1192,7 @@ class ResidencyUse:
 
     @property
     def values(self) -> Mapping[ResidencyRequirement, TensorResident]:
-        """Borrowed values keyed by exact requirement during this context."""
+        """Borrowed values keyed by requirement during this context."""
 
         if self._values is None:
             raise RuntimeError(
@@ -1206,7 +1206,7 @@ class ResidencyUse:
         *,
         at: ResidencyLocation,
     ) -> TensorResident:
-        """Return the borrow for one exact ``(handle, location)`` endpoint."""
+        """Return the borrow for one ``(handle, location)`` endpoint."""
 
         return self.values[ResidencyRequirement(handle, at)]
 

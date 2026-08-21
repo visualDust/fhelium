@@ -37,9 +37,9 @@ schedule = partial(
 )
 ```
 
-Good static state includes engine plans, fixed operation-ready weights, exact
-keys, and control flow. Dynamic positional inputs should contain only tensors or
-serializable exact FHElium values supported by `ValueTreeSignature`.
+Good static state includes engine plans, fixed operation-ready weights, direct
+rotation keys, and control flow. Dynamic positional inputs should contain only
+tensors or serializable FHElium values supported by `ValueTreeSignature`.
 
 ## 3. Exclude unsafe or dynamic work
 
@@ -55,7 +55,7 @@ Keep outside capture:
 
 Encrypt dynamic request data before replay and decrypt results afterward.
 
-## 4. Capture from representative exact inputs
+## 4. Capture from representative inputs
 
 ```python
 from fhelium.execution import CudaGraphProgram
@@ -67,7 +67,7 @@ program = CudaGraphProgram.capture(
 )
 ```
 
-The prototype must match every later input in structure and exact CKKS state.
+The prototype must match every later input in structure and CKKS state.
 Its device may be part of the staging path, but device residency is deliberately
 separate from the signature.
 
@@ -92,7 +92,7 @@ flowchart LR
     COPY --> HANDLE --> REPLAY
 ```
 
-Follow the current [Execution API reference](../api/fhelium/execution/cuda_graph.md) for exact
+Follow the current [Execution API reference](../api/fhelium/execution/cuda_graph.md) for
 arguments.
 
 ## 6. Handle borrowed output correctly
@@ -141,5 +141,5 @@ lifetime plan.
 
 - [CUDA Graph model](../concepts/execution/cuda-graph-model.md)
 - [CUDA Graph tutorial](../tutorial/cuda-graph-matvec.md)
-- [Exact signatures and buffers](../concepts/execution/exact-signatures-and-buffers.md)
+- [Value signatures and buffers](../concepts/execution/signatures-and-buffers.md)
 - [Benchmark a workload](benchmark-a-workload.md)

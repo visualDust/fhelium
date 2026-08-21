@@ -87,7 +87,7 @@ flowchart TB
 ```
 
 All public pipeline ciphertexts have axes
-`[component, *batch, limb, coefficient]`, two components, Q basis, and exact
+`[component, *batch, limb, coefficient]`, two components, Q basis, and
 `prime_ids`. They remain in coefficient domain with standard residues between
 operations. NTT-domain Montgomery values are temporary arithmetic inputs. Each
 linear stage consumes one leading Q row and follows the actual scale recurrence
@@ -166,7 +166,7 @@ rounding can differ, so residue tensors need not be bit-identical.
 The built-in callable accepts a `RotationKeySet`, `RelinearizationKey`, and
 `ConjugationKey` as separate keyword arguments. Its `required_rotations` and
 `key_steps()` queries report the transform rotation schedule, and
-`create_rotation_keys()` generates either the exact inventory or the compact
+`create_rotation_keys()` generates either the direct-key inventory or the compact
 signed-power-of-two inventory. Built-in periodic reductions require the
 relinearization key for ciphertext products. Full branch handling requires the
 conjugation key; the exponential reduction also uses it for sine extraction.

@@ -2,14 +2,14 @@
 
 **Example source:** [`examples/16_compressed_plaintext.py`](https://github.com/VisualDust/fhelium/blob/main/examples/16_compressed_plaintext.py)
 
-This example converts a periodic operation-ready plaintext to exact
+This example converts a periodic operation-ready plaintext to losslessly reconstructible
 `CompressedPlaintext`, verifies dense-equivalent addition and multiplication,
 and measures storage and evaluator cost. The evaluator reads the compact
 operand directly rather than expanding a dense plaintext first.
 
-Use this representation when a repeatedly used plaintext has exact repetition
-or exact sparse structure **after CKKS encoding and arithmetic preparation**.
-Keep using `Plaintext` when the encoded tensor is not exactly representable by a
+Use this representation when a repeatedly used plaintext has bitwise repetition
+or lossless sparse structure **after CKKS encoding and arithmetic preparation**.
+Keep using `Plaintext` when the encoded tensor is not losslessly representable by a
 supported layout or when compact storage does not improve the measured
 workload.
 
@@ -27,9 +27,9 @@ python examples/16_compressed_plaintext.py \
 
 Use `--device cuda:0` to run the same example through CUDA. The command reports:
 
-- the slot period and exact encoded unique count;
+- the slot period and encoded unique count;
 - dense and compact tensor bytes;
-- bit-exact ciphertext equality against dense addition and multiplication;
+- ciphertext residue equality against dense addition and multiplication;
 - maximum cleartext error after compressed multiplication;
 - synchronized dense and compressed evaluator medians.
 
@@ -47,7 +47,7 @@ level, batch shape, device, and period used by the deployed workload.
 ## 1. Identify the representation requirement
 
 `Plaintext` remains the general CKKS value. `CompressedPlaintext` is a separate
-exact value for an **operation-ready RNS plaintext** whose encoded last axis can
+operation-ready RNS value whose encoded last axis can
 be reconstructed without loss.
 
 The two physical layouts are:
@@ -66,8 +66,8 @@ source message.
 For example, a semantic slot vector with power-of-two period `r` has a specific
 property under the current codec:
 
-- its prepared coefficient representation is exactly strided sparse;
-- its prepared NTT representation has `2 * r` exact values in contiguous
+- its prepared coefficient representation is strided sparse without information loss;
+- its prepared NTT representation has `2 * r` values in contiguous
   repeated blocks.
 
 The checked constructor verifies those claims against the actual dense tensor.
@@ -77,7 +77,7 @@ Do not infer compressibility from source-message appearance alone.
 
 Let the ring dimension be `N`, the compact width be `U`, and
 `repeat_count = N // U`. For `N = 8`, `U = 2`, and compact data `[a, b]`, the
-exact expansions are:
+expansions are:
 
 ```text
 cyclic:          [a, b, a, b, a, b, a, b]
@@ -85,7 +85,7 @@ contiguous:      [a, a, a, a, b, b, b, b]
 strided_sparse:  [a, z, z, z, b, z, z, z]
 ```
 
-For `strided_sparse`, `z` is one exact `implicit_data` value per batch member
+For `strided_sparse`, `z` is one stored `implicit_data` value per batch member
 and RNS limb. It is not assumed to be zero. The compact entries occupy indices
 `u * repeat_count`; every other dense position uses that row's stored implicit
 value.
@@ -100,7 +100,7 @@ The supported arithmetic is:
 
 `strided_sparse` is coefficient-domain only. Multiplication requires a cyclic
 or contiguous NTT-domain value. An application that needs both addition and
-multiplication prepares and retains two separate exact compressed values.
+multiplication prepares and retains two separate compressed values.
 
 For every layout:
 
@@ -109,7 +109,7 @@ For every layout:
 - `U` must divide `N`;
 - `data` is integral and uses Montgomery residues;
 - the value records its format version, ring dimension, context, level, actual
-  scale, domain, basis, residue form, and exact `prime_ids`.
+  scale, domain, basis, residue form, and ordered `prime_ids`.
 
 ## 3. Build the dense operation-ready values first
 
@@ -142,7 +142,7 @@ The multiplication value is NTT-domain Montgomery RNS. The addition value is
 coefficient-domain Montgomery RNS. Both retain the level, actual scale,
 context, basis, and active prime rows chosen by the engine.
 
-## 4. Convert with bit-exact validation
+## 4. Convert with residue-equality validation
 
 For the periodic factor above, create the two compressed values as follows:
 
@@ -221,7 +221,7 @@ Addition accepts a compatible coefficient-domain compressed plaintext:
 compressed_sum = engine.add_plaintext(ciphertext, compressed_add)
 ```
 
-Addition requires exact scale equality and preserves that scale. It modifies
+Addition requires equal scales and preserves that scale. It modifies
 only the `c0` component mathematically. The in-place form makes the storage
 mutation visible:
 
@@ -236,7 +236,7 @@ nonempty batch prefix must match `ciphertext.batch_shape` exactly.
 
 ## 6. Verify equivalence against dense arithmetic
 
-Compression is an exact storage and execution representation, not a numerical
+Compression is a lossless storage and execution representation, not a numerical
 approximation. Compare the resulting ciphertext tensors against the same
 operation with the dense prepared plaintext:
 
@@ -288,12 +288,12 @@ the ciphertext size or guarantee a speedup. Benchmark with synchronization and
 report both storage and latency, as the maintained example does.
 
 Keep lifecycle policy separate from representation. If both arithmetic states
-are reused, retain `compressed_add` and `compressed_multiply` as two exact
+are reused, retain `compressed_add` and `compressed_multiply` as two
 values. FHElium does not hide one state behind an engine-owned conversion cache.
 
-## 8. Serialize and move the exact compressed value
+## 8. Serialize and move the compressed value
 
-`CompressedPlaintext` participates in the core exact-value interfaces. For
+`CompressedPlaintext` participates in the core value interfaces. For
 example:
 
 ```python
@@ -312,9 +312,9 @@ restored = fh.load_value(
 ```
 
 The file preserves the compression-format version, compact and implicit tensor
-metadata, cryptographic state, and exact encoded layout. Typed distributed
+metadata, cryptographic state, and encoded layout. Typed distributed
 transport, residency helpers, execution signatures, and CUDA Graph validation
-likewise treat the compressed value as an exact value rather than as a recipe
+likewise treat the compressed value as an encoded value rather than as a recipe
 to re-encode semantic slots.
 
 ## 9. Recognize rejected layouts
@@ -335,11 +335,11 @@ Expect conversion or evaluation to fail in these cases:
 - an incompatible compression-format version is loaded.
 
 A source vector can be semantically short, constant over blocks, or generated
-from a low-dimensional formula and still fail exact encoded-axis validation.
-That failure preserves the exact representation rule: use the dense `Plaintext`, or change the
+from a low-dimensional formula and still fail encoded-axis reconstruction validation.
+That failure preserves the representation rule: use the dense `Plaintext`, or change the
 application's packing and validate the resulting operation-ready value again.
 Do not weaken the equality check or choose a larger `unique_count` unless the
-new representation is still smaller than `N` and passes exact validation.
+new representation is still smaller than `N` and passes reconstruction validation.
 
 ::: details Complete runnable source
 <<< @/../examples/16_compressed_plaintext.py

@@ -3,7 +3,7 @@
 **Example source:** [`examples/07_rotation_hoisting_benchmark.py`](https://github.com/VisualDust/fhelium/blob/main/examples/07_rotation_hoisting_benchmark.py)
 
 This example benchmarks independent rotations against a grouped request over
-the same source and exact keys. The tutorial explains which decomposition and
+the same source and direct keys. The tutorial explains which decomposition and
 preparation work can be shared and how to interpret the timings.
 
 ## Rotation API
@@ -42,7 +42,7 @@ python examples/07_rotation_hoisting_benchmark.py \
   --runs 3
 ```
 
-## 1. Provision every exact key before timing
+## 1. Provision every direct key before timing
 
 ```python
 for rotation_step in rotation_steps_all:
@@ -77,7 +77,7 @@ all requested steps.
 
 A rotation applies a Galois automorphism and a key switch. When many rotations
 use the same source ciphertext, decomposition and extension work derived from
-that source can be prepared once and reused across exact rotation keys.
+that source can be prepared once and reused across direct rotation keys.
 
 Conceptually:
 

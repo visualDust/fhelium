@@ -18,7 +18,7 @@ accepted as aliases.
 The `int32` family uses a 30-bit residue buffer and 28-bit structural Q/P
 primes. The `int64` family uses a 62-bit residue buffer and 60-bit structural
 Q/P primes. Both use the built-in 128-bit classical category, Gaussian error
-standard deviation 3.19, and uniform-ternary secret sampling. The exact
+standard deviation 3.19, and uniform-ternary secret sampling. The
 installed prime values remain part of the resolved `CkksConfig` and context
 identity. Preset level counts are fixed constants rather than values
 recomputed from the current built-in budget data. Some int32 counts are limited

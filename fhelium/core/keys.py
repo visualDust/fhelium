@@ -566,7 +566,7 @@ class EvaluationKeySet:
 
         ``RotationKeySet`` is intentionally mutable for application-owned key
         planning, so consumers call this method again before use. The
-        check re-establishes capability-role types, exact rotation mapping, and
+        check re-establishes capability-role types, rotation-step mapping, and
         one shared context/prime/domain/basis/residue/ring/digit/dtype/device
         structure. It does not select or validate an evaluator engine.
         """

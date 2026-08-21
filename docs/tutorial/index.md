@@ -47,7 +47,7 @@ explanation.
   architecture.
 - [How-to guides](../how-to/index.md) provide focused planning and diagnostic
   procedures.
-- [API reference](../api/index.md) gives exact signatures and docstrings for
+- [API reference](../api/index.md) gives signatures and docstrings for
   supported interfaces and non-private implementation modules.
 - [Developer Guide](../developer/index.md) covers the native operator stack and
   internal cross-layer invariants and interfaces.

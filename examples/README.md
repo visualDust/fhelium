@@ -22,7 +22,7 @@ self-contained workflow.
 | --- | --- |
 | [`01_basic_ckks_flow.py`](../docs/tutorial/basic-ckks-workflow.md) | Encrypt, add, multiply, relinearize, rescale, rotate, decrypt, and compare with cleartext |
 | [`02_key_materials.py`](../docs/tutorial/key-materials.md) | Inspect key layouts and optionally persist selected public/evaluation material |
-| [`03_plaintext_ciphertext_memory.py`](../docs/tutorial/value-memory-and-persistence.md) | Compare value sizes, move a live activation, and round-trip exact value files |
+| [`03_plaintext_ciphertext_memory.py`](../docs/tutorial/value-memory-and-persistence.md) | Compare value sizes, move a live activation, and round-trip serialized value files |
 | [`04_modulus_chain_depth.py`](../docs/tutorial/modulus-chain-depth.md) | Relate configured chain depth, modulus width, active rows, security budget, and ciphertext size |
 | [`05_explicit_scale_management.py`](../docs/tutorial/explicit-scale-management.md) | Plan actual per-value scales against dropped Q primes and align level separately |
 | [`06_explicit_state_late_relinearization_ntt.py`](../docs/tutorial/late-relinearization-and-ntt-reuse.md) | Reuse NTT operands and delay relinearization under declared CKKS state constraints |
@@ -33,7 +33,7 @@ self-contained workflow.
 | [`11_cuda_graph_matrix_vector.py`](../docs/tutorial/cuda-graph-matvec.md) | Capture a fixed evaluator and replay it with staged ciphertext inputs |
 | [`12_reusable_value_buffer.py`](../docs/tutorial/reusable-value-buffer.md) | Stream pinned-host plaintext tiles through fixed CUDA buffers |
 | [`13_explicit_residency.py`](../docs/tutorial/explicit-residency.md) | Manage opaque local handles with optional pinned/CUDA budgets, a scoped reservation, and an event-backed CUDA lease |
-| [`14_automatic_residency.py`](../docs/tutorial/automatic-residency.md) | Prepare and review deterministic reclaim and admission for an exact CUDA working set under a strict managed budget |
+| [`14_automatic_residency.py`](../docs/tutorial/automatic-residency.md) | Prepare and review deterministic reclaim and admission for a CUDA working set under a strict managed budget |
 | [`15_homogeneous_batching.py`](../docs/tutorial/homogeneous-batching.md) | Compare homogeneous message batches with unbatched loops |
 | [`16_compressed_plaintext.py`](../docs/tutorial/compressed-plaintext.md) | Validate lossless operation-ready plaintext compression and direct evaluation |
 | [`17_ckks_bootstrap_logn16.py`](../docs/tutorial/composable-ckks-bootstrap.md) | Refresh a depleted ciphertext with a versioned composable bootstrap factory |

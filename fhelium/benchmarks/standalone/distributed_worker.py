@@ -197,7 +197,7 @@ def _collective_benchmark(
                 oracle=(
                     "Broadcast output equals rank-0 fill value on every rank."
                     if operation == "broadcast"
-                    else "All-reduce output equals the exact sum of rank fill values on every rank."
+                    else "All-reduce output equals the sum of rank fill values on every rank."
                 ),
                 metric="invalid_rank_count",
                 observed=invalid_ranks,
@@ -859,7 +859,7 @@ def _ckks_rotation_matvec_benchmark(
                 value / gib for value in peak_reserved
             ],
             "rotation_step_assignment": "round-robin",
-            "rotation_mode": "bounded grouped exact-key rotations",
+            "rotation_mode": "bounded grouped direct-key rotations",
             "hoist_chunk_size": hoist_chunk_size,
             "batch_diagonal_terms": batch_diagonal_terms,
             "diagonal_batch_size": diagonal_batch_size,
@@ -884,7 +884,7 @@ def _ckks_rotation_matvec_benchmark(
         },
         notes=[
             "CUDA_VISIBLE_DEVICES defines the local GPU set; profiles launch one rank per visible device unless world_size is overridden.",
-            "Launcher-to-ready startup includes torchrun process creation, Python imports, process-group initialization, engine construction, input encryption, exact-key provisioning, diagonal encoding, and optional graph capture.",
+            "Launcher-to-ready startup includes torchrun process creation, Python imports, process-group initialization, engine construction, input encryption, direct-key provisioning, diagonal encoding, and optional graph capture.",
             "Grouped rotations are bounded by the configured hoist chunk size; completed chunks are accumulated immediately.",
             "When batch_diagonal_terms is enabled, each completed rotation chunk is split into homogeneous message batches of at most diagonal_batch_size for matching batched plaintext multiply and rescale before its terms are accumulated.",
             "A batched term group is summed through contiguous-half modular-addition rounds, preserving the zero-copy native RNS batch ABI while avoiding one under-filled addition launch per message.",

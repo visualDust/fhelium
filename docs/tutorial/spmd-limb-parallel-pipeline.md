@@ -4,7 +4,7 @@
 
 This example partitions one logical ciphertext along its active RNS-limb axis,
 runs limb-local addition and multiplication, and reconstructs the complete
-basis for global transitions. The tutorial identifies the exact gather
+basis for global transitions. The tutorial identifies the required gather
 points in that pipeline.
 
 ## Run on two GPUs
@@ -58,7 +58,7 @@ prepared_sum = engine.coefficient_domain_to_ntt_domain(full_sum)
 
 NTT conversion preserves the level and operates independently on each modulus,
 but the example reconstructs the complete ciphertext before repartitioning so
-rank zero can derive and transmit one exact active-basis layout.
+rank zero can derive and transmit one active-basis layout.
 
 ## 4. Multiply local intervals
 
@@ -93,7 +93,7 @@ value to `default_scale`.
 
 ```mermaid
 flowchart LR
-    rank0["rank 0: prime_ids [q0, q1, ...]"] --> concatenate["concatenate in exact active-basis order"]
+    rank0["rank 0: prime_ids [q0, q1, ...]"] --> concatenate["concatenate in active-basis order"]
     rank1["rank 1: prime_ids [qk, qk+1, ...]"] --> concatenate
 ```
 

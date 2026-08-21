@@ -3,11 +3,11 @@
 **Example source:** [`examples/03_plaintext_ciphertext_memory.py`](https://github.com/VisualDust/fhelium/blob/main/examples/03_plaintext_ciphertext_memory.py)
 
 This example compares level-dependent value sizes, moves live values between
-devices, and round-trips exact values through direct files and optional
+devices, and round-trips values through direct files and optional
 artifacts. The tutorial separates three concepts that are easy to conflate:
 
 1. a live value's current device residency;
-2. an exact value file at a caller-selected path;
+2. a value file at a caller-selected path;
 3. artifact naming and durability policy.
 
 ## Run the example
@@ -73,7 +73,7 @@ value after synchronization and after all consumers have finished.
 `torch.cuda.empty_cache()` concerns allocator-reserved blocks and is normally
 not an object-level lifecycle operation.
 
-## 3. Save one exact value file
+## 3. Save one value file
 
 ```python
 fh.save_value(
@@ -84,7 +84,7 @@ fh.save_value(
 ```
 
 The core serialization API writes one versioned safetensors file. It preserves
-the exact value type and cryptographic metadata but deliberately owns no
+the value type and cryptographic metadata but deliberately owns no
 namespace, tenant, cache, or eviction policy.
 
 Inspect without materializing tensors:
@@ -157,12 +157,12 @@ activation_ref = store.put(
   the input value.
 - `activation_ref` is a tensor-free `ArtifactRef[Ciphertext]`; it contains no
   ciphertext tensor payload. It records the store identity, logical name,
-  exact generation, value type, context identity, logical tensor bytes, and
+  identified generation, value type, context identity, logical tensor bytes, and
   payload checksum.
 - The store now owns an independent durable payload and binds
   `"requests/example/activation"` to that generation.
 
-Materialize that exact generation by passing the reference back to the store:
+Materialize that generation by passing the reference back to the store:
 
 ```python
 restored_activation = store.get(
@@ -208,7 +208,7 @@ when the computation no longer needs them.
 
 ### Supported persisted value state
 
-Artifact payloads use the same exact-value schema as `save_value`. Supported
+Artifact payloads use the same value schema as `save_value`. Supported
 types and their persisted state are:
 
 | Value type | Tensor payloads | Persisted type-specific state |
@@ -250,7 +250,7 @@ artifact_ciphertext = store.get(
 
 `ArtifactStore` is layered on the same typed value-file primitives. A SQLite
 catalog records each logical name's one current generation, while immutable
-store-controlled safetensors objects retain the exact payloads. The store adds
+store-controlled safetensors objects retain the payloads. The store adds
 typed references, collections, checksums, and transactional replacement
 without changing the reconstructed `Ciphertext` or `Plaintext` type.
 
@@ -303,5 +303,5 @@ durability, and application cache policy remain separate decisions.
 
 - [Value model and identity](../concepts/ckks/value-model-and-identity.md)
 - [Serialization and artifacts](../concepts/execution/serialization-and-artifacts.md)
-- [Manage exact artifacts by logical name](../how-to/manage-exact-artifacts.md)
+- [Manage artifacts by logical name](../how-to/manage-artifacts.md)
 - [Residency lifetimes](../concepts/execution/residency-lifetimes.md)

@@ -3,7 +3,7 @@
 // Canonical arithmetic consumes integral [*batch, limb, index] operands on a
 // registered execution device in [0, q_i) or documented lazy-compatible
 // inputs. rns_params has shape
-// [parameter, limb], and column j describes the exact prime_ids[j] of limb j.
+// [parameter, limb], and column j describes the prime_ids[j] of limb j.
 // Add/sub compute $(a_i +/- b_i)\bmod q_i$ and return [0, q_i). Montgomery
 // row-scalar multiply computes $a_i b_iR^{-1}\bmod q_i$ and canonicalizes.
 // Functional results have lhs shape/domain/representation, alias no input, and

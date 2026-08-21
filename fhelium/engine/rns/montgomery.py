@@ -18,7 +18,7 @@ class MontgomeryParameters:
     therefore maps a product of two Montgomery residues back to Montgomery
     form. Native kernels accept lazy representatives in $[0,2q_i)$ and rely on
     $4q_i<R$ for signed-word overflow safety. This object stores Python
-    integers only; ``RnsRuntime`` materializes exact integral row tables.
+    integers only; ``RnsRuntime`` materializes integral row tables.
     """
 
     def __init__(self, ckks_config: CkksConfig):

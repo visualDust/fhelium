@@ -513,8 +513,8 @@ export default defineConfig({
               link: '/how-to/switch-cpu-cuda',
             },
             {
-              text: 'Exact signatures and buffers',
-              link: '/concepts/execution/exact-signatures-and-buffers',
+              text: 'Value signatures and buffers',
+              link: '/concepts/execution/signatures-and-buffers',
             },
             {
               text: 'CUDA Graph model',
@@ -614,8 +614,8 @@ export default defineConfig({
           text: 'Execution and lifecycle',
           items: [
             {
-              text: 'Manage exact artifacts',
-              link: '/how-to/manage-exact-artifacts',
+              text: 'Manage artifacts',
+              link: '/how-to/manage-artifacts',
             },
             {
               text: 'Capture a repeated evaluator',

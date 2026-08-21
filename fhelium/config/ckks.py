@@ -186,7 +186,7 @@ class CkksConfig:
 
     ``total_modulus_bits`` covers the complete QP parameter modulus, both
     $Q_0$ and $P$, and ``maximum_modulus_bits`` is the corresponding security
-    budget. The exact built-in table supports Gaussian error standard deviation
+    budget. The built-in table supports Gaussian error standard deviation
     ``sigma=3.19`` and classical categories 128, 192, and 256. Engine
     construction checks the complete QP product before native initialization
     when ``enforce_security_budget`` is true. Disabling that check transfers
@@ -342,11 +342,11 @@ class CkksConfig:
     # ---- primes + security budget -------------------------------------------
     @cached_property
     def maximum_modulus_bits(self) -> int:
-        """Exact built-in budget for the complete QP modulus bit width.
+        """Built-in budget for the complete QP modulus bit width.
 
         Raises:
             SecurityParametersUnsupportedError: If this configuration does
-                not match an exact table row.
+                not match a table row.
         """
 
         maximum = _lookup_maximum_modulus_bits(
@@ -362,7 +362,7 @@ class CkksConfig:
                 secret_distribution="ternary",
                 error_stddev=self.sigma,
                 reason=(
-                    "No exact built-in budget matches this configuration; "
+                    "No built-in budget matches this configuration; "
                     "see the security guide for external "
                     "assessment requirements."
                 ),
@@ -371,7 +371,7 @@ class CkksConfig:
 
     @cached_property
     def security_assessment(self) -> SecurityAssessment:
-        """Structured exact-table assessment of the complete QP modulus."""
+        """Structured table assessment of the complete QP modulus."""
 
         return assess_config_security(self)
 
@@ -574,13 +574,13 @@ class CkksConfig:
         return (math.prod(self.moduli) - 1).bit_length()
 
     def validate_security_budget(self) -> SecurityAssessment:
-        """Require an exact supported assessment that meets its QP budget.
+        """Require a supported assessment that meets its QP budget.
 
         Returns:
             The immutable structured assessment when the budget is met.
 
         Raises:
-            SecurityParametersUnsupportedError: If no exact built-in row
+            SecurityParametersUnsupportedError: If no built-in row
                 matches this configuration.
             SecurityBudgetExceededError: If the complete QP modulus exceeds
                 the matching table budget.
@@ -594,7 +594,7 @@ class CkksConfig:
                 secret_distribution="ternary",
                 error_stddev=self.sigma,
                 reason=assessment.reason
-                or "No exact built-in budget matches this configuration.",
+                or "No built-in budget matches this configuration.",
             )
         if assessment.status == "exceeds":
             maximum = assessment.maximum_modulus_bits

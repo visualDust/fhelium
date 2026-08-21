@@ -65,7 +65,7 @@ class CosineDoubleAngleReduction:
 
     The homomorphic input is a two-component coefficient-domain, standard-RNS
     Q ciphertext with payload axes
-    `[component, *batch, limb, coefficient]`, exact active `prime_ids`, and
+    `[component, *batch, limb, coefficient]`, active `prime_ids`, and
     actual scale near `engine.config.default_scale`. Evaluation is functional.
     Each multiplication returns to coefficient-domain standard RNS, drops one
     leading Q row on rescale, and is explicitly reinterpreted at the default

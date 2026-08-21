@@ -465,7 +465,7 @@ def recommend_ntt_backend(
     seed: int,
     progress: ProgressCallback,
 ) -> BenchmarkResult:
-    """Run one named suite and recommend an exact NTT backend name."""
+    """Run one named suite and recommend an NTT backend."""
 
     if suite not in _SUPPORTED_SUITES:
         raise ValueError(
@@ -580,7 +580,7 @@ def recommend_ntt_backend(
                 name=f"{backend}-correctness",
                 passed=observed <= limit,
                 oracle=(
-                    "Exact equality modulo every active QP prime after NTT roundtrip."
+                    "Residue equality modulo every active QP prime after NTT roundtrip."
                     if suite == "kernel"
                     else "Decrypted CKKS primitive outputs compared with deterministic cleartext operations."
                 ),

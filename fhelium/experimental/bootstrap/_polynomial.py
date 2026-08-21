@@ -283,7 +283,7 @@ class BalancedPowerEvaluator:
     `evaluate` consumes a two-component coefficient-domain, standard-RNS Q
     ciphertext representing the basis coordinate $x$. Its dense payload axes
     are `[component, *batch, limb, coefficient]`; all batch members share level,
-    scale, and exact `prime_ids`. The method is functional. Each ciphertext
+    scale, and `prime_ids`. The method is functional. Each ciphertext
     product converts operands to NTT/Montgomery form, multiplies to three
     components, relinearizes back to two coefficient-domain standard
     components, drops one leading Q row, and applies the bootstrap's explicit
@@ -298,7 +298,7 @@ class BalancedPowerEvaluator:
     def operation_inventory(
         self, polynomial: PolynomialApproximation
     ) -> dict[str, int]:
-        """Return exact multiplying operations executed by :meth:`evaluate`.
+        """Return multiplying operations executed by :meth:`evaluate`.
 
         Coefficient multiplication counts only active nonconstant terms.
         Alignment multiplication counts every multiply-by-one level advance,
@@ -478,7 +478,7 @@ class HornerPowerEvaluator:
     def operation_inventory(
         self, polynomial: PolynomialApproximation
     ) -> dict[str, int]:
-        """Return the exact corrected-Horner multiplication inventory."""
+        """Return the corrected-Horner multiplication inventory."""
 
         required_levels = self.required_levels(polynomial)
         del required_levels
@@ -590,7 +590,7 @@ class PatersonStockmeyerPowerEvaluator:
     def _schedule(
         self, polynomial: PolynomialApproximation
     ) -> tuple[int, dict[str, int]]:
-        """Simulate the exact relative levels and multiplying operations."""
+        """Simulate relative levels and multiplying operations."""
 
         if polynomial.basis != 'power':
             raise ValueError(
@@ -700,14 +700,14 @@ class PatersonStockmeyerPowerEvaluator:
         )
 
     def required_levels(self, polynomial: PolynomialApproximation) -> int:
-        """Return the exact critical-path level cost for this fixed ``k``."""
+        """Return the critical-path level cost for this fixed ``k``."""
 
         return self._schedule(polynomial)[0]
 
     def operation_inventory(
         self, polynomial: PolynomialApproximation
     ) -> dict[str, int]:
-        """Return exact ciphertext, coefficient, and alignment counts."""
+        """Return ciphertext, coefficient, and alignment counts."""
 
         return self._schedule(polynomial)[1]
 
@@ -868,7 +868,7 @@ class BinaryDecompositionChebyshevEvaluator:
     $$
 
     caching every required $T_n$ for one call. This keeps intermediate inputs near the approximation's
-    bounded domain and exposes an exact critical-path depth.
+    bounded domain and exposes the critical-path depth.
 
     The coordinate, tensor axes, arithmetic-state preconditions, functional
     behavior, per-product transitions, output level, active `prime_ids`, and
@@ -881,7 +881,7 @@ class BinaryDecompositionChebyshevEvaluator:
     def operation_inventory(
         self, polynomial: PolynomialApproximation
     ) -> dict[str, int]:
-        """Return exact multiplying operations executed by :meth:`evaluate`.
+        """Return multiplying operations executed by :meth:`evaluate`.
 
         Alignment includes operand advancement within odd recurrences,
         advancement of the original $T_1=x$ before subtraction, and term

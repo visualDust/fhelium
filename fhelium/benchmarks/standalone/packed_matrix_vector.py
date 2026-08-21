@@ -100,7 +100,7 @@ def prepare_packed_matvec(
     matrix: torch.Tensor,
     source: fh.Ciphertext,
 ) -> tuple[tuple[fh.Plaintext, ...], dict[int, fh.RotationKey]]:
-    """Materialize operation-ready diagonals and exact rotation keys."""
+    """Materialize operation-ready diagonals and direct rotation keys."""
 
     diagonals = tuple(
         engine.prepare_plaintext_for_multiplication(
@@ -227,7 +227,7 @@ def _run_packed_matvec(
     packed_vector = periodic_slots(vector, engine.num_slots)
     source = engine.encrypt_message(packed_vector)
 
-    progress("Materializing exact rotation keys and operation-ready diagonals")
+    progress("Materializing direct rotation keys and operation-ready diagonals")
     diagonals, rotation_keys = prepare_packed_matvec(engine, matrix, source)
 
     def evaluate() -> fh.Ciphertext:
@@ -312,7 +312,7 @@ def _run_packed_matvec(
         id="packed-cyclic-diagonal-evaluation-v1",
         description="One encrypted packed matrix-vector evaluation using bounded cyclic-diagonal chunks.",
         includes=(
-            "bounded grouped exact-key rotations",
+            "bounded grouped direct-key rotations",
             "batched forward NTT and operation-ready plaintext multiplication",
             "batched ciphertext reduction and one rescale per chunk",
         ),

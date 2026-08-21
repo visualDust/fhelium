@@ -8,7 +8,7 @@ layout: home
 
 ## Choose your level of control
 
-FHElium provides one hierarchical CKKS programming model with four entry levels: direct evaluator calls, tuned key and arithmetic schedules, mixed-dialect JIT `Program` objects, and GPU-rank partitioning. Every level reaches the same `CkksEngine`, core `Ciphertext` values, and exact CKKS state invariants.
+FHElium provides one hierarchical CKKS programming model with four entry levels: direct evaluator calls, tuned key and arithmetic schedules, mixed-dialect JIT `Program` objects, and GPU-rank partitioning. Every level reaches the same `CkksEngine`, core `Ciphertext` values, and CKKS state invariants.
 
 <HomeControlDeck />
 

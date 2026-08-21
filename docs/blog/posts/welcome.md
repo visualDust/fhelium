@@ -13,7 +13,7 @@ tags:
 **Announcement · August 3, 2026 · FHElium contributors**
 
 The FHElium documentation is organized around stable reader tasks: learning
-the programming model, completing a workflow, resolving an exact API, or
+the programming model, completing a workflow, resolving an API, or
 understanding implementation details. Not every useful project update fits
 one of those document families.
 

@@ -4,7 +4,7 @@
 
 The default lowering pipeline is extended with a custom, non-rewriting CKKS
 audit pass and the executable-graph validator. The example then plans and binds
-exact evaluation keys, checks readiness before and after binding, and validates
+evaluation keys, checks readiness before and after binding, and validates
 the actual CKKS result against one fixed two-rescale validation threshold.
 """
 
@@ -118,7 +118,7 @@ def main() -> None:
         workspace=workspace,
     )
 
-    # Insert a caller-owned audit after the exact named default step, then
+    # Insert a caller-owned audit after the named default step, then
     # append the structural execution gate. No pass here pretends to perform a
     # backend-specific late-rescale or late-relinearization optimization.
     pipeline = (
@@ -132,7 +132,7 @@ def main() -> None:
     program = lowered.program
 
     # Key planning is a pure scan of the explicit lowered operations. Before
-    # binding, readiness exposes the exact absent runtime capabilities.
+    # binding, readiness exposes the absent runtime capabilities.
     key_plan = jit.analyze_evaluation_key_requirements(program)
     before_bindings = program.readiness(workspace)
     if before_bindings.runnable:

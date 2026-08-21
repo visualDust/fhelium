@@ -19,7 +19,7 @@ application choice.
 1. **Screen kernels** to find obviously slow candidates.
 2. **Confirm CKKS primitives** to include encryption, key switching, and
    rotation behavior.
-3. **Apply one exact name** only when the evidence supports a choice.
+3. **Apply one backend name** only when the evidence supports a choice.
 
 The following real example shows the kind of result the command produces.
 
@@ -62,7 +62,7 @@ reason               0.47% runner-up margin; winner changed across repetitions
 
 Do **not** claim that group8 is universally faster. The leading two backends
 are separated by less than 1%, and the repetition winner changes. The useful
-conclusion is narrower: group4 and radix4 are poor candidates for this exact
+conclusion is narrower: group4 and radix4 are poor candidates for this
 kernel case, while group8 and radix16 require higher-level confirmation.
 
 ## 2. Confirm with CKKS primitives
@@ -98,9 +98,9 @@ A different result should lead to a different action:
 | Gap is below 3%, or repetition winners disagree | Keep the stable fallback; record the result as a near tie. |
 | Kernel and primitive suites disagree | Prefer primitives for a general CKKS evaluator, then benchmark the real workload. |
 
-## 3. Apply the exact recommendation
+## 3. Apply the recommendation
 
-The CLI prints a constructor expression. Copy the exact backend name:
+The CLI prints a constructor expression. Copy the backend name:
 
 ```python
 import fhelium as fh
@@ -129,7 +129,7 @@ fhelium benchmark recommend ntt \
   --backend radix16_compact
 ```
 
-At least two exact compatible names are required. The indexed radix-2
+At least two compatible names are required. The indexed radix-2
 correctness oracle is omitted by default because it is not a production
 candidate, but it remains available for diagnostic runs.
 

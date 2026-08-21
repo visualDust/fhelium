@@ -488,7 +488,7 @@ def sample_common_uniform(
     returns one unbatched ``[limb, N]`` tensor.  Every explicit positive
     ``count``, including ``count=1``, returns
     ``[count, limb, N]`` with a leading item/digit axis.  The caller must
-    distribute the exact returned values to every participant.
+    distribute the returned values to every participant.
     """
 
     if basis not in ("Q", "QP"):
@@ -843,7 +843,7 @@ def unsafe_collective_decryption_share(
 ) -> torch.Tensor:
     r"""Return arithmetic-only $c_1s_i+e_i$ for collective decryption.
 
-    ``smudging_error_coefficients`` must have exact
+    ``smudging_error_coefficients`` must have
     ``[*ciphertext.batch_shape, N]`` contiguous engine-integral layout on
     ``engine.device``.  Distribution selection and privacy analysis belong to
     the caller.
@@ -915,7 +915,7 @@ def unsafe_public_key_switch_share(
 ) -> RkgMessage:
     r"""Return arithmetic-only Protocol-4 share components.
 
-    All caller-provided coefficient tensors must have exact
+    All caller-provided coefficient tensors must have
     ``[*ciphertext.batch_shape, N]`` contiguous engine-integral layout on
     ``engine.device``.  Freshness, smallness, smudging adequacy, and
     destination-key provenance are caller responsibilities.

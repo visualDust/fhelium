@@ -34,7 +34,7 @@ class Ciphertext(TensorResident):
     u(X)=\sum_{j=0}^{d-1}c_j(X)s(X)^j.
     $$
 
-    Limb row $i$ is modulo the exact parameter prime ``prime_ids[i]``. The
+    Limb row $i$ is modulo the parameter prime ``prime_ids[i]``. The
     final extent indexes coefficients in
     $R=\mathbb{Z}[X]/(X^N+1)$ or NTT evaluations according to
     ``polynomial_domain``. ``modulus_basis`` selects $Q_\ell$ or $Q_\ell P$;
@@ -42,7 +42,7 @@ class Ciphertext(TensorResident):
     NTT domain with Montgomery residues. ``scale`` is the positive finite
     actual scale $\Delta(c)$.
 
-    Every member of ``batch_shape`` shares the exact level, scale, component
+    Every member of ``batch_shape`` shares the same level, scale, component
     count, domain, basis, residue form, context, and ordered ``prime_ids``.
     Direct construction retains the input dtype, device, and storage; engine
     operations additionally require the engine's configured integral dtype,

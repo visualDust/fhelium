@@ -239,7 +239,7 @@ completed reclaim or entry transitions remain committed.
 ## Declarative requests and decisions
 
 `ResidencyController` is an optional orchestration layer over one manager. It
-accepts an immutable `ResidencyRequest` containing exact `(handle, location)`
+accepts an immutable `ResidencyRequest` containing required `(handle, location)`
 requirements and named headroom. Repeated handles are valid when their
 locations differ and the value is `REPLICABLE`; an `EXCLUSIVE` value cannot
 have simultaneous location requirements.
@@ -272,7 +272,7 @@ silently replan.
 `search_state_limit` bounds deterministic planner work. Exhaustive failure
 within that bound raises `ResidencyPlanError` as infeasible; reaching the bound
 raises `ResidencySearchLimitError` as an inconclusive search instead. The
-error's `state_limit` and `explored_states` fields expose the exact bounded-search
+error's `state_limit` and `explored_states` fields expose the bounded-search
 evidence when the search is inconclusive.
 
 `decide(request)` returns a tensor-free `ResidencyDecision` containing the
@@ -324,7 +324,7 @@ process-wide CUDA allocator metrics. Named active reservation records make
 reserved bytes attributable.
 
 Completed primitive transitions produce `ResidencyTransitionReport` records
-with exact action, resolved endpoints, no-op/reason state, logical/storage
+with the requested action, resolved endpoints, no-op/reason state, logical/storage
 charge, timestamps, and optional allocator metrics plus sampled CUDA device. A
 bounded in-memory trace is configured by `trace_capacity`; `trace()` returns
 completion order and `clear_trace()` changes no residency state.

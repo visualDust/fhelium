@@ -1,7 +1,7 @@
 """Compress a periodic operation-ready plaintext without changing Plaintext.
 
 The example starts from a standard periodic CKKS slot message, encodes it with
-the ordinary codec, verifies the exact repeated NTT structure, and converts it
+the ordinary codec, verifies the repeated NTT structure, and converts it
 to a separate CompressedPlaintext. The evaluator kernel reads the compact
 operand directly; it does not materialize a dense plaintext during multiply.
 """
@@ -73,7 +73,7 @@ def main() -> None:
     )
     factor = unique_slots.repeat(engine.num_slots // period)
 
-    # A period-r semantic slot vector yields 2r exact encoded NTT values,
+    # A period-r semantic slot vector yields 2r encoded NTT values,
     # stored as contiguous repeated blocks for the current CKKS codec.
     dense = engine.prepare_plaintext_for_multiplication(engine.encode(factor))
     compressed = fh.CompressedPlaintext.from_plaintext(

@@ -147,19 +147,19 @@ class ResidencyValueSpec(Generic[ValueT_co]):
 
 
 class ResidencySource(Protocol[ValueT_co]):
-    """Synchronous reconstruction source for one exact managed value.
+    """Synchronous reconstruction source for one managed value.
 
     Sources are registered directly with residency state and return a ready
     ``TensorResident`` value when invoked. The manager validates its runtime
     type, byte accounting, and initial location. The source is trusted to
-    return the exact contents and CKKS state registered for that handle; the
+    return the contents and CKKS state registered for that handle; the
     source owns content-identity correctness. Each call must return independent
     tensor storage whose logical alias ownership transfers to the manager; a
     source must not retain or later mutate the returned materialization.
     """
 
     def load(self) -> ValueT_co:
-        """Synchronously reconstruct and return the exact registered value."""
+        """Synchronously reconstruct and return the registered value."""
 
         ...
 

@@ -42,7 +42,7 @@ from fhelium.residency import (
 
 
 def _charge(value: TensorResident) -> int:
-    """Return the conservative managed charge of one exact value."""
+    """Return the conservative managed charge of one value."""
 
     return max(value.nbytes, value.storage_nbytes)
 
@@ -187,7 +187,7 @@ def main() -> None:
     )
 
     # decide() reads tensor-free snapshots only. The returned decision records
-    # exact actions, policy evidence, predicted peaks, and its state precondition.
+    # ordered actions, policy evidence, predicted peaks, and its state precondition.
     decision = controller.decide(request)
     if decision.expected_state_version != residency.state_version:
         raise RuntimeError(

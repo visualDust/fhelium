@@ -28,7 +28,7 @@ class RnsRuntime:
     with shape ``[*batch, limb, coefficient_or_ntt_index]`` and final extent
     $N$.  Limb row ``j`` represents the modulus whose canonical parameter id is
     ``prime_ids[j]``.  Public full-basis calls derive those ids from ``level``
-    and internal calls supply ``parameter_row_start`` for an exact contiguous
+    and internal calls supply ``parameter_row_start`` for a contiguous
     row interval.  ``include_p`` is only this internal row selector; it is not
     public ``modulus_basis`` metadata.
 
@@ -183,8 +183,8 @@ class RnsRuntime:
         # -q_i^{-1} low, -q_i^{-1} high, R^2 mod q_i,
         # Delta_0 R^2 mod q_i, N^{-1} R mod q_i]. The scaled-R2 row remains
         # stored for parameter-table compatibility; no public conversion op
-        # implicitly applies Delta_0. Native operands receive an exact limb
-        # slice, so parameter column j always describes operand limb j.
+        # implicitly applies Delta_0. Native operands receive the corresponding
+        # limb slice, so parameter column j always describes operand limb j.
         self.rns_parameter_tensor = torch.stack(
             [
                 self.twice_modulus,
@@ -385,14 +385,14 @@ class RnsRuntime:
         return self.rns_parameters_for_prime_ids(prime_ids)
 
     def row_parameters(self, key) -> RnsRowParameters:
-        """Return immutable host/device parameters for exact ``prime_ids``."""
+        """Return immutable host/device parameters for ``prime_ids``."""
 
         return self.parameter_store.row_parameters(key)
 
     def basis_parameters(
         self, level: int, *, include_p: bool = False
     ) -> RnsRowParameters:
-        """Return parameters for the exact Q or QP rows active at ``level``."""
+        """Return parameters for the Q or QP rows active at ``level``."""
 
         return self.parameter_store.basis_parameters(level, include_p=include_p)
 
@@ -408,7 +408,7 @@ class RnsRuntime:
     def moduli_for_basis(
         self, level: int, *, include_p: bool = False
     ) -> list[int]:
-        """Return host integers in the active basis's exact ``prime_ids`` order."""
+        """Return host integers in the active basis's ``prime_ids`` order."""
 
         return self.parameter_store.moduli_for_basis(level, include_p=include_p)
 
@@ -441,7 +441,7 @@ class RnsRuntime:
     ) -> None:
         r"""Mutate ``a[..., i, :]`` to $a_i b_i R^{-1}\bmod q_i$.
 
-        ``b`` has shape ``[limb]`` and is aligned with the same exact prime
+        ``b`` has shape ``[limb]`` and is aligned with the same prime
         rows. Both inputs use one integral dtype and Montgomery form;
         polynomial domain is preserved and the result is lazy in $[0,2q_i)$.
         """
@@ -463,7 +463,7 @@ class RnsRuntime:
         r"""Return canonical $a_i b_iR^{-1}\bmod q_i$ row products.
 
         ``a`` is integral ``[*batch, limb, index]`` and ``b`` is the
-        aligned Montgomery ``[limb]`` scalar vector for the same exact prime
+        aligned Montgomery ``[limb]`` scalar vector for the same prime
         rows. Polynomial domain is preserved. Output has canonical
         Montgomery residues in $[0,q_i)$ and aliases neither input.
         """
@@ -486,7 +486,7 @@ class RnsRuntime:
         r"""Return $a_i b_iR^{-1}\bmod q_i$ without mutating either input.
 
         Operands have equal ``[*batch, limb, N]`` layouts, integral dtype,
-        exact prime-row mapping, polynomial domain, and Montgomery form. The
+        prime-row mapping, polynomial domain, and Montgomery form. The
         output has the same state, is lazy in $[0,2q_i)$, and aliases neither
         input.
         """
@@ -512,7 +512,7 @@ class RnsRuntime:
 
         ``a`` is integral ``[*batch, limb, N]`` and ``compressed_b`` is
         ``[*compressed_batch, limb, unique_index]`` on the same device, domain,
-        exact prime rows, and Montgomery form. The compact final axis repeats
+        prime rows, and Montgomery form. The compact final axis repeats
         cyclically to extent $N$. After leading axes are collapsed, the compact
         batch count must equal the dense batch count or be one; no other
         broadcasting occurs. Output is lazy Montgomery RNS and aliases neither
@@ -558,7 +558,7 @@ class RnsRuntime:
     ) -> None:
         r"""Replace $x_iR\bmod q_i$ by standard $x_i\bmod q_i$ in place.
 
-        Shape, integral dtype, exact prime rows, polynomial domain, and
+        Shape, integral dtype, prime rows, polynomial domain, and
         storage are preserved. The output is lazy in $[0,2q_i)$.
         """
 
@@ -628,7 +628,7 @@ class RnsRuntime:
         r"""Return $(a_i+b_i)\bmod 2q_i$ as lazy residues.
 
         Equal-shape integral operands use the same domain, representation,
-        and exact prime rows and lie in $[0,2q_i)$. Output has the same shape
+        and prime rows and lie in $[0,2q_i)$. Output has the same shape
         and state, lies in $[0,2q_i)$, and aliases neither input.
         """
 
@@ -725,7 +725,7 @@ class RnsRuntime:
 
         Equal-shape integral operands have layout
         ``[*batch, limb, coefficient_or_ntt_index]``, identical domain and
-        residue representation, and the same exact prime rows. Output
+        residue representation, and the same prime rows. Output
         preserves that state and aliases neither input.
         """
 
@@ -774,7 +774,7 @@ class RnsRuntime:
 
         Equal-shape integral operands have layout
         ``[*batch, limb, coefficient_or_ntt_index]``, identical domain and
-        residue representation, and the same exact prime rows. Output
+        residue representation, and the same prime rows. Output
         preserves that state and aliases neither input.
         """
 
@@ -823,7 +823,7 @@ class RnsRuntime:
         ``a`` maps from ``[*batch, limb, coefficient]`` to the same storage
         viewed as ``[*batch, limb, ntt_index]``. For row $i$ it evaluates the
         polynomial modulo $X^N+1$ and $q_i$ at the backend's canonical NTT
-        points. Integral CUDA dtype, exact prime rows, Montgomery form, and
+        points. Integral CUDA dtype, prime rows, Montgomery form, and
         lazy $[0,2q_i)$ range are preserved.
         """
 
@@ -861,7 +861,7 @@ class RnsRuntime:
 
         The state transition is ``coefficient`` + ``standard`` to ``ntt`` +
         ``montgomery`` on unchanged ``[*batch, limb, N]`` integral
-        storage and exact prime rows; output is lazy in $[0,2q_i)$.
+        storage and prime rows; output is lazy in $[0,2q_i)$.
         """
 
         _, row_start = self._active_rns_parameters(
@@ -898,7 +898,7 @@ class RnsRuntime:
 
         Per prime row normalization multiplies by
         $N^{-1}R\bmod q_i$ under Montgomery reduction. The integral
-        tensor changes from NTT indices to coefficients in place; exact rows,
+        tensor changes from NTT indices to coefficients in place; prime rows,
         storage, Montgomery representation, and lazy $[0,2q_i)$ range remain.
         """
 

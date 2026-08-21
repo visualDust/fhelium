@@ -1,6 +1,6 @@
-"""Reusable fixed-address buffers for exact execution values.
+"""Reusable fixed-address buffers for execution values.
 
-Buffers provide exact fixed-storage data movement. Applications choose payload
+Buffers provide fixed-storage data movement. Applications choose payload
 identity, movement timing, caching, and prefetch policy.
 """
 
@@ -76,7 +76,7 @@ class _BufferNode:
 class CopyHandle:
     """Future-like handle for one copy enqueued into a reusable buffer.
 
-    A handle owns the exact submitted tensor leaves until the CUDA event reports
+    A handle owns the submitted tensor leaves until the CUDA event reports
     completion. This prevents a mutable source tree from releasing or replacing
     pinned host or device storage while an asynchronous copy may still read it.
     ``wait_on`` inserts a stream dependency without blocking the CPU;
@@ -183,20 +183,21 @@ class CopyHandle:
 
 
 class ReusableValueBuffer(Generic[_ValueT]):
-    """Fixed-structure storage whose exact-value payload may be replaced.
+    """Fixed-structure storage whose value payload may be replaced.
 
-    Construct a buffer from a representative tensor/exact-value tree with
+    Construct a buffer from a representative tensor/value tree with
     :meth:`like`. The representative defines container structure, cryptographic
     metadata, and tensor topology. The buffer separately owns tensors on one
     target device. :meth:`copy_from` accepts a matching tree on CPU or CUDA,
     validates the complete source before copying anything, and preserves every
     target tensor address.
 
-    The buffer identifies payloads solely by exact structure. Applications or
-    extensions associate it with model weights, user keys, request ciphertexts,
+    The buffer identifies payloads solely by its structural signature.
+    Applications or extensions associate it with model weights, user keys,
+    request ciphertexts,
     and cache/prefetch/eviction policy.
 
-    The :attr:`value` property reconstructs ordinary tensors and exact FHElium
+    The :attr:`value` property reconstructs ordinary tensors and FHElium
     values around the fixed storage, so an eager callable can consume it without
     a buffer-specific evaluator API. Do not retain a reconstructed tree as an
     ownership or readiness signal; use the buffer and the :class:`CopyHandle`
@@ -261,7 +262,7 @@ class ReusableValueBuffer(Generic[_ValueT]):
         """Allocate independent storage with the structure of ``example``.
 
         Args:
-            example: Tensor/exact-value tree defining structure, metadata, and
+            example: Tensor/value tree defining structure, metadata, and
                 initial payload. Supported containers are lists, tuples, and
                 dictionaries.
             device: Target residency. If omitted, all example tensors must
@@ -309,16 +310,35 @@ class ReusableValueBuffer(Generic[_ValueT]):
             target=target,
             pin_memory=pin_memory,
         )
-        return cls(
+        buffer = cls(
             node=node,
             signature=signature,
             device=target,
             pinned=pin_memory,
         )
+        if target.type == "cuda":
+            # CUDA-to-CUDA ``Tensor.to(copy=True)`` is stream ordered even
+            # with ``non_blocking=False``. Record allocation-tree completion
+            # before a first overwrite can be submitted on another stream.
+            # The internal handle also keeps CUDA sources alive until their
+            # initialization copies have completed.
+            with torch.cuda.device(target):
+                initialized = torch.cuda.Event()
+                initialized.record(torch.cuda.current_stream(target))
+            buffer._inflight_copies.append(
+                CopyHandle(
+                    event=initialized,
+                    device=target,
+                    source_tensors=tuple(source_tensors),
+                    bytes_copied=buffer._nbytes,
+                    target_token=buffer._target_token,
+                )
+            )
+        return buffer
 
     @property
     def signature(self) -> ValueTreeSignature:
-        """Device-independent structure and exact-value state of this buffer."""
+        """Device-independent structure and value state of this buffer."""
 
         return self._signature
 
@@ -345,7 +365,7 @@ class ReusableValueBuffer(Generic[_ValueT]):
     def value(self) -> _ValueT:
         """A fresh ordinary value tree around the fixed target tensors.
 
-        Container and exact-value wrapper objects may be newly reconstructed on
+        Container and value-wrapper objects may be newly reconstructed on
         each access; their tensor addresses remain fixed for the buffer
         lifetime. Payload readiness is governed by the relevant
         :class:`CopyHandle` or caller stream ordering.
@@ -363,12 +383,12 @@ class ReusableValueBuffer(Generic[_ValueT]):
     ) -> CopyHandle:
         """Copy a matching source tree into the fixed target storage.
 
-        Full structural and exact-state validation happens before the first
+        Full signature validation happens before the first
         ``Tensor.copy_``. Tensor source devices may differ from the target and
         from the representative used by :meth:`like`.
 
         Args:
-            source: Matching tensor/exact-value tree whose payload replaces the
+            source: Matching tensor/value tree whose payload replaces the
                 buffer contents.
             stream: Caller-owned CUDA stream on which target writes are
                 enqueued. Defaults to the current target-device stream. CPU
@@ -543,7 +563,7 @@ def pin_value_tree(value: _ValueT) -> _ValueT:
     persistence policy; callers retain and release the returned tree normally.
 
     Args:
-        value: Supported tensor/exact-value tree to clone. Source leaves may be
+        value: Supported tensor/value tree to clone. Source leaves may be
             on CPU or CUDA.
 
     Returns:
@@ -563,7 +583,7 @@ def value_tree_nbytes(value: object) -> int:
     """Return logical tensor bytes in one supported execution value tree.
 
     Args:
-        value: Tensor/exact-value tree whose tensor payload is counted.
+        value: Tensor/value tree whose tensor payload is counted.
 
     Returns:
         Sum of ``numel * element_size`` over every tensor leaf.

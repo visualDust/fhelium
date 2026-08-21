@@ -61,7 +61,7 @@ Metrics remain typed by name, unit, statistic, direction, and dimensions:
 
 Absent measurements are blank, never zero. CUDA allocator counters are not used as CPU-versus-CUDA metrics because zero from the CPU path would not represent equivalent memory evidence.
 
-Every measured configuration must pass its exact correctness checks before a report can complete. The raw report retains each oracle, observed value, limit, and supporting details. Numerical limits are never widened merely to make a run pass. The retained affine and degree-four method limits require controlled cross-backend calibration before release; current implementation validation preserves rather than relaxes those criteria.
+Every measured configuration must pass its defined correctness checks before a report can complete. The raw report retains each oracle, observed value, limit, and supporting details. Numerical limits are never widened merely to make a run pass. The retained affine and degree-four method limits require controlled cross-backend calibration before release; current implementation validation preserves rather than relaxes those criteria.
 
 ## Platform and provenance
 
@@ -86,7 +86,7 @@ docs/public/benchmarks/v1/
     sha256-<64 lowercase hexadecimal digits>.json
 ```
 
-Each raw filename is the SHA-256 digest of its exact bytes. `catalog.json` is a rendering projection in which one entry is one complete formal run; cases are nested and never published as standalone results. Catalog runs include the exact report-level `execution` object.
+Each raw filename is the SHA-256 digest of its bytes. `catalog.json` is a rendering projection in which one entry is one complete formal run; cases are nested and never published as standalone results. Catalog runs include the report-level `execution` object.
 
 The current fixed manifest identity is:
 

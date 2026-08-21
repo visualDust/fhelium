@@ -60,7 +60,7 @@ jit.SvgGraphVisualizationPass(
 ).run(lowered_program, workspace)
 ```
 
-Arguments, constants, operations, and outputs remain distinct. Equal operation color keys receive equal colors. The default key is the exact operation name; preserved `torch.call` operations also include call kind and target, allowing repeated public subgraphs to remain recognizable. The SVG canvas is transparent, and node fills use a varied FHElium-derived light palette with deep-neutral text.
+Arguments, constants, operations, and outputs remain distinct. Equal operation color keys receive equal colors. The default key is the operation name; preserved `torch.call` operations also include call kind and target, allowing repeated public subgraphs to remain recognizable. The SVG canvas is transparent, and node fills use a varied FHElium-derived light palette with deep-neutral text.
 
 Rendering requires the Python `pydot` package and the system Graphviz `dot` executable.
 
@@ -71,10 +71,10 @@ Rendering requires the Python `pydot` package and the system Graphviz `dot` exec
 | Field | Rendered evidence |
 | --- | --- |
 | `name` | Stable SSA result or block-argument name. |
-| `opcode` | Exact xDSL operation name, such as `fhelium.ckks.add`. |
+| `opcode` | xDSL operation name, such as `fhelium.ckks.add`. |
 | `role` | Encrypted, message, plaintext, material, or resource result role. |
 | `operands` | Ordered SSA producer names consumed by the node. |
-| `result_types` | Exact xDSL result types and their carried representation-state metadata. |
+| `result_types` | xDSL result types and their carried representation-state metadata. |
 | `attributes` | Selected non-internal xDSL operation attributes, one row per attribute. |
 | `scheduling_obligations` | Lowering work still outstanding on the operation. |
 | `num_users` | Total number of SSA uses of the operation results. |
@@ -97,7 +97,7 @@ The `attributes` field and `attribute_names` perform different selections:
 
 - omitting `attributes` from `fields` removes all attribute selection and rows;
 - including `attributes` with `attribute_names=None` retains every selected operation attribute;
-- an `attribute_names={...}` allowlist retains only exact names present on each operation.
+- an `attribute_names={...}` allowlist retains only listed names present on each operation.
 
 The default presentation always excludes:
 
@@ -108,7 +108,7 @@ Every retained attribute is printed in its own `attr:<name>` row. Missing allowl
 
 ### Long attribute values
 
-The default `attribute_preview_chars=180` retains at most 180 source characters from each attribute value in the Graphviz record. A shortened row appends the exact omitted-character count, so the final row text is deliberately longer than the retained prefix:
+The default `attribute_preview_chars=180` retains at most 180 source characters from each attribute value in the Graphviz record. A shortened row appends the number of omitted characters, so the final row text is deliberately longer than the retained prefix:
 
 ```text
 attr:fhelium.call.arguments=... [247 chars omitted]
@@ -207,7 +207,7 @@ jit.SvgGraphVisualizationPass(
 ).run(lowered_program, workspace)
 ```
 
-An exact `operation_colors` entry takes precedence over the palette. Other keys are deterministically mapped into the non-empty palette. Supplying `operation_colors={}` intentionally removes the default special color for `fhelium.constant`; omitting it retains that default. The hash algorithm remains an implementation detail, while equal keys under one theme are guaranteed to receive equal colors.
+A matching `operation_colors` entry takes precedence over the palette. Other keys are deterministically mapped into the non-empty palette. Supplying `operation_colors={}` intentionally removes the default special color for `fhelium.constant`; omitting it retains that default. The hash algorithm remains an implementation detail, while equal keys under one theme are guaranteed to receive equal colors.
 
 When a custom classifier handles only selected operation families, delegate all other contexts to `default_svg_operation_color_key()` as above. This preserves the default distinction among `torch.call` function and method targets instead of collapsing every preserved Torch operation into one color.
 

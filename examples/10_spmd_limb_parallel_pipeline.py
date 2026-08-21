@@ -97,7 +97,7 @@ def main() -> None:
 
     local_operand = dist.scatter_ciphertext_limbs(prepared_shards, src=0)
 
-    # Exact-state ciphertext multiplication is also limb-local. It returns three components;
+    # Matching-state ciphertext multiplication is also limb-local. It returns three components;
     # relinearization is deliberately delayed until the limbs are complete.
     local_triplet = engine.multiply(local_operand, local_operand)
     full_triplet = dist.gather_ciphertext_limbs(local_triplet, dst=0)

@@ -7,7 +7,7 @@
 // or copy. All residue/twiddle/parameter tensors are integral, dense enough for
 // that view, and on one registered execution device. Parameter column j and
 // twiddle row j
-// describe the exact prime_ids[j] represented by operand limb j. rns_params is
+// describe the prime_ids[j] represented by operand limb j. rns_params is
 // [parameter, limb] with rows defined by rns_parameters.h. Indexed schedules
 // are int32 [stage, N/2]; compact tables are [limb, N], while strict-radix
 // tables are [limb, N-1] and [limb, radix]. Twiddles are Montgomery residues.

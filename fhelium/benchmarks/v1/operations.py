@@ -81,7 +81,7 @@ _PARAMETER_SELECTION_RATIONALE = (
 _TIMED_BOUNDARY = BenchmarkTimedBoundary(
     id="depth-aware-single-public-ckks-call",
     description=(
-        "One functional public CkksEngine call at one exact entry level, with "
+        "One functional public CkksEngine call at one entry level, with "
         "synchronized device completion."
     ),
     includes=(
@@ -1275,7 +1275,7 @@ DEFINITION = register_benchmark(
         description=(
             "Measures twelve functional public CKKS calls on one fixed "
             "cross-backend CKKS plan "
-            "while sweeping exact active-Q entry levels. Setup and correctness "
+            "while sweeping active-Q entry levels. Setup and correctness "
             "canonicalization are excluded from synchronized call timing."
         ),
         profiles=(

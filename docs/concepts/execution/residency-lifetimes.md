@@ -37,7 +37,7 @@ graph TB
 ```
 
 - **Graph staging** preserves addresses for captured dynamic inputs.
-- **Reusable buffers** expose a fixed allocation and an copy schedule.
+- **Reusable buffers** expose a fixed allocation and a copy schedule.
 - **Residency** tracks which manager-issued local handle has a materialization
   in which local memory location.
 
@@ -71,7 +71,7 @@ Two independent constraints describe a managed value:
 | `Recoverability.RECONSTRUCTIBLE` | A registered `ResidencySource` can reconstruct the managed value after its final materialization is dropped. |
 | `Recoverability.MUST_PRESERVE` | At least one materialization remains until the application discards the managed value. `adopt` establishes this preservation requirement. |
 
-`ResidencySource.load()` synchronously reconstructs the exact value and
+`ResidencySource.load()` synchronously reconstructs the registered value and
 transfers sole logical ownership of independent tensor storage to the manager.
 The source must not retain or mutate the returned concrete value after the
 callback returns. While `load()` is active, every concurrent public access to
@@ -230,7 +230,7 @@ issued by the local manager. FHE operations can expand memory substantially
 through key switching, rotation, multiplication, relinearization,
 bootstrapping, and temporary RNS bases. Stage and tile transitions select
 managed values, reserve measured headroom, acquire a read window, and release
-or move materializations at an declared completion point.
+or move materializations at a declared completion point.
 
 `execute_actions(...)` runs a raw ordered action sequence without a scoped
 body. Both it and `scope(...)` accept a per-destination `transfer_streams`
@@ -274,7 +274,7 @@ with controller.use(
     run(input_value, weight_value)
 ```
 
-Each requirement identifies an exact `(handle, location)` endpoint. A
+Each requirement identifies a `(handle, location)` endpoint. A
 `REPLICABLE` value may be required at several locations; an `EXCLUSIVE` value
 cannot. The built-in policy uses configured fallback edges and deterministic
 priority-aware least-recently-used ordering. It never infers a tier or capacity
@@ -378,5 +378,5 @@ Distributed programs create and use independent rank-local managers.
 - [Choose a Residency control level](../../how-to/choose-residency-control-level.md)
 - [Diagnose a Residency failure](../../how-to/diagnose-residency-failure.md)
 - [Stream resources with bounded memory](../../how-to/stream-bounded-memory.md)
-- [Exact signatures and buffers](exact-signatures-and-buffers.md)
+- [Value signatures and buffers](signatures-and-buffers.md)
 - [CKKS cost model](../performance/cost-model.md)

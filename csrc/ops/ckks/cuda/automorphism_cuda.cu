@@ -6,7 +6,7 @@
 
 // Galois automorphism representation requirements. Input is integral CUDA
 // [*batch, limb, coefficient_or_ntt_index]; output is newly allocated with the
-// same shape, dtype/device, exact prime rows, domain, representation, and lazy
+// same shape, dtype/device, prime rows, domain, representation, and lazy
 // or canonical range. source_indices is int32 [N] destination-to-source order.
 // The coefficient variant also consumes int8 source_sign [N] and integral
 // twice_modulus [limb] to implement $\sigma_g:X\mapsto X^g$ modulo $X^N+1$;

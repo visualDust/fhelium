@@ -26,6 +26,7 @@ from packaging.utils import parse_wheel_filename
 @dataclass(frozen=True)
 class Artifact:
     configuration: str
+    platform: str
     python_abi: str
     filename: str
     sha256: str
@@ -49,7 +50,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_matrix_module() -> ModuleType:
-    path = Path(__file__).with_name("release_matrix.py")
+    path = Path(__file__).with_name("matrix.py")
     spec = importlib.util.spec_from_file_location(
         "_fhelium_release_matrix", path
     )
@@ -101,6 +102,14 @@ def wheel_abi(filename: str, supported: tuple[str, ...]) -> str:
     return matches[0]
 
 
+def wheel_platform(filename: str) -> str:
+    if filename.endswith("-win_amd64.whl"):
+        return "win_amd64"
+    if "manylinux" in filename and filename.endswith("_x86_64.whl"):
+        return "manylinux_2_28_x86_64"
+    raise RuntimeError(f"unsupported release wheel platform: {filename}")
+
+
 def html_project_page(artifacts: list[Artifact]) -> str:
     anchors = [
         "<a "
@@ -148,7 +157,7 @@ def write_json(path: Path, value: object) -> None:
 def main() -> None:
     args = parse_args()
     root = Path(__file__).resolve().parents[1]
-    matrix = load_matrix_module().load_release_matrix()
+    matrix = load_matrix_module().load_matrix()
     project = tomllib.loads(
         (root / "pyproject.toml").read_text(encoding="utf-8")
     )["project"]
@@ -173,14 +182,22 @@ def main() -> None:
                 *wheel_dir.glob("*/wheelhouse/*.whl"),
             }
         )
-        if len(wheels) != len(matrix.python_abis):
+        expected_wheels = len(configuration.platform_targets) * len(
+            matrix.python_abis
+        )
+        if len(wheels) != expected_wheels:
             raise RuntimeError(
-                f"{configuration.id} must provide {len(matrix.python_abis)} "
+                f"{configuration.id} must provide {expected_wheels} "
                 f"wheels, found {len(wheels)}"
             )
-        seen_abis: set[str] = set()
+        seen_cells: set[tuple[str, str]] = set()
         for wheel in wheels:
             abi = wheel_abi(wheel.name, matrix.python_abis)
+            platform = wheel_platform(wheel.name)
+            if not configuration.supports(platform):
+                raise RuntimeError(
+                    f"{configuration.id} does not publish {platform}"
+                )
             distribution, parsed_version, _, _ = parse_wheel_filename(
                 wheel.name
             )
@@ -188,9 +205,12 @@ def main() -> None:
                 raise RuntimeError(
                     f"unexpected wheel project/version: {wheel.name}"
                 )
-            if abi in seen_abis:
-                raise RuntimeError(f"duplicate {configuration.id}/{abi}")
-            seen_abis.add(abi)
+            cell = (platform, abi)
+            if cell in seen_cells:
+                raise RuntimeError(
+                    f"duplicate {configuration.id}/{platform}/{abi}"
+                )
+            seen_cells.add(cell)
             relative = f"artifacts/{version}/{configuration.id}/{wheel.name}"
             destination = output / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -198,6 +218,7 @@ def main() -> None:
             artifacts.append(
                 Artifact(
                     configuration=configuration.id,
+                    platform=platform,
                     python_abi=abi,
                     filename=wheel.name,
                     sha256=sha256(destination),
@@ -273,6 +294,7 @@ def main() -> None:
         "artifacts": [
             {
                 "configuration": artifact.configuration,
+                "platform": artifact.platform,
                 "python_abi": artifact.python_abi,
                 "filename": artifact.filename,
                 "relative_path": artifact.relative_path,
@@ -283,7 +305,11 @@ def main() -> None:
             }
             for artifact in sorted(
                 artifacts,
-                key=lambda item: (item.configuration, item.python_abi),
+                key=lambda item: (
+                    item.configuration,
+                    item.platform,
+                    item.python_abi,
+                ),
             )
         ],
     }

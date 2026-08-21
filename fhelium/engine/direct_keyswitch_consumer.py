@@ -18,13 +18,12 @@ class DirectKeySwitchDigitConsumer(Protocol):
     r"""Consume one coefficient-domain QP digit into two accumulators.
 
     The hybrid key-switch executor owns digit production and lifetime. A
-    consumer owns only the representation transition and multiply-accumulate,
-    which is the exact operation that an ordinary two-kernel implementation
-    and a fused native implementation may differ.
+    consumer owns only the representation transition and multiply-accumulate.
+    The protocol permits ordinary kernels or a fused native implementation.
 
     ``digit_qp`` and both accumulators are integral
     ``[*batch, limb, coefficient_or_ntt_index]`` tensors whose limb order is
-    the same exact active $Q_\ell P$ interval. The digit enters in
+    the same active $Q_\ell P$ interval. The digit enters in
     coefficient/Montgomery lazy form. Consumers mutate it to NTT/Montgomery
     and add products with ``key_digit[key_component, limb, ntt_index]`` into
     the two NTT/Montgomery accumulators. ``parameter_row_start`` maps local

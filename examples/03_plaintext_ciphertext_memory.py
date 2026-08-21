@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Inspect residency and round-trip exact values through direct files."""
+"""Inspect residency and round-trip values through direct files."""
 
 from __future__ import annotations
 

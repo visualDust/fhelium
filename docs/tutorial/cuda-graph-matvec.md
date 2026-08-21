@@ -27,8 +27,8 @@ into:
 | --- | --- |
 | engine and CKKS context | encrypted input vector |
 | encoded matrix diagonals | ciphertext payload |
-| exact rotation keys | request-specific values |
-| operation schedule | matching exact-value input signature |
+| direct rotation keys | request-specific values |
+| operation schedule | matching value input signature |
 
 Encryption and decryption remain outside the graph.
 
@@ -83,12 +83,12 @@ program = CudaGraphProgram.capture(
 
 [`CudaGraphProgram`](../api/fhelium/execution/cuda_graph.md#cudagraphprogram) performs side-stream
 warmup, allocates fixed dynamic-input storage, captures the evaluator, records
-the output storage, and derives an exact input signature.
+the output storage, and derives an input signature.
 
 The prototype determines structure, including:
 
 - value-tree shape;
-- exact value type;
+- value type;
 - tensor shape and dtype;
 - CKKS context and level;
 - polynomial domain, modulus basis, residue representation, scale, and prime IDs.
@@ -164,5 +164,5 @@ fixed captured programs.
 ## Related concepts and guides
 
 - [CUDA Graph execution model](../concepts/execution/cuda-graph-model.md)
-- [Exact signatures and buffers](../concepts/execution/exact-signatures-and-buffers.md)
+- [Value signatures and buffers](../concepts/execution/signatures-and-buffers.md)
 - [Capture a repeated evaluator](../how-to/capture-repeated-evaluator.md)

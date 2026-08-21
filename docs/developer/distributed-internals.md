@@ -32,7 +32,7 @@ rendezvous is supplied, but still creates an ordinary PyTorch `ProcessGroup`.
 The package also re-exports selected `torch.distributed` APIs. Raw tensor calls
 retain their PyTorch signatures, mutation behavior, group semantics, and
 `Work` handles. FHElium-specific names such as `broadcast_ciphertext` and
-`all_reduce_ciphertext` identify operations that require exact-value metadata
+`all_reduce_ciphertext` identify operations that require value metadata
 or CKKS arithmetic.
 
 ## Rank and device identity
@@ -70,12 +70,12 @@ sender converts a value into a `ValueEnvelope`-derived descriptor containing:
 
 - transfer protocol version;
 - concrete FHElium value type and value-schema version;
-- context identity and exact non-tensor metadata;
+- context identity and non-tensor metadata;
 - tensor names, shapes, dtypes, and CPU/CUDA device type.
 
 The receiver validates the descriptor, allocates the corresponding tensor
 leaves on its rank-local device, transfers those leaves, and reconstructs the
-typed value through the exact value schema.
+typed value through the value schema.
 
 ```mermaid
 sequenceDiagram
@@ -84,18 +84,18 @@ sequenceDiagram
     participant R as Receiver rank
     participant P as Tensor payload collectives
 
-    S->>C: exact value descriptor
+    S->>C: value descriptor
     C->>C: validate protocol, arguments, and rank agreement
     C->>R: accepted descriptor
     R->>R: allocate typed receiver storage
     S->>P: ordered dense tensor leaves
     P->>R: transfer payloads
-    R->>R: reconstruct exact FHElium value
+    R->>R: reconstruct FHElium value
 ```
 
 The transfer protocol and durable serialization schema have independent
 versions. Raw `torch.Tensor` is a transport descriptor kind, but is not added to
-the FHElium exact-value serialization registry.
+the FHElium value serialization registry.
 
 Control errors must become group-consistent before a rank enters a payload
 collective. A rank-local exception followed by peer ranks waiting in NCCL or
@@ -111,7 +111,7 @@ position:
 - scatter distributes a source sequence of complete ciphertext values;
 - gather and all-gather reconstruct complete values in process-group order.
 
-These are transport operations. They preserve payload bits and exact metadata;
+These are transport operations. They preserve payload bits and value metadata;
 they do not add ciphertexts, concatenate RNS rows, align levels, or change
 scale.
 
@@ -190,7 +190,7 @@ Distributed implementation changes should cover:
 - global versus group-relative rank arguments;
 - CPU/Gloo and CUDA/NCCL paths supported by the change;
 - descriptor or argument mismatch before payload transfer;
-- exact reconstructed value state and device;
+- reconstructed value state and device;
 - whole-value, additive, and limb-partition semantics as distinct cases;
 - cleanup and timeout diagnostics after a failed collective.
 

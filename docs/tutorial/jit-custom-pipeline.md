@@ -22,7 +22,7 @@ python examples/21_jit_custom_pipeline.py \
 
 The script runs on the selected CPU or CUDA engine and prints:
 
-- every pass in its exact pipeline position;
+- every pass in its pipeline position;
 - match, transformation, insertion, removal, and skip counts;
 - evaluation-key requirements;
 - readiness before and after runtime binding;
@@ -100,7 +100,7 @@ captured = jit.trace(
 | `rotation` | `static(3)` | Capture specializes the integer and omits it from the runtime signature |
 
 `captured.program` is the source-independent xDSL `Program`.
-`captured.workspace` is the exact caller-supplied mapping object. Program text
+`captured.workspace` is the same mapping object supplied by the caller. Program text
 contains operations and symbolic identities; live engines, keys, policies,
 handlers, and analysis results remain outside the graph.
 
@@ -155,7 +155,7 @@ The pass has two independent effects:
 
 1. it rejects a lowered surface that still contains recognized semantic or
    logical arithmetic, or that lacks an operation required by this workload;
-2. it publishes the exact observed operation surface under a caller-owned
+2. it publishes the observed operation surface under a caller-owned
    workspace key.
 
 The pass deliberately returns `PassResult.unchanged(...)`. `matched` records
@@ -232,7 +232,7 @@ operations. The custom audit reports the final operation surface without
 rewriting it. `ValidateExecutableGraphPass` provides a separate executable
 schema gate; it does not replace the runtime capability check.
 
-## 6. Plan the exact evaluation keys
+## 6. Plan the required evaluation keys
 
 Key planning scans the explicit lowered operations:
 

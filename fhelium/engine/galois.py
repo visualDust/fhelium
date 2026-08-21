@@ -92,8 +92,8 @@ def apply_coefficient_galois_automorphism(
 
     ``residues`` has integral ``[*batch, limb, coefficient]`` layout on one
     device in either standard or Montgomery representation. The gather and
-    sign change preserve that representation and exact prime-row order.
-    ``moduli`` is a same-dtype/device vector containing the exact modulus for
+    sign change preserve that representation and prime-row order.
+    ``moduli`` is a same-dtype/device vector containing the modulus for
     each limb; reducing against it maps signed gather results into canonical
     $[0,q_i)$ representatives before any NTT or key-switch consumer. The
     output has identical shape, dtype, and device, owns independent storage,

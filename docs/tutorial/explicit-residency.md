@@ -20,7 +20,7 @@ CUDA is required. The workload rotates one encrypted message by one slot,
 multiplies it by a prepared `0.5` plaintext, rescales, decrypts, and compares
 with the cleartext result.
 
-## 1. Start with live exact values
+## 1. Start with live values
 
 The example creates:
 
@@ -43,7 +43,7 @@ source = engine.encrypt_message(message)
 ## 2. Configure optional admission budgets
 
 Locations are immutable identities. Host locations are canonical constants;
-CUDA locations require an device index.
+CUDA locations require a device index.
 
 ```python
 device_location = cuda_location(engine.device)
@@ -240,7 +240,7 @@ values. Evaluation still requires a lease.
 This example deliberately keeps placement actions and plan order under direct
 application control. Use the separate
 [automatic residency admission](./automatic-residency.md) workflow when the
-application should state exact working-set endpoints and headroom while a
+application should state working-set endpoints and headroom while a
 deterministic policy selects legal reclaim actions. Both workflows execute
 through the same manager authority and strict leases; automation does not
 change `ResidencyManager.acquire()` or introduce background movement.

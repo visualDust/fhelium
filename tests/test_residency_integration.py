@@ -237,7 +237,7 @@ def test_artifact_source_reconstructs_exact_value_and_obeys_lifetimes(
     assert original.data is not None
     expected_data = original.data.clone()
     reference = ArtifactStore(store_root).put(
-        "integration/exact-plaintext",
+        "integration/plaintext",
         original,
     )
     del original

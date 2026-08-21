@@ -124,7 +124,7 @@ class SecurityBudgetExceededError(ConfigurationError):
 
 
 class SecurityParametersUnsupportedError(ConfigurationError):
-    """No exact supported security-table row matches the configuration."""
+    """No supported security-table row matches the configuration."""
 
     def __init__(
         self,
@@ -141,7 +141,7 @@ class SecurityParametersUnsupportedError(ConfigurationError):
         self.error_stddev = float(error_stddev)
         self.reason = str(reason)
         super().__init__(
-            "No exact supported security assessment matches the "
+            "No supported security assessment matches the "
             f"configuration: ring_dimension={self.ring_dimension}, "
             f"target_bits={self.target_bits}, "
             f"secret_distribution={self.secret_distribution!r}, "
@@ -170,7 +170,7 @@ class InvalidScaleError(ScaleError):
 
 
 class ScaleMismatchError(ScaleError):
-    """Two values have different scales for an exact-scale operation."""
+    """Two values have different scales for an equal-scale operation."""
 
     def __init__(
         self,
@@ -222,7 +222,7 @@ class CudaGraphCaptureError(ExecutionError):
 
 
 class CudaGraphInputError(ExecutionInputError):
-    """Replay input structure or exact-value state differs from capture."""
+    """Replay input structure or value state differs from capture."""
 
 
 class ArtifactError(FHEliumError, RuntimeError):

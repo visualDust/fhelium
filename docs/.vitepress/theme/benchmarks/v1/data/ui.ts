@@ -26,7 +26,7 @@ export interface BenchmarkGpuDevice {
   totalGlobalMem: number | null
 }
 
-const exactLabels: Record<string, string> = {
+const fixedLabels: Record<string, string> = {
   add: 'Add',
   add_plaintext: 'Add plaintext',
   coefficient_domain_to_ntt_domain: 'Coefficient → NTT',
@@ -65,8 +65,8 @@ const acronymLabels: Record<string, string> = {
 }
 
 export function humanizeIdentifier(value: string): string {
-  const exact = exactLabels[value]
-  if (exact) return exact
+  const fixed = fixedLabels[value]
+  if (fixed) return fixed
   const compactBackend = /^radix(\d+)_compact_group(\d+)_smem(\d+)$/u.exec(value)
   if (compactBackend) {
     return `Radix-${compactBackend[1]} compact · group ${compactBackend[2]} · SMEM ${compactBackend[3]}`

@@ -7,7 +7,7 @@ and provide a C++17-capable compiler.
 
 <InstallCommand :show-details-link="false" />
 
-Binary compatibility includes the Python ABI, exact Torch version, Torch CUDA
+Binary compatibility includes the Python ABI, pinned Torch version, Torch CUDA
 version, C++ ABI, and compiled GPU architectures. Prebuilt Linux wheels are
 complete `fhelium` wheels served by FHElium's static release store. The
 installer above selects the configuration-specific wheel index corresponding

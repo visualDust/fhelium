@@ -30,7 +30,7 @@ must fail before native launch.
 
 Before editing CUDA, create a minimal test/harness that:
 
-- builds an fixed preset and indexed device;
+- builds a fixed preset and indexed device;
 - reaches the target operation through public state transitions;
 - compares against a cleartext or trusted reference;
 - checks output state as well as tensor values;
@@ -64,7 +64,7 @@ state cannot be represented in the dispatcher schema.
 For CPU support, register the schema under the `CPU` dispatch key and use ATen
 tensor accessors, integral dtype dispatch, and `at::parallel_for` where the
 work size justifies intra-op parallelism. Compile against the parallel backend
-selected by the exact Torch package; do not introduce an independent FHElium
+selected by the installed Torch package; do not introduce an independent FHElium
 thread pool or link a second OpenMP runtime.
 
 For CUDA support, register the same schema under the `CUDA` dispatch key. The

@@ -226,7 +226,7 @@ evaluation.
 ## Addition and subtraction require compatible state
 
 Addition and subtraction preserve level and scale, but only after the operands
-already satisfy their exact compatibility requirements:
+already satisfy their compatibility requirements:
 
 $$
 \ell_a=\ell_b,
@@ -235,7 +235,7 @@ $$
 $$
 
 with binary64 equality, together with equal context, shape, component count,
-domain, basis, residue representation, and exact prime IDs. A scale difference
+domain, basis, residue representation, and prime IDs. A scale difference
 of one unit in the last place is a mismatch. `add`, `subtract`,
 `sum_ciphertexts`, and `add_plaintext` accept values that already satisfy this
 set of requirements.
@@ -263,7 +263,7 @@ Programs align the two axes separately:
 | `mod_switch_to_level` | Set the requested reachable public level | Preserve |
 | `reinterpret_at_scale` | Preserve | Replace with the requested scale |
 
-Exact signatures, representation preconditions, exceptions, result allocation,
+Signatures, representation preconditions, exceptions, result allocation,
 and in-place alias behavior are specified by the generated API reference and
 method docstrings. Primitive representation, domain, and residue conversions
 are defined in
@@ -271,7 +271,7 @@ are defined in
 Arithmetic, component-count, and key-dependent effects are described in
 [Evaluator operation transitions](evaluator-operation-transitions.md).
 
-## Query the exact rescale transition
+## Query the rescale transition
 
 The engine exposes the same level-dependent divisor and binary64 quotient used
 by `rescale_to_next_level`:
@@ -287,7 +287,7 @@ assert predicted_scale == pre_rescale_scale / q_drop
 ```
 
 These queries return the modulus and scale arithmetic of one transition from
-an provided source level and input scale.
+a provided source level and input scale.
 
 Binary64 expression ordering is observable. Branches that will be added use a
 common scale calculation history so their scale metadata satisfies binary64

@@ -1,4 +1,4 @@
-"""CKKS encryption for exact Plaintext values."""
+"""CKKS encryption for Plaintext values."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from fhelium.rng import Csprng
 
 
 class CkksEncryptor:
-    r"""Encrypt exact coefficients under one engine-owned public key policy.
+    r"""Encrypt integer coefficients under one engine-owned public key policy.
 
     The component constructs two-component phases
     $c_0(X)+c_1(X)s(X)=p(X)+e(X)\pmod{B_\ell}$. It owns no key inventory,
@@ -64,7 +64,7 @@ class CkksEncryptor:
         plaintext: Plaintext,
         public_key: PublicKey,
     ) -> Ciphertext:
-        r"""Encrypt exact integer coefficients under ``public_key``.
+        r"""Encrypt integer coefficients under ``public_key``.
 
         For $p(X)\in R$, generate a phase
 
@@ -78,7 +78,7 @@ class CkksEncryptor:
         extent $N$. The new output has
         ``[component=2, *batch, limb, coefficient]`` layout, coefficient
         domain, canonical standard residues, Q or QP basis selected by the
-        public key, exact active ``prime_ids``, unchanged level, and
+        public key, active ``prime_ids``, unchanged level, and
         $\Delta(c)=\Delta(p)$. Inputs are not mutated and output storage is
         independent.
         """
@@ -147,7 +147,7 @@ class CkksEncryptor:
 
         ``plaintext_rns`` has layout ``[*batch, limb, coefficient]``, engine
         integral dtype/device, final extent $N$, and limb row $i$ modulo the
-        exact active ``prime_ids[i]`` selected by ``level`` and the public-key
+        active ``prime_ids[i]`` selected by ``level`` and the public-key
         Q/QP basis. ``public_key`` is
         ``[key_component=2, level_zero_limb, ntt_index]`` in NTT-domain
         Montgomery form. Sampling $v,e_0,e_1$ yields
@@ -159,7 +159,7 @@ class CkksEncryptor:
         and therefore
         $c_0(X)+c_1(X)s(X)=p(X)+e(X)\pmod{B_\ell}$. Output is newly allocated
         ``[component=2, *batch, limb, coefficient]`` with canonical standard
-        residues, engine dtype/device, exact active ``prime_ids``, and supplied
+        residues, engine dtype/device, active ``prime_ids``, and supplied
         level/actual scale. Inputs do not alias the output.
         """
 
@@ -268,7 +268,7 @@ class CkksEncryptor:
         to Python integers and reduced into each RNS row. Both paths produce
         the same semantic ciphertext representation. Output has layout
         ``[component=2, *batch, limb, coefficient]``, engine integral
-        dtype/device, coefficient domain, canonical standard residues, exact Q
+        dtype/device, coefficient domain, canonical standard residues, Q
         or QP ``prime_ids`` selected by the key, requested level, and actual
         scale $\Delta$. It owns independent storage; message/key inputs are not
         mutated.

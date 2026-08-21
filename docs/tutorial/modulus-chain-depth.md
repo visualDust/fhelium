@@ -15,7 +15,7 @@ Inspect low, middle, and full-depth variants of a preset:
 python examples/04_modulus_chain_depth.py --preset slots32768-scale40-levels34-int64
 ```
 
-Select exact depth values:
+Select depth values:
 
 ```bash
 python examples/04_modulus_chain_depth.py \
@@ -64,18 +64,18 @@ $$
 \operatorname{bits}(QP)\approx25L+28(1+K_P).
 $$
 
-The exact catalog primes remain authoritative. In particular, every native
+The catalog primes remain authoritative. In particular, every native
 modulus must also satisfy $4q<2^w$, where $w$ is the configured residue buffer
 width; security-budget capacity alone does not establish native arithmetic
 validity.
 
-`total_modulus_bits` is the exact configured value
+`total_modulus_bits` is the configured value
 $\lceil\log_2(Q_0P)\rceil$. It covers both the ordinary Q-chain primes $q_i$
 and the special-prime product $P$, not Q alone. The configuration requires
 `total_modulus_bits <= maximum_modulus_bits` when
 `enforce_security_budget=True`.
 
-The exact primes come from the immutable catalog. The configuration validates
+The primes come from the immutable catalog. The configuration validates
 that the selected chain remains within the requested security budget.
 
 ## 2. Q and P have different roles
@@ -133,7 +133,7 @@ fits the security table:
 - unnecessary depth makes early-level operations more expensive.
 
 ::: info Level is not an abstract counter
-In FHElium, level determines an exact ordered `prime_ids` interval and a
+In FHElium, level determines an ordered `prime_ids` interval and a
 concrete dense tensor shape. Operations validate this structure rather than
 trusting level metadata alone.
 :::

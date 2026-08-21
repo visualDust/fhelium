@@ -21,7 +21,7 @@ disabled or may have overwritten older transitions.
 Do not infer manager state from `torch.cuda.memory_reserved()` or NVML. Those
 are process/device observations rather than Residency admission evidence.
 
-## 2. Verify the exact endpoint
+## 2. Verify the requested endpoint
 
 For each failed operation, record the required pair:
 
@@ -55,7 +55,7 @@ new peak        = current charged + requested or temporary charge
 admissible      = budget_bytes is None or new peak <= budget_bytes
 ```
 
-For `ResidencyBudgetError`, use its exact `location`, `budget_bytes`,
+For `ResidencyBudgetError`, use its reported `location`, `budget_bytes`,
 `used_bytes`, `reserved_bytes`, and `requested_bytes` fields. Determine whether
 the request is a new materialization, a `MemoryReservation`, or temporary
 reconstruction storage before changing the limit.
@@ -180,7 +180,7 @@ cannot be re-entered to complete the plan.
 | `ResidencySearchLimitError` | Automatic search reached its deterministic bound; feasibility is unknown. | Record search evidence, simplify alternatives, or justify a larger bound. |
 | `ResidencyStaleStateError` | A decision's expected manager version no longer matches. | Identify the mutation and derive/review a new decision if still required. |
 | `ResidencyInUseError` | A lease, hold, or pending CUDA event blocks direct removal. | Resolve the owning lifetime or defer removal. |
-| `ResidencyUnavailableError` | A direct operation requires an absent endpoint or source. | Establish the exact endpoint or valid reconstruction path. |
+| `ResidencyUnavailableError` | A direct operation requires an absent endpoint or source. | Establish the requested endpoint or valid reconstruction path. |
 | `ResidencyPlanExecutionError` | Execution failed after preflight and may have committed a prefix. | Inspect `phase`, `partial_report`, failed object/index, cause, and current snapshot. |
 
 `ResidencySearchLimitError` and `ResidencyStaleStateError` are specialized

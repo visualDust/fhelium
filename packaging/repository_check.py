@@ -11,6 +11,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
 
+from matrix import load_matrix
+
 
 class LinkParser(HTMLParser):
     def __init__(self) -> None:
@@ -49,6 +51,7 @@ def read_json(path: Path) -> dict[str, object]:
 def main() -> None:
     args = parse_args()
     tree = args.tree.resolve()
+    matrix = load_matrix()
     manifests = list(tree.glob("artifacts/*/manifest.json"))
     if len(manifests) != 1:
         raise RuntimeError(
@@ -79,8 +82,14 @@ def main() -> None:
     if catalog.get("fhelium_version") != manifest.get("project_version"):
         raise RuntimeError("install catalog version differs from manifest")
     recipes = catalog.get("binary_recipes")
-    if not isinstance(recipes, list) or len(recipes) != 4:
-        raise RuntimeError("install catalog must contain four binary recipes")
+    expected_recipes = sum(
+        len(configuration.platform_targets)
+        for configuration in matrix.configurations
+    )
+    if not isinstance(recipes, list) or len(recipes) != expected_recipes:
+        raise RuntimeError(
+            f"install catalog must contain {expected_recipes} binary recipes"
+        )
     if any(
         not isinstance(recipe, dict) or recipe.get("published") is not True
         for recipe in recipes
@@ -115,9 +124,10 @@ def main() -> None:
 
     html_pages = list(tree.glob("*/simple/fhelium/index.html"))
     json_pages = list(tree.glob("*/simple/fhelium/index.json"))
-    if len(html_pages) != 4 or len(json_pages) != 4:
+    root_count = len(matrix.configurations)
+    if len(html_pages) != root_count or len(json_pages) != root_count:
         raise RuntimeError(
-            "static tree must contain four HTML and JSON project pages"
+            f"static tree must contain {root_count} HTML and JSON project pages"
         )
 
     seen_html: set[str] = set()

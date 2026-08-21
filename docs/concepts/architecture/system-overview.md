@@ -35,7 +35,7 @@ graph TB
 | --- | --- | --- |
 | Application interface | Python 3.12+, typed FHElium values | Express CKKS values, keys, packing, and evaluator calls |
 | Tensor runtime | PyTorch | Own tensor storage, devices, allocation, CPU intra-op execution, CUDA streams, profiling, and collectives |
-| CKKS orchestration | Python in `fhelium.engine` | Validate exact state and compose encode, encrypt, NTT, RNS, key-switch, and rescale stages |
+| CKKS orchestration | Python in `fhelium.engine` | Validate state and compose encode, encrypt, NTT, RNS, key-switch, and rescale stages |
 | Native operator ABI | PyTorch C++ operator schemas | Give CPU and CUDA one operator name, mutation model, and tensor signature |
 | CPU arithmetic | C++17, ATen, `at::parallel_for` | Execute RNS, indexed radix-2 NTT, and CKKS tensor primitives through Torch's CPU runtime |
 | GPU arithmetic | CUDA C++ and ATen CUDA integration | Execute RNS, several NTT policies, Galois, key-switch, and rescale kernels on the current stream |
@@ -45,7 +45,7 @@ The native extension can contain CPU implementations, CUDA implementations, or
 both. A shared operator schema does not choose a backend itself: PyTorch selects
 the registered implementation from the input tensor's dispatch key.
 
-## Values and exact state
+## Values and CKKS state
 
 A `Plaintext`, `Ciphertext`, or key combines dense tensor storage with the
 metadata required to interpret it. For an RNS ciphertext, the principal layout
@@ -67,14 +67,14 @@ cryptographic and arithmetic state, including:
 - key-specific axes and identity where applicable.
 
 These metadata are execution inputs, not descriptive labels added after the
-fact. For example, ciphertext addition requires matching level, exact scale,
+fact. For example, ciphertext addition requires matching level, scale,
 component layout, domain, basis, residue form, context, prime rows, dtype, and
 device before any modular addition runs.
 
 ```mermaid
 graph LR
     VALUE[Typed value]
-    META[Exact CKKS state]
+    META[CKKS state]
     DATA[Dense torch.Tensor]
     VALUE --> META
     VALUE --> DATA
@@ -109,7 +109,7 @@ sequenceDiagram
     Disp->>Native: registered CPU or CUDA implementation
     Native-->>Run: allocated or mutated tensor
     Run-->>API: completed tensor stages
-    API-->>App: typed output with exact new state
+    API-->>App: typed output with its new state
 ```
 
 Python owns the semantic operation. It decides, for example, which Q rows are
@@ -180,7 +180,7 @@ graph TB
 ```
 
 Typed collectives separate a metadata/descriptor phase from dense tensor
-transfer. Whole-value transport reconstructs exact FHElium values at the
+transfer. Whole-value transport reconstructs FHElium values at the
 receiver. Limb gather/scatter performs structural RNS-row reconstruction, while
 ciphertext reduce/all-reduce uses modular ciphertext addition rather than raw
 integer `SUM`.
@@ -195,7 +195,7 @@ engine semantics.
 The `fhelium.execution` package builds reusable execution mechanisms on top of
 typed values:
 
-- `ValueTreeSignature` records exact nested input structure and value state;
+- `ValueTreeSignature` records nested input structure and value state;
 - `ReusableValueBuffer` owns stable destination storage and stream/event-aware
   copies;
 - `CudaGraphProgram` warms up, captures, and replays a rank-local callable with
@@ -216,7 +216,7 @@ Persistence and live placement are separate systems:
 
 ```mermaid
 graph LR
-    FILE[Exact value file]
+    FILE[Value file]
     STORE[ArtifactStore<br/>logical names and generations]
     VALUE[Live typed value]
     RES[ResidencyManager<br/>local materializations and lifetimes]
@@ -228,7 +228,7 @@ graph LR
     RES -->|ensure/move/reconstruct| VALUE
 ```
 
-- Exact serialization maps one typed value to a versioned file representation.
+- Serialization maps one typed value to a versioned file representation.
 - `ArtifactStore` adds durable logical naming, immutable generations, catalog
   identity, checksums, and retirement around those files.
 - `ResidencyManager` owns process-local live materializations, locations,
@@ -248,8 +248,8 @@ or loading and adopting a value.
 | `fhelium.engine` | Public CKKS semantics, RNS runtime, NTT plans/backends, encoding, encryption, key switching, and rescale |
 | `fhelium.native` | Native ABI validation/loading, generated `torch.ops` wrappers, and CUDA topology inspection |
 | `fhelium.distributed` | PyTorch distributed facade and typed HE collectives |
-| `fhelium.execution` | Exact signatures, reusable buffers, copy handles, and CUDA Graph execution |
-| `fhelium.serialization` | Exact versioned single-value files |
+| `fhelium.execution` | Value signatures, reusable buffers, copy handles, and CUDA Graph execution |
+| `fhelium.serialization` | Versioned single-value files |
 | `fhelium.artifacts` | Durable local repository names and immutable generations |
 | `fhelium.residency` | Live process-local materialization ownership, accounting, and admission |
 | `fhelium.experimental` | Opt-in bootstrap, JIT, and multiparty mechanisms |

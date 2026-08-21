@@ -9,13 +9,13 @@ change within a release series.
 ```text
 fhelium/
   config/          CKKS parameters, NTT policies, security assessment
-  core/            context identity, exact values, keys, rotation planning
+  core/            context identity, values, keys, rotation planning
   engine/          CKKS algorithms and engine-owned RNS/NTT implementation
     rns/            chain/layout metadata, parameters, arithmetic runtime
     ntt/            host plans, materialized tables, CPU/CUDA backends
   native/          extension loading, ABI diagnostics, CUDA inspection, wrappers
   rng/             CSPRNG interface and adapter
-  serialization/   exact versioned value files
+  serialization/   versioned value files
   artifacts/       logical names, current generations, and local repository policy
   distributed/     process state, typed transport, HE collectives
   execution/       signatures, reusable buffers, CUDA Graphs
@@ -36,7 +36,7 @@ csrc/ops/
 csrc/runtime/      CUDA device and peer-topology inspection extension
 examples/          maintained runnable workflows
 tests/             public, state, ABI, execution, distributed tests
-packaging/         release matrix, manylinux builders, artifact/index publication
+packaging/         five thin release commands, matrix/container declarations, private release modules
 cloudflare/        read-only Python package-index Worker
 .github/workflows/ release orchestration
 ```
@@ -105,7 +105,7 @@ wrapper output without changing the source schema or generator that owns it.
 | Limb scatter/gather | `fhelium/distributed/_limb_collectives.py` |
 | Ciphertext reduction | `fhelium/distributed/_ciphertext_reduction.py` |
 | Private collective aggregation point | `fhelium/distributed/_typed_collectives.py` |
-| Exact execution signatures | `fhelium/execution/signature.py` |
+| Execution signatures | `fhelium/execution/signature.py` |
 | Reusable buffers and copy handles | `fhelium/execution/buffer.py` |
 | CUDA Graph program | `fhelium/execution/cuda_graph.py` |
 | Composable CKKS bootstrap | `fhelium/experimental/bootstrap/` |

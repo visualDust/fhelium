@@ -30,9 +30,9 @@ class CkksPlaintextCodec:
     \longrightarrow (p\bmod q_i)_{i\in I_\ell}
     $$
 
-    and the inverse slot embedding for decoding. Encoding returns exact
-    integer coefficients; RNS reduction is a separate transition. Decoding
-    accepts exact integer coefficients or bounded binary64 approximate decrypt
+    and the inverse slot embedding for decoding. Encoding returns integer
+    coefficients; RNS reduction is a separate transition. Decoding accepts
+    integer coefficients or bounded binary64 approximate decrypt
     coefficients, never unreconstructed RNS rows.
     """
 
@@ -104,7 +104,7 @@ class CkksPlaintextCodec:
         level: int,
         scale: float,
     ) -> Plaintext:
-        """Wrap exact ``[*batch, coefficient]`` storage without copying.
+        """Wrap ``[*batch, coefficient]`` storage without copying.
 
         ``coeff`` is engine-dtype integral data on the engine device with
         final extent $N$; the result is coefficient-domain
@@ -132,7 +132,7 @@ class CkksPlaintextCodec:
 
         ``coefficients`` has layout ``[*batch, coefficient]``, dtype
         ``torch.float64``, engine device, and final extent $N$. It represents
-        the centered trailing-Q class used only for decoding, not an exact
+        the centered trailing-Q class used only for decoding, not a
         full-$Q_\ell$ CRT inverse and not an encryptable/RNS-convertible value.
         """
 
@@ -184,7 +184,7 @@ class CkksPlaintextCodec:
         *,
         scale: float,
     ) -> torch.Tensor:
-        r"""Return exact coefficients for CKKS encoding.
+        r"""Return integer coefficients for CKKS encoding.
 
         For canonical slots $m$, compute
 
@@ -226,7 +226,7 @@ class CkksPlaintextCodec:
         $$
 
         independently of the selected RNS level. The functional result is
-        exact ``integer_coefficients`` with layout
+        ``integer_coefficients`` with layout
         ``[*batch, coefficient]``, final extent $N$, engine integral dtype and
         device, coefficient domain, actual scale $\Delta$, and no RNS basis or
         ``prime_ids``. Use :meth:`integer_coefficients_to_rns` for modular reduction.
@@ -249,9 +249,9 @@ class CkksPlaintextCodec:
         *,
         modulus_basis: ModulusBasis = "Q",
     ) -> Plaintext:
-        r"""Reduce exact integer coefficients to standard RNS.
+        r"""Reduce integer coefficients to standard RNS.
 
-        For each exact active row ``prime_ids[i]`` with modulus $q_i$, compute
+        For each active row ``prime_ids[i]`` with modulus $q_i$, compute
         $r_{i,j}=p_j\bmod q_i$. Input layout
         ``[*batch, coefficient]`` becomes
         ``[*batch, limb, coefficient]`` with engine integral dtype/device and
@@ -343,7 +343,7 @@ class CkksPlaintextCodec:
         *,
         allow_approximate: bool,
     ) -> Plaintext:
-        """Validate one engine-local exact or approximate coefficient value."""
+        """Validate one engine-local integer or approximate coefficient value."""
 
         if not isinstance(plaintext, Plaintext):
             raise TypeError(
@@ -358,7 +358,7 @@ class CkksPlaintextCodec:
             expected = " or ".join(repr(item) for item in allowed)
             raise ValueError(
                 f"This operation requires representation={expected}, got "
-                f"{plaintext.representation!r}. Encode a separate exact "
+                f"{plaintext.representation!r}. Encode a separate "
                 "integer-coefficient Plaintext when required."
             )
         self._validate_public_level(plaintext.level)
@@ -408,7 +408,7 @@ class CkksPlaintextCodec:
         return plaintext
 
     def decode(self, plaintext: Plaintext, *, is_real: bool = False):
-        r"""Decode exact or approximate coefficients into CPU slots.
+        r"""Decode integer or approximate coefficients into CPU slots.
 
         For coefficient data $p$ and the value's actual scale $\Delta(p)$,
 
@@ -417,7 +417,7 @@ class CkksPlaintextCodec:
         \mathcal{E}_g(p)/\Delta(p).
         $$
 
-        The accepted payload is exact integral ``integer_coefficients`` or
+        The accepted payload is integral ``integer_coefficients`` or
         finite ``torch.float64`` ``approximate_coefficients``, each with layout
         ``[*batch, coefficient]``, final extent $N$, and engine device. Slots
         input is encoded first under its stored scale. RNS input is rejected;

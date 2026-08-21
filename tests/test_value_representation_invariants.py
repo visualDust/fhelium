@@ -298,8 +298,8 @@ def test_approximate_coefficients_require_dense_finite_float64_tensor() -> None:
 def test_plaintext_raw_transition_chain_is_composable_and_axis_exact(
     engine: fh.CkksEngine,
 ) -> None:
-    exact = engine.encode(torch.linspace(-0.01, 0.01, 16), level=2)
-    standard = engine.integer_coefficients_to_rns(exact, modulus_basis="QP")
+    encoded = engine.encode(torch.linspace(-0.01, 0.01, 16), level=2)
+    standard = engine.integer_coefficients_to_rns(encoded, modulus_basis="QP")
     montgomery = engine.standard_residues_to_montgomery_residues(standard)
     ntt = engine.coefficient_domain_to_ntt_domain(montgomery)
     coefficient_montgomery = engine.ntt_domain_to_coefficient_domain(ntt)
@@ -307,7 +307,7 @@ def test_plaintext_raw_transition_chain_is_composable_and_axis_exact(
         coefficient_montgomery
     )
 
-    assert exact.representation == "integer_coefficients"
+    assert encoded.representation == "integer_coefficients"
     assert (standard.polynomial_domain, standard.residue_representation) == (
         "coefficient",
         "standard",
@@ -353,9 +353,11 @@ def test_plaintext_raw_transition_chain_is_composable_and_axis_exact(
             value.scale,
         ) == identity
 
-    addition = engine.prepare_plaintext_for_addition(exact, modulus_basis="QP")
+    addition = engine.prepare_plaintext_for_addition(
+        encoded, modulus_basis="QP"
+    )
     multiplication = engine.prepare_plaintext_for_multiplication(
-        exact, modulus_basis="QP"
+        encoded, modulus_basis="QP"
     )
     assert addition.residue_representation == "montgomery"
     assert addition.polynomial_domain == "coefficient"

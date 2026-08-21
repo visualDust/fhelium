@@ -1,4 +1,4 @@
-"""Centered modulus raising and its exact-RNS reference helpers."""
+"""Centered modulus raising and its integer-RNS reference helpers."""
 
 from __future__ import annotations
 
@@ -359,7 +359,7 @@ def _modulus_raise(
     the centered interval modulo the source product, then reduced exactly into
     every ``target_prime_ids`` row. Output owns newly allocated
     ``[component=2, *batch, destination_limb, coefficient]`` storage in
-    coefficient/standard/canonical Q state. Component count, batch axes, exact
+    coefficient/standard/canonical Q state. Component count, batch axes,
     integer polynomial, and actual scale are preserved; no input aliases or is
     mutated by the returned ciphertext.
     """

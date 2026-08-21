@@ -5,7 +5,7 @@
 Example 20 imports a versioned mixed-dialect xDSL `Program` from text, verifies
 a stable textual round trip, records requirements with a custom pass, binds an
 application operation handler through a retained `Workspace`, checks readiness,
-and executes an exact public Tensor computation.
+and executes a public Tensor computation.
 
 This workflow is IR-first and CPU-only. It demonstrates textual interchange and
 extension operations without constructing a CKKS engine or generating keys.
@@ -23,7 +23,7 @@ The script prints:
 - the imported operation, unknown-operation, and Torch-target requirements;
 - readiness diagnostics before and after the extension handler is bound;
 - reports from the custom pass and executable validator;
-- the exact input, output, and expected Tensor values;
+- the input, output, and expected Tensor values;
 - the canonical round-tripped textual `Program`.
 
 No CUDA device is required.
@@ -129,7 +129,7 @@ For this program, the scan reports:
 - operations: `application.scale_and_shift`, `fhelium.constant`, and
   `torch.call`;
 - unknown operations: `application.scale_and_shift`;
-- Torch targets: the exact `torch.neg` symbol;
+- Torch targets: the `torch.neg` symbol;
 - no CKKS engine requirement.
 
 Requirements describe what the current graph contains. They do not authorize
@@ -220,14 +220,14 @@ workspace = jit.Workspace(
 )
 ```
 
-`handlers` maps an exact extension operation name to a callable with the
+`handlers` maps an extension operation name to a callable with the
 signature `(operation, evaluated_operands, workspace)`. Binding the handler is a
 trust decision: FHElium checks that it is callable, but the application owns its
 arithmetic, type behavior, side effects, and resource safety.
 
 Built-in operation names are reserved and cannot be overridden through this
 mapping. Preserved `torch.call` targets use the separate audited Torch path or
-an exact `workspace["torch_handlers"]` binding.
+a `workspace["torch_handlers"]` binding keyed by target.
 
 ## 7. Compose the custom pipeline
 
@@ -244,7 +244,7 @@ transformed = pipeline.run(round_tripped, workspace)
 ```
 
 `PassPipeline.run()` clones the source `Program` once, invokes both passes in
-order, verifies the `Program` returned by each pass, and passes the exact same
+order, verifies the `Program` returned by each pass, and passes the same
 workspace object to every step. The example asserts retained identity:
 
 ```python
@@ -253,7 +253,7 @@ if transformed.workspace is not workspace:
 ```
 
 The first report records the imported operation surface. The second report
-shows that the graph is executable with the exact handler map now present.
+shows that the graph is executable with the handler map now present.
 Neither pass invokes the handler.
 
 ## 8. Check readiness after binding
@@ -283,7 +283,7 @@ The gain itself is handler-owned policy. Readiness cannot infer that a
 particular handler will read `workspace["application/gain"]`; the handler
 performs that check when invoked.
 
-## 9. Execute and require exact output
+## 9. Execute and compare the output
 
 The runtime input is a public CPU Tensor:
 
@@ -315,7 +315,7 @@ ordinary public Tensor computation with the same PyTorch operations on both
 paths. This example makes no CKKS approximation claim.
 
 `jit.run()` repeats readiness, binds the entry argument, interprets the audited
-`torch.neg`, then invokes the extension handler at its exact operation. A
+`torch.neg`, then invokes the extension handler at its operation. A
 handler failure remains an execution failure rather than being converted into
 successful readiness.
 
@@ -331,5 +331,5 @@ successful readiness.
   insertion, explicit CKKS auditing, key planning, and CUDA execution.
 - [JIT programs](../concepts/unified-jit-programs.md) defines structural and
   readiness validity, Program/Workspace ownership, and control modes.
-- [JIT internals](../developer/unified-jit-internals.md) specifies the exact
+- [JIT internals](../developer/unified-jit-internals.md) specifies the
   textual schemas, pass scope, and handler authorization.

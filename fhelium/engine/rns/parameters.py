@@ -12,7 +12,7 @@ from fhelium.engine.rns.layout import RnsLayout
 
 @dataclass(frozen=True)
 class RnsRowParameters:
-    r"""Device tables for one exact contiguous ``prime_ids`` interval.
+    r"""Device tables for one contiguous ``prime_ids`` interval.
 
     Every tensor is integral on one execution device. One-dimensional tables
     have shape ``[limb]`` in ``prime_ids`` order. ``montgomery_r2[j]`` is
@@ -54,7 +54,7 @@ class RnsParameterStore:
     A process owns one device and one dense canonical ``[Q | P]`` prime order.
     Level $\ell$ selects the contiguous interval beginning at Q prime id
     ``level``; a Q basis ends before P and a QP basis includes the fixed P
-    suffix. Views preserve this exact order and do not allocate or mutate the
+    suffix. Views preserve this order and do not allocate or mutate the
     source tables. The store contains no device fanout or communication policy.
     """
 

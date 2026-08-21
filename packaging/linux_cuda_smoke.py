@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_matrix_module() -> ModuleType:
-    path = Path(__file__).with_name("release_matrix.py")
+    path = Path(__file__).with_name("matrix.py")
     spec = importlib.util.spec_from_file_location(
         "_fhelium_release_matrix", path
     )
@@ -59,9 +59,7 @@ def main() -> None:
     args = parse_args()
     wheel = args.wheel.resolve()
     configuration = (
-        load_matrix_module()
-        .load_release_matrix()
-        .configuration(args.configuration)
+        load_matrix_module().load_matrix().configuration(args.configuration)
     )
     if not configuration.has_cuda:
         raise ValueError(f"{configuration.id} is not a CUDA configuration")

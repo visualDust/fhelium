@@ -134,7 +134,7 @@ restriction across several levels in one call, dropping
 Therefore:
 
 - a larger level means fewer active Q rows;
-- `prime_ids` identifies the exact rows represented by the dense tensor;
+- `prime_ids` identifies the rows represented by the dense tensor;
 - the tensor's limb dimension shrinks after rescale or modulus switch;
 - a final legal level cannot be rescaled again;
 - operation compatibility requires more than comparing integer `level` values.
@@ -190,11 +190,11 @@ temporary storage.
 
 ## Invariants to remember
 
-- Context identity includes the exact modulus values, not only their count.
+- Context identity includes the modulus values, not only their count.
 - Level zero contains all ordinary Q rows.
 - Level increases as leading scale primes are dropped.
 - Q and QP are different bases, not different levels.
-- `prime_ids` is part of exact value identity.
+- `prime_ids` is part of value identity.
 - Ring size, active rows, and component/digit axes all contribute to memory.
 - Precision claims must be validated at realistic amplitude and summation
   width.

@@ -56,7 +56,7 @@ Before using this object, establish all of the following:
 
 1. the input is a two-component coefficient-domain standard-RNS Q ciphertext
    at the final public level and actual scale near `default_scale` or its square;
-2. every batch member uses all $S=N/2$ slots and the exact active `prime_ids`;
+2. every batch member uses all $S=N/2$ slots and the active `prime_ids`;
 3. both raw branch coordinates lie within `[-input_bound, input_bound]`;
 4. the selected polynomial degree and evaluator meet the application's error
    model;
@@ -185,7 +185,7 @@ class MyBootstrap:
         )
 ```
 
-Document the custom callable's exact tensor axes, level/scale/domain/basis
+Document the custom callable's tensor axes, level/scale/domain/basis
 transitions, raw range, normalization owner, and output target. Ordinary
 dictionaries or tensors can hold caches; core value serialization and artifact
 facilities remain available for persistence.
@@ -212,8 +212,8 @@ refreshed = bootstrap(
 )
 ```
 
-`rotation_strategy="exact"` requests every mathematical transform rotation.
-`"power_of_two"` stores compact signed-power keys and composes missing exact
+`rotation_strategy="direct"` requests a direct key for every transform rotation.
+`"power_of_two"` stores compact signed-power keys and composes missing direct
 steps online. Generate or provision the relinearization and conjugation keys
 independently because they serve different operations and are not part of the
 rotation inventory.
@@ -232,6 +232,6 @@ config = fh.CkksConfig.parse(
 engine = fh.CkksEngine(config, galois_generator=5, device="cuda:0")
 ```
 
-Factories do not enforce this exact preset and do not prove the raw branch range
+Factories do not enforce this preset and do not prove the raw branch range
 or output error. Treat a different engine, range, polynomial profile, or
 application tolerance as a new validation target.

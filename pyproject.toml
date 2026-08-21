@@ -31,6 +31,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: C++",
     "Programming Language :: Python",
@@ -114,6 +115,8 @@ reportMissingTypeStubs = "none"
 
 [dependency-groups]
 dev = [
+    "jsonschema==4.26.0",
+    "packaging==26.3",
     "pre-commit==4.5.1",
     "pyright==1.1.411",
     "pytest==9.1.1",

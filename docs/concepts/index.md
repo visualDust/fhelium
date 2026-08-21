@@ -18,8 +18,8 @@ mental models, invariants, ownership rules, and mathematical semantics.
   />
   <DocCard
     title="Repeat execution within bounded memory"
-    description="Connect exact signatures, CUDA Graph execution, and residency lifetimes."
-    href="/concepts/execution/exact-signatures-and-buffers"
+    description="Connect value signatures, CUDA Graph execution, and residency lifetimes."
+    href="/concepts/execution/signatures-and-buffers"
   />
   <DocCard
     title="Optimize a workload"
@@ -49,7 +49,7 @@ mental models, invariants, ownership rules, and mathematical semantics.
 graph TB
     APP[Application evaluator]
     API[Public Python API]
-    VALUE[Exact dense values]
+    VALUE[Dense values]
     ENGINE[Rank-local CKKS engine]
     NATIVE[RNS / NTT / native CUDA]
     DIST[Rank-local SPMD]
@@ -71,7 +71,7 @@ The main conceptual families are:
 | [Architecture](architecture/system-overview.md) | Responsibility ownership across system layers |
 | [CKKS semantics](ckks/value-model-and-identity.md) | Context, value identity, primitive transitions, scale-level laws, and evaluator state effects |
 | [Distributed execution](distributed/spmd-model.md) | Mathematical relationships among rank-local values |
-| [Execution and lifecycle](execution/exact-signatures-and-buffers.md) | Exact-value staging, repetition, persistence, and retention |
+| [Execution and lifecycle](execution/signatures-and-buffers.md) | Value staging, repetition, persistence, and retention |
 | Features | Composable CKKS bootstrapping and JIT program construction, transformation, and execution |
 | [Performance](performance/cost-model.md) | Operation costs and optimization effects |
 | [Glossary](glossary.md) | Definitions of FHElium terminology |

@@ -1,7 +1,7 @@
 # Diagnose a value-state mismatch
 
 When an operation rejects a value—or a lower-level experiment produces wrong
-results—compare exact state in a fixed order. Do not begin by changing kernels
+results—compare value state in a fixed order. Do not begin by changing kernels
 or disabling validation.
 
 ## 1. Reduce to one deterministic operation
@@ -139,13 +139,13 @@ threshold.
 
 Capture:
 
-- exact source commit and build/wheel origin;
+- source commit and build/wheel origin;
 - operator schema and generated wrapper status;
 - shape/dtype/device and mutation or aliasing semantics;
 - level-specific row start/stop and prime IDs;
 - singleton/last-level/Q-vs-QP cases;
 - synchronized CUDA error location;
-- smallest `logN` and exact NTT backend that reproduce the issue.
+- smallest `logN` and NTT backend that reproduce the issue.
 
 Do not treat an asynchronous error reported at a later call as proof that the
 later call caused it.

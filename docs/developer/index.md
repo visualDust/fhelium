@@ -25,12 +25,12 @@ lowering, source ownership, and contributor validation.
   />
   <DocCard
     title="Distributed internals"
-    description="Trace torch.distributed initialization, exact-value descriptors, payload collectives, limb reconstruction, and modular ciphertext reduction."
+    description="Trace torch.distributed initialization, value descriptors, payload collectives, limb reconstruction, and modular ciphertext reduction."
     href="/developer/distributed-internals"
   />
   <DocCard
     title="Buffers and CUDA Graphs"
-    description="Inspect exact execution signatures, fixed-address value buffers, CUDA-event copy lifetime, graph capture, replay, and output ownership."
+    description="Inspect execution signatures, fixed-address value buffers, CUDA-event copy lifetime, graph capture, replay, and output ownership."
     href="/developer/execution-buffers-and-cuda-graphs"
   />
   <DocCard
@@ -70,7 +70,7 @@ lowering, source ownership, and contributor validation.
   />
   <DocCard
     title="Binary packaging and release"
-    description="Build the exact Torch and CUDA wheel matrix, publish immutable artifacts and cumulative package indexes, and operate the self-hosted release workflow."
+    description="Build the declared Torch and CUDA wheel matrix, publish immutable artifacts and cumulative package indexes, and operate the self-hosted release workflow."
     href="/developer/binary-packaging-and-release"
   />
 </DocGrid>
@@ -105,6 +105,6 @@ entry point to the storage or native operation that performs the work. Record:
 - source commit and loaded native ABI manifest;
 - smallest correctness oracle and focused tests.
 
-For numerical work, retain the exact preset, level, scale, NTT backend, and
+For numerical work, retain the preset, level, scale, NTT backend, and
 first failing stage. Synchronize only around the suspected CUDA stage when
 locating asynchronous failures.

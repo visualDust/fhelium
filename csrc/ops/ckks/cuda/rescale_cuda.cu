@@ -11,7 +11,7 @@ namespace {
 // [*batch, remaining_limb, coefficient] and dropped is
 // [*batch, coefficient], both standard residues from the same input integer.
 // inverse [remaining_limb] stores the dropped Q prime inverse in Montgomery
-// form for each exact destination prime; params [parameter, remaining_limb]
+// form for each destination prime; params [parameter, remaining_limb]
 // follows the same prime_ids order. The kernel computes
 // $\operatorname{Round}(c/q_{\mathrm{drop}})\bmod q_i$: nearest increments
 // when the canonical dropped residue exceeds floor(q_drop/2), while truncate

@@ -95,7 +95,7 @@ def _load_table(
     *,
     expected_format: str,
 ) -> PrimeTable:
-    """Load one packaged safetensors table under an exact schema and version."""
+    """Load one packaged safetensors table with the required schema and version."""
 
     decoded: dict[PrimeKey, tuple[int, ...]] = {}
     try:

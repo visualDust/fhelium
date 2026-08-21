@@ -11,7 +11,7 @@
 // Generic mixed-radix requirements (coefficient domain).
 //
 // source_residues is integral CUDA [*batch, source_limb, coefficient] in
-// standard lazy range [0, 2q_i), with source limb j mapped to one exact ordered
+// standard lazy range [0, 2q_i), with source limb j mapped to one ordered
 // source prime id. Native code collapses only *batch. For source bases b_r, let
 // M_0=1 and $M_r=\prod_{t<r}b_t$. `mixed_radix_decompose` returns non-aliasing
 // standard lazy digits of the same shape such that
@@ -22,7 +22,7 @@
 //
 // `mixed_radix_basis_extend_to_montgomery` consumes standard digits
 // [*batch, digit, coefficient]. extension_coefficients has shape
-// [digit-1, destination_limb] and stores $M_rR^2$ for r>=1 in exact
+// [digit-1, destination_limb] and stores $M_rR^2$ for r>=1 in
 // destination-prime order; rns_params is [parameter, destination_limb] in that
 // same order. It returns newly allocated
 // [*batch, destination_limb, coefficient] Montgomery lazy residues in

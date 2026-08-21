@@ -87,8 +87,8 @@ evaluation_keys = EvaluationKeySet(
 ```
 
 The compact rotation inventory contains signed powers of two.
-`FullSlotBootstrap` composes them when an exact transform rotation is absent.
-Use `rotation_strategy="exact"` to trade more key memory for fewer online
+`FullSlotBootstrap` composes them when a direct transform key is absent.
+Use `rotation_strategy="direct"` to trade more key memory for fewer online
 rotation compositions.
 
 `create_rotation_keys()` derives only the inventory reported by `key_steps()`.
@@ -126,12 +126,12 @@ while ciphertext.level < engine.final_public_level:
 
 The entry ciphertext has axes
 `[component, *batch, limb, coefficient]`, two components, coefficient domain,
-standard residues, Q basis, and exact active `prime_ids`. The built-in topology
+standard residues, Q basis, and active `prime_ids`. The built-in topology
 uses all $S=N/2$ slots and currently requires final public level with actual
 scale near `default_scale` or its square.
 
 Each depletion multiplication records the actual pending scale product, and
-each public rescale divides that scale by the exact dropped Q prime. No public
+each public rescale divides that scale by the actual dropped Q prime. No public
 operation silently normalizes to `default_scale`.
 
 ## 5. Follow the refresh state transitions
@@ -168,7 +168,7 @@ executes:
 6. Apply SlotsToCoeffs with the same per-stage actual-scale recurrence.
 
 The final output is a two-component coefficient-domain standard-RNS Q
-ciphertext at `bootstrap.output_level`, with exact
+ciphertext at `bootstrap.output_level`, with
 `engine.rns_layout.prime_ids(bootstrap.output_level)`. The final actual scale is
 the product of the SlotsToCoeffs recurrences; it is not assumed equal to
 `default_scale`.
@@ -248,7 +248,7 @@ level/scale transition, although their rotation count and rounding order differ.
 
 For a different full algorithm, write an ordinary function or callable class.
 Document who owns raw-to-normalized conversion, the output target, every tensor
-axis and state transition, the required key material, and the exact output
+axis and state transition, the required key material, and the output
 actual-scale recurrence.
 
 ::: details Complete runnable source

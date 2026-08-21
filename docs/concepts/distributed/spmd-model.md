@@ -67,7 +67,7 @@ work.wait()
 
 A specialized API is required when:
 
-1. a receiver needs exact metadata before it can allocate a `Ciphertext`,
+1. a receiver needs typed metadata before it can allocate a `Ciphertext`,
    `Plaintext`, or key; or
 2. the collective operation must use CKKS/RNS arithmetic rather than machine
    integer arithmetic.
@@ -80,7 +80,7 @@ Current typed families include:
 - `scatter_ciphertext_limbs` and `gather_ciphertext_limbs`;
 - `reduce_ciphertext` and `all_reduce_ciphertext`.
 
-Consult the [Distributed API reference](../../api/fhelium/distributed.md) for exact
+Consult the [Distributed API reference](../../api/fhelium/distributed.md) for
 signatures and synchronization behavior.
 
 ## Descriptor before payload
@@ -94,7 +94,7 @@ sequenceDiagram
 
     Src->>Ctrl: type, shape, context, level, state
     Ctrl->>Dst: bounded descriptor
-    Dst->>Dst: validate and allocate exact receiver
+    Dst->>Dst: validate and allocate receiver
     Src->>Data: tensor payload
     Data->>Dst: fill allocated storage
     Dst->>Dst: reconstruct typed value
@@ -108,7 +108,7 @@ different collective phase.
 ## Keys remain workload-owned
 
 A process does not receive every key automatically. The workload decides which
-rank needs which exact rotation or evaluation key and whether to:
+rank needs which rotation or evaluation key and whether to:
 
 - create it locally;
 - load it from a store;

@@ -11,7 +11,7 @@ one versioned VitePress site.
 | Concept | Why does this model or design exist? | Mental model, invariant, diagram, trade-off |
 | How-to | How do I complete or diagnose one task through a supported interface? | Public-interface procedure, deployment decision, diagnosis, performance validation |
 | Developer Guide | How is the implementation assembled or changed? | Source ownership, internal data flow, application binary interface (ABI), implementation invariants, tests |
-| API reference | What is the exact current interface? | Generated signatures and docstrings |
+| API reference | What is the current interface? | Generated signatures and docstrings |
 | Blog | What changed, what was investigated, or what is being announced? | Dated engineering note, announcement, release summary, research report |
 
 Avoid placing a long source-tree walkthrough, benchmark report, and beginner
@@ -25,7 +25,7 @@ tutorial on one concept page. Cross-link the appropriate families instead.
   expands their members statically; `__all__` may define a declared module
   inventory when needed.
 - Do not hand-maintain module pages or API sidebar entries. A generated page
-  uses the exact Python module name and moves automatically when its package
+  uses the Python module name and moves automatically when its package
   path changes.
 - Reuse runnable programs from `examples/` instead of copying complete scripts.
 - Store static documentation files under `docs/public/`; VitePress copies this
@@ -90,7 +90,7 @@ Use Mermaid for architecture, state, sequence, and decision diagrams:
 ````markdown
 ```mermaid
 flowchart LR
-    A[Exact value] --> B[Engine validation] --> C[Native operation]
+    A[Value] --> B[Engine validation] --> C[Native operation]
 ```
 ````
 
@@ -136,7 +136,7 @@ component and mathematics is rendered at build time.
 2. Introduce one compact mental model or diagram.
 3. Explain invariants and ownership responsibilities.
 4. Show the most important trade-offs or invalid assumptions.
-5. Link to a runnable tutorial, a focused how-to, and exact API/internal pages.
+5. Link to a runnable tutorial, a focused how-to, and relevant API/internal pages.
 
 Prefer progressive disclosure over one very long page that addresses every
 reader level.
@@ -160,7 +160,7 @@ tags:
 Use `Announcement`, `Engineering`, `Release`, `Research`, or another concrete
 category that describes the post. Dates use `YYYY-MM-DD`. The generated Blog
 index validates the required fields, excludes posts with `draft: true`, sorts
-published posts by descending date, and uses each post's exact frontmatter
+published posts by descending date, and uses each post's frontmatter
 rather than a separate navigation inventory.
 
 ## Install documentation tooling

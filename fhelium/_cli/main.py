@@ -260,7 +260,7 @@ def benchmark_recommend_group() -> None:
     "--backend",
     "backends",
     multiple=True,
-    help="Restrict the comparison to exact backend names; repeat as needed.",
+    help="Restrict the comparison to named backends; repeat as needed.",
 )
 @click.option("--seed", type=int, default=20260723, show_default=True)
 @click.option(
@@ -279,7 +279,7 @@ def benchmark_recommend_ntt(
     seed: int,
     output: str | None,
 ) -> None:
-    """Recommend an exact NTT backend without changing any default."""
+    """Recommend an NTT backend without changing any default."""
 
     from pathlib import Path
 

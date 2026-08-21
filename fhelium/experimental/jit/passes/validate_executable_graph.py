@@ -1,4 +1,4 @@
-"""Validate the exact operation surface selected for execution."""
+"""Validate the operation surface selected for execution."""
 
 from __future__ import annotations
 
@@ -357,11 +357,11 @@ def validate_executable_graph(
     handled_operations: Collection[str] = (),
     handled_torch_targets: Collection[str] = (),
 ) -> None:
-    """Validate the exact selected-entry schema consumed by the interpreter.
+    """Validate the selected-entry schema consumed by the interpreter.
 
     Validation requires structural module integrity, one selected single-block
     entry, valid entry input metadata, one final return, cleared scheduling
-    obligations, exact built-in operation arities/roles/attributes, authorized
+    obligations, built-in operation arities/roles/attributes, authorized
     Torch targets, authorized extension operations, and valid captured output
     metadata. Built-in runtime names are reserved: ``handled_operations`` can
     authorize extension names but cannot replace a built-in schema.

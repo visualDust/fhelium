@@ -7,7 +7,7 @@ correctness of an application protocol.
 
 ::: warning Active development
 FHElium is under active development. APIs may change significantly between
-releases. Record the exact FHElium, PyTorch, compiler, and—when applicable—CUDA
+releases. Record the FHElium, PyTorch, compiler, and—when applicable—CUDA
 and driver versions used to produce a result.
 :::
 
@@ -19,7 +19,7 @@ polynomial domain, residue representation, RNS layout, component count, and
 required key material.
 
 When `enforce_security_budget=True`, `CkksEngine` also checks the complete
-configured QP modulus against an exact published parameter row for the selected
+configured QP modulus against a supported published parameter row for the selected
 ring dimension, security category, secret distribution, and error model. It
 does not interpolate or extrapolate an unsupported parameter set.
 
@@ -83,4 +83,4 @@ only.
 - Run one local evaluator: [Quickstart](tutorials.md)
 - Plan parameters and depth: [Choose a preset and chain depth](../how-to/choose-preset-and-depth.md)
 - Manage key lifecycles: [Key lifecycle](../concepts/ckks/key-lifecycle.md)
-- Inspect exact value state: [Programming model](../concepts/programming-model.md)
+- Inspect value state: [Programming model](../concepts/programming-model.md)

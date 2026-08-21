@@ -28,7 +28,7 @@ class DefinitionRegistry(Protocol):
 
 @dataclass(frozen=True)
 class ResolvedCase:
-    """A Benchmark v1 case bound to its exact definition and parameters."""
+    """A Benchmark v1 case bound to its definition and parameters."""
 
     case: BenchmarkCase
     definition: BenchmarkDefinition
@@ -65,7 +65,7 @@ class ResolvedManifest:
     sha256: str
 
     def manifest_dict(self) -> dict[str, Any]:
-        """Return the exact payload covered by :attr:`sha256`."""
+        """Return the payload covered by :attr:`sha256`."""
 
         return {
             "benchmark_version": self.specification.benchmark_version,
@@ -100,7 +100,7 @@ def resolve_benchmark(
     specification: BenchmarkSpecification,
     definitions: DefinitionRegistry,
 ) -> ResolvedManifest:
-    """Bind the fixed Benchmark v1 cases to their exact leaf definitions."""
+    """Bind the fixed Benchmark v1 cases to their leaf definitions."""
 
     if not isinstance(specification, BenchmarkSpecification):
         raise TypeError("specification must be a BenchmarkSpecification")
@@ -164,7 +164,7 @@ def resolve_benchmark(
 
 
 def validate_report_specification(report: BenchmarkReport) -> None:
-    """Require the exact fixed manifest and five case identities of v1."""
+    """Require the fixed manifest and five case identities of v1."""
 
     if not isinstance(report, BenchmarkReport):
         raise TypeError("report must be a BenchmarkReport")

@@ -2,7 +2,7 @@
 
 **Example source:** [`examples/09_spmd_rotation_parallel_mxv.py`](https://github.com/VisualDust/fhelium/blob/main/examples/09_spmd_rotation_parallel_mxv.py)
 
-This example partitions the cyclic-diagonal terms and exact rotation keys of
+This example partitions the cyclic-diagonal terms and direct rotation keys of
 one packed matrix-vector product across ranks, then reduces additive
 ciphertext partials. The tutorial explains term ownership, key movement, and
 the final reduction step.
@@ -72,7 +72,7 @@ The cyclic assignment balances the number of diagonal terms. A production
 algorithm may choose another owner function based on measured cost or
 key locality.
 
-## 4. Move only the exact keys each owner retains
+## 4. Move only the direct keys each owner retains
 
 Rank zero creates each key:
 

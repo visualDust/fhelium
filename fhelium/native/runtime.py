@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sysconfig
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -13,6 +12,7 @@ from ._abi import (
     compatibility_mismatches,
     manifest_native_backends,
     manifest_path,
+    python_abi_identity,
     read_manifest,
     runtime_identity,
 )
@@ -42,8 +42,9 @@ class NativeExtensionError(ImportError):
 _NATIVE_DIR = Path(__file__).resolve().parent
 _SOURCE_ROOT = _NATIVE_DIR.parents[1]
 _TORCHOPS_DIR = _NATIVE_DIR / "torchops"
-_SOABI = sysconfig.get_config_var("SOABI") or ""
-_EXTENSION_SUFFIX = sysconfig.get_config_var("EXT_SUFFIX") or ""
+_PYTHON_ABI = python_abi_identity()
+_SOABI = _PYTHON_ABI["soabi"]
+_EXTENSION_SUFFIX = _PYTHON_ABI["ext_suffix"]
 _OPS_PATH = _TORCHOPS_DIR / f"_ops{_EXTENSION_SUFFIX}"
 _MANIFEST_PATH = manifest_path(_TORCHOPS_DIR, _SOABI)
 _IS_SOURCE_CHECKOUT = all(

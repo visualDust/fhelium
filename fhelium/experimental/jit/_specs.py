@@ -110,9 +110,9 @@ def encrypted(
 ) -> InputSpec:
     """Declare a secret slot tensor bound from Tensor or ``Ciphertext``.
 
-    ``level`` and a non-``None`` ``scale`` define the exact runtime CKKS input
+    ``level`` and a non-``None`` ``scale`` define the runtime CKKS input
     state; ``scale=None`` selects the bound engine's default scale. ``slots``
-    specifies either the engine's full capacity or an exact final-axis extent.
+    specifies either the engine's full capacity or a final-axis extent.
     ``batch_mode='none'`` requires a one-dimensional Tensor and an unbatched
     Ciphertext; ``'any'`` permits leading batch axes.
 
@@ -147,11 +147,11 @@ def message() -> InputSpec:
 
 
 def plaintext() -> InputSpec:
-    """Declare a caller-owned FHElium Plaintext with exact runtime state.
+    """Declare a caller-owned FHElium Plaintext with runtime state.
 
     JIT execution requires a core ``Plaintext`` entry value and validates its
     level, scale, basis, domain, residues, prime identities, and batch
-    requirements at its exact encrypted consumer. The retained Python
+    requirements at its encrypted consumer. The retained Python
     reference callable consumes the corresponding public Tensor or scalar
     shadow supplied by the caller.
     """

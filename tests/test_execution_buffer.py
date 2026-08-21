@@ -115,6 +115,41 @@ def test_copy_handle_keeps_pinned_source_alive_until_transfer_completes() -> (
 
 @pytest.mark.gpu
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_first_cross_stream_overwrite_waits_for_buffer_initialization() -> None:
+    device = torch.device("cuda:0")
+    prototype = torch.full((4096,), 1.0, device=device)
+    replacement = torch.full((4096,), 7.0, device=device)
+    torch.cuda.synchronize(device)
+    prototype_reference = weakref.ref(prototype)
+    initialization_stream = torch.cuda.Stream(device=device)
+    overwrite_stream = torch.cuda.Stream(device=device)
+
+    # Delay the asynchronous CUDA-to-CUDA clone performed by ``like``. Without
+    # an initialization event, the overwrite completes on its independent
+    # stream first and the delayed clone deterministically restores prototype.
+    with torch.cuda.stream(initialization_stream):
+        torch.cuda._sleep(100_000_000)
+        buffer = ReusableValueBuffer.like(prototype)
+
+    copied = buffer.copy_from(replacement, stream=overwrite_stream)
+    assert copied.event is not None
+    del prototype
+    gc.collect()
+    assert prototype_reference() is not None
+
+    try:
+        copied.synchronize()
+        initialization_stream.synchronize()
+        torch.testing.assert_close(buffer.value, replacement)
+    finally:
+        buffer.close()
+
+    gc.collect()
+    assert prototype_reference() is None
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
 def test_copy_handle_retains_submitted_leaf_after_source_tree_mutation() -> (
     None
 ):

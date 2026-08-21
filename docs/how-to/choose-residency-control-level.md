@@ -7,10 +7,10 @@ control required by the workload.
 
 | Need | Use | Application responsibility | Runtime responsibility |
 | --- | --- | --- | --- |
-| Move one application-owned exact value | `TensorResident.to(...)` | Own both values and all Python/CUDA lifetimes. | Perform one functional tensor movement. |
+| Move one application-owned value | `TensorResident.to(...)` | Own both values and all Python/CUDA lifetimes. | Perform one functional tensor movement. |
 | Manage values by opaque handle while choosing every transition | `ResidencyManager` primitives | Choose `ensure`, `move`, `drop`, `discard`, and strict lease lifetimes. | Own materializations, enforce replica/lifetime rules, and account bytes. |
 | Repeat a fixed stage with reviewed action order and headroom | Manual `ResidencyPlan` + manager scope | Specify reclaim, reservations, entry, exit, and the stage body. | Preflight and execute the ordered plan under manager authority. |
-| State a working set but inspect policy choices before admission | `ResidencyController.decide` → inspect → `scope` | Define exact request endpoints, policy tiers, and acceptance of the decision. | Derive a state-bound plan; the manager validates and executes it. |
+| State a working set but inspect policy choices before admission | `ResidencyController.decide` → inspect → `scope` | Define request endpoints, policy tiers, and acceptance of the decision. | Derive a state-bound plan; the manager validates and executes it. |
 | Admit and borrow a working set in one context | `ResidencyController.use` | Define the request and supply all stream identities. | Decide, version-check, enter the scope, and acquire strict leases. |
 
 Apply the following decision tree:
@@ -27,7 +27,7 @@ Apply the following decision tree:
 5. Use `controller.use(...)` only when the selected policy and complete request
    make the combined context sufficiently reviewable.
 
-## 2. Keep each layer's input exact
+## 2. Keep each layer's input concrete
 
 ### Functional movement
 

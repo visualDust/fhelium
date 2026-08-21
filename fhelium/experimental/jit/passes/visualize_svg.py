@@ -20,10 +20,10 @@ from ._utils import OBLIGATIONS_ATTRIBUTE, display_name, obligations
 
 SvgGraphField = Literal[
     "name",  # Stable SSA result or block-argument name.
-    "opcode",  # Exact xDSL operation name, such as fhelium.ckks.add.
+    "opcode",  # Registered xDSL operation name, such as fhelium.ckks.add.
     "role",  # FHElium encrypted/message/plaintext/material/resource role.
     "operands",  # Ordered SSA value names consumed by the node.
-    "result_types",  # Exact xDSL result types and carried state metadata.
+    "result_types",  # xDSL result types and carried state metadata.
     "attributes",  # Selected xDSL attributes, one record row per attribute.
     "scheduling_obligations",  # Explicit lowering work still outstanding.
     "num_users",  # Total number of SSA uses of the node's results.
@@ -110,7 +110,7 @@ class SvgOperationContext:
 
     @property
     def opcode(self) -> str:
-        """Return the exact registered or dynamic operation name."""
+        """Return the registered or dynamic operation name."""
 
         return operation_name(self.operation)
 
@@ -123,7 +123,7 @@ def _string_attribute(operation: Operation, name: str) -> str | None:
 def default_svg_operation_color_key(context: SvgOperationContext) -> str:
     """Return the default stable operation color key.
 
-    Exact operation names define ordinary keys. Preserved ``torch.call``
+    Operation names define ordinary keys. Preserved ``torch.call``
     operations additionally include call kind and target so custom classifiers
     can delegate without reproducing that rule.
     """
@@ -189,7 +189,7 @@ class _ImmutableColorMap(Mapping[str, str]):
 class SvgGraphTheme:
     """Define colors and operation color classification for an SVG graph.
 
-    An operation first receives a key from ``operation_color_key``. An exact
+    An operation first receives a key from ``operation_color_key``. A matching
     ``operation_colors`` entry wins; otherwise the key is deterministically
     mapped into ``operation_palette``. The hash implementation is private, but
     equal keys under one theme always receive equal colors. ``None`` selects
@@ -590,7 +590,7 @@ class SvgGraphVisualizationPass:
     establish execution readiness or numerical correctness.
 
     Args:
-        output_path: Exact ``.svg`` file to write.
+        output_path: ``.svg`` file to write.
         overwrite: Replace an existing output file when true.
         entry: Unique single-block function entry to render.
         presentation: Operation evidence and theme policy. ``None`` constructs

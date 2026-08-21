@@ -1,4 +1,4 @@
-"""Structural validation shared by exact CKKS value classes."""
+"""Structural validation shared by CKKS value classes."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import torch
 
 
 def validate_nonnegative_level(level: object, *, value_name: str) -> int:
-    """Require one exact non-negative Python integer level."""
+    """Require a non-bool, non-negative Python integer level."""
 
     if type(level) is not int:
         raise TypeError(
@@ -34,7 +34,7 @@ def validate_prime_ids(
     value_name: str,
     allow_empty: bool = False,
 ) -> tuple[int, ...]:
-    """Require exact non-bool, non-negative, strictly ordered prime IDs."""
+    """Require non-bool, non-negative, strictly ordered prime IDs."""
 
     try:
         values = tuple(prime_ids)
@@ -44,7 +44,7 @@ def validate_prime_ids(
         raise ValueError(f"{value_name} prime_ids cannot be empty")
     if any(type(prime_id) is not int for prime_id in values):
         raise TypeError(
-            f"{value_name} prime_ids must contain exact non-bool integers"
+            f"{value_name} prime_ids must contain non-bool integers"
         )
     integer_values = cast(tuple[int, ...], values)
     if any(prime_id < 0 for prime_id in integer_values):

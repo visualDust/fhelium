@@ -71,9 +71,9 @@ How-to guides provide procedures for application, deployment, diagnosis, and per
     href="/how-to/switch-cpu-cuda"
   />
   <DocCard
-    title="Manage exact artifacts by logical name"
+    title="Manage artifacts by logical name"
     description="Publish, replace, validate, and consume checked ArtifactStore generations with local durability guarantees."
-    href="/how-to/manage-exact-artifacts"
+    href="/how-to/manage-artifacts"
   />
   <DocCard
     title="Capture a repeated evaluator"

@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_matrix_module() -> ModuleType:
-    path = Path(__file__).with_name("release_matrix.py")
+    path = Path(__file__).with_name("matrix.py")
     spec = importlib.util.spec_from_file_location(
         "_fhelium_release_matrix", path
     )
@@ -145,7 +145,7 @@ def html_page(files: list[dict[str, object]]) -> str:
 def main() -> None:
     args = parse_args()
     tree = args.tree.resolve()
-    matrix = load_matrix_module().load_release_matrix()
+    matrix = load_matrix_module().load_matrix()
     for configuration in matrix.configurations:
         project_dir = tree / configuration.id / "simple" / PROJECT
         local_path = project_dir / "index.json"

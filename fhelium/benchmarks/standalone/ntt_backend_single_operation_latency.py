@@ -70,7 +70,7 @@ def _resolve_backends(
 
 
 def _resolve_operations(configured_operations: object) -> tuple[str, ...]:
-    """Validate the exact semantic operations requested by one profile."""
+    """Validate the semantic operations requested by one profile."""
 
     if not isinstance(configured_operations, Sequence) or isinstance(
         configured_operations, str
@@ -130,9 +130,9 @@ def _run_ntt_backend_single_op(
         assert_ntt_roundtrip(engine, operation_inputs["roundtrip"])
         checks.append(
             BenchmarkCheck(
-                name=f"{backend}-exact-ntt-roundtrip",
+                name=f"{backend}-ntt-roundtrip-residue-equality",
                 passed=True,
-                oracle="Exact equality modulo every active QP prime after forward and inverse NTT.",
+                oracle="Residue equality modulo every active QP prime after forward and inverse NTT.",
                 metric="mismatched_residues",
                 observed=0,
                 comparison="==",

@@ -1,4 +1,4 @@
-"""Single-file safetensors persistence for exact FHElium values."""
+"""Single-file safetensors persistence for FHElium values."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def save_value(
     allow_secret: bool = False,
     overwrite: bool = False,
 ) -> ValueFileMetadata:
-    """Atomically save one exact value to the caller-selected file path.
+    """Atomically save one value to the caller-selected file path.
 
     This function provides a versioned file representation, not a namespace,
     cache, encryption-at-rest policy, or storage manager. Secret-key material
@@ -154,7 +154,7 @@ def load_value(
     expected_type: type[T] | None = None,
     expected_context_id: str | None = None,
 ) -> T:
-    """Load one exact value from a caller-selected value-file path.
+    """Load one value from a caller-selected value-file path.
 
     This is a file-codec operation: the caller owns path naming, replacement,
     and lifecycle. ``ArtifactStore.get`` is the separate repository operation

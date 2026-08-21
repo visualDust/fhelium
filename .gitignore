@@ -11,7 +11,7 @@ poetry.lock
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
-*.py[cod]
+*.py[co]
 *$py.class
 *.pkl
 *.safetensors
@@ -20,12 +20,15 @@ __pycache__/
 
 # C extensions
 *.so
+/fhelium/native/torchops/_ops*.pyd
+/fhelium/native/cuda/cuda_info*.pyd
 fhelium/native/torchops/_build_manifest.*.json
 
 # Distribution / packaging
 .Python
 .python-version
 build/
+/compile_commands.json
 develop-eggs/
 dist/
 release-output/

@@ -169,7 +169,7 @@ with automatic as active:
     weight_value = active.value(weight_handle, at=cuda)
 ```
 
-The exact decision becomes available as `active.decision` after successful
+The accepted decision becomes available as `active.decision` after successful
 entry, and the completed plan report is available as `automatic.report` after
 exit. Use separate `decide` and `scope` calls, as the runnable example does,
 when admission must be reviewed before any manager mutation.

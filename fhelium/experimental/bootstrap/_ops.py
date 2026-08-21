@@ -3,7 +3,7 @@ r"""Private CKKS arithmetic compositions shared by bootstrap components.
 Unless stated otherwise, ciphertext payloads have axes
 `[component, *batch, limb, coefficient]` in coefficient-domain standard RNS.
 Each helper is functional and returns two components over the Q basis. The
-bootstrap uses the engine's exact active `prime_ids`; the limb axis is never
+bootstrap uses the engine's active `prime_ids`; the limb axis is never
 identified by level alone.
 """
 
@@ -40,16 +40,16 @@ def _rotate_with_key_inventory(
     *,
     rotation_keys: RotationKeySet,
 ) -> Ciphertext:
-    r"""Compute $\operatorname{Rot}_r(c)$ with exact or composed keys.
+    r"""Compute $\operatorname{Rot}_r(c)$ with direct or composed keys.
 
-    The function first canonicalizes `step` as signed slot rotation $r$ and uses an exact key when the
+    The function first canonicalizes `step` as signed slot rotation $r$ and uses a direct key when the
     inventory contains one. Otherwise it caches a signed power-of-two
     decomposition and applies those keyed rotations in sequence. The cache
     contains only integer steps; it never retains ciphertexts or key tensors.
 
     The input must be a two-component coefficient-domain, standard-RNS
     ciphertext on the engine device. Rotation and its key switches preserve
-    data shape, level, actual scale, Q basis, exact `prime_ids`, component count,
+    data shape, level, actual scale, Q basis, `prime_ids`, component count,
     polynomial domain, and residue representation. The returned ciphertext has
     new storage; a zero step clones rather than aliases the input.
     """
@@ -57,9 +57,9 @@ def _rotate_with_key_inventory(
     canonical = RotationKey.canonical_step(step, ring_dimension=engine.config.N)
     if canonical == 0:
         return ciphertext.clone()
-    exact = rotation_keys.get(canonical)
-    if exact is not None:
-        return engine.rotate_with_key(ciphertext, exact)
+    direct_key = rotation_keys.get(canonical)
+    if direct_key is not None:
+        return engine.rotate_with_key(ciphertext, direct_key)
     decomposition = decomposition_cache.get(canonical)
     if decomposition is None:
         decomposition = tuple(
@@ -133,7 +133,7 @@ def _apply_linear_transform(
     r"""Evaluate ordered maps $L_{m-1}\circ\cdots\circ L_0$.
 
     Each evaluator stage consumes one level. If $q_j$ is the leading Q prime
-    at stage $j$, the exact metadata recurrence is
+    at stage $j$, the scale recurrence is
 
     $$
     \ell_{j+1}=\ell_j+1,\qquad
@@ -228,7 +228,7 @@ def _multiply_by_monomial(
 
     The input must use coefficient-domain standard residues on the engine
     device. The operation is functional and preserves shape, component count,
-    level, actual scale, basis, exact `prime_ids`, polynomial domain, and
+    level, actual scale, basis, `prime_ids`, polynomial domain, and
     residue representation. The output is canonicalized into each limb's
     interval $[0,q_i)$ and does not alias the input.
     """
@@ -269,7 +269,7 @@ def _align_levels(
     Each advancement consumes one leading Q row under `_advance_level` and
     returns actual scale $\Delta_0$. An operand already at the deeper level is
     returned by identity, so this helper does not by itself guarantee equal
-    scales; callers performing addition still rely on exact engine validation.
+    scales; callers performing addition still rely on engine validation.
     """
 
     while lhs.level < rhs.level:
@@ -322,7 +322,7 @@ def _multiply_relinearize_rescale(
     then dropped and the result is explicitly reinterpreted at $\Delta_0$.
     The result is functional and has level
     $\max(\ell_{\rm lhs},\ell_{\rm rhs})+1$ after any alignment levels, Q basis,
-    and the corresponding exact `prime_ids`.
+    and the corresponding `prime_ids`.
     """
 
     lhs, rhs = _align_levels(engine, lhs, rhs)
@@ -417,10 +417,10 @@ def _add_scalar(
     r"""Compute $c_{\rm out}=c+a$ without changing CKKS state metadata.
 
     The scalar is broadcast across semantic `[slot]` and batch axes, encoded at
-    the ciphertext's exact actual scale, and prepared as coefficient-domain
+    the ciphertext's actual scale, and prepared as coefficient-domain
     Montgomery RNS over the same Q `prime_ids`. Addition updates only $c_0$.
     The functional output preserves data shape, level, scale, two components,
-    coefficient-domain standard residues, basis, and exact `prime_ids`.
+    coefficient-domain standard residues, basis, and `prime_ids`.
     """
 
     plaintext = engine.prepare_plaintext_for_addition(

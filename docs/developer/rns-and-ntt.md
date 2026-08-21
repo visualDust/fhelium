@@ -67,7 +67,7 @@ must not infer a global prime solely from an ambiguous local row count.
 `CkksEngine` creates one `RnsRuntime` for its selected local device. Runtime
 construction builds the canonical Q/P chain, Montgomery constants, a dense
 `[parameter, limb]` tensor, the selected NTT plan, device-resident twiddle
-tables, and one backend object. Arithmetic calls then pass exact tensor views
+tables, and one backend object. Arithmetic calls then pass tensor views
 through generated wrappers to the shared PyTorch operator schemas.
 
 ```mermaid
@@ -227,7 +227,7 @@ or transmit a `shared_memory_log_n` argument.
 
 For an eligible strict schedule, the forward launcher chooses the largest
 suffix of complete radix digits whose widths fit the native default; the
-inverse launcher chooses the exact dual prefix. A realized selection may cover
+inverse launcher chooses the corresponding dual prefix. A realized selection may cover
 fewer than eight bits because a digit is never split merely to fill the budget.
 The selected digits execute consecutively after one coalesced tile load and
 before one coalesced store, while preserving the digit-bit-reversed
@@ -247,7 +247,7 @@ locality optimization that preserves the selected strict radix.
 By contrast, the maintained compact radix-2 names expose grouping and smem8
 because those names distinguish multiple selectable execution policies; the
 `smem8` portion records the native implementation rather than a Python integer
-passed on every operation. Result provenance should still record the exact
+passed on every operation. Result provenance should still record the
 FHElium version in case internal tuning changes.
 
 This is a genuine-radix locality optimization, not a radix-2 fallback.
@@ -258,7 +258,7 @@ scratch space, reducing each worker's live register vector. A separate
 `shared_memory_log_n` override for correctness tests and cross-GPU profiling;
 the production backend never calls that namespace.
 
-The exact supported schedules are:
+The supported schedules are:
 
 | `logN` | compatible strict genuine-radix schedules |
 |---|---|
@@ -269,9 +269,9 @@ The exact supported schedules are:
 
 The power-of-two radix kernels may choose a different representative in the
 lazy $[0,2q)$ interval than sequential radix-2 because modular additions are
-associated differently. Forward results therefore compare exactly modulo
-$q$, rather than necessarily bit-for-bit as signed integers. Canonical inverse
-outputs are exact and all domain and representation states are unchanged.
+associated differently. Forward results are therefore congruent modulo $q$,
+rather than necessarily bit-for-bit equal as signed integers. Canonical inverse
+outputs are equal and all domain and representation states are unchanged.
 
 The default remains `radix2_compact_group8_smem8`. A new algorithm family is
 not promoted merely because it has fewer mathematical digits; radix-4/8/16 can
@@ -341,7 +341,7 @@ Whenever row mapping, tables, or kernels change, test:
 
 Benchmark NTT policy at three layers:
 
-1. forward/inverse microbench for exact shapes and active rows;
+1. forward/inverse microbench for configured shapes and active rows;
 2. CKKS operators that use the transforms;
 3. complete workloads with keys, memory, and launch policy.
 

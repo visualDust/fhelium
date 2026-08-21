@@ -72,7 +72,7 @@ workload.
 | --- | --- | --- |
 | Late relinearization | Repeated key switches across compatible triplets | Larger three-component live state |
 | Operation-ready plaintexts | Repeated encode/lift/NTT preparation | Larger persistent weight footprint |
-| Reused NTT operands | Repeated transforms of fixed operands | Exact level/state coupling |
+| Reused NTT operands | Repeated transforms of fixed operands | Level/state coupling |
 | NTT-domain product accumulation | Per-term inverse transforms in additive PT×CT regions | One coefficient transition before rescale/decrypt |
 | NTT grouping/compact tables | Launches and table/global-memory traffic | Registers, occupancy, index arithmetic |
 | Rotation hoisting | Repeated decomposition/ModUp/NTT prefix | Hoist temporaries and output memory |
@@ -86,7 +86,7 @@ No mechanism dominates every shape, level, GPU, and request pattern.
 ## Hoisting has a memory curve
 
 Multiple rotations can share preparation that depends only on the input
-component, but each step still needs its own automorphism, exact key products,
+component, but each step still needs its own automorphism, direct key products,
 ModDown, and output storage.
 
 ```mermaid
@@ -280,7 +280,7 @@ flowchart TD
     Q4{CUDA memory dominates?}
     Q5{independent or additive work exists?}
     P --> Q1
-    Q1 -->|yes| H[hoisting, exact keyset, schedule]
+    Q1 -->|yes| H[hoisting, direct keyset, schedule]
     Q1 -->|no| Q2
     Q2 -->|yes| N[backend and grouping ablation]
     Q2 -->|no| Q3

@@ -18,7 +18,7 @@ class CkksDecryptor:
 
     The component evaluates two- or three-component secret-key phases in RNS
     and reconstructs only a bounded trailing-Q class into binary64
-    coefficients for decoding. That reconstruction is not exact full-$Q_\ell$ CRT
+    coefficients for decoding. That reconstruction is not full-$Q_\ell$ CRT
     reconstruction. Key inventory and engine validation remain engine-owned.
     """
 
@@ -70,7 +70,7 @@ class CkksDecryptor:
         reconstructs the centered class from the trailing one/two Q primes
         into finite ``torch.float64`` ``[*batch, coefficient]`` on the engine
         device. This ``approximate_coefficients`` result is valid only for
-        decoding; it is not exact full-$Q_\ell$ CRT and cannot return to RNS.
+        decoding; it is not full-$Q_\ell$ CRT and cannot return to RNS.
         Level and actual scale are preserved. Inputs are unchanged and output
         storage is independent.
         """
@@ -101,14 +101,14 @@ class CkksDecryptor:
         r"""Evaluate the secret-key phase into coefficient-domain RNS.
 
         ``ciphertext`` has layout
-        ``[component, *batch, limb, coefficient_or_ntt_index]`` with exact
+        ``[component, *batch, limb, coefficient_or_ntt_index]`` with
         ``prime_ids``. Two-component input must be coefficient/standard and
         computes $c_0(X)+c_1(X)s(X)$; three-component input must be
         NTT/Montgomery and computes
         $c_0(X)+c_1(X)s(X)+c_2(X)s(X)^2$. ``secret_key`` is
         ``[level_zero_limb, ntt_index]`` in Montgomery form. Output is newly
         allocated ``[*batch, limb, coefficient]`` with engine integral
-        dtype/device, the ciphertext Q/QP basis and exact rows, and canonical
+        dtype/device, the ciphertext Q/QP basis and rows, and canonical
         standard residues. Inputs are not mutated.
         """
 
@@ -193,7 +193,7 @@ class CkksDecryptor:
         $[-\lfloor D_\ell/2\rfloor,\lceil D_\ell/2\rceil)$ to
         ``torch.float64``. The functional output is
         ``[*batch, coefficient]`` on the same device and does not alias input.
-        Conversion to binary64 can round wide integers; this is not exact
+        Conversion to binary64 can round wide integers; this is not
         full-$Q_\ell$ CRT reconstruction.
         """
 
@@ -275,7 +275,7 @@ class CkksDecryptor:
         self,
         source_prime_ids: tuple[int, ...],
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        r"""Return cached tables for exact ``source_prime_ids`` order.
+        r"""Return cached tables for ``source_prime_ids`` order.
 
         For $L$ source primes, ``normalizers`` has shape ``[L-1]`` and
         ``propagation`` has shape ``[L-1, L]``. Both use engine integral
@@ -367,7 +367,7 @@ class CkksDecryptor:
         reconstruction with
         $m_{\mathrm{approx}}=\mathcal{E}_g(p)/\Delta(ciphertext)$. Output is
         CPU ``[*batch, slot]`` with final extent $S=N/2$, complex unless
-        ``is_real=True``. It is approximate and does not provide an exact
+        ``is_real=True``. It is approximate and does not provide a
         decrypt-to-encrypt representation round trip. Inputs are unchanged.
         """
 

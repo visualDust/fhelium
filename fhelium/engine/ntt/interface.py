@@ -31,8 +31,8 @@ class NttBackend(Protocol):
 
     ``parameter_row_start`` is the zero-based start of the operand's prime-row
     interval in the backend's complete canonical QP tables. Implementations
-    use it to select the exact per-prime twiddles, roots, and RNS parameters;
-    they must not infer prime identity from ``operand.size(-2)``.
+    use it to select the corresponding per-prime twiddles, roots, and RNS
+    parameters; they must not infer prime identity from ``operand.size(-2)``.
 
     The protocol intentionally contains no radix, grouping, or table-layout
     fields. Those are construction-time properties of a concrete backend, not
@@ -44,7 +44,7 @@ class NttBackend(Protocol):
     which its native schemas have dispatcher implementations. CPU engines use
     indexed radix-2 execution. There is no broadcasting. Limb ``j`` is
     aligned with canonical parameter row ``parameter_row_start + j`` and
-    therefore with that row's exact prime $q_i$. All tables use the same
+    therefore with that row's prime $q_i$. All tables use the same
     dtype/device.
 
     Let $\psi_i$ be the prepared primitive $2N$-th root modulo $q_i$ and

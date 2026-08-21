@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from release_matrix import load_release_matrix
+from matrix import load_matrix
 
 
 HTML_MEDIA_TYPE = "text/html"
@@ -60,7 +60,7 @@ def get(url: str, accept: str) -> tuple[int, str, bytes]:
 
 def main() -> None:
     args = parse_args()
-    matrix = load_release_matrix()
+    matrix = load_matrix()
     prepared = (
         args.expect_empty_or_matching.resolve()
         if args.expect_empty_or_matching is not None

@@ -3,12 +3,18 @@ name: Release FHElium
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: Build and verify artifacts, or publish after verification
+        required: true
+        default: build-only
+        type: choice
+        options: [build-only, publish]
       tag:
         description: Existing release tag matching pyproject.toml
         required: true
         type: string
       initialize_repository:
-        description: Establish empty Simple Repository roots
+        description: Establish an empty configuration root once
         required: true
         default: false
         type: boolean
@@ -18,7 +24,7 @@ on:
         default: false
         type: boolean
 
-run-name: Release ${{ inputs.tag }}
+run-name: Release ${{ inputs.tag }} (${{ inputs.mode }})
 
 permissions:
   contents: read
@@ -31,7 +37,7 @@ env:
   RELEASE_OUTPUT: ${{ github.workspace }}/release-output
 
 jobs:
-  build-and-prepare:
+  build-linux:
     runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -41,7 +47,7 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
-      - name: Validate immutable release ref
+      - name: Validate source identity and matrix
         id: version
         shell: bash
         env:
@@ -49,37 +55,26 @@ jobs:
         run: |
           set -euo pipefail
           source_commit=$(git rev-parse HEAD)
-          version=$(python packaging/validate_release_ref.py \
-            --tag "$RELEASE_TAG" \
-            --source-commit "$source_commit" \
-            --remote origin)
-          git tag --points-at HEAD | grep -Fx "$RELEASE_TAG"
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          printf 'source_commit=%s\n' "$source_commit" >> "$GITHUB_OUTPUT"
-          python -m pip install \
-            "jsonschema==4.26.0" \
-            "scikit-build-core==1.0.3"
-          python packaging/release_matrix.py validate
+          version=$(python packaging/release_identity.py \
+            --tag "$RELEASE_TAG" --source-commit "$source_commit" --remote origin)
+          printf 'version=%s\nsource_commit=%s\n' \
+            "$version" "$source_commit" >> "$GITHUB_OUTPUT"
+          python -m pip install "jsonschema==4.26.0" "scikit-build-core==1.0.3"
+          python -I packaging/matrix.py validate
       - name: Verify source tree
         shell: bash
         run: |
           set -euo pipefail
-          configuration_json=$(python packaging/release_matrix.py show torch213-cu130)
+          configuration=$(python -I packaging/matrix.py show torch213-cu130)
           torch_requirement=$(python -c \
             'import json,sys; print(json.load(sys.stdin)["torch_requirement"])' \
-            <<<"$configuration_json")
+            <<<"$configuration")
           torch_index_url=$(python -c \
             'import json,sys; print(json.load(sys.stdin)["torch_index_url"])' \
-            <<<"$configuration_json")
-          python -m pip install \
-            --index-url "$torch_index_url" \
-            "$torch_requirement"
+            <<<"$configuration")
+          python -m pip install --index-url "$torch_index_url" "$torch_requirement"
           python -m pip install --group dev --no-build-isolation
-          python -m pip install \
-            --editable . \
-            --no-build-isolation \
-            --no-cache-dir \
-            --verbose
+          python -m pip install --editable . --no-build-isolation --no-cache-dir
           python -m ruff check fhelium tests examples scripts packaging
           python -m ruff format --check fhelium tests examples scripts packaging
           python -m pyright
@@ -87,34 +82,28 @@ jobs:
           npm --prefix docs ci
           npm --prefix docs run build
           git diff --check
-      - name: Build release wheels
+      - name: Build Linux wheels
         shell: bash
         run: |
           set -euo pipefail
           rm -rf "$RELEASE_OUTPUT"
-          docker build \
-            --file packaging/manylinux_2_28.Dockerfile \
-            --tag fhelium-manylinux-cpu \
-            .
-          docker build \
-            --file packaging/manylinux_2_28_cuda12_9.Dockerfile \
-            --tag fhelium-manylinux-cuda-12.9 \
-            .
-          docker build \
-            --file packaging/manylinux_2_28_cuda13.Dockerfile \
-            --tag fhelium-manylinux-cuda-13.0 \
-            .
-          for configuration in \
-            torch213-cu130 torch212-cu129 torch213-cpu torch212-cpu; do
-            for python_abi in cp312-cp312 cp313-cp313; do
-              python packaging/build_release.py \
-                --configuration "$configuration" \
-                --python-abi "$python_abi" \
-                --output "$RELEASE_OUTPUT" \
-                --smoke
-            done
+          docker build --file packaging/manylinux_2_28.Dockerfile \
+            --tag fhelium-manylinux-cpu .
+          docker build --file packaging/manylinux_2_28_cuda12_9.Dockerfile \
+            --tag fhelium-manylinux-cuda-12.9 .
+          docker build --file packaging/manylinux_2_28_cuda13.Dockerfile \
+            --tag fhelium-manylinux-cuda-13.0 .
+          python -I packaging/matrix.py cells \
+            --platform manylinux_2_28_x86_64 |
+          while read -r configuration platform python_abi; do
+            python packaging/build_wheel.py \
+              --platform "$platform" \
+              --configuration "$configuration" \
+              --python-abi "$python_abi" \
+              --output "$RELEASE_OUTPUT" \
+              --smoke
           done
-      - name: Execute native CUDA validation
+      - name: Execute Linux CUDA wheel smokes
         shell: bash
         run: |
           set -euo pipefail
@@ -124,14 +113,10 @@ jobs:
                 cp312-cp312) python_bin=python3.12 ;;
                 cp313-cp313) python_bin=python3.13 ;;
               esac
-              wheel=$(find \
-                "$RELEASE_OUTPUT/$configuration/$python_abi/wheelhouse" \
-                -maxdepth 1 -type f -name '*.whl' -print -quit)
-              test -n "$wheel"
-              python packaging/validate_cuda_wheel.py \
-                "$wheel" \
-                --configuration "$configuration" \
-                --python "$python_bin"
+              wheel=$(find "$RELEASE_OUTPUT/$configuration/$python_abi/wheelhouse" \
+                -maxdepth 1 -type f -name '*manylinux*.whl' -print -quit)
+              python packaging/linux_cuda_smoke.py "$wheel" \
+                --configuration "$configuration" --python "$python_bin"
             done
           done
       - name: Build source distribution
@@ -141,20 +126,71 @@ jobs:
           python -m pip install "build==1.5.0" "twine==6.2.0"
           python -m build --sdist --no-isolation --outdir "$RELEASE_OUTPUT/sdist"
           python -m twine check "$RELEASE_OUTPUT"/sdist/*
-          rm -rf "$RUNNER_TEMP/sdist-wheel"
-          mkdir -p "$RUNNER_TEMP/sdist-wheel"
-          CMAKE_ARGS='-DFHELIUM_NATIVE_BACKENDS=CPU' \
-            python -m pip wheel \
-              "$RELEASE_OUTPUT"/sdist/fhelium-*.tar.gz \
-              --no-build-isolation \
-              --no-deps \
-              --no-cache-dir \
-              --wheel-dir "$RUNNER_TEMP/sdist-wheel"
-      - name: Prepare static repository
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fhelium-linux-${{ inputs.tag }}
+          path: ${{ env.RELEASE_OUTPUT }}/**
+          if-no-files-found: error
+          retention-days: 30
+
+  build-windows:
+    needs: build-linux
+    runs-on: [self-hosted, Windows, X64, fhelium-release, gpu]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.build-linux.outputs.source_commit }}
+          fetch-depth: 0
+      - name: Build Windows wheels
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item -Recurse -Force $env:RELEASE_OUTPUT -ErrorAction SilentlyContinue
+          $py312 = (& py -3.12 -c 'import sys; print(sys.executable)').Trim()
+          $py313 = (& py -3.13 -c 'import sys; print(sys.executable)').Trim()
+          & $py312 -m pip install 'jsonschema==4.26.0'
+          $cells = (& $py312 -I packaging/matrix.py cells `
+            --platform win_amd64 --json | ConvertFrom-Json)
+          foreach ($cell in $cells) {
+            $python = if ($cell.python_abi -eq 'cp312-cp312') { $py312 } else { $py313 }
+            & $python -I packaging/build_wheel.py `
+              --platform win_amd64 `
+              --configuration $cell.configuration `
+              --python-abi $cell.python_abi `
+              --python $python `
+              --output $env:RELEASE_OUTPUT `
+              --smoke
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fhelium-windows-${{ inputs.tag }}
+          path: ${{ env.RELEASE_OUTPUT }}/**
+          if-no-files-found: error
+          retention-days: 30
+
+  prepare-release:
+    needs: [build-linux, build-windows]
+    runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
+    outputs:
+      version: ${{ needs.build-linux.outputs.version }}
+      source_commit: ${{ needs.build-linux.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.build-linux.outputs.source_commit }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: fhelium-*-${{ inputs.tag }}
+          path: ${{ env.RELEASE_OUTPUT }}
+          merge-multiple: true
+      - name: Prepare repository candidate
         shell: bash
         run: |
           set -euo pipefail
-          python packaging/prepare_static_index.py \
+          python -m pip install "jsonschema==4.26.0" "packaging==26.3"
+          python packaging/prepare_release.py \
             --input "$RELEASE_OUTPUT" \
             --output "$RELEASE_OUTPUT/prepared-site" \
             --prepared-at "$(git show -s --format=%cI HEAD)"
@@ -162,13 +198,11 @@ jobs:
           if [ '${{ inputs.initialize_repository }}' = true ]; then
             merge_args+=(--allow-missing-repository)
           fi
-          python packaging/merge_published_indexes.py \
+          python packaging/merge_repository.py \
             "$RELEASE_OUTPUT/prepared-site" "${merge_args[@]}"
-          python packaging/validate_static_index.py \
-            "$RELEASE_OUTPUT/prepared-site" \
-            --source-commit "$(git rev-parse HEAD)"
-      - name: Preserve release bundle
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+          python packaging/repository_check.py \
+            "$RELEASE_OUTPUT/prepared-site" --source-commit "$(git rev-parse HEAD)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fhelium-${{ inputs.tag }}
           path: |
@@ -178,7 +212,8 @@ jobs:
           retention-days: 30
 
   publish:
-    needs: build-and-prepare
+    if: inputs.mode == 'publish'
+    needs: prepare-release
     runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
     environment: release
     permissions:
@@ -187,7 +222,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ needs.build-and-prepare.outputs.source_commit }}
+          ref: ${{ needs.prepare-release.outputs.source_commit }}
           fetch-depth: 0
       - name: Restore release bundle
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -203,14 +238,14 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          SOURCE_COMMIT: ${{ needs.build-and-prepare.outputs.source_commit }}
+          SOURCE_COMMIT: ${{ needs.prepare-release.outputs.source_commit }}
         run: |
           set -euo pipefail
-          python packaging/validate_release_ref.py \
+          python packaging/release_identity.py \
             --tag "$RELEASE_TAG" \
             --source-commit "$SOURCE_COMMIT" \
             --remote origin
-          python packaging/validate_static_index.py \
+          python packaging/repository_check.py \
             "$RELEASE_OUTPUT/prepared-site" \
             --source-commit "$(git rev-parse HEAD)"
           python -m twine check "$RELEASE_OUTPUT"/sdist/*
@@ -221,11 +256,11 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$INITIALIZE_REPOSITORY" = true ]; then
-            python packaging/validate_repository_routing.py \
+            python packaging/repository_probe.py \
               --expect-empty-or-matching \
               "$RELEASE_OUTPUT/prepared-site"
           else
-            python packaging/validate_repository_routing.py
+            python packaging/repository_probe.py
           fi
       - name: Publish immutable release objects to R2
         shell: bash
@@ -236,30 +271,30 @@ jobs:
           FHELIUM_R2_ENDPOINT_URL: ${{ vars.R2_ENDPOINT_URL }}
           FHELIUM_R2_BUCKET: ${{ vars.R2_BUCKET }}
           RELEASE_TAG: ${{ inputs.tag }}
-          SOURCE_COMMIT: ${{ needs.build-and-prepare.outputs.source_commit }}
+          SOURCE_COMMIT: ${{ needs.prepare-release.outputs.source_commit }}
         run: |
           set -euo pipefail
-          python packaging/validate_release_ref.py \
+          python packaging/release_identity.py \
             --tag "$RELEASE_TAG" \
             --source-commit "$SOURCE_COMMIT" \
             --remote origin
-          python packaging/publish_static_index.py \
+          python packaging/publish_release.py \
             "$RELEASE_OUTPUT/prepared-site" \
             --phase artifacts
-          python packaging/verify_public_release.py \
+          python packaging/artifact_probe.py \
             "$RELEASE_OUTPUT/prepared-site/release-manifest.json"
       - name: Validate PyPI release identity
         shell: bash
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          SOURCE_COMMIT: ${{ needs.build-and-prepare.outputs.source_commit }}
+          SOURCE_COMMIT: ${{ needs.prepare-release.outputs.source_commit }}
         run: |
           set -euo pipefail
-          python packaging/validate_release_ref.py \
+          python packaging/release_identity.py \
             --tag "$RELEASE_TAG" \
             --source-commit "$SOURCE_COMMIT" \
             --remote origin
-          python packaging/verify_pypi_release.py \
+          python packaging/pypi_probe.py \
             "$RELEASE_OUTPUT"/sdist/fhelium-*.tar.gz \
             --allow-missing
       - name: Publish source distribution to PyPI
@@ -272,14 +307,14 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          SOURCE_COMMIT: ${{ needs.build-and-prepare.outputs.source_commit }}
+          SOURCE_COMMIT: ${{ needs.prepare-release.outputs.source_commit }}
         run: |
           set -euo pipefail
-          python packaging/validate_release_ref.py \
+          python packaging/release_identity.py \
             --tag "$RELEASE_TAG" \
             --source-commit "$SOURCE_COMMIT" \
             --remote origin
-          python packaging/verify_pypi_release.py \
+          python packaging/pypi_probe.py \
             "$RELEASE_OUTPUT"/sdist/fhelium-*.tar.gz \
             --attempts 24 \
             --interval 5
@@ -292,25 +327,25 @@ jobs:
           FHELIUM_R2_ENDPOINT_URL: ${{ vars.R2_ENDPOINT_URL }}
           FHELIUM_R2_BUCKET: ${{ vars.R2_BUCKET }}
           RELEASE_TAG: ${{ inputs.tag }}
-          SOURCE_COMMIT: ${{ needs.build-and-prepare.outputs.source_commit }}
+          SOURCE_COMMIT: ${{ needs.prepare-release.outputs.source_commit }}
         run: |
           set -euo pipefail
-          python packaging/validate_release_ref.py \
+          python packaging/release_identity.py \
             --tag "$RELEASE_TAG" \
             --source-commit "$SOURCE_COMMIT" \
             --remote origin
-          python packaging/publish_static_index.py \
+          python packaging/publish_release.py \
             "$RELEASE_OUTPUT/prepared-site" \
             --phase indexes
       - name: Verify public package indexes
         shell: bash
         run: |
           set -euo pipefail
-          version='${{ needs.build-and-prepare.outputs.version }}'
+          version='${{ needs.prepare-release.outputs.version }}'
           for configuration in \
             torch213-cu130 torch212-cu129 torch213-cpu torch212-cpu; do
             configuration_json=$(
-              python packaging/release_matrix.py show "$configuration"
+              python packaging/matrix.py show "$configuration"
             )
             torch_requirement=$(python -c \
               'import json,sys; print(json.load(sys.stdin)["torch_requirement"])' \
@@ -374,15 +409,53 @@ jobs:
           PY
             done
           done
+  verify-public-windows:
+    if: inputs.mode == 'publish'
+    needs: [prepare-release, publish]
+    runs-on: [self-hosted, Windows, X64, fhelium-release, gpu]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.prepare-release.outputs.source_commit }}
+      - name: Verify public Windows wheels
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $py312 = (& py -3.12 -c 'import sys; print(sys.executable)').Trim()
+          $py313 = (& py -3.13 -c 'import sys; print(sys.executable)').Trim()
+          & $py312 -m pip install 'jsonschema==4.26.0'
+          $cells = (& $py312 -I packaging/matrix.py cells `
+            --platform win_amd64 --json | ConvertFrom-Json)
+          foreach ($cell in $cells) {
+            $base = if ($cell.python_abi -eq 'cp312-cp312') { $py312 } else { $py313 }
+            $configuration = (& $py312 -I packaging/matrix.py show `
+              $cell.configuration | ConvertFrom-Json)
+            $environment = Join-Path $env:RUNNER_TEMP `
+              "public-$($cell.configuration)-$($cell.python_abi)"
+            Remove-Item -Recurse -Force $environment -ErrorAction SilentlyContinue
+            & $base -m venv --copies $environment
+            $python = Join-Path $environment 'Scripts\python.exe'
+            & $python -m pip install --index-url $configuration.torch_index_url `
+              $configuration.torch_requirement
+            & $python -m pip install --only-binary=fhelium `
+              --extra-index-url `
+              "https://download.fhelium.550w.host/$($cell.configuration)/simple/" `
+              "fhelium==${{ needs.prepare-release.outputs.version }}"
+            & $python -I -c `
+              'import torch; import fhelium; from fhelium.native import native_status; s=native_status(); assert s.available; x=torch.tensor([[[1,2]]],dtype=torch.int64); p=torch.zeros((8,1),dtype=torch.int64); p[0,0]=34; assert torch.equal(torch.ops.fhelium_rns_ops.add_canonical(x,x,p),x+x)'
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
   publish-github-release:
-    needs: [build-and-prepare, publish]
+    if: inputs.mode == 'publish'
+    needs: [prepare-release, publish, verify-public-windows]
     runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ needs.build-and-prepare.outputs.source_commit }}
+          ref: ${{ needs.prepare-release.outputs.source_commit }}
           fetch-depth: 0
       - name: Restore release bundle
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -393,10 +466,10 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          SOURCE_COMMIT: ${{ needs.build-and-prepare.outputs.source_commit }}
+          SOURCE_COMMIT: ${{ needs.prepare-release.outputs.source_commit }}
         run: |
           set -euo pipefail
-          python packaging/validate_release_ref.py \
+          python packaging/release_identity.py \
             --tag "$RELEASE_TAG" \
             --source-commit "$SOURCE_COMMIT" \
             --remote origin
@@ -419,10 +492,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PRERELEASE: ${{ inputs.prerelease }}
           RELEASE_TAG: ${{ inputs.tag }}
-          SOURCE_COMMIT: ${{ needs.build-and-prepare.outputs.source_commit }}
+          SOURCE_COMMIT: ${{ needs.prepare-release.outputs.source_commit }}
         run: |
           set -euo pipefail
-          python packaging/validate_release_ref.py \
+          python packaging/release_identity.py \
             --tag "$RELEASE_TAG" \
             --source-commit "$SOURCE_COMMIT" \
             --remote origin

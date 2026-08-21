@@ -386,7 +386,7 @@ class ResidencySnapshot(Generic[ValueT_co]):
 class ResidencyTransitionReport:
     """Measured result of one completed residency action.
 
-    ``action`` is the exact requested action.  ``source`` records the resolved
+    ``action`` is the requested action. ``source`` records the resolved
     source when an action left it implicit, and ``destination`` records the
     target when applicable.  CUDA allocator metrics are optional because host
     transitions and managers without allocator instrumentation cannot provide

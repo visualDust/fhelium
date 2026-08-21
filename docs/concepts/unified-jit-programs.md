@@ -81,7 +81,7 @@ interchange and inspection useful before a runtime has been selected.
 ### Readiness validity
 
 [`Program.readiness()`](../api/fhelium/experimental/jit.md#readiness)
-selects one entry function and compares its exact current operations with a
+selects one entry function and compares its current operations with a
 runtime workspace. Its `ReadinessReport` records concrete diagnostics and a
 `runnable` decision. The check covers the executable operation schemas,
 unresolved scheduling obligations, program versions, material/resource
@@ -116,7 +116,7 @@ The executor assigns these conventional workspace keys:
 | `material_resolver` | Resolve `(symbol, kind, binding, workspace)` during a ``Program.run(...)`` call |
 | `resource_resolver` | Resolve `(symbol, kind, binding, workspace)` during a ``Program.run(...)`` call |
 | `handlers` | Map an extension operation name to an operation handler |
-| `torch_handlers` | Map an exact Torch target symbol to an trusted Python callable |
+| `torch_handlers` | Map a Torch target symbol to a trusted Python callable |
 | `engine` | Supply the `CkksEngine` for lowered CKKS operations and encrypted inputs |
 | `evaluation_keys` | Supply rotation and relinearization keys required by current operations |
 | `public_key` | Authorize online encryption when an encrypted input is supplied as a Tensor |
@@ -143,10 +143,10 @@ These mechanisms answer different questions:
 - **Passes** transform locally recognized operations. A `PassPipeline` clones
   the source program once, runs an ordered pass tuple over the clone, shares one
   workspace across the tuple, and returns per-pass reports.
-- **Readiness** applies the interpreter's exact schema and capability gate to a
+- **Readiness** applies the interpreter's schema and capability check to a
   selected entry and workspace.
 - **Handlers** extend execution. `handlers` execute unknown operation names;
-  `torch_handlers` authorize exact preserved Torch targets. FHE-touching Torch
+  `torch_handlers` authorize preserved Torch targets. FHE-touching Torch
   calls require a bound target handler. Built-in operations retain their
   built-in semantics and cannot be overridden through the extension map.
 
@@ -179,7 +179,7 @@ used beside a JIT-managed subprogram.
 | **Backend extension** | Preserve dialect-specific operations/types, add transformation passes or state validators, and bind trusted operation/resource handlers |
 
 This organization allows a workload to start from semantic PyTorch, textual IR,
-or direct evaluator code while retaining one exact CKKS value model during
+or direct evaluator code while retaining one shared CKKS value model during
 execution.
 
 ## Continue
@@ -188,5 +188,5 @@ execution.
   trace through pass reports and encrypted execution.
 - [JIT internals](../developer/unified-jit-internals.md) defines the
   xDSL vocabulary, pass scope, schemas, and extension interfaces.
-- [JIT API modules](../api/fhelium/experimental/jit.md) provide exact
+- [JIT API modules](../api/fhelium/experimental/jit.md) provide current
   current signatures.

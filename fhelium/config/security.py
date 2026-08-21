@@ -1,4 +1,4 @@
-"""Assess complete HE moduli against one exact published parameter table.
+"""Assess complete HE moduli against a published parameter table.
 
 The built-in budgets reproduce the parameter limits published in
 [*Security Guidelines for Implementing Homomorphic
@@ -84,7 +84,7 @@ def _lookup_maximum_modulus_bits(
     secret_distribution: str,
     error_stddev: float,
 ) -> int | None:
-    """Return one exact table entry, or ``None`` when none matches."""
+    """Return the matching table entry, or ``None`` when none matches."""
 
     if error_stddev != _TABLE_ERROR_STANDARD_DEVIATION:
         return None
@@ -95,11 +95,11 @@ def _lookup_maximum_modulus_bits(
 
 @dataclass(frozen=True, slots=True)
 class SecurityAssessment:
-    r"""Immutable result of one exact built-in parameter assessment.
+    r"""Immutable result of a built-in parameter assessment.
 
-    ``status`` is ``"meets"`` when $\lceil\log_2 q\rceil$ is at most the exact
+    ``status`` is ``"meets"`` when $\lceil\log_2 q\rceil$ is at most the
     table budget, ``"exceeds"`` when it is larger, and ``"unsupported"`` when
-    no exact table row matches the assumptions. An unsupported result has
+    no table row matches the assumptions. An unsupported result has
     ``None`` for ``maximum_modulus_bits`` and ``modulus_margin_bits``. A
     negative modulus margin reports how far a supported parameter tuple
     exceeds its modulus budget; it is not a bit-security margin.
@@ -163,24 +163,24 @@ def assess_security(
     secret_distribution: str = "ternary",
     error_stddev: float = _TABLE_ERROR_STANDARD_DEVIATION,
 ) -> SecurityAssessment:
-    """Assess a complete modulus against one exact built-in budget row.
+    """Assess a complete modulus against one built-in budget row.
 
     Args:
         ring_dimension: Polynomial-ring dimension ``N``.
-        modulus: Exact complete parameter modulus ``q``.  For CKKS hybrid key
+        modulus: Complete parameter modulus ``q``. For CKKS hybrid key
             switching this is ``Q * P``.
-        moduli: Exact factors of the complete parameter modulus.  Specify this
+        moduli: Factors of the complete parameter modulus. Specify this
             or ``modulus``, but not both.
         target_bits: Classical security category.
-        secret_distribution: Exact table secret distribution, ``"ternary"``
+        secret_distribution: Table secret distribution, ``"ternary"``
             or ``"gaussian"``.
         error_stddev: Gaussian error standard deviation. The built-in budgets
             support exactly ``3.19``.
 
     Returns:
-        A structured assessment with status, exact integer modulus-bit width,
+        A structured assessment with status, modulus-bit width,
         budget, margin, and an unsupported reason when applicable. Parameters
-        without an exact row return ``status="unsupported"``; this function
+        without a matching row return ``status="unsupported"``; this function
         never interpolates or extrapolates.
 
     Raises:
@@ -229,11 +229,11 @@ def assess_security(
             and error_stddev == _TABLE_ERROR_STANDARD_DEVIATION
         ):
             reasons.append(
-                "No exact built-in row matches "
+                "No built-in row matches "
                 f"ring_dimension={ring_dimension}, target_bits={target_bits}."
             )
         reasons.append(
-            "Parameters outside the exact table require an external security "
+            "Parameters outside the built-in table require an external security "
             "assessment; see the security guide."
         )
         reason = " ".join(reasons)
@@ -260,7 +260,7 @@ def assess_config_security(config: CkksConfig) -> SecurityAssessment:
     """Assess a :class:`~fhelium.config.CkksConfig` complete QP modulus."""
 
     # Import lazily to keep the utility module independent of config import
-    # order while still providing an exact public type check.
+    # order while still checking the public type at runtime.
     from fhelium.config import CkksConfig
 
     if not isinstance(config, CkksConfig):

@@ -57,11 +57,11 @@ class CkksEngine:
 
     The engine fixes $N=2^{\mathtt{logN}}$, the ordered Q and P primes, one
     integral tensor dtype, one local device, and an NTT backend. Public values
-    carry exact level, actual scale, polynomial domain, modulus basis,
-    residue form, and exact ``prime_ids``; operations never infer hidden level
+    carry level, actual scale, polynomial domain, modulus basis,
+    residue form, and ``prime_ids``; operations never infer hidden level
     or scale alignment.
 
-    ``ntt_backend`` is an exact engine execution-policy name. When omitted,
+    ``ntt_backend`` selects a named engine execution policy. When omitted,
     CUDA engines select ``fhelium.DEFAULT_NTT_BACKEND`` and CPU engines select
     ``fhelium.DEFAULT_CPU_NTT_BACKEND``. Engine
     construction does not benchmark hardware. A selected backend name must support
@@ -279,7 +279,7 @@ class CkksEngine:
         over the complete level-zero Q or QP basis, and transformed to
         NTT-domain Montgomery residues. The result has layout
         ``[limb, ntt_index]``, engine integral dtype/device, final extent $N$,
-        and exact level-zero ``prime_ids``. Generation allocates independent
+        and level-zero ``prime_ids``. Generation allocates independent
         key storage and does not change the engine's installed key lifecycle.
         """
 
@@ -304,7 +304,7 @@ class CkksEngine:
 
         where $B_0$ is Q or QP as requested. Output layout is
         ``[key_component=2, limb, ntt_index]`` in level-zero NTT-domain
-        Montgomery form with engine integral dtype/device and exact
+        Montgomery form with engine integral dtype/device and
         ``prime_ids``. The input secret key is not mutated and the public key
         is not installed on the engine.
         """
@@ -365,7 +365,7 @@ class CkksEngine:
         The result has layout
         ``[key_digit, key_component=2, limb, ntt_index]`` in complete
         level-zero QP, NTT-domain Montgomery form with engine integral
-        dtype/device and exact ``prime_ids``. It enables semantic slot
+        dtype/device and ``prime_ids``. It enables semantic slot
         conjugation and is returned without installation; ``secret_key`` is
         not mutated.
         """
@@ -395,7 +395,7 @@ class CkksEngine:
         Both secret keys must be complete level-zero QP NTT/Montgomery values
         for this engine. The output layout is
         ``[key_digit, key_component=2, limb, ntt_index]`` with engine integral
-        dtype/device and exact QP ``prime_ids``. Optional uniform components
+        dtype/device and QP ``prime_ids``. Optional uniform components
         are indexed by stable ``key_digit_index``. Inputs are not mutated and
         the result is not installed.
         """
@@ -562,7 +562,7 @@ class CkksEngine:
             scale: Positive finite per-value scale, or ``None`` to use
                 ``config.default_scale``.
         Returns:
-            A new exact ``integer_coefficients`` plaintext with layout
+            A new ``integer_coefficients`` plaintext with layout
             ``[*batch, coefficient]``, final extent $N$, engine integral dtype
             and device, coefficient domain, and the selected binary64 actual
             scale. It has no RNS basis or ``prime_ids``.
@@ -586,7 +586,7 @@ class CkksEngine:
     ) -> Plaintext:
         r"""Reduce an integer polynomial to coefficient-domain standard RNS.
 
-        For every exact active ``prime_ids[i]`` with modulus $q_i$, compute
+        For every active ``prime_ids[i]`` with modulus $q_i$, compute
 
         $$
         r_{i,j}=p_j\bmod q_i.
@@ -599,7 +599,7 @@ class CkksEngine:
         The result has ``representation="rns"``,
         ``polynomial_domain="coefficient"``, and
         ``residue_representation="standard"``. Its level, scale, semantic
-        polynomial, and exact active ``prime_ids`` are preserved. The input
+        polynomial, and active ``prime_ids`` are preserved. The input
         must be the ``integer_coefficients`` result of :meth:`encode`; this
         transition never performs encoding or CRT reconstruction implicitly.
         """
@@ -617,7 +617,7 @@ class CkksEngine:
     ) -> Plaintext:
         r"""Prepare coefficient-domain Montgomery RNS data for addition.
 
-        For each exact active ``prime_ids[i]`` with modulus $q_i$, compute
+        For each active ``prime_ids[i]`` with modulus $q_i$, compute
 
         $$
         \widetilde{r}_{i,j}=(p_j\bmod q_i)R\bmod q_i.
@@ -629,7 +629,7 @@ class CkksEngine:
         The result's state is ``(representation="rns",
         polynomial_domain="coefficient",
         residue_representation="montgomery")``. Level, scale, semantic
-        polynomial, modulus basis, and exact ``prime_ids`` are preserved.
+        polynomial, modulus basis, and ``prime_ids`` are preserved.
 
         Semantically, this convenience operation is equivalent to
 
@@ -652,7 +652,7 @@ class CkksEngine:
     ) -> Plaintext:
         r"""Prepare NTT-domain Montgomery RNS data for multiplication.
 
-        For each exact active ``prime_ids[i]`` with modulus $q_i$, reduce
+        For each active ``prime_ids[i]`` with modulus $q_i$, reduce
         $p(X)$ and compute its negacyclic NTT in Montgomery form. Input
         ``[*batch, coefficient]`` becomes ``[*batch, limb, ntt_index]`` with
         engine integral dtype/device and final extent $N$. This changes only
@@ -661,7 +661,7 @@ class CkksEngine:
         The result's state is ``(representation="rns",
         polynomial_domain="ntt",
         residue_representation="montgomery")`` with the selected Q or QP
-        ``modulus_basis`` and its exact ``prime_ids``.
+        ``modulus_basis`` and its ``prime_ids``.
 
         Semantically, this convenience operation is equivalent to
 
@@ -687,7 +687,7 @@ class CkksEngine:
         $$
 
         Slots input is encoded first at its stored scale. Otherwise the input
-        is exact integral ``integer_coefficients`` or finite binary64
+        is integral ``integer_coefficients`` or finite binary64
         ``approximate_coefficients`` with layout ``[*batch, coefficient]``,
         final extent $N$, and engine device. RNS input is rejected because CRT
         reconstruction is distinct. The functional output is CPU
@@ -702,7 +702,7 @@ class CkksEngine:
         plaintext: Plaintext,
         public_key: PublicKey | None = None,
     ) -> Ciphertext:
-        r"""Encrypt slots or exact integer coefficients under a public key.
+        r"""Encrypt slots or integer coefficients under a public key.
 
         The output phase satisfies
 
@@ -715,7 +715,7 @@ class CkksEngine:
         configured encryption noise $e(X)$, the result is a new dense
         ``[component=2, *batch, limb, coefficient]`` ciphertext in coefficient
         domain and standard residues, over Q or QP according to the public
-        key. It uses engine integral dtype/device, exact active ``prime_ids``,
+        key. It uses engine integral dtype/device, active ``prime_ids``,
         unchanged level, and $\Delta(c)=\Delta(p)$. Input and key are not
         mutated, and output storage does not alias them.
         """
@@ -754,7 +754,7 @@ class CkksEngine:
         The current decrypt path reconstructs the centered class from the trailing
         Q-prime pair into a finite ``torch.float64``
         ``[*batch, coefficient]`` tensor on the engine device. It is bounded
-        ``approximate_coefficients`` for decoding, not an exact full-$Q_\ell$
+        ``approximate_coefficients`` for decoding, not a full-$Q_\ell$
         CRT inverse and not encryptable RNS input. The returned plaintext keeps
         ``ct.level`` and $\Delta(p)=\Delta(ct)$; scale division occurs only in
         :meth:`decode`. Inputs are unchanged and output storage is independent.
@@ -804,7 +804,7 @@ class CkksEngine:
         Returns:
             A new two-component ``[component, *batch, limb, coefficient]``
             ciphertext in coefficient domain and standard residues, with
-            engine integral dtype/device, exact Q or QP ``prime_ids`` selected
+            engine integral dtype/device, Q or QP ``prime_ids`` selected
             by the public key, unchanged level, and actual scale $\Delta$.
 
         Raises:
@@ -843,7 +843,7 @@ class CkksEngine:
         $$
 
         Decryption uses the bounded approximate-coefficient reconstruction described
-        by :meth:`decrypt`; it is not exact CRT. The result is CPU
+        by :meth:`decrypt`; it is not a CRT reconstruction. The result is CPU
         ``[*batch, slot]`` and is complex unless ``is_real=True``. The
         ciphertext and secret key are unchanged.
         """
@@ -890,7 +890,7 @@ class CkksEngine:
         Layout ``[*batch, limb, N]`` for plaintext or
         ``[component, *batch, limb, N]`` for ciphertext, engine integral
         dtype/device, level, actual scale, component count, Q/QP basis, and
-        exact ``prime_ids`` are preserved. The functional result has
+        ``prime_ids`` are preserved. The functional result has
         independent storage. Input already in NTT domain is rejected because
         this is a strict source-to-target transition. No CRT reconstruction
         occurs.
@@ -950,7 +950,7 @@ class CkksEngine:
         inverse NTT and Montgomery reduction.
 
         Tensor shape, engine integral dtype/device, level, actual scale,
-        component count, Q/QP basis, and exact ``prime_ids`` are preserved.
+        component count, Q/QP basis, and ``prime_ids`` are preserved.
         The functional result owns independent storage. Input already in
         coefficient domain is rejected because this is a strict
         source-to-target transition. It remains RNS; no CRT reconstruction
@@ -992,7 +992,7 @@ class CkksEngine:
         For limb prime $q_i$, map $r_{i,j}$ to $r_{i,j}R\bmod q_i$. Input and
         output layout is ``[*batch, limb, coefficient]`` with engine integral
         dtype/device. Representation, level, actual scale, Q/QP basis, and
-        exact ``prime_ids`` are preserved. The functional output has
+        ``prime_ids`` are preserved. The functional output has
         independent storage. Input already using Montgomery residues is
         rejected because this is a strict source-to-target transition.
         """
@@ -1026,7 +1026,7 @@ class CkksEngine:
         For limb prime $q_i$, Montgomery-reduce each residue to its ordinary
         representative. Input and output layout is
         ``[*batch, limb, coefficient]`` with engine integral dtype/device.
-        Representation, level, actual scale, Q/QP basis, and exact
+        Representation, level, actual scale, Q/QP basis, and
         ``prime_ids`` are preserved. The functional output has independent
         storage. Input already using standard residues is rejected because
         this is a strict source-to-target transition.
@@ -1150,7 +1150,7 @@ class CkksEngine:
         $B_{\ell+1}=Q_{\ell+1}P$ and every P row is retained.
         ``rounding="nearest"`` selects nearest-integer quotient and
         ``rounding="floor"`` subtracts the least nonnegative dropped residue
-        before exact division.
+        before integer division.
 
         Args:
             ct: Full-layout coefficient-domain, standard-residue ciphertext at
@@ -1161,7 +1161,7 @@ class CkksEngine:
         Returns:
             A new coefficient-domain standard ciphertext at ``ct.level + 1``
             with the same two/three component count and Q/QP basis, engine
-            integral dtype/device, exact ``prime_ids=ct.prime_ids[1:]``, and
+            integral dtype/device, ``prime_ids=ct.prime_ids[1:]``, and
             canonical residues in $[0,q_i)$. ``ct`` is unchanged and output
             storage does not alias it.
 
@@ -1250,7 +1250,7 @@ class CkksEngine:
 
         The mathematical RNS restriction and no-wrap condition are identical
         to :meth:`mod_switch_to_next_level`. ``ct.data`` is narrowed to a view of its
-        existing allocation; level and exact ``prime_ids`` change, while
+        existing allocation; level and ``prime_ids`` change, while
         actual scale and all other state axes are preserved. Aliases observe
         metadata mutation and retained storage rows.
 
@@ -1302,7 +1302,7 @@ class CkksEngine:
         Returns:
             A new ciphertext at ``target_level`` with unchanged component
             count, domain, Q/QP basis, residue form, dtype/device, and actual
-            scale. Exact ``prime_ids`` are restricted accordingly. Passing the
+            scale. ``prime_ids`` are restricted accordingly. Passing the
             current level returns a full clone; output never aliases ``ct``.
 
         Raises:
@@ -1322,7 +1322,7 @@ class CkksEngine:
         r"""In-place form of :meth:`mod_switch_to_level`.
 
         The same RNS restriction and no-wrap condition apply. The narrowed
-        tensor remains a view into the original allocation; level and exact
+        tensor remains a view into the original allocation; level and
         ``prime_ids`` change while actual scale and other state axes are
         preserved. Aliases observe mutation.
 
@@ -1376,7 +1376,7 @@ class CkksEngine:
         Returns:
             A new ciphertext with cloned payload, independent storage, and
             ``target_scale``. Level, component count, domain, basis, residue
-            form, dtype/device, and exact ``prime_ids`` are unchanged.
+            form, dtype/device, and ``prime_ids`` are unchanged.
 
         Raises:
             InvalidScaleError: If ``target_scale`` is invalid.
@@ -1429,11 +1429,11 @@ class CkksEngine:
         )
 
     def zero_plaintext_like(self, plaintext: Plaintext) -> Plaintext:
-        r"""Construct semantic zero in the same exact plaintext state.
+        r"""Construct semantic zero in the same plaintext state.
 
         Slots, integer coefficients, approximate coefficients, or RNS payloads
         are materialized as zero with matching batch shape, level, actual
-        scale, representation, domain, Q/QP basis, residue form, and exact
+        scale, representation, domain, Q/QP basis, residue form, and
         ``prime_ids``. The result uses the engine-compatible dtype/device for
         newly encoded storage and owns independent storage. The input is not
         mutated.
@@ -1499,7 +1499,7 @@ class CkksEngine:
         $c_0(X)+c_1(X)s(X)=e(X)\pmod{B_\ell}$ and decodes to
         zero up to encryption error. It is a new two-component ciphertext with
         ``ct``'s batch shape, level, actual scale, coefficient/NTT domain,
-        Q/QP basis, standard/Montgomery form, engine dtype/device, and exact
+        Q/QP basis, standard/Montgomery form, engine dtype/device, and
         ``prime_ids``. The supplied public key must select the same basis.
         Neither input nor key is mutated and no storage aliases them.
         """
@@ -1557,7 +1557,7 @@ class CkksEngine:
 
         Returns:
             A new three-component NTT/Montgomery ciphertext at unchanged level
-            and Q/QP basis, with engine integral dtype/device, the exact shared
+            and Q/QP basis, with engine integral dtype/device, the shared
             ``prime_ids``, the operands' batch shape, and product actual scale.
             Inputs are unchanged and output storage is independent.
 
@@ -1631,7 +1631,7 @@ class CkksEngine:
 
         Returns:
             A new two-component coefficient-domain standard ciphertext with
-            Q basis, the same batch shape, engine integral dtype/device, exact
+            Q basis, the same batch shape, engine integral dtype/device,
             active Q ``prime_ids``, level, and actual scale as ``ct``. Inputs
             are unchanged and output storage is independent.
 
@@ -1689,7 +1689,7 @@ class CkksEngine:
         that invariant. The represented message, level, and actual scale are
         preserved up to key-switch error. Input must be coefficient-domain
         standard, two-component, full-layout Q RNS. Output is a new Q value
-        with unchanged batch shape, engine dtype/device, and exact active Q
+        with unchanged batch shape, engine dtype/device, and active Q
         ``prime_ids``; inputs are not mutated and storage is independent.
         """
 
@@ -1731,7 +1731,7 @@ class CkksEngine:
 
         Returns:
             The sum with unchanged component count, level, domain, Q/QP basis,
-            residue form, engine dtype/device, and exact ``prime_ids``. The
+            residue form, engine dtype/device, and ``prime_ids``. The
             functional result owns independent storage; ``inplace=True``
             mutates and returns ``lhs`` so aliases observe canonicalized
             payload changes.
@@ -1767,12 +1767,12 @@ class CkksEngine:
         c'_j=\sum_i c_{i,j}\pmod{B_\ell}
         $$
 
-        with one exactly shared actual scale. Every state axis, batch shape,
-        dtype/device, and exact ``prime_ids`` must match.
+        with one shared actual scale. Every state axis, batch shape,
+        dtype/device, and ``prime_ids`` must match.
 
         Args:
-            ciphertexts: Non-empty sequence satisfying :meth:`add`'s exact
-                layout and exact-scale requirements.
+            ciphertexts: Non-empty sequence satisfying :meth:`add`'s layout
+                and equal-scale requirements.
 
         Returns:
             A new ciphertext. Every input remains unchanged.
@@ -1827,7 +1827,7 @@ class CkksEngine:
         Returns:
             A new ciphertext with the selected batch axis removed. Level,
             scale, polynomial domain, modulus basis, residue representation,
-            component count, device, dtype, and exact ``prime_ids`` are
+            component count, device, dtype, and ``prime_ids`` are
             preserved. The input is unchanged.
 
         Raises:
@@ -1890,7 +1890,7 @@ class CkksEngine:
 
         Returns:
             The difference with unchanged component count, level, domain,
-            Q/QP basis, residue form, engine dtype/device, and exact
+            Q/QP basis, residue form, engine dtype/device, and
             ``prime_ids``. The functional result owns independent storage;
             ``inplace=True`` mutates and returns ``lhs``.
 
@@ -1924,7 +1924,7 @@ class CkksEngine:
         $$
 
         Component count, level, domain, Q/QP basis, residue form,
-        dtype/device, and exact ``prime_ids`` are preserved. The functional
+        dtype/device, and ``prime_ids`` are preserved. The functional
         result owns independent storage; ``inplace=True`` mutates canonicalized
         residues in ``ct`` and aliases observe the change.
         """
@@ -1981,7 +1981,7 @@ class CkksEngine:
         Args:
             ct: Two-component coefficient-domain standard ciphertext.
             plaintext: Coefficient-domain RNS ``Plaintext`` or compatible
-                compressed form at the same level, basis, rows, and exact
+                compressed form at the same level, basis, rows, and equal
                 binary64 scale. A batched plaintext must match
                 ``ct.batch_shape`` exactly; an unbatched plaintext broadcasts
                 over every ciphertext batch entry.
@@ -1990,7 +1990,7 @@ class CkksEngine:
         Returns:
             A two-component coefficient-domain standard ciphertext with
             unchanged level, Q/QP basis, batch shape, engine dtype/device,
-            exact ``prime_ids``, and shared actual scale. Functional mode
+            ``prime_ids``, and shared actual scale. Functional mode
             allocates independent output; ``inplace=True`` mutates only
             ``ct.c0`` and aliases observe the change.
 
@@ -2070,7 +2070,7 @@ class CkksEngine:
         ct: Ciphertext,
         plaintext: Plaintext | CompressedPlaintext,
     ) -> Ciphertext:
-        """Mutate ``ct.c0`` with :meth:`add_plaintext`'s exact input requirements."""
+        """Mutate ``ct.c0`` under :meth:`add_plaintext`'s input requirements."""
 
         return self.add_plaintext(ct, plaintext, inplace=True)
 
@@ -2108,7 +2108,7 @@ class CkksEngine:
         Returns:
             A new two-component NTT-domain Montgomery ciphertext at
             unchanged level and Q/QP basis, with the ciphertext batch shape,
-            engine integral dtype/device, exact ``prime_ids``, and product
+            engine integral dtype/device, ``prime_ids``, and product
             actual scale. Functional mode leaves inputs unchanged and owns
             independent storage; ``inplace=True`` replaces all ``ct`` state
             with the new storage, so old tensor aliases keep the old allocation.
@@ -2196,7 +2196,7 @@ class CkksEngine:
         The step is canonicalized modulo $S$. A matching direct key is used
         when installed, generated lazily when allowed, or composed from the
         installed key inventory. Use :meth:`rotate_with_key` when the caller
-        owns the exact direct key.
+        owns the direct key.
         """
 
         if not isinstance(rotation_step, Integral):
@@ -2226,7 +2226,7 @@ class CkksEngine:
 
         Input must be a two-component coefficient-domain standard full-layout
         Q ciphertext. Output is a new Q ciphertext with unchanged batch shape,
-        level, actual scale, engine integral dtype/device, and exact active Q
+        level, actual scale, engine integral dtype/device, and active Q
         ``prime_ids``; key switching adds its configured approximation error.
         Inputs are unchanged and output storage is independent. Step zero
         returns a clone without automorphism or key switch.
@@ -2357,7 +2357,7 @@ class CkksEngine:
         $\sigma_{-1}(s(X))\longmapsto s(X)$. Input must be two-component,
         coefficient-domain, standard-residue, full-layout Q RNS. Output is a
         new Q ciphertext with unchanged batch shape, level, actual scale,
-        engine integral dtype/device, and exact active Q ``prime_ids``, up to
+        engine integral dtype/device, and active Q ``prime_ids``, up to
         key-switch error. Inputs are unchanged and output storage is
         independent.
         """
@@ -2411,7 +2411,7 @@ class CkksEngine:
     # ------------------------------------------------------------------
 
     def _validate_public_level(self, level: object) -> int:
-        """Require one exact level addressable by this public CKKS context."""
+        """Validate a level addressable by this public CKKS context."""
 
         if type(level) is not int:
             raise TypeError(
@@ -2426,7 +2426,7 @@ class CkksEngine:
 
     @staticmethod
     def _validate_modulus_basis(value: object) -> ModulusBasis:
-        """Require one exact public modulus-basis selector."""
+        """Validate a public modulus-basis selector."""
 
         if not isinstance(value, str):
             raise TypeError(
@@ -2561,7 +2561,7 @@ class CkksEngine:
         """Validate a complete dense ciphertext against this engine.
 
         The check re-runs the value's mutable-storage invariants and requires the
-        exact context, ring dimension, dtype, device, public level, modulus
+        matching context, ring dimension, dtype, device, public level, modulus
         basis, and complete active ``prime_ids`` expected by ordinary engine
         operations. It performs no evaluator work and does not mutate the
         ciphertext.
@@ -2573,7 +2573,7 @@ class CkksEngine:
         """Validate public encryption material against this engine.
 
         The check re-runs the key's mutable-storage invariants and requires the
-        exact context, ring dimension, dtype, device, polynomial domain,
+        matching context, ring dimension, dtype, device, polynomial domain,
         residue representation, and prime layout consumed by online
         encryption. The key is not installed or mutated.
         """
@@ -2713,7 +2713,7 @@ class CkksEngine:
             raise ValueError(
                 "This full-layout primitive received a different local RNS "
                 f"structure: ciphertext prime_ids={ct.prime_ids}, "
-                f"engine prime_ids={expected_prime_ids}. Use an local "
+                f"engine prime_ids={expected_prime_ids}. Use a local "
                 "primitive and communication plan for limb-partitioned data."
             )
 
@@ -2865,15 +2865,15 @@ class CkksEngine:
     ) -> None:
         """Validate that a dense key belongs to this rank-local engine.
 
-        The compatibility requirements cover the exact concrete key type, CKKS
+        The compatibility requirements cover the concrete key type, CKKS
         context, polynomial degree, configured dtype and local device, NTT
-        polynomial domain, Montgomery residues, optional exact basis, complete
+        polynomial domain, Montgomery residues, an optional required basis, complete
         level-zero prime layout, and key-switch digit shape where applicable.
 
         Args:
             key: Dense secret, public, or key-switch key to validate.
-            expected_type: Exact concrete key class required by the operation.
-            modulus_basis: Exact RNS basis required by the calling operation, or
+            expected_type: Concrete key class required by the operation.
+            modulus_basis: RNS basis required by the calling operation, or
                 ``None`` to accept either Q or QP and validate its matching
                 prime layout.
 
@@ -2954,7 +2954,7 @@ class CkksEngine:
 
         Entry ``level`` is an engine-integral CPU or CUDA tensor with layout
         ``[remaining_qp_limb]``. Element $i$ is
-        $q_{\mathrm{drop}}^{-1}R\bmod r_i$ for the corresponding row of exact
+        $q_{\mathrm{drop}}^{-1}R\bmod r_i$ for the corresponding row of
         ``rns_layout.prime_ids(level, include_p=True)[1:]``. The table is
         Montgomery-form scalar metadata, not a polynomial tensor. It is newly
         allocated and retained by the engine.
@@ -2995,7 +2995,7 @@ class CkksEngine:
         engine-integral tensor on the engine device with layout
         ``[p_drop_step, surviving_limb]``. Valid entries store
         $p_{\mathrm{drop}}^{-1}R\bmod r_i$ for each surviving QP row after
-        that sequential P-prime drop. Row order follows the exact active
+        that sequential P-prime drop. Row order follows the active
         ``prime_ids`` at ``level``; unused packed tail entries are never
         consumed. Construction allocates engine-owned table storage.
         """
@@ -3311,7 +3311,7 @@ class CkksEngine:
         semantically secure output ciphertext. The new allocation matches
         ``ct`` in component count, ``[*batch, limb, index]`` shape,
         dtype/device, level, actual scale, domain, Q/QP basis, residue form, and
-        exact ``prime_ids``; it does not alias ``ct``.
+        ``prime_ids``; it does not alias ``ct``.
         """
 
         self._assert_engine_ciphertext(ct)
@@ -3423,7 +3423,7 @@ class CkksEngine:
 
         The returned tensor has layout
         ``[*batch, limb, coefficient_or_ntt_index]``, engine integral
-        dtype/device, exact ``prime_ids`` equal to the ciphertext limb order,
+        dtype/device, ``prime_ids`` equal to the ciphertext limb order,
         matching Q/QP basis, Montgomery residues, and the requested polynomial
         domain. A nonempty plaintext batch shape must equal the ciphertext
         batch shape; a truly unbatched plaintext may broadcast over
@@ -3491,7 +3491,7 @@ class CkksEngine:
         """Validate compact state against an engine-local ciphertext.
 
         The result aliases dense integral
-        ``[*batch, limb, unique_index]`` storage on the engine device. Exact
+        ``[*batch, limb, unique_index]`` storage on the engine device.
         ``prime_ids``, Q/QP basis, Montgomery form, and requested domain match
         ``ct``. A nonempty batch shape must match exactly; only an unbatched
         value may broadcast. ``implicit_data``, when present, has
@@ -3578,7 +3578,7 @@ class CkksEngine:
         ``[*plaintext_batch, limb, unique_index]`` and Montgomery residues.
         Both use engine integral dtype/device and limb order
         ``plaintext.prime_ids``. ``rns_params`` is
-        ``[parameter, limb]`` for those exact primes. The native kernel expands
+        ``[parameter, limb]`` for those primes. The native kernel expands
         the declared compression layout and computes
         $c'_0=c_0+p\pmod{B_\ell}$ with unbatched-plaintext broadcasting only.
         Functional mode allocates non-aliasing canonical standard residues;
@@ -3649,7 +3649,7 @@ class CkksEngine:
         ``ciphertext_component_ntt`` is
         ``[*batch, limb, ntt_index]`` and ``prepared_data`` is
         ``[*plaintext_batch, limb, unique_ntt_index]``; limb row $i$ is modulo
-        exact ``prime_ids[i]``. Cyclic/contiguous expansion defines $p$ over
+        ``prime_ids[i]``. Cyclic/contiguous expansion defines $p$ over
         the full NTT axis and the result is $c'_j=c_jp\pmod{B_\ell}$.
         An unbatched plaintext may broadcast; output has the ciphertext shape,
         is newly allocated, and does not alias either input. The allowed lazy
@@ -3864,7 +3864,7 @@ class CkksEngine:
 
         ``component`` is an engine-integral tensor on the engine device with
         layout ``[*batch, limb, coefficient]`` and standard residues; limb
-        order is the engine's exact Q or QP ``prime_ids`` at ``level``.
+        order is the engine's Q or QP ``prime_ids`` at ``level``.
         For the Galois element $g$ derived from ``rotation_step``, the kernel
         computes $\sigma_g(c)(X)=c(X^g)$ in
         $R=\mathbb{Z}[X]/(X^N+1)$, including the coefficient sign induced by

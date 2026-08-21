@@ -24,22 +24,22 @@ from fhelium.core.validation import (
 
 @dataclass(eq=False)
 class Plaintext(TensorResident):
-    r"""One homogeneous CKKS plaintext or dense batch at one exact state tuple.
+    r"""One homogeneous CKKS plaintext or dense batch at one state tuple.
 
     The state fields describe tensor layout and arithmetic form independently:
 
     - ``representation="slots"`` stores a scalar (repeated to all slots during
       encoding) or ``[*batch, slot]`` real/complex semantic messages. Encoding
       has not occurred; ``data`` and all RNS-state metadata are absent.
-    - ``representation="integer_coefficients"`` stores an exact integral
+    - ``representation="integer_coefficients"`` stores an integral
       ``[*batch, coefficient]`` tensor for $p(X)\in R$, before RNS reduction.
     - ``representation="approximate_coefficients"`` stores the bounded
       binary64 ``[*batch, coefficient]`` tail-Q reconstruction produced by
       decryption. It is valid only for decoding and cannot be encrypted or
-      reduced back to RNS; it is not an exact full-$Q_\ell$ CRT inverse.
+      reduced back to RNS; it is not a full-$Q_\ell$ CRT inverse.
     - ``representation="rns"`` stores a dense integral
       ``[*batch, limb, coefficient_or_ntt_index]`` tensor. Limb row $i$ is
-      modulo the exact parameter prime ``prime_ids[i]``. The last axis indexes
+      modulo the parameter prime ``prime_ids[i]``. The last axis indexes
       coefficients of $R=\mathbb{Z}[X]/(X^N+1)$ in ``"coefficient"`` domain
       or NTT evaluations in ``"ntt"`` domain. ``modulus_basis`` selects
       $Q_\ell$ or $Q_\ell P$, and ``residue_representation`` distinguishes
@@ -56,7 +56,7 @@ class Plaintext(TensorResident):
     A program that needs the same semantic message in multiple arithmetic states
     constructs separate values. The object owns no engine, cache, placement, or
     persistence reference. ``scale`` is the positive finite actual scale
-    $\Delta(v)$; ``level`` identifies $Q_\ell$ but never substitutes for exact
+    $\Delta(v)$; ``level`` identifies $Q_\ell$ but never substitutes for
     ``prime_ids``.
     """
 
@@ -313,7 +313,7 @@ class Plaintext(TensorResident):
 
         Scalar slots plaintexts are rejected because stacking them would
         change their repeat-to-all-slots meaning; materialize slot vectors
-        first. Inputs must have identical representation, state, exact
+        first. Inputs must have identical representation, state,
         ``prime_ids``, shape, dtype, and device. The result does not alias an
         input.
         """

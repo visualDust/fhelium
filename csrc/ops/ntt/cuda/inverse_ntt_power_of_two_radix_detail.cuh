@@ -1,5 +1,9 @@
 #pragma once
 
+#if defined(_MSC_VER) && defined(_M_X64)
+#include <intrin.h>
+#endif
+
 #include "power_of_two_radix_butterfly.cuh"
 
 // Genuine power-of-two radix inverse DIT digit kernels and host launch
@@ -70,7 +74,7 @@ __global__ void inverse_ntt_power_of_two_radix_digit_kernel(
   }
 }
 
-// Cooperative genuine-radix16 prefix. This is the exact DIT dual of the
+// Cooperative genuine-radix16 prefix. This is the algebraic DIT dual of the
 // forward shared-memory tail: every digit first restores its own
 // digit-bit-reversed lane order, evaluates the same 4x4 cyclic transform, and
 // only then applies the inverse outer twist.
@@ -648,7 +652,13 @@ void launch_inverse_ntt_fixed_radix_cuda(torch::Tensor a,
   auto params_acc = FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2);
 
   const int N = static_cast<int>(a.size(2));
+#if defined(_MSC_VER) && defined(_M_X64)
+  unsigned long log_n_index = 0;
+  _BitScanForward(&log_n_index, static_cast<unsigned long>(N));
+  const int logN = static_cast<int>(log_n_index);
+#else
   const int logN = __builtin_ctz(static_cast<unsigned>(N));
+#endif
   const int digit_count = logN / RADIX_BITS;
   const int shared_digit_count =
       std::min(digit_count, shared_memory_log_n / RADIX_BITS);

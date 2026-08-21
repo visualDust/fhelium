@@ -46,7 +46,7 @@ Create one application descriptor before secret sampling. At minimum, record:
 
 ```text
 epoch_id                 application-defined unique label
-party_ids                exact ordered set of cryptographic party identities
+party_ids                ordered set of cryptographic party identities
 context_id               engine.context.context_id
 ring_dimension           engine.config.N
 q_prime_ids              engine.rns_layout.prime_ids(0)
@@ -68,7 +68,7 @@ protocol
 round
 context_id
 operation_parameter       for example, one canonical rotation step
-payload_identity          application-defined exact-byte identity or digest
+payload_identity          application-defined byte identity or digest
 payload
 ```
 
@@ -156,7 +156,7 @@ Protocol 1 is a one-round request after the common Q tensor is distributed.
 ```python
 from fhelium.experimental import mpc
 
-# One application role samples and distributes these exact residues.
+# One application role samples and distributes these residues.
 common_a = mpc.sample_common_uniform(engine, basis="Q")
 
 # Run once in each party process with its local secret_share_i.
@@ -170,7 +170,9 @@ collective_public_key = mpc.aggregate_ckg(
 )
 ```
 
-Each party caches `ckg_share_i` before attempting delivery. A transport retry retransmits that exact cached payload. Calling `ckg_share` again samples a new internal error and therefore creates a different logical message.
+Each party caches `ckg_share_i` before attempting delivery. A transport retry
+retransmits that cached payload byte for byte. Calling `ckg_share` again samples
+a new internal error and therefore creates a different logical message.
 
 The result is a core Q `PublicKey`:
 
@@ -189,7 +191,7 @@ stateDiagram-v2
     [*] --> PROPOSED
     PROPOSED --> R1_LOCAL_CACHED: bind fresh common a_d and sample one local u_i
     R1_LOCAL_CACHED --> R1_AGGREGATED: accept all round-one tuples and aggregate each family
-    R1_AGGREGATED --> R2_LOCAL_CACHED: distribute exact aggregate and cache every round-two tuple
+    R1_AGGREGATED --> R2_LOCAL_CACHED: distribute the same aggregate and cache every round-two tuple
     R2_LOCAL_CACHED --> COMPLETE: accept all round-two tuples and assemble RelinearizationKey
     PROPOSED --> ABORTED
     R1_LOCAL_CACHED --> ABORTED
@@ -243,7 +245,8 @@ A failed RKG request leaves the collective epoch active. Retry it under a new `r
 
 ## Generate rotation and conjugation keys
 
-Each exact Galois-key request is a one-round child operation under an active epoch. Use one fresh common QP digit tensor for one requested key.
+Each Galois-key request is a one-round child operation under an active epoch.
+Use one fresh common QP digit tensor for one requested key.
 
 ```python
 rotation_step = 3
@@ -290,7 +293,7 @@ conjugation_key = mpc.aggregate_conjugation_key(
 )
 ```
 
-A later workload may request another exact rotation under the same collective
+A later workload may request another rotation under the same collective
 public key. Treat it as a new material request with a new request identity and
 common tensor. The `fhelium.experimental.mpc` namespace performs no hidden
 on-demand collective key generation.
@@ -323,7 +326,8 @@ $$
 d_i(X)=c_1(X)s_i(X)+e_i(X).
 $$
 
-Bind one exact source ciphertext and one output request identity before any party computes a share. Each party supplies its own compact coefficient error:
+Bind one source ciphertext and one output request identity before any party
+computes a share. Each party supplies its own compact coefficient error:
 
 ```python
 decryption_share_i = mpc.unsafe_collective_decryption_share(
@@ -349,7 +353,9 @@ The fusion recipient receives every individual secret-dependent share and obtain
 
 ## Open an unsafe public-key-switch request
 
-Protocol 4 moves the output arithmetic to a compatible destination public key. The application request binds the source ciphertext and exact destination Q `PublicKey`. Party $i$ computes:
+Protocol 4 moves the output arithmetic to a compatible destination public key.
+The application request binds the source ciphertext and destination Q
+`PublicKey`. Party $i$ computes:
 
 $$
 \begin{aligned}
@@ -386,7 +392,7 @@ The following rules support correct and reproducible executions. They provide no
 | Event | Application action |
 | --- | --- |
 | Delivery timeout | Resend the byte-identical cached message; do not invoke the share function again |
-| Identical duplicate | Deduplicate by epoch, request, party, round, and exact payload identity |
+| Identical duplicate | Deduplicate by epoch, request, party, round, and payload digest |
 | Conflicting duplicate | Abort the request |
 | Missing expected party | Abort the request; never aggregate a reduced party set under the same epoch/request |
 | Wrong context, common tensor, round, rotation step, source ciphertext, destination key, or shape | Abort the request |
@@ -402,7 +408,7 @@ Use these freshness lifetimes:
 | Party $s_i$ | Once per collective epoch |
 | CKG common $a$ | Once per CKG epoch setup |
 | RKG common $a_d$ and local $u_i$ | Once per RKG request; $u_i$ spans exactly rounds 1 and 2 |
-| Rotation/conjugation common $a_d$ | Once per exact key request |
+| Rotation/conjugation common $a_d$ | Once per key request |
 | Protocol-3 caller error | Once per authorized output request |
 | Protocol-4 caller ephemeral and both errors | Once per authorized output request |
 
@@ -425,13 +431,13 @@ Map the local structures to independent processes as follows:
 | Tuple of party secret shares | One process-local share in each independent party trust domain |
 | One shared compatible engine | Independently constructed engines with an identical descriptor |
 | List comprehension over parties | One application request to each immutable party identity and one accepted reply |
-| One `common_a` Python object | Exact identical integer payload delivered to every party and reconstructed contiguously on `engine.device` |
+| One `common_a` Python object | Same integer payload delivered to every party and reconstructed contiguously on `engine.device` |
 | Python list order | Envelope validation against the frozen party set, followed by deterministic ordering |
 | Direct `aggregate_*` call | Aggregator call after validating request metadata and the complete logical roster |
 | Local destination key pair | Destination-owned key pair; only its Q public key enters Protocol 4 |
 
 The `fhelium.experimental.mpc` namespace supplies no raw-message serializer or
-transport. An application may move exact integer payloads through its chosen
+transport. An application may move integer payloads through its chosen
 mechanism and restore the required dtype, shape, contiguity, and engine device
 before invoking its functions. Never send a party secret share or RKG
 ephemeral through a generic key-broadcast path.
@@ -448,7 +454,10 @@ Use this scenario to study collective-key setup, ciphertext compatibility, layou
 
 ### Multiplication, rotation, and later material requests
 
-Three parties complete CKG, one two-round RKG request, and one exact rotation-key request. The evaluator multiplies, relinearizes, rescales, and rotates a synthetic tensor. A later workload requests a second exact rotation under the same epoch using new request metadata and common randomness.
+Three parties complete CKG, one two-round RKG request, and one rotation-key
+request. The evaluator multiplies, relinearizes, rescales, and rotates a
+synthetic tensor. A later workload requests a second rotation under the same
+epoch using new request metadata and common randomness.
 
 Use this scenario to study evaluation-key equations, hybrid-digit layouts, material-generation cost, and workload-driven key inventories.
 
@@ -483,13 +492,13 @@ The current surface has no implementation or validated support for:
 ## Check a workflow before running it
 
 - [ ] All inputs and keys are synthetic or throwaway.
-- [ ] The epoch descriptor and exact ordered party set are frozen.
+- [ ] The epoch descriptor and ordered party set are frozen.
 - [ ] Every party uses a compatible engine and one process-local QP secret share.
-- [ ] Every request has an application identity, operation, round, and exact common input.
+- [ ] Every request has an application identity, operation, round, and common input.
 - [ ] Each randomized share function is invoked once per party/round and its result is cached before delivery.
 - [ ] The aggregator accepts exactly one logical contribution from every expected party.
 - [ ] RKG round 2 uses the same party-local $u_i$ as round 1.
-- [ ] Rotation/conjugation requests use one fresh common digit tensor per exact key.
+- [ ] Rotation/conjugation requests use one fresh common digit tensor per requested key.
 - [ ] Secret shares and RKG ephemerals never enter transport.
 - [ ] Every output source is a two-component coefficient/standard Q ciphertext.
 - [ ] Protocol-3/4 caller tensors and their lack of security parameters are recorded in the application security review.

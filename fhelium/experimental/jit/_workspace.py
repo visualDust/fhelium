@@ -20,7 +20,7 @@ class Workspace(dict[Any, Any]):
     the corresponding resolver when each reference operation is encountered,
     passing ``(symbol, kind, binding, workspace)``. The resolver's return value
     becomes that operation's runtime value. Pipeline and execution APIs retain
-    the exact Workspace object supplied by the caller.
+    the same Workspace object supplied by the caller.
     """
 
 

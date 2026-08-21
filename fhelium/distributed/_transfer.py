@@ -1,10 +1,10 @@
 """Metadata descriptors and receiver allocation for distributed transfers.
 
-The distributed wire protocol carries an exact serialization value description
+The distributed wire protocol carries a serialized value description
 plus transport-specific tensor allocation metadata.  The protocol version is
 independent of the durable value schema version: changing one does not imply a
 change to the other.  Raw ``torch.Tensor`` remains a transport-only special
-case and is not part of the exact FHElium value schema.
+case and is not part of the FHElium value schema.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def describe_value(value: object) -> TransferDescriptor:
         }
     if not isinstance(value, TensorResident):
         raise TypeError(
-            "Typed value transfer supports torch.Tensor and exact FHElium "
+            "Typed value transfer supports torch.Tensor and FHElium "
             f"values; got {type(value).__name__}"
         )
     return _describe_envelope(ValueEnvelope.from_value(value))
@@ -239,7 +239,9 @@ def _validate_tensor_descriptor(descriptor: object) -> None:
         raise ValueError("Transfer tensor descriptor must be an object")
     expected = {"shape", "dtype", "device_type"}
     if set(descriptor) != expected:
-        raise ValueError("Transfer tensor descriptor fields are not exact")
+        raise ValueError(
+            "Transfer tensor descriptor fields differ from the schema"
+        )
     shape = descriptor["shape"]
     if not isinstance(shape, tuple) or any(
         type(dimension) is not int or dimension < 0 for dimension in shape

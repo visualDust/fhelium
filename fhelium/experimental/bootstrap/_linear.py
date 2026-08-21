@@ -109,7 +109,7 @@ class DiagonalLinearTransform:
     def reference(self, values: ArrayLike) -> np.ndarray:
         r"""Apply $L(x)=\sum_kd_k\odot\operatorname{Rot}_k(x)$ in NumPy.
 
-        `values` must have exact shape `[slot]`. The returned CPU `complex128`
+        `values` must have shape `[slot]`. The returned CPU `complex128`
         array has shape `[slot]`. This plaintext oracle does not encode, rescale,
         consume levels, or model CKKS error.
         """
@@ -136,7 +136,7 @@ class DirectDiagonalEvaluator:
     the corresponding encoded diagonal, and adds the product to an accumulator.
     All products have pending scale $\Delta_{\rm in}\Delta_0$, so the sum is
     rescaled only after every diagonal has been accumulated. It is simple but can require one
-    exact rotation for every nonzero diagonal.
+    direct rotation key for every nonzero diagonal.
 
     The input is a two-component coefficient-domain standard-RNS Q ciphertext
     with data axes `[component, *batch, limb, coefficient]`, ring extent $N$,
@@ -253,7 +253,7 @@ class DiagonalBSGSEvaluator:
     Thus direct and BSGS evaluators implement the same map and level/scale/state
     transition; different grouping and CKKS rounding need not produce
     bit-identical residues. `hoist_baby_rotations` uses
-    `engine.rotate_many_with_keys` only when exact baby keys are available.
+    `engine.rotate_many_with_keys` only when direct baby-step keys are available.
     Compact power-of-two inventories compose rotations through the private
     key-aware evaluation helper.
     """
@@ -565,7 +565,7 @@ def _compose_diagonal_transforms(
     *,
     name: str,
 ) -> DiagonalLinearTransform:
-    r"""Return the exact cyclic-diagonal composition $B(A(x))$.
+    r"""Return the cyclic-diagonal composition $B(A(x))$.
 
     If $A_i$ and $B_j$ are diagonals at offsets $i$ and $j$, their composed
     contribution is $B_j\odot\operatorname{Rot}_j(A_i)$ at offset $i+j$.
@@ -635,7 +635,7 @@ class Radix2FourierTransformCompiler:
         Compilation proceeds in four steps:
 
         1. validate the cyclotomic slot orbit and build root tables;
-        2. construct one exact three-diagonal transform per radix-2 layer;
+        2. construct one three-diagonal transform per radix-2 layer;
         3. compose adjacent layers according to ``stage_count``;
         4. fold `scale` into the first forward stage or final inverse
            stage so the normalization is applied once in the complete transform.

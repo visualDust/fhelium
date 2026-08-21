@@ -69,7 +69,7 @@ A docstring must not merely say "transform", "prepare", "normalize", or "convert
 | $\operatorname{Rot}_r$ | user-visible signed slot rotation | `rotation_step` |
 | $\operatorname{SRound}$ | unbiased stochastic rounding | encoding quantizer |
 
-Here $I_\ell$ is the ordered set of active Q-prime identifiers at public level $\ell$. A lower-level tensor comment should prefer exact `prime_ids` over assuming that the active rows are always a contiguous numerical interval.
+Here $I_\ell$ is the ordered set of active Q-prime identifiers at public level $\ell$. A lower-level tensor comment should name `prime_ids` rather than assume that the active rows are always a contiguous numerical interval.
 
 ## Canonical value and state vocabulary
 
@@ -80,9 +80,9 @@ Here $I_\ell$ is the ordered set of active Q-prime identifiers at public level $
 | Value | Meaning | Canonical payload axes |
 |---|---|---|
 | `slots` | semantic complex CKKS message | `[*batch, slot]`, final extent $S$ |
-| `integer_coefficients` | exact signed integer polynomial coefficients | `[*batch, coefficient]`, final extent $N$ |
+| `integer_coefficients` | signed integer polynomial coefficients | `[*batch, coefficient]`, final extent $N$ |
 | `approximate_coefficients` | bounded binary64 decrypt reconstruction, valid for decoding only | `[*batch, coefficient]`, final extent $N$ |
-| `rns` | exact operation-ready residues | `[*batch, limb, coefficient_or_ntt_index]` |
+| `rns` | operation-ready residues | `[*batch, limb, coefficient_or_ntt_index]` |
 
 Do not use the word "coefficient" alone to distinguish CRT reconstruction from polynomial domain. The following statements are different:
 
@@ -98,7 +98,7 @@ Do not use the word "coefficient" alone to distinguish CRT reconstruction from p
 | `polynomial_domain` | `coefficient`, `ntt` | coefficient indexing versus NTT evaluation indexing |
 | `residue_representation` | `standard`, `montgomery` | standard residues versus Montgomery residues |
 | `modulus_basis` | `Q`, `QP` | active $Q_\ell$ rows versus active $Q_\ell P$ rows |
-| `prime_ids` | exact tuple of parameter-row identifiers | ordered modulus represented by each limb row |
+| `prime_ids` | tuple of parameter-row identifiers | ordered modulus represented by each limb row |
 | `level` | public Q-chain level | determines active $Q_\ell$ but does not replace `prime_ids` |
 | `scale` | positive finite binary64 | actual per-value scale $\Delta(v)$ |
 
@@ -123,7 +123,7 @@ No public method named `ntt_domain_to_coefficient_domain` performs CRT reconstru
 | RNS `Plaintext.data` | `[*batch, limb, coefficient_or_ntt_index]` | limb order equals `prime_ids` |
 | integer/approximate coefficient plaintext | `[*batch, coefficient]` | final extent is $N$ |
 | slots plaintext | `[*batch, slot]` | final extent is $S$ |
-| `SecretKey.data` | `[limb, coefficient_or_ntt_index]` | exact basis/domain must be stated |
+| `SecretKey.data` | `[limb, coefficient_or_ntt_index]` | basis/domain must be stated |
 | `PublicKey.data` | `[key_component, limb, coefficient_or_ntt_index]` | key-component extent is two |
 | `KeySwitchKey.data` | `[digit, key_component, limb, coefficient_or_ntt_index]` | distinguish local `digit_index` from stable `key_digit_index` |
 
@@ -146,7 +146,7 @@ $$
 \mathbb{E}[\operatorname{SRound}(x)]=x.
 $$
 
-`encode` returns `integer_coefficients`. `integer_coefficients_to_rns` performs exact modular reduction into coefficient-domain standard RNS. Decoding consumes exact integer coefficients or bounded `approximate_coefficients`; it does not accept an unreconstructed RNS plaintext.
+`encode` returns `integer_coefficients`. `integer_coefficients_to_rns` performs modular reduction into coefficient-domain standard RNS. Decoding consumes integer coefficients or bounded `approximate_coefficients`; it does not accept an unreconstructed RNS plaintext.
 
 ### Encryption and decryption
 
@@ -162,7 +162,7 @@ $$
 u(X)=c_0(X)+c_1(X)s(X)+c_2(X)s(X)^2\pmod{Q_\ell}.
 $$
 
-The current decrypt path reconstructs bounded binary64 `approximate_coefficients` for decoding. It is not an exact full-$Q_\ell$ CRT inverse and must not be documented as one. Direct decrypt-to-encrypt is therefore not an exact representation round trip; the semantic path is decrypt, decode, encode, encrypt.
+The current decrypt path reconstructs bounded binary64 `approximate_coefficients` for decoding. It is not an exact full-$Q_\ell$ CRT inverse and must not be documented as one. Direct decrypt-to-encrypt is therefore not a bit-preserving representation round trip; the semantic path is decrypt, decode, encode, encrypt.
 
 ### Domain and residue transitions
 
@@ -191,7 +191,7 @@ domain, while `coefficient_domain_to_ntt_domain` and
 `ntt_domain_to_coefficient_domain` apply only the forward or inverse NTT to
 Montgomery residues. These composable transitions preserve the ring element,
 representation, `level`, actual `scale`, modulus basis, component count where
-present, and exact `prime_ids`.
+present, and `prime_ids`.
 
 Every primitive transition requires its named source state. Supplying a value
 already in the target state is an error rather than an implicit no-op.
@@ -205,7 +205,9 @@ c_{\mathrm{out},j}=c_{\mathrm{lhs},j}\mathbin{\pm}c_{\mathrm{rhs},j}
 \pmod{B_\ell}.
 $$
 
-The operands must already have the same level, exact scale, component count, domain, basis, residue representation, context, and `prime_ids`. FHElium does not hide level or scale alignment in addition or subtraction.
+The operands must already have the same level, scale, component count, domain,
+basis, residue representation, context, and `prime_ids`. FHElium does not hide
+level or scale alignment in addition or subtraction.
 
 ### Ciphertext multiplication
 
@@ -346,7 +348,7 @@ Mutation and aliasing:
     functional; output does not alias an input
 ```
 
-The exact shape and table orientation must match the actual schema. A generated wrapper may repeat shapes and mutation annotations, but it should not become an independent source of mathematical truth.
+The documented shape and table orientation must match the actual schema. A generated wrapper may repeat shapes and mutation annotations, but it should not become an independent source of mathematical truth.
 
 ## Cross-layer review checklist
 

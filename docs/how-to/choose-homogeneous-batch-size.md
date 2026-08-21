@@ -22,7 +22,7 @@ Keep fixed:
 
 - cleartext inputs and expected outputs;
 - preset, level, scale, and active prime ids;
-- NTT backend and exact keyset;
+- NTT backend and direct keyset;
 - evaluator schedule, graph mode, and hoisting policy;
 - warmup, timed region, and synchronization rule.
 
@@ -129,7 +129,7 @@ The following data is a worked example, not a portable dispatch table.
 | Presets | 40-bit scale family at each recorded slot capacity |
 | Default backend | `radix2_compact_group8_smem8` |
 | Timing | CUDA-synchronized warm runs; median wall latency |
-| Correctness | Exact batched-vs-loop ciphertext data plus cleartext oracle |
+| Correctness | Bit-for-bit batched-vs-loop ciphertext data plus cleartext oracle |
 
 Setup, key generation, and constant preparation were outside operator and
 workload timing unless the row names an end-to-end public API.

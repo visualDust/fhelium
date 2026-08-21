@@ -161,7 +161,7 @@ AT_DISPATCH_INTEGRAL_TYPES(input.scalar_type(), operation, [&] {
 });
 ```
 
-`at::parallel_for` uses the intra-op runtime selected by the exact Torch build.
+`at::parallel_for` uses the intra-op runtime selected by the installed Torch build.
 When Torch was built with OpenMP, FHElium translation units compile with the
 matching OpenMP frontend options and reuse the runtime already loaded through
 `libtorch_cpu`; the extension does not link a second OpenMP runtime. Thread
@@ -255,7 +255,7 @@ operand device selects between them at runtime.
 ## Build stack and backend selection
 
 The native module is built through scikit-build-core and CMake. CMake obtains
-the active CPython interpreter and the exact installed Torch package, compiles
+the active CPython interpreter and the installed Torch package, compiles
 backend-neutral schema sources, then adds only the selected implementation
 sources.
 
@@ -296,7 +296,7 @@ Torch CUDA identity against that Toolkit before compilation.
 `fhelium.native.runtime` locates the `_ops` binary for the current CPython
 extension suffix and its adjacent build manifest before registering operators.
 The manifest is compared with the running environment, including project and
-Python identity, exact Torch build, Torch CUDA variant, C++ ABI, and compiled
+Python identity, pinned Torch build, Torch CUDA variant, C++ ABI, and compiled
 backend set. A mismatch fails before a public engine uses the extension.
 
 After validation, `torch.ops.load_library` installs the schemas and backend

@@ -15,7 +15,7 @@ It compares two ways to execute the same sequence of plaintext-weight tiles:
     ``i+1`` while the current CUDA stream evaluates tile ``i``.
 
 The application chooses the number of tiles and Plaintexts per tile. Execution
-utilities only validate exact value structure, reuse storage, enqueue copies,
+utilities only validate value structure, reuse storage, enqueue copies,
 and expose future-like :class:`fhelium.execution.CopyHandle` objects.
 
 The default `slots32768-scale40-levels34-int64` workload at level 20 materializes 16
@@ -86,7 +86,7 @@ def _gib(byte_count: int) -> float:
 
 
 def _pinned_plaintext_copy(prototype: fh.Plaintext) -> fh.Plaintext:
-    """Copy one exact Plaintext into an independent pinned CPU allocation."""
+    """Copy one Plaintext into an independent pinned CPU allocation."""
 
     if prototype.data is None or not prototype.is_cpu:
         raise ValueError("prototype must be an encoded CPU Plaintext")

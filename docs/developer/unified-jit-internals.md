@@ -85,7 +85,7 @@ Semantic, logical, `torch.call`, `fhelium.constant`, and lowered
 `fhelium.ckks.*` operations currently use unregistered xDSL operation objects.
 Their canonical executable schemas are enforced at readiness rather than by
 IRDL construction. This placement permits intermediate and extension dialects
-to coexist while keeping execution exact.
+to coexist under one interpreter model.
 
 `value_role()` recognizes only the registered FHElium encrypted, message, and
 plaintext types. It returns `None` for an extension type. Passes must preserve
@@ -128,7 +128,7 @@ and types; `generic=True` requests xDSL's generic format.
 ## Canonical frontend and execution schemas
 
 Canonical schemas make textual import and execution deterministic. New writers
-must emit the exact current names and attribute kinds; readers should reject a
+must emit the current names and attribute kinds; readers should reject a
 malformed executable schema instead of inferring an alternative meaning.
 
 ### Capture module and input metadata
@@ -160,7 +160,7 @@ complex values, `Ellipsis`, Torch dtype, device, and layout.
 `torch.call` has one result and these required attributes:
 
 - `fhelium.call.kind`: `"function"`, `"method"`, or `"module"`;
-- `fhelium.call.target`: stable exact target symbol;
+- `fhelium.call.target`: stable target symbol;
 - `fhelium.call.arguments`: JSON descriptors for positional and keyword
   arguments.
 
@@ -182,7 +182,7 @@ schemas are:
 - binary encrypted `add`, `subtract`, `multiply`;
 - binary `add_plaintext` and `multiply_plaintext` with encrypted/plaintext
   operand roles;
-- `rescale` with an exact `condition` and corresponding one- or two-operand
+- `rescale` with a `condition` and corresponding one- or two-operand
   form.
 
 `fhelium.scheduling_obligations` is an `ArrayAttr[StringAttr]` used by lowering
@@ -207,7 +207,7 @@ A `Pass` exposes a stable non-empty `name` and
 
 The built-in leaf-operation helper visits operations in every top-level
 function and block, excluding terminators and operations that own regions or
-successors. Individual passes narrow that set by exact operation names, role
+successors. Individual passes narrow that set by operation names, role
 patterns, arity, and local traits. Execution analysis and readiness instead
 inspect only the selected entry. Keep that difference visible when
 adding a module-wide transform.
@@ -266,7 +266,7 @@ operation branches precede the extension handler lookup, so
 
 Public-only preserved Torch calls may use the executor's small audited target
 set. Any `torch.call` whose operands or result touch encrypted/plaintext roles
-requires an provided callable in `workspace["torch_handlers"]`. This rule makes
+requires a provided callable in `workspace["torch_handlers"]`. This rule makes
 preserved text a symbolic request rather than authority to import arbitrary
 Python.
 
@@ -316,10 +316,10 @@ An extension operation handler has the conceptual type:
 
 A zero-result operation must return `None`; a one-result operation returns one
 object; a multi-result operation returns a tuple with exactly the result count.
-Bind it by exact operation name under `workspace["handlers"]`.
+Bind it by operation name under `workspace["handlers"]`.
 
 A `torch_handlers` value is called with the positional and keyword arguments
-reconstructed from the canonical descriptor. Bind it by exact
+reconstructed from the canonical descriptor. Bind it by
 `fhelium.call.target` string.
 
 Material and resource resolvers receive:

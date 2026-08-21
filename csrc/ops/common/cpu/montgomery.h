@@ -5,6 +5,10 @@
 #include <cstdint>
 #include <type_traits>
 
+#if defined(_MSC_VER) && defined(_M_X64)
+#include <intrin.h>
+#endif
+
 #include "../rns_parameters.h"
 
 namespace fhelium::cpu {
@@ -128,6 +132,25 @@ multiply(const scalar_t lhs,
          const MontgomeryConstants<scalar_t>& constants) {
   constexpr int64_t kRadixBits = sizeof(scalar_t) * 8 - 2;
   const uint64_t q = modulus(constants);
+#if defined(_MSC_VER) && defined(_M_X64)
+  // MSVC x64 exposes the same modulo-2^128 product and carry operations used
+  // by the unsigned __int128 implementation below.
+  uint64_t product_hi = 0;
+  const uint64_t product_lo = _umul128(
+      static_cast<uint64_t>(lhs), static_cast<uint64_t>(rhs), &product_hi);
+  const uint64_t radix_mask = (uint64_t{1} << kRadixBits) - 1;
+  const uint64_t correction =
+      (product_lo * neg_inverse(constants)) & radix_mask;
+  uint64_t correction_product_hi = 0;
+  const uint64_t correction_product_lo =
+      _umul128(correction, q, &correction_product_hi);
+  uint64_t sum_lo = 0;
+  const unsigned char carry =
+      _addcarry_u64(0, product_lo, correction_product_lo, &sum_lo);
+  const uint64_t sum_hi = product_hi + correction_product_hi + carry;
+  const uint64_t result =
+      (sum_lo >> kRadixBits) | (sum_hi << (64 - kRadixBits));
+#else
   const unsigned __int128 product =
       static_cast<unsigned __int128>(static_cast<uint64_t>(lhs)) *
       static_cast<uint64_t>(rhs);
@@ -139,6 +162,7 @@ multiply(const scalar_t lhs,
   const unsigned __int128 reduced =
       (product + static_cast<unsigned __int128>(correction) * q) >> kRadixBits;
   const uint64_t result = static_cast<uint64_t>(reduced);
+#endif
   return static_cast<scalar_t>(result < q ? result : result - q);
 }
 

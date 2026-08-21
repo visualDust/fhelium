@@ -1,12 +1,12 @@
-# Exact signatures and reusable buffers
+# Value signatures and reusable buffers
 
 Repeated execution needs a compatibility test stricter than "same shape" and
-more flexible than "same device". FHElium uses device-independent exact signatures
+more flexible than "same device". FHElium uses device-independent value signatures
 to decide whether a value tree may be copied into reusable fixed storage.
 
-## Exact copy compatibility
+## Copy compatibility
 
-`ValueTreeSignature` supports tensors, exact FHElium values, and nested
+`ValueTreeSignature` supports tensors, FHElium values, and nested
 `list`/`tuple`/`dict` structures. It records:
 
 - Python container structure and dictionary keys;
@@ -16,7 +16,7 @@ to decide whether a value tree may be copied into reusable fixed storage.
 - key specialization such as a rotation step.
 
 Device is deliberately excluded. A CPU value and a CUDA value can share an
-exact signature while the target buffer owns the residency decision. An
+value signature while the target buffer owns the residency decision. An
 external ciphertext/key relation is also excluded when no concrete value field
 stores it; the application must validate that relation separately.
 
@@ -40,7 +40,7 @@ therefore cannot leave half of a reusable input tree updated and half stale.
 A reusable buffer owns:
 
 ```text
-one exact tree structure
+one tree structure
 + one target device
 + stable tensor storage addresses
 + copy ordering
@@ -140,7 +140,7 @@ small.
 
 ## Buffer requirements and synchronization
 
-A `ReusableValueBuffer` owns fixed destination storage for one exact value
+A `ReusableValueBuffer` owns fixed destination storage for one value
 signature. The application supplies the tile sequence and copy/consumer
 streams. `CopyHandle` and consumer-complete events order writes against readers,
 while signature validation protects CKKS state compatibility. Size the active

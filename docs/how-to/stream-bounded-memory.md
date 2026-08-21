@@ -39,7 +39,7 @@ hold, or a short lease/window selected by the application.
 
 ### Use `ReusableValueBuffer` when
 
-- tile structures and exact states repeat;
+- tile structures and value states repeat;
 - you control the transfer/compute schedule;
 - a small number of stable CUDA addresses is sufficient;
 - values already have a separate logical owner.
@@ -56,7 +56,7 @@ hold, or a short lease/window selected by the application.
 ### Add `ResidencyController` when
 
 - the manager already owns the values and remains the sole state authority;
-- the application can state exact `(handle, location)` working-set endpoints
+- the application can state `(handle, location)` working-set endpoints
   and reservation headroom more directly than a transition sequence;
 - deterministic policy-selected reclaim should remain visible in an immutable
   `ResidencyDecision`; and
@@ -78,7 +78,7 @@ For real host-to-device (H2D) overlap, prepare pinned host materializations wher
 Pageable memory may require staging and should not be assumed to provide fully
 asynchronous transfer.
 
-Keep exact state stable across host and device materializations. A tile at a
+Keep value state stable across host and device materializations. A tile at a
 different level, prime layout, or rotation step must use a different signature
 or buffer.
 
@@ -124,8 +124,8 @@ completion events rather than requiring a full-device synchronization.
 Choose admission separately from the lease:
 
 - use manager primitives or a manual `ResidencyPlan` when the application owns
-  the exact transition order;
-- use `controller.decide(request)` when the application owns the exact endpoint
+  the transition order;
+- use `controller.decide(request)` when the application owns the endpoint
   requirements but wants deterministic reclaim selection;
 - inspect `decision.evictions`, `decision.explored_states`, and predicted peaks
   before entering `controller.scope(decision, ...)`; or
@@ -204,7 +204,7 @@ lowest single-request latency.
 
 ## Related documentation
 
-- [Exact signatures and buffers](../concepts/execution/exact-signatures-and-buffers.md)
+- [Value signatures and buffers](../concepts/execution/signatures-and-buffers.md)
 - [Residency lifetimes](../concepts/execution/residency-lifetimes.md)
 - [Reusable-buffer tutorial](../tutorial/reusable-value-buffer.md)
 - [Explicit Residency tutorial](../tutorial/explicit-residency.md)

@@ -109,7 +109,7 @@ def assert_ntt_roundtrip(
     engine: CkksEngine,
     base_data: torch.Tensor,
 ) -> None:
-    """Require exact equality modulo each active QP prime after a roundtrip."""
+    """Require residue equality modulo each active QP prime after a roundtrip."""
 
     result = base_data.clone()
     run_ntt_operation(engine, result, "roundtrip")

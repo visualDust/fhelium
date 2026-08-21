@@ -66,7 +66,7 @@ data.copy_(prototype.data)
 ```
 
 Pinned memory enables asynchronous host-to-device copies. Each `Plaintext`
-still carries exact level, scale, representation, polynomial domain, modulus basis, residue representation, and
+still carries level, scale, representation, polynomial domain, modulus basis, residue representation, and
 prime IDs.
 
 The example creates application-selected tiles. FHElium does not decide how
@@ -82,7 +82,7 @@ buffers = [
 ```
 
 [`ReusableValueBuffer`](../api/fhelium/execution/buffer.md#reusablevaluebuffer) recursively
-allocates an exact value/tensor tree on the target device. Later copies reuse
+allocates a value/tensor tree on the target device. Later copies reuse
 the same allocations.
 
 The example records every tensor `data_ptr()` before and after the workload
@@ -177,6 +177,6 @@ graph capture. The execution mechanism does not impose one consumer.
 
 ## Related concepts and guides
 
-- [Exact signatures and buffers](../concepts/execution/exact-signatures-and-buffers.md)
+- [Value signatures and buffers](../concepts/execution/signatures-and-buffers.md)
 - [Residency lifetimes](../concepts/execution/residency-lifetimes.md)
 - [Stream resources with bounded memory](../how-to/stream-bounded-memory.md)

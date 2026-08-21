@@ -143,7 +143,7 @@ def _assert_decryption_error_distribution(
     """Check RMS and 99th-percentile CKKS error against ``N / scale``.
 
     The Gaussian error distribution is unbounded, so a full-slot maximum is
-    not a stable numerical specification. Exact CPU/CUDA residue comparison in
+    not a stable numerical specification. Bit-for-bit CPU/CUDA residue comparison in
     the caller detects isolated native corruption independently.
     """
 
@@ -622,13 +622,13 @@ def test_int64_coefficients_wider_than_scale_prime_use_exact_rns_lift() -> None:
         convenience,
         message,
         atol=5e-6,
-        operation="40-bit exact-RNS convenience roundtrip",
+        operation="40-bit RNS convenience roundtrip",
     )
     _assert_array_close(
         composed,
         message,
         atol=5e-6,
-        operation="40-bit exact-RNS composed roundtrip",
+        operation="40-bit RNS composed roundtrip",
     )
 
 

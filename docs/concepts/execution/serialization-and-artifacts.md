@@ -1,10 +1,10 @@
 # Serialization and artifacts
 
-FHElium separates **exact value persistence** from **storage-path and namespace
-policy**. The core file format answers "what exact value is this?"; optional
+FHElium separates **typed value persistence** from **storage-path and namespace
+policy**. The core file format answers "which value is this?"; optional
 artifact tooling answers "where and under which logical name should it live?"
 
-## Direct exact-value files
+## Direct value files
 
 Top-level public functions are:
 
@@ -26,18 +26,18 @@ current optional arguments. The file-format guarantee is that one versioned
 safetensors file contains:
 
 - concrete value type and schema version;
-- exact non-tensor metadata;
+- non-tensor value metadata;
 - context identity;
 - named tensor payloads;
-- enough information to reconstruct the exact typed value.
+- enough information to reconstruct the typed value.
 
 ```mermaid
 graph LR
     V[Plaintext / Ciphertext / key]
-    E[exact envelope<br/>type + metadata + tensors]
+    E[value envelope<br/>type + metadata + tensors]
     F[one versioned safetensors file]
     I[inspect metadata]
-    R[reconstructed exact value]
+    R[reconstructed value]
     V --> E --> F
     F --> I
     F --> R
@@ -62,15 +62,15 @@ assume a saved CUDA value will silently return to its previous GPU.
 
 ## Deployment-managed persistence policy
 
-Direct serialization defines one exact-value file. Deployment infrastructure
+Direct serialization defines one value file. Deployment infrastructure
 supplies tenant or model namespaces, directory policy, remote object storage,
 encryption and KMS integration, cache admission/prefetch/eviction, and engine
-or process-group placement. These policies remain independent of the exact
+or process-group placement. These policies remain independent of the
 value format.
 
 ## `ArtifactStore` as a local repository
 
-`ArtifactStore` is a local repository for named exact-value
+`ArtifactStore` is a local repository for named value
 artifacts. A SQLite catalog owns each logical name's current generation and
 transactional metadata, while store-controlled immutable safetensors files
 hold the tensor payloads produced by the serialization layer.
@@ -81,7 +81,7 @@ see [Values, memory, and persistence](../../tutorial/value-memory-and-persistenc
 
 ```mermaid
 graph LR
-    VALUE[exact typed value]
+    VALUE[typed value]
     PUT[ArtifactStore.put logical name]
     OBJECT[immutable UUID object<br/>payload.safetensors]
     CATALOG[SQLite catalog<br/>name → current generation]
@@ -113,20 +113,20 @@ not retain those references as loadable version history.
 Transaction ordering, the SQLite v1 schema, crash recovery, filesystem
 requirements, and contributor-facing invariants are specified separately in
 [ArtifactStore v1 internals](../../developer/artifact-store-v1.md). Those
-mechanisms implement repository durability; they are not part of an exact
+mechanisms implement repository durability; they are not part of a
 `Plaintext`, `Ciphertext`, or key's mathematical identity.
 
-## Exact value versus logical identity
+## Value identity versus logical identity
 
 These are intentionally separate:
 
 ```mermaid
 flowchart LR
-    EXACT["exact value identity"]
-    EXACT_FIELDS["type, context, state, tensor payload"]
+    VALUE_ID["value identity"]
+    VALUE_FIELDS["type, context, state, tensor payload"]
     LOGICAL["logical artifact identity"]
     LOGICAL_FIELDS["store ID, name, current generation, checksum, policy metadata"]
-    EXACT --> EXACT_FIELDS
+    VALUE_ID --> VALUE_FIELDS
     LOGICAL --> LOGICAL_FIELDS
 ```
 
@@ -168,22 +168,22 @@ PyTorch reserved bytes
 physical free device memory
 ```
 
-File operations return application-owned exact values. Managed residency
+File operations return application-owned values. Managed residency
 transitions operate on manager handles and materializations.
 
 ## When to use which layer
 
 | Need | Use |
 | --- | --- |
-| Save/load one exact known path | `save_value` / `load_value` |
-| Inspect exact metadata before loading | `inspect_value` |
+| Save/load one known path | `save_value` / `load_value` |
+| Inspect value metadata before loading | `inspect_value` |
 | Local logical names, checked generations, collections, checksums | `ArtifactStore` |
 | Local pageable/pinned/CUDA materializations, lifetimes, and optional admission budgets | `ResidencyManager` |
 
 ## Continue
 
 - [Value memory and persistence tutorial](../../tutorial/value-memory-and-persistence.md)
-- [Manage exact artifacts by logical name](../../how-to/manage-exact-artifacts.md)
+- [Manage artifacts by logical name](../../how-to/manage-artifacts.md)
 - [Residency lifetimes](residency-lifetimes.md)
 - [Ownership and runtime responsibilities](../architecture/ownership-and-responsibilities.md)
 - [Serialization API](../../api/fhelium/serialization/value.md)

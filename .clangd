@@ -1,6 +1,6 @@
 CompileFlags:
   Compiler: clang++
-  CompilationDatabase: .
+  CompilationDatabase: build
   Add:
     - -x
     - cuda
@@ -27,3 +27,13 @@ CompileFlags:
     - "--expt-relaxed-constexpr"
     - "-forward-unknown-to-host-compiler"
     - "-Werror=cross-execution-space-call"
+
+---
+# Detail headers depend on declarations assembled by their owning .cu file.
+# The owning translation unit remains fully diagnosed through compile_commands.
+If:
+  PathMatch: csrc/ops/.*/cuda/.*\.(inc\.)?cuh
+CompileFlags:
+  Add: -ferror-limit=0
+Diagnostics:
+  Suppress: "*"

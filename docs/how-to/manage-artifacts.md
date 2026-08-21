@@ -1,7 +1,7 @@
-# Manage exact artifacts by logical name
+# Manage artifacts by logical name
 
 Use `ArtifactStore` when an application needs stable local names and
-transactional replacement for exact FHElium values. Each successful write
+transactional replacement for FHElium values. Each successful write
 creates an immutable stored version, called a **generation**; exactly one
 generation is current for each logical name. Use direct serialization when the
 application already owns the complete file path and does not need a repository
@@ -12,10 +12,10 @@ namespace.
 | Save or load one caller-selected file | `fhelium.save_value` / `fhelium.load_value` |
 | Inspect one caller-selected file | `fhelium.inspect_value` |
 | Load the current value stored under a logical name | `ArtifactStore.get(name)` |
-| Retain a checked identity for one exact stored version | `ArtifactRef` |
+| Retain a checked identity for one stored version | `ArtifactRef` |
 | Group names under one namespace | `ArtifactStore.collection(prefix)` |
 
-An artifact store persists exact supported values. It does not persist an
+An artifact store persists supported values. It does not persist an
 engine, application object graph, arbitrary tensor container, or live Residency
 state.
 
@@ -30,10 +30,15 @@ from fhelium.artifacts import ArtifactStore
 store = ArtifactStore(Path("state") / "artifact-store")
 ```
 
-Use one trusted host and a local POSIX filesystem. The store relies on ordinary
-SQLite locking, same-filesystem atomic replacement, and file/directory `fsync`. NFS,
-SMB, FUSE or object-store mounts, multi-host writers, and processes that modify
-the catalog or object files outside `ArtifactStore` are unsupported.
+Use one trusted host and a local POSIX or Windows filesystem. POSIX publication
+uses no-clobber hard links plus file/directory `fsync`. Windows publication uses
+a no-replace, write-through move and writable-file `fsync`; this implementation
+has no supported Windows directory flush, so it does not claim POSIX-equivalent
+directory-metadata survival after sudden power loss. Windows applications must
+also provision store-root ACLs because `0600`/`0700` mode values do not create
+owner-only Windows access control. NFS, SMB, FUSE or object-store mounts,
+multi-host writers, and processes that modify the catalog or object files
+outside `ArtifactStore` are unsupported.
 
 Opening a missing or empty root initializes the catalog. Opening an existing
 store validates its format, schema, identity, catalog rows, and that every
@@ -52,9 +57,9 @@ activation_ref = store.put(
 )
 ```
 
-`put` snapshots the supported exact value into an independent durable payload
-and returns a tensor-free `ArtifactRef`. It does not move, mutate, offload, or
-release `ciphertext_cpu`.
+`put` snapshots the supported value into an independently flushed payload
+under the platform contract above and returns a tensor-free `ArtifactRef`. It
+does not move, mutate, offload, or release `ciphertext_cpu`.
 
 Without `overwrite=True`, writing an existing logical name raises
 `FileExistsError`. This defines create-if-absent behavior:
@@ -70,7 +75,7 @@ The returned reference records the store ID, normalized logical name, artifact
 ID, value type, context ID, logical bytes, and payload checksum. It contains no
 tensor payload.
 
-## 3. Load the current value or one exact stored version
+## 3. Load the current value or one stored version
 
 Use a string name when the application wants whichever generation is current:
 
@@ -88,7 +93,7 @@ if current is None:
 A string lookup returns `None` only for a missing name. Corruption, checksum,
 type, context, and schema failures remain errors.
 
-Use an `ArtifactRef` when the caller requires the exact checked generation:
+Use an `ArtifactRef` when the caller requires a checked generation:
 
 ```python
 restored = store.get(
@@ -150,7 +155,7 @@ also supports `store.list(prefix="model/v1")` for a broader inventory.
 
 Use `exists(name)` only as a lightweight availability probe. It does not verify
 the checksum or fully inspect the payload. Use `inspect(name_or_ref)` to validate
-catalog metadata and the exact-value header without reconstructing tensors, and
+catalog metadata and the value-file header without reconstructing tensors, and
 use `get(...)` for the default complete checksum and reconstruction path.
 
 ## 6. Save secret keys only with explicit authorization

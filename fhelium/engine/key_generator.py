@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 class CkksKeyGenerator:
     r"""Construct dense CKKS keys on one process-local execution device.
 
-    Key payloads use integral dtype and exact canonical prime rows. Secret-key
+    Key payloads use integral dtype and canonical prime rows. Secret-key
     data is ``[limb, ntt_index]``; public keys are
     ``[key_component, limb, ntt_index]``; key-switch keys are
     ``[key_digit, key_component, limb, ntt_index]``. Returned keys are always
@@ -143,7 +143,7 @@ class CkksKeyGenerator:
     ) -> SecretKey:
         r"""Sample ternary $s(X)$ and return its level-zero NTT/Montgomery RNS.
 
-        Output shape is ``[limb, ntt_index]`` with exact Q or QP ``prime_ids``
+        Output shape is ``[limb, ntt_index]`` with Q or QP ``prime_ids``
         selected by ``modulus_basis``. Sampling and all temporary transitions
         are functional from the caller's perspective.
         """
@@ -178,7 +178,7 @@ class CkksKeyGenerator:
         r"""Generate ``(k_0,k_1)`` satisfying $k_0+k_1s=e$ modulo the basis.
 
         Output is integral ``[key_component=2, limb, ntt_index]`` in
-        level-zero NTT/Montgomery form with exact Q or QP rows. ``secret_key``
+        level-zero NTT/Montgomery form with Q or QP rows. ``secret_key``
         and optional ``uniform_component`` are read-only and never alias the
         returned stacked tensor.
         """
@@ -257,7 +257,7 @@ class CkksKeyGenerator:
         $k_{d,0}+k_{d,1}s_{\mathrm{dst}}=P s_{\mathrm{src}}+e_d$.
         Output is integral
         ``[key_digit, key_component=2, QP_limb, ntt_index]`` in
-        NTT/Montgomery lazy form and exact level-zero QP order. Input keys and
+        NTT/Montgomery lazy form and level-zero QP order. Input keys and
         optional uniform components are not mutated or aliased.
         """
 

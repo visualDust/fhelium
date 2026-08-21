@@ -1,6 +1,6 @@
 """Structural signatures for reusable FHElium execution values.
 
-Signatures describe copy-compatible tensor topology and exact FHElium value
+Signatures describe copy-compatible tensor topology and FHElium value
 state. They deliberately exclude tensor residency: a CPU value and a CUDA value
 may have the same signature and can therefore be copied through a
 :class:`~fhelium.execution.ReusableValueBuffer` whose target device is tracked
@@ -32,8 +32,8 @@ class TensorSignature:
     that storage.
 
     Args:
-        shape: Exact tensor dimensions.
-        stride: Exact element strides required by fixed target storage.
+        shape: Tensor dimensions.
+        stride: Element strides required by fixed target storage.
         dtype: Tensor scalar dtype.
         layout: PyTorch tensor layout, normally ``torch.strided``.
         requires_grad: Autograd flag expected by the reusable payload.
@@ -68,7 +68,7 @@ class TensorSignature:
 
 @dataclass(frozen=True)
 class ValueSignature:
-    """Exact FHElium value state plus device-independent tensor topology.
+    """FHElium value state plus device-independent tensor topology.
 
     A value signature fixes cryptographic metadata such as context, level,
     scale, plaintext representation, polynomial domain, modulus basis, residue
@@ -77,10 +77,10 @@ class ValueSignature:
     and cache associations remain external.
 
     Args:
-        type_name: Registered serialized exact-value class name.
-        schema_version: Exact-value serialization schema version.
+        type_name: Registered serialized-value class name.
+        schema_version: Value-serialization schema version.
         context_id: Cryptographic context identity, if the value has one.
-        metadata: Frozen, deterministically ordered non-tensor exact state.
+        metadata: Frozen, deterministically ordered non-tensor state.
         tensors: Ordered tensor names and their device-independent signatures.
     """
 
@@ -92,21 +92,21 @@ class ValueSignature:
 
     @classmethod
     def from_value(cls, value: TensorResident) -> ValueSignature:
-        """Describe one serializable exact FHElium value.
+        """Describe one serializable FHElium value.
 
         Args:
-            value: Exact resident value whose type, metadata, and tensor
+            value: Resident value whose type, metadata, and tensor
                 topology are captured.
 
         Returns:
-            Device-independent exact-value signature.
+            Device-independent value signature.
         """
 
         return _value_signature_from_envelope(ValueEnvelope.from_value(value))
 
 
 def _value_signature_from_envelope(envelope: ValueEnvelope) -> ValueSignature:
-    """Compile exact state and tensor topology from one existing envelope."""
+    """Compile value state and tensor topology from one existing envelope."""
 
     return ValueSignature(
         type_name=envelope.value_type,
@@ -125,7 +125,7 @@ def _value_signature_from_envelope(envelope: ValueEnvelope) -> ValueSignature:
 
 @dataclass(frozen=True)
 class ValueTreeSignature:
-    """Structure of tensors and exact values in a reusable execution payload.
+    """Structure of tensors and FHElium values in a reusable execution payload.
 
     Supported leaves are :class:`torch.Tensor` and serializable FHElium
     :class:`~fhelium.core.TensorResident` values. Lists, tuples, and
@@ -135,11 +135,11 @@ class ValueTreeSignature:
 
     ``ValueTreeSignature`` composes :class:`TensorSignature` and
     :class:`ValueSignature` rather than replacing them: tensor leaves need only
-    tensor topology, while exact-value leaves additionally require
+    tensor topology, while FHElium-value leaves additionally require
     cryptographic metadata.
 
     Args:
-        kind: Node kind: tensor, exact value, list, tuple, or dictionary.
+        kind: Node kind: tensor, FHElium value, list, tuple, or dictionary.
         leaf: Tensor/value signature for a leaf node; ``None`` for containers.
         children: Ordered signatures nested by a container node.
         keys: Dictionary keys in the same order as ``children``; empty for all
@@ -153,23 +153,23 @@ class ValueTreeSignature:
 
     @classmethod
     def from_value(cls, value: object) -> ValueTreeSignature:
-        """Describe a supported tensor/exact-value tree.
+        """Describe a supported tensor/value tree.
 
         Args:
-            value: Representative tensor/exact-value tree to describe.
+            value: Representative tensor/value tree to describe.
 
         Returns:
-            Recursive device-independent structure and exact-state signature.
+            Recursive device-independent structure and state signature.
 
         Raises:
-            TypeError: If a leaf is not a tensor or serializable exact FHElium
+            TypeError: If a leaf is not a tensor or serializable FHElium
                 value, or if a container is not a list, tuple, or dictionary.
         """
 
         return _build_value_tree_signature(value)
 
     def validate(self, value: object, *, path: str = "value") -> None:
-        """Require ``value`` to have this exact structure and state.
+        """Require ``value`` to have this structure and state.
 
         Tensor devices may differ because signatures describe transfer
         compatibility, not residency. Validation completes for the full tree
@@ -181,7 +181,7 @@ class ValueTreeSignature:
             path: Root label used in mismatch diagnostics.
 
         Raises:
-            ExecutionInputError: If structure, tensor topology, or exact-value
+            ExecutionInputError: If structure, tensor topology, or value
                 metadata differs.
         """
 
@@ -361,7 +361,7 @@ def _envelope_matches_signature(
     expected_envelope: ValueEnvelope,
     expected_signature: ValueSignature,
 ) -> bool:
-    """Compare fresh exact state with one private immutable buffer template."""
+    """Compare fresh value state with one private immutable buffer template."""
 
     if (
         envelope.value_type != expected_envelope.value_type

@@ -13,7 +13,7 @@ graph TB
     STATIC[static closure state<br/>engine, keys, weights, schedule]
     DYNAMIC[dynamic positional inputs]
     CAP[Capture]
-    BUFFER[stable exact input buffer]
+    BUFFER[stable input buffer]
     GRAPH[torch.cuda.CUDAGraph]
     OUTPUT[retained borrowed output]
 
@@ -28,7 +28,7 @@ graph TB
 A good capture candidate has:
 
 - fixed operation sequence and control flow;
-- fixed tensor shapes and exact CKKS states;
+- fixed tensor shapes and CKKS states;
 - keys and operation-ready weights bound as static state;
 - deterministic rank-local arithmetic;
 - a small, well-defined set of dynamic inputs.
@@ -43,7 +43,7 @@ sequenceDiagram
     participant Graph as CUDA Graph
 
     App->>Program: capture(function, example_inputs)
-    Program->>Program: build exact signature and input buffer
+    Program->>Program: build value signature and input buffer
     Program->>Side: warm up with fresh buffers
     Side-->>Program: lazy initialization complete
     Program->>Graph: capture function on stable inputs
@@ -65,7 +65,7 @@ sequenceDiagram
     participant Graph
 
     App->>Program: replay(next_inputs)
-    Program->>Program: validate exact signature
+    Program->>Program: validate value signature
     Program->>Stream: copy into stable input addresses
     Program->>Stream: wait for overwrite safety
     Program->>Graph: replay
@@ -79,7 +79,7 @@ schedules may split them:
 - `copy_inputs_from(...)` prepares stable inputs and returns a copy handle;
 - `replay_prepared(...)` consumes that prepared handle and launches replay.
 
-Use the [Execution API reference](../../api/fhelium/execution/cuda_graph.md) for exact stream,
+Use the [Execution API reference](../../api/fhelium/execution/cuda_graph.md) for stream,
 event, and output-copy options.
 
 ## Borrowed outputs
@@ -109,7 +109,7 @@ separate program instances, buffers, and scheduling state.
 
 Calling the raw underlying CUDA graph's replay method bypasses FHElium's:
 
-- exact input validation;
+- value-signature validation;
 - dynamic input staging;
 - event dependencies;
 - overwrite protection;
@@ -172,6 +172,6 @@ baseline with the same correctness and memory accounting.
 ## Continue
 
 - [CUDA Graph matvec tutorial](../../tutorial/cuda-graph-matvec.md)
-- [Exact signatures and buffers](exact-signatures-and-buffers.md)
+- [Value signatures and buffers](signatures-and-buffers.md)
 - [Communication semantics](../distributed/communication-semantics.md)
 - [CKKS cost model](../performance/cost-model.md)

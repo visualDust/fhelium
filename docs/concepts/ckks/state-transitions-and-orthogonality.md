@@ -11,7 +11,7 @@ plaintext preparation.
 
 ## Value-state axes
 
-An exact local CKKS value is described by several distinct axes:
+A local CKKS value is described by several distinct axes:
 
 | Axis | Values | Responsibility |
 | --- | --- | --- |
@@ -19,7 +19,7 @@ An exact local CKKS value is described by several distinct axes:
 | Polynomial domain | `coefficient`, `ntt` | Distinguishes polynomial coefficients from NTT evaluations |
 | Residue representation | `standard`, `montgomery` | Distinguishes ordinary residues from Montgomery residues |
 | Modulus basis | `Q`, `QP` | Selects the active Q rows or active Q plus auxiliary P rows |
-| Level | Public Q-chain level | Selects the active Q suffix, together with exact `prime_ids` |
+| Level | Public Q-chain level | Selects the active Q suffix, together with `prime_ids` |
 | Scale | Positive finite binary64 | Records the actual CKKS scale of the value |
 | Component count | Two or three for ciphertexts | Records the current secret-key polynomial degree |
 | Placement | CPU or CUDA device | Identifies storage location, not mathematical state |
@@ -29,7 +29,7 @@ The axes are not interchangeable. In particular:
 - NTT domain does not imply Montgomery representation as a general concept.
 - Montgomery representation does not imply NTT domain.
 - QP basis is not a level.
-- `level` does not replace exact ordered `prime_ids`.
+- `level` does not replace ordered `prime_ids`.
 - placement does not change the represented polynomial or CKKS message.
 
 ## Plaintext state orthogonality
@@ -67,8 +67,8 @@ stateDiagram-v2
     ApproximateCoefficients --> DecodedSlotTensor: decode
 ```
 
-`ApproximateCoefficients` is produced by decryption, not by an exact
-`integer_coefficients` transition. It is finite binary64 data for decoding and
+`ApproximateCoefficients` is produced by decryption, not by the full-CRT
+`integer_coefficients` reconstruction path. It is finite binary64 data for decoding and
 cannot be reduced back to RNS. `DecodedSlotTensor` is a semantic CPU tensor,
 not a new `Plaintext` object with `representation="slots"`.
 
@@ -94,7 +94,7 @@ For ciphertexts,
 `coefficient_domain_to_ntt_domain` applies a forward NTT and converts standard
 residues to Montgomery form. `ntt_domain_to_coefficient_domain` applies the
 normalized inverse NTT and returns standard residues. Both preserve the ring
-element, component count, level, scale, Q/QP basis, and exact `prime_ids`.
+element, component count, level, scale, Q/QP basis, and `prime_ids`.
 
 Ciphertext multiplication primitives consume and produce the
 `(ntt, montgomery)` state. This common rule covers both `multiply` and
@@ -111,7 +111,7 @@ preserved, as for plaintexts, or follows the ciphertext coupling rule.
 
 | API | Accepted source | Target | Preserved state |
 | --- | --- | --- | --- |
-| `integer_coefficients_to_rns` | Exact `integer_coefficients` plaintext | RNS `(coefficient, standard)` plaintext | Level, scale, semantic polynomial; basis is provided as an argument |
+| `integer_coefficients_to_rns` | `integer_coefficients` plaintext | RNS `(coefficient, standard)` plaintext | Level, scale, semantic polynomial; basis is provided as an argument |
 | `standard_residues_to_montgomery_residues` | RNS `(coefficient, standard)` plaintext | RNS `(coefficient, montgomery)` plaintext | Representation, domain, level, scale, basis, `prime_ids` |
 | `coefficient_domain_to_ntt_domain` | RNS `(coefficient, montgomery)` plaintext | RNS `(ntt, montgomery)` plaintext | Representation, residue form, level, scale, basis, `prime_ids` |
 | `coefficient_domain_to_ntt_domain` | `(coefficient, standard)` ciphertext | `(ntt, montgomery)` ciphertext | Components, level, scale, basis, `prime_ids` |
@@ -187,7 +187,7 @@ key-switch or bootstrapping state-transition specification.
 convert RNS data into `integer_coefficients`. FHElium deliberately exposes no
 implicit `RNS -> integer_coefficients` arrow. Such an operation would need to
 specify the composite modulus, representative interval, output numeric type,
-and exact versus approximate reconstruction semantics.
+and integer versus approximate reconstruction semantics.
 
 Decryption instead produces bounded `approximate_coefficients` for decoding.
 The semantic round trip consists of these operations:

@@ -40,7 +40,7 @@ support world-size-one execution, data parallelism, additive-term parallelism
 
 ## Why values are dense and local
 
-A value owns ordinary tensor storage and exact cryptographic metadata:
+A value owns ordinary tensor storage and cryptographic metadata:
 
 ```text
 Ciphertext.data -> [component, *batch, limb, coefficient_or_ntt_index]
@@ -62,7 +62,7 @@ by the application or the responsible subsystem.
   dispatch.
 - A world-size-one program uses the same local semantics as a distributed one.
 - Different parallel strategies can use the same value types.
-- Serialization and transport can reconstruct exact values without recreating
+- Serialization and transport can reconstruct values without recreating
   a hidden runtime.
 
 ### Cost
@@ -89,7 +89,7 @@ graph TB
 
     CORE --> MECH --> POLICY --> PRODUCT
 
-    CORE --- A[exact state and validation]
+    CORE --- A[value state and validation]
     MECH --- B[copy, event, collective, graph]
     POLICY --- C[what, when, where to retain]
     PRODUCT --- D[identity, queueing, routing]
@@ -100,7 +100,7 @@ Examples of the mechanism/policy separation:
 | Mechanism | Policy built on top |
 | --- | --- |
 | `value.nbytes` | Admission and memory budgets |
-| Exact value signature | Which program handles a request |
+| Value signature | Which program handles a request |
 | `ReusableValueBuffer` | Tile size and prefetch schedule |
 | `CopyHandle` and CUDA event | When to overlap transfer and compute |
 | Typed ciphertext reduction | Which ranks own additive terms |
@@ -127,20 +127,20 @@ graph LR
     LIFE -->|policy controls| RES
 ```
 
-This separation enables exact CPU-to-GPU staging without teaching core values
+This separation enables CPU-to-GPU staging without teaching core values
 about model/request lifetimes.
 
 ## Responsibility checklist
 
 Before adding a feature, ask:
 
-1. Does it change exact CKKS meaning? Define the semantics in `core` or `engine`.
+1. Does it change CKKS meaning? Define the semantics in `core` or `engine`.
 2. Is it reusable movement, synchronization, or capture? Consider
    `distributed` or `execution`.
 3. Does it choose resources for a model, request, user, or cache budget? Keep it
    in the experimental namespace or an application.
 4. Does it depend on a packing algorithm? Keep it with the workload/compiler.
-5. Does it require a native tensor primitive? Define an exact-state operator
+5. Does it require a native tensor primitive? Define a state-aware operator
    and validate the cross-layer ABI.
 
 ## Related pages

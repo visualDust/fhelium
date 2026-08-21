@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -240,13 +241,66 @@ def _sha256_file(path: Path) -> str:
 
 
 def _fsync_file(path: Path) -> None:
+    if sys.platform == "win32":
+        # The Windows CRT requires a writable descriptor for ``_commit``,
+        # which is the operation exposed by ``os.fsync``.
+        with path.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        return
+
     with path.open("rb") as stream:
         os.fsync(stream.fileno())
 
 
 def _fsync_directory(path: Path) -> None:
+    if sys.platform == "win32":
+        # Windows exposes no generally supported directory-flush operation
+        # equivalent to POSIX fsync. Artifact payload publication instead uses
+        # MoveFileExW with MOVEFILE_WRITE_THROUGH; ArtifactStore documents the
+        # remaining directory-metadata durability limitation explicitly.
+        return
+
     descriptor = os.open(path, os.O_RDONLY)
     try:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _publish_file(source: Path, destination: Path) -> None:
+    """Publish ``source`` at an absent destination without replacing a peer."""
+
+    if sys.platform != "win32":
+        os.link(source, destination, follow_symlinks=False)
+        source.unlink()
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    move_file = ctypes.WinDLL("kernel32", use_last_error=True).MoveFileExW
+    move_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+    )
+    move_file.restype = wintypes.BOOL
+
+    # Deliberately omit MOVEFILE_REPLACE_EXISTING. WRITE_THROUGH requests the
+    # documented write-through completion behavior for the move; it does not
+    # supply the unavailable directory-flush guarantee discussed above.
+    movefile_write_through = 0x00000008
+    if move_file(str(source), str(destination), movefile_write_through):
+        return
+
+    error = ctypes.get_last_error()
+    # Supplying the native error as ``winerror`` lets Python map, for example,
+    # ERROR_FILE_EXISTS/ERROR_ALREADY_EXISTS to FileExistsError while retaining
+    # both source and destination paths for every other failure.
+    raise OSError(
+        None,
+        ctypes.FormatError(error),
+        str(source),
+        error,
+        str(destination),
+    )

@@ -289,7 +289,7 @@ class ResidencyManager:
     ) -> ResidencyHandle[ValueT]:
         """Register a trusted reconstruction source without loading a value.
 
-        The source must reproduce the exact contents and CKKS state identified
+        The source must reproduce the contents and CKKS state identified
         by the new handle. The manager later validates runtime type, declared
         location, logical bytes, and storage ceiling; the source owns
         content-identity correctness.

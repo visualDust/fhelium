@@ -69,7 +69,7 @@ class MyEvaluator:
 
 State the basis your evaluator accepts. The built-in evaluators consume a
 two-component coefficient-domain standard-RNS Q ciphertext with axes
-`[component, *batch, limb, coefficient]` and exact active `prime_ids`. Their
+`[component, *batch, limb, coefficient]` and active `prime_ids`. Their
 ciphertext products require a relinearization key and perform
 
 ```text
@@ -113,7 +113,7 @@ class SparseCompiler:
 
 `reference()` is a plaintext oracle. Document its accepted axes and whether its
 input is a raw physical coordinate or a normalized coordinate. The built-in
-radix-2 reference uses exact shape `[slot]` and the convention
+radix-2 reference uses shape `[slot]` and the convention
 
 $$
 T(C(a))=Sa.
@@ -233,7 +233,7 @@ The component interface specification must state:
 - whether `evaluate()` accepts $r$ or $x$ under each fusion setting;
 - the raw admissible interval and output target;
 - the polynomial basis and design interval;
-- exact `required_levels` and output actual scale;
+- `required_levels` and output actual scale;
 - whether `requires_relinearization` is true because evaluation performs a
   ciphertext-ciphertext product;
 - whether ciphertext products or conjugation consume the supplied primitive
@@ -291,7 +291,7 @@ Test components independently before inserting them into a full bootstrap:
 - compare encrypted component output with the plaintext oracle;
 - assert output level advancement and actual scale recurrence;
 - assert component, batch, limb, and coefficient/NTT axes;
-- assert domain, basis, residue representation, and exact `prime_ids`;
+- assert domain, basis, residue representation, and `prime_ids`;
 - compare direct and BSGS decoded outputs for the same mathematical map;
 - run full-slot end-to-end refresh across several seeds and admissible ranges;
 - measure the application's actual raw branch range and error distribution.

@@ -1,13 +1,15 @@
-"""Transactional local artifact catalog built on exact value serialization."""
+"""Transactional local artifact catalog for serialized FHElium values."""
 
 from __future__ import annotations
 
-import fcntl
+import errno
 import json
 import os
 import shutil
 import sqlite3
 import stat
+import sys
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -15,6 +17,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any, TypeVar, overload
 from uuid import uuid4
 from warnings import warn
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 import torch
 
@@ -29,6 +36,7 @@ from fhelium.artifacts._catalog import (
     _fsync_file,
     _metadata_from_catalog_row,
     _normalize_name,
+    _publish_file,
     _sha256_file,
     _validate_reference,
     _validate_uuid,
@@ -130,7 +138,7 @@ _EXPECTED_TABLE_COLUMNS = {
 
 
 class ArtifactStore:
-    """Store one active exact-value generation per local logical name.
+    """Store one active value generation per local logical name.
 
     SQLite owns the namespace, metadata transaction, stale-generation checks,
     and process concurrency. Immutable safetensors files under ``objects/`` own
@@ -147,12 +155,19 @@ class ArtifactStore:
     committed generation and makes every older :class:`ArtifactRef` stale.
 
     Version 1 requires SQLite 3.37 or later and supports one trusted host on a
-    local POSIX filesystem with ordinary SQLite locking, same-filesystem
-    publication, and file/directory ``fsync``. NFS, SMB, FUSE/object-store
-    mounts, multi-host access, hostile writers that bypass this API, encryption
-    at rest, and authenticated integrity are not supported. The SHA-256 digest
-    detects accidental payload corruption but an attacker able to modify both
-    catalog and payload can replace both.
+    local POSIX or Windows filesystem with ordinary SQLite locking and
+    same-filesystem, no-replace payload publication. POSIX publication uses
+    file and directory ``fsync``. Windows uses writable-file ``fsync`` and
+    ``MoveFileExW(MOVEFILE_WRITE_THROUGH)``; Windows has no supported directory
+    flush equivalent here, so power-loss durability of directory metadata is
+    weaker than the POSIX contract. POSIX permission modes requested for new
+    store-owned paths do not establish owner-only Windows ACLs; callers must
+    provision suitable Windows access control separately.
+
+    NFS, SMB, FUSE/object-store mounts, multi-host access, hostile writers that
+    bypass this API, encryption at rest, and authenticated integrity are not
+    supported. The SHA-256 digest detects accidental payload corruption but an
+    attacker able to modify both catalog and payload can replace both.
 
     Args:
         root: Local directory that owns the catalog and immutable payloads. A
@@ -197,7 +212,7 @@ class ArtifactStore:
                     )
                 self._initialize_catalog()
             else:
-                self._require_private_regular_catalog()
+                self._require_single_link_regular_catalog()
                 if self._catalog_is_uninitialized():
                     # A crash may leave an empty SQLite file before the first
                     # schema transaction commits. This is initialization
@@ -211,7 +226,7 @@ class ArtifactStore:
                         )
                     self._discard_uninitialized_catalog()
                     self._initialize_catalog()
-            self._require_private_regular_catalog()
+            self._require_single_link_regular_catalog()
             self._validate_catalog_and_recover()
 
     def _unexpected_root_entries(self) -> tuple[str, ...]:
@@ -224,37 +239,85 @@ class ArtifactStore:
             )
         )
 
-    def _require_private_regular_catalog(self) -> None:
+    def _require_single_link_regular_catalog(self) -> None:
         status = self._catalog_path.lstat()
         if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
-            raise ValueError("Artifact catalog must be a private regular file")
+            raise ValueError(
+                "Artifact catalog must be a regular file with exactly one "
+                "hard link"
+            )
 
     @contextmanager
     def _bootstrap_lock(self) -> Iterator[None]:
         if self._bootstrap_lock_path.is_symlink():
             raise ValueError("Artifact store lock cannot be a symlink")
         flags = os.O_RDWR | os.O_CREAT
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        if hasattr(os, "O_CLOEXEC"):
-            flags |= os.O_CLOEXEC
+        flags |= int(getattr(os, "O_NOFOLLOW", 0))
+        flags |= int(getattr(os, "O_CLOEXEC", 0))
         descriptor = os.open(
             self._bootstrap_lock_path,
             flags,
             0o600,
         )
+        locked = False
         try:
             status = os.fstat(descriptor)
             if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
                 raise ValueError(
-                    "Artifact store lock must be a private regular file"
+                    "Artifact store lock must be a regular file with exactly "
+                    "one hard link"
                 )
-            os.fchmod(descriptor, 0o600)
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            fchmod = getattr(os, "fchmod", None)
+            if fchmod is not None:
+                fchmod(descriptor, 0o600)
+            self._lock_bootstrap_descriptor(descriptor)
+            locked = True
             yield
         finally:
+            try:
+                if locked:
+                    self._unlock_bootstrap_descriptor(descriptor)
+            finally:
+                os.close(descriptor)
+
+    @staticmethod
+    def _lock_bootstrap_descriptor(descriptor: int) -> None:
+        if sys.platform != "win32":
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            return
+
+        # Windows CRT locks apply to a byte range from the current file
+        # position. A non-blocking retry loop avoids LK_LOCK's fixed retry
+        # limit while keeping the descriptor (and therefore the lock) alive
+        # for the complete bootstrap critical section.
+        while True:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                break
+            except OSError as error:
+                if error.errno not in {
+                    errno.EACCES,
+                    errno.EAGAIN,
+                    errno.EDEADLK,
+                }:
+                    raise
+                time.sleep(0.05)
+
+        # Locking one byte beyond EOF is supported on Windows. Materialize that
+        # byte only after acquiring the range, eliminating a first-open race.
+        if os.fstat(descriptor).st_size == 0:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            os.write(descriptor, b"\0")
+            os.fsync(descriptor)
+
+    @staticmethod
+    def _unlock_bootstrap_descriptor(descriptor: int) -> None:
+        if sys.platform != "win32":
             fcntl.flock(descriptor, fcntl.LOCK_UN)
-            os.close(descriptor)
+            return
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
 
     @staticmethod
     def _configure_connection(connection: sqlite3.Connection) -> None:
@@ -524,12 +587,12 @@ class ArtifactStore:
         A writer transaction spans staging and catalog publication. Existing
         readers may continue loading the previous immutable payload; commit
         waits for them before that payload becomes eligible for removal.
-        Publication snapshots the supported exact value state but does not
+        Publication snapshots the supported value state but does not
         move, mutate, offload, or release the caller's live ``value``.
 
         Args:
             name: Normalized store-relative logical name.
-            value: Exact tensor-resident FHElium value.
+            value: Tensor-resident FHElium value.
             sensitivity: Descriptive public/confidential/secret label. It does
                 not provide encryption or access control.
             allow_secret: Explicitly permit unencrypted SecretKey persistence.
@@ -539,7 +602,7 @@ class ArtifactStore:
         Returns:
             A tensor-free :class:`ArtifactRef` identifying the newly published
             generation. The reference is not a materialized copy of ``value``;
-            pass it to :meth:`get` to reconstruct that exact generation.
+            pass it to :meth:`get` to reconstruct that generation.
         """
 
         name = _normalize_name(name)
@@ -616,8 +679,7 @@ class ArtifactStore:
 
             payload_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             os.chmod(payload_path.parent, 0o700)
-            os.link(temporary_path, payload_path, follow_symlinks=False)
-            temporary_path.unlink()
+            _publish_file(temporary_path, payload_path)
             _fsync_directory(self._temporary_path)
             _fsync_directory(payload_path.parent)
             _fsync_directory(self._objects_path)
@@ -712,12 +774,12 @@ class ArtifactStore:
         This is a repository lookup, not a file-codec operation.
         :func:`fhelium.load_value` reads one caller-selected value-file path;
         ``get`` resolves a catalog name or checked generation, verifies store
-        policy, and then reconstructs the exact value.
+        policy, and then reconstructs the value.
 
         Args:
             ref_or_name: Logical name for the optional current generation, or
                 a generation-specific checked reference.
-            device: Device on which to reconstruct the exact value. Defaults
+            device: Device on which to reconstruct the value. Defaults
                 to CPU and is not inherited from the saved value.
             expected_type: Optional concrete value type required both in the
                 file metadata and after reconstruction.
@@ -727,7 +789,7 @@ class ArtifactStore:
                 before reconstruction.
 
         Returns:
-            The reconstructed exact value. Returns ``None`` only when a string
+            The reconstructed value. Returns ``None`` only when a string
             logical name has no current generation.
         """
 

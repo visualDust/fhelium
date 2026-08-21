@@ -8,7 +8,7 @@
 
 // Prepared-plaintext addition requirements. Ciphertext components are integral
 // CUDA [*batch, limb, coefficient] standard residues. Prepared plaintexts use
-// the same exact prime rows in coefficient-domain Montgomery representation;
+// the same prime rows in coefficient-domain Montgomery representation;
 // dense shape is [*batch, limb, coefficient]. Compressed variants replace the
 // final extent with repeated power-of-two support, and strided
 // form supplies [*batch, limb] implicit values. rns_params is
@@ -43,7 +43,7 @@ add_prepared_plaintext_residue(scalar_t ciphertext_value,
 }
 
 // Add one operation-ready coefficient-domain plaintext to a ciphertext
-// component. The plaintext may either match the ciphertext's exact batch or be
+// component. The plaintext may either match the ciphertext's batch or be
 // the unique allowed broadcast case: one genuinely unbatched RNS plaintext.
 template <typename scalar_t>
 __global__ void ckks_add_prepared_plaintext_component_kernel(

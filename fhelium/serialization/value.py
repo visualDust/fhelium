@@ -1,4 +1,4 @@
-"""Exact typed value envelopes, validation, and reconstruction."""
+"""Typed value envelopes, validation, and reconstruction."""
 
 from __future__ import annotations
 
@@ -46,11 +46,11 @@ _KEY_TYPES: dict[str, type] = {
 
 @dataclass(frozen=True)
 class ValueEnvelope:
-    """An exact value description with tensors but no path or store policy.
+    """A value description with tensors but no path or store policy.
 
     The envelope is the shared representation for application-owned storage and
     memory managers. Its tensors may be moved or persisted by the caller, then passed
-    to :meth:`to_value` to reconstruct the exact FHElium value type.
+    to :meth:`to_value` to reconstruct the original FHElium value type.
     """
 
     schema_version: int
@@ -61,12 +61,12 @@ class ValueEnvelope:
 
     @classmethod
     def from_value(cls, value: TensorResident) -> Self:
-        """Describe one exact live value without choosing storage policy."""
+        """Describe one live value without choosing storage policy."""
 
         return cast(Self, _envelope_from_value(value, cls))
 
     def to_value(self) -> TensorResident:
-        """Reconstruct the exact concrete FHElium value type."""
+        """Reconstruct the concrete FHElium value type."""
 
         return _value_from_envelope(self)
 
@@ -82,7 +82,7 @@ def _envelope_from_value(
     value: TensorResident,
     envelope_type: type[ValueEnvelope],
 ) -> ValueEnvelope:
-    """Build the path-independent representation of one exact live value."""
+    """Build the path-independent representation of one live value."""
 
     if isinstance(value, Plaintext):
         tensors = {}
@@ -184,13 +184,13 @@ def _envelope_from_value(
         *_KEY_TYPES,
     ]
     raise TypeError(
-        "Exact value serialization only supports FHElium values "
+        "Value serialization only supports FHElium values "
         f"{supported}; got {type(value).__name__}"
     )
 
 
 def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
-    """Reconstruct one exact live value from a validated tensor envelope."""
+    """Reconstruct one live value from a validated tensor envelope."""
 
     if not isinstance(envelope, ValueEnvelope):
         raise TypeError(
@@ -435,7 +435,7 @@ def validate_value_description(
     tensor_names: set[str],
     tensor_metadata: dict[str, Any] | None = None,
 ) -> None:
-    """Validate an exact tensor-free value schema description.
+    """Validate a tensor-free value schema description.
 
     Persistence inspection and envelope materialization share this validator,
     so stale metadata and tensor-name mismatches fail before payload loading.

@@ -6,7 +6,7 @@
 // tensors on a registered execution device. Native views collapse only
 // *batch and never broadcast a non-singleton batch, coefficient, or limb axis.
 // rns_params is integral
-// [parameter, limb] on the same device; its column j describes the exact
+// [parameter, limb] on the same device; its column j describes the
 // prime_ids[j] represented by operand limb j. Binary functional outputs have
 // lhs shape/state and do not alias inputs. A trailing underscore mutates only
 // its schema write argument, preserves storage, and treats tables/other
@@ -24,7 +24,7 @@
 // centered interval; `shift_residues_positive_` adds q_i to centered values.
 // `lift_centered_coefficients` maps integral [*batch, coefficient] to
 // [*batch, limb, coefficient]; the caller aligns twice_modulus[j] with the
-// exact prime_ids[j] for limb j. It allocates non-aliasing standard lazy
+// prime_ids[j] for limb j. It allocates non-aliasing standard lazy
 // output.
 
 TORCH_LIBRARY_FRAGMENT(fhelium_rns_ops, m) {

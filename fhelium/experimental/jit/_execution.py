@@ -718,7 +718,7 @@ def _materialize_entry_input(
             )
         if value.level != level or value.scale != expected_scale:
             raise JitInputError(
-                "Encrypted input state differs from its exact InputSpec: "
+                "Encrypted input state differs from its InputSpec: "
                 f"level/scale={value.level}/{value.scale!r}, expected "
                 f"{level}/{expected_scale!r}"
             )
@@ -1140,7 +1140,7 @@ def _prepare_public_operand(
             )
         if operation == "add" and public.scale != ciphertext.scale:
             raise ValueError(
-                "Plaintext addition requires exact scale equality: "
+                "Plaintext addition requires equal scales: "
                 f"{public.scale} != {ciphertext.scale}"
             )
         if public.is_slots:

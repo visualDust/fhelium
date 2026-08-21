@@ -28,7 +28,7 @@ def deplete_public_levels(
     Q ciphertext by an unbatched NTT/Montgomery plaintext at scale $\Delta_0$,
     then drops the leading Q row. The output remains coefficient-domain
     standard RNS with axes `[component, *batch, limb, coefficient]`, unchanged
-    batch shape and component count, exact next-level `prime_ids`, and actual
+    batch shape and component count, next-level `prime_ids`, and actual
     scale $\Delta_{\rm out}=\Delta_{\rm in}\Delta_0/q_{\rm drop}$. The
     returned ciphertext is functional; the argument's storage is not mutated.
     """

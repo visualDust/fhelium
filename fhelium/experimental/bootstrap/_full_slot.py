@@ -208,22 +208,22 @@ class FullSlotBootstrap:
             )
         )
 
-    def key_steps(self, strategy: str = 'exact') -> tuple[int, ...]:
+    def key_steps(self, strategy: str = 'direct') -> tuple[int, ...]:
         """Return the rotation-key inventory for one composition strategy.
 
-        ``exact`` returns every logical transform step as a direct key.
+        ``direct`` returns every logical transform step as a direct key.
         ``power_of_two`` returns the deduplicated signed-power steps whose
         compositions cover those transforms. The latter therefore describes
         actual inventory entries, not the original transform offsets.
 
         Raises:
-            ValueError: If ``strategy`` is not ``exact`` or ``power_of_two``.
+            ValueError: If ``strategy`` is not ``direct`` or ``power_of_two``.
         """
 
-        if strategy == 'exact':
+        if strategy == 'direct':
             return self.required_rotations
         if strategy != 'power_of_two':
-            raise ValueError("strategy must be 'exact' or 'power_of_two'")
+            raise ValueError("strategy must be 'direct' or 'power_of_two'")
         return tuple(
             sorted(
                 {
@@ -345,7 +345,7 @@ class FullSlotBootstrap:
         r"""Refresh a final-public-level full-slot ciphertext or dense batch.
 
         The input must be a context-compatible two-component Q ciphertext in
-        coefficient domain with standard residues, exact active `prime_ids`,
+        coefficient domain with standard residues, active `prime_ids`,
         data axes `[component, *batch, limb, coefficient]`, ring extent $N$,
         final public level $L-1$, and actual scale near either $\Delta_0$ or
         $\Delta_0^2$. All $S$ slots are transformed; there is no sparse-slot
@@ -399,7 +399,7 @@ class FullSlotBootstrap:
 
         The functional result does not alias the input. It is a two-component
         coefficient-domain standard-RNS Q ciphertext with unchanged batch
-        axes, level `output_level`, and exact
+        axes, level `output_level`, and
         `engine.rns_layout.prime_ids(output_level)`. The method does not enforce
         an application error bound or the reducer's encrypted input range.
         """

@@ -40,7 +40,7 @@ python examples/02_key_materials.py \
 The second command persists public, relinearization, and rotation keys. It
 does **not** persist the secret key.
 
-## 1. Create exact key types
+## 1. Create typed keys
 
 ```python
 secret_key = engine.secret_key
@@ -107,7 +107,7 @@ rotation_keys.put("1", engine.rotation_keys[1], overwrite=True)
 ```
 
 The store uses a transactional SQLite catalog for logical names and immutable
-safetensors objects for exact key payloads. It adds typed current-generation
+safetensors objects for key payloads. It adds typed current-generation
 references, collections, checksums, and local durability policy. Overwriting a
 name creates a new artifact ID and makes the previous reference stale; it does
 not retain prior key versions. The store does not decide which user owns a key,
@@ -131,7 +131,7 @@ policy, and deletion policy appropriate to their threat model. The store's
 payload checksum detects accidental corruption; it does not authenticate data
 against an actor who can modify both the catalog and payload.
 
-## 6. Restore the exact type
+## 6. Restore the key type
 
 ```python
 restored = store.get(relinearization_ref, device=engine.device)
@@ -140,11 +140,11 @@ torch.testing.assert_close(restored.data, relinearization_key.data)
 ```
 
 The serialized metadata reconstructs the key type, context, modulus basis, polynomial domain,
-prime IDs, and other exact state. A successful tensor load is not enough if
+prime IDs, and other key state. A successful tensor load is not enough if
 that metadata does not match the current engine or intended operation.
 
 ::: warning Do not make every key globally resident
-A serving layer should provision exact user/model keysets, enforce a memory
+A serving layer should provision user/model keysets, enforce a memory
 budget, and lease only the keys required by the current operation. The core
 engine intentionally does not infer that policy.
 :::

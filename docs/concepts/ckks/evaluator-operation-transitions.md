@@ -17,7 +17,7 @@ representation, domain, and residue conversions are defined in
 ```mermaid
 flowchart LR
     A[Ciphertext A<br/>level l, scale s]
-    B[Ciphertext B<br/>matching exact-value layout]
+    B[Ciphertext B<br/>matching value layout]
     ADD[add]
     C[Ciphertext<br/>level l, scale s]
     A --> ADD
@@ -68,7 +68,7 @@ result = engine.rescale_to_next_level(
 ```
 
 For repeated model weights, encode and prepare operation-ready plaintexts at
-the exact levels used by the evaluator instead of repeating preparation per
+the levels used by the evaluator instead of repeating preparation per
 request.
 
 ## Ciphertext multiplication produces three components
@@ -101,7 +101,7 @@ flowchart LR
 The public `multiply` operation has these preconditions:
 
 - two components on each input;
-- matching exact-value layout;
+- matching value layout;
 - NTT domain;
 - Montgomery representation;
 - Q modulus basis.
@@ -153,7 +153,7 @@ QP ciphertext with two or three components. It advances one level, removes the
 leading Q row, and divides the actual scale by that Q prime.
 `mod_switch_to_next_level` and `mod_switch_to_level` restrict the active Q basis while
 preserving scale. `reinterpret_at_scale` preserves residues and records a new
-scale, changing the decoded message by the old-to-new scale ratio. The exact
+scale, changing the decoded message by the old-to-new scale ratio. The
 equations, public bounds, and compatibility requirements are specified in
 [Scale and level lifecycle](scale-and-level-lifecycle.md).
 
@@ -169,7 +169,7 @@ sequenceDiagram
 
     App->>Engine: rotate_by_step(ciphertext, step)
     Engine->>Engine: canonicalize signed step
-    Engine->>Key: select exact step key
+    Engine->>Key: select direct step key
     Engine->>Auto: transform components
     Engine->>KS: switch transformed dependency
     KS-->>Engine: correction components
@@ -177,7 +177,7 @@ sequenceDiagram
 ```
 
 A sequence of rotations may share preparation through hoisting, but every
-output still needs a step-specific automorphism, exact rotation key, key
+output still needs a step-specific automorphism, direct rotation key, key
 products, and ModDown.
 
 ## Functional and in-place forms
@@ -187,7 +187,7 @@ products, and ModDown.
 | `engine.add(a, b)` | Returns a new value; inputs are unchanged |
 | `engine.add_(a, b)` | Mutates the first argument |
 | `value.to(device)` | Returns the same value state on another device |
-| `value.replace_(other)` | Rebinds an object's storage and exact state |
+| `value.replace_(other)` | Rebinds an object's storage and state |
 
 Prefer functional operations until a memory-lifetime plan proves that mutation
 is safe. In-place execution can invalidate borrowed references or race with

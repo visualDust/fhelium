@@ -57,7 +57,7 @@ classDiagram
 ```mermaid
 mindmap
   root((Value description))
-    exact value state
+    CKKS value state
       concrete type and tensor topology
       context level scale prime IDs
       plaintext representation where applicable
@@ -124,7 +124,7 @@ Message batch axes are not:
 `stack_batch` is a named allocating copy for compatible existing values. For
 ciphertext-ciphertext arithmetic, batch shapes must match exactly. A genuinely
 unbatched RNS plaintext may broadcast over a ciphertext batch; a batched RNS
-plaintext must have the exact ciphertext batch shape.
+plaintext must have the ciphertext batch shape.
 
 ## Plaintext owns one representation
 
@@ -133,9 +133,9 @@ A `Plaintext` contains exactly one canonical representation:
 | Representation | Storage | State |
 | --- | --- | --- |
 | `"slots"` | Scalar or `[*batch, slot]` semantic message | No polynomial domain, modulus basis, residue representation, or prime IDs |
-| `"integer_coefficients"` | `[*batch, coefficient]` configured integral-dtype polynomial | Exact coefficient polynomial, but no RNS modulus basis or prime IDs |
+| `"integer_coefficients"` | `[*batch, coefficient]` configured integral-dtype polynomial | Integer coefficient polynomial, but no RNS modulus basis or prime IDs |
 | `"approximate_coefficients"` | `[*batch, coefficient]` finite float64 decrypt reconstruction | Decodable approximation, but not encryptable or reducible to RNS |
-| `"rns"` | `[*batch, limb, coefficient_or_ntt_index]` | Exact polynomial domain, modulus basis, residue representation, and prime IDs |
+| `"rns"` | `[*batch, limb, coefficient_or_ntt_index]` | Polynomial domain, modulus basis, residue representation, and prime IDs |
 
 The complete plaintext and ciphertext transition graphs, strict source-state
 preconditions, and operation-oriented preparation equivalences are defined in
@@ -168,7 +168,7 @@ Direct construction rejects structurally impossible combinations, such as an
 NTT ciphertext without Montgomery representation. Public operations also
 validate their arithmetic preconditions before launch.
 
-## Key layouts are exact too
+## Key layouts carry state too
 
 Conceptual dense layouts include:
 
@@ -209,7 +209,7 @@ For example:
 - multiplication requires two two-component NTT/Montgomery ciphertexts;
 - relinearization requires three components and a compatible relinearization
   key;
-- rotation requires a two-component ciphertext and a key for the exact
+- rotation requires a two-component ciphertext and a key for the requested
   canonical step;
 - rescale requires coefficient-domain standard residues, every expected active
   row for the Q or QP modulus basis, and another legal level; it records the
@@ -226,7 +226,7 @@ placement plan.
 This distinction underpins:
 
 - loading a value on CPU and then moving it to an engine device;
-- validating one exact signature across CPU/pinned/CUDA materializations;
+- validating one value signature across CPU/pinned/CUDA materializations;
 - staging dynamic inputs into fixed CUDA buffers;
 - transporting descriptors separately from dense payloads.
 

@@ -113,7 +113,7 @@ class CkksRescaler:
         Returns:
             A new coefficient-domain standard ciphertext at ``ct.level + 1``
             with unchanged component count, batch shape, Q/QP basis, engine
-            integral dtype/device, exact ``prime_ids=ct.prime_ids[1:]``, and
+            integral dtype/device, ``prime_ids=ct.prime_ids[1:]``, and
             canonical residues in $[0,q_i)$. ``ct`` is unchanged and output
             storage is independent.
 
@@ -144,7 +144,7 @@ class CkksRescaler:
 
         The quotient and actual-scale equations are identical to
         :meth:`rescale_to_next_level`. Aliases observe updated surviving rows,
-        narrowed ``ct.data``, level, scale, and exact ``prime_ids``. The
+        narrowed ``ct.data``, level, scale, and ``prime_ids``. The
         narrowed tensor remains a view of the original allocation.
         """
 
@@ -314,7 +314,7 @@ class CkksRescaler:
     ) -> None:
         r"""Rescale one component's surviving RNS-row view in place.
 
-        Tensor axes, dtype/device, exact row mapping, quotient law, and
+        Tensor axes, dtype/device, row mapping, quotient law, and
         canonical $[0,q_i)$ output match :meth:`_rescale_component`. The
         ``remaining`` view is mutated; ``dropped`` and table tensors are read
         only. Aliases of surviving rows observe the update.
@@ -350,7 +350,7 @@ class CkksRescaler:
         ciphertext is then constructed from those remaining rows. Component
         input layout ``[*batch, limb, coefficient]`` becomes
         ``[*batch, limb-1, coefficient]`` with engine integral dtype/device,
-        canonical standard residues, and exact ``prime_ids[1:]``. Output
+        canonical standard residues, and ``prime_ids[1:]``. Output
         storage is independent.
         """
 

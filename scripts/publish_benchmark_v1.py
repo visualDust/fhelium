@@ -1280,7 +1280,7 @@ def _load_catalog(path: Path) -> dict[str, Any]:
         }
         if not _json_values_equal(run, expected):
             raise ValidationError(
-                f"catalog.runs[{index}] is not the exact projection of its raw report"
+                f"catalog.runs[{index}] does not equal the projection of its raw report"
             )
         rebuilt_runs.append(expected)
     recorded_times = [run["recorded_at"] for run in rebuilt_runs]

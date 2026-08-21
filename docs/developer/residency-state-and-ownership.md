@@ -124,7 +124,7 @@ coexist in one process-local manager.
 One materialization contains a ready `TensorResident`, its logical and storage
 byte counts, its fixed managed charge, and internal
 read/hold/pending-event protection-token sets. The manager validates common
-device placement, uniform CPU pinning, exact type and logical bytes, and that
+device placement, uniform CPU pinning, runtime type and logical bytes, and that
 actual storage does not exceed the registered charge before installation.
 
 ## Replica modes
@@ -180,7 +180,7 @@ but Python cannot revoke an object extracted while the lease was active.
 `register_source(spec, source, ...)` registers a managed value without
 loading a materialization. Its specification must use
 `Recoverability.RECONSTRUCTIBLE`, and the source location must be valid locally.
-`ResidencySource.load()` synchronously returns the exact registered
+`ResidencySource.load()` synchronously returns the registered
 `TensorResident` value. The source is trusted to preserve that content and
 its CKKS-state invariants. The manager validates runtime type, location, and byte
 bounds. Each successful callback also transfers sole logical ownership of its
@@ -230,7 +230,7 @@ and reservations. `ResidencyController` stores deterministic access epochs and
 workload policy metadata and receives immutable tensor-free candidates while
 planning.
 
-A `ResidencyRequest` contains exact `(handle, location)` postconditions and
+A `ResidencyRequest` contains required `(handle, location)` postconditions and
 `MemoryReservation` declarations. A pure `ResidencyPolicy` orders
 invariant-filtered candidates and exposes only configured fallback
 tiers. The resulting `ResidencyDecision` contains the concrete manager-bound

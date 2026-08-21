@@ -171,7 +171,7 @@ def broadcast_compressed_plaintext(
     src: int = 0,
     group: torch.distributed.ProcessGroup | None = None,
 ) -> CompressedPlaintext:
-    """Broadcast one exact compressed plaintext with typed allocation.
+    """Broadcast one compressed plaintext with typed allocation.
 
     The compact tensor, ring dimension, encoded repetition layout, and all
     arithmetic metadata are preserved. The operation is synchronous and does
@@ -210,7 +210,7 @@ def broadcast_key(
 
     Returns:
         The source's original key object on ``src`` and a newly allocated key
-        of the same exact type and metadata on every other group rank.  For a
+        of the same concrete type and metadata on every other group rank. For a
         world-size-one group, the source object is returned unchanged and no
         payload communication or receiver allocation occurs.
 
@@ -659,7 +659,7 @@ def all_gather_compressed_plaintexts(
     *,
     group: torch.distributed.ProcessGroup | None = None,
 ) -> list[CompressedPlaintext]:
-    """All-gather independent compressed plaintexts of one exact layout."""
+    """All-gather independent compressed plaintexts sharing one layout."""
 
     if not isinstance(value, CompressedPlaintext):
         raise TypeError(

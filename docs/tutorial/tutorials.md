@@ -46,7 +46,7 @@ The separate operations are intentional:
    divided by that prime.
 
 See [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md)
-for the exact level/scale laws,
+for the level/scale laws,
 [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)
 for the broader state machine, and
 [`CkksEngine`](../api/fhelium/engine/ckks_engine.md#ckksengine) for the generated
@@ -85,18 +85,18 @@ mandatory reading order.
 | Example | Tutorial | Main question |
 | --- | --- | --- |
 | [08](https://github.com/VisualDust/fhelium/blob/main/examples/08_spmd_independent_ciphertexts.py) | [Independent ciphertexts](spmd-independent-ciphertexts.md) | When should SPMD code scatter and gather independent encrypted values? |
-| [09](https://github.com/VisualDust/fhelium/blob/main/examples/09_spmd_rotation_parallel_mxv.py) | [Rotation-parallel matrix-vector](spmd-rotation-parallel-matvec.md) | How are additive diagonal terms and exact rotation keys partitioned across processes? |
+| [09](https://github.com/VisualDust/fhelium/blob/main/examples/09_spmd_rotation_parallel_mxv.py) | [Rotation-parallel matrix-vector](spmd-rotation-parallel-matvec.md) | How are additive diagonal terms and direct rotation keys partitioned across processes? |
 | [10](https://github.com/VisualDust/fhelium/blob/main/examples/10_spmd_limb_parallel_pipeline.py) | [Limb-parallel pipeline](spmd-limb-parallel-pipeline.md) | Which operations are RNS-row local, and where must every expected active row be reconstructed? |
 
 ## Execution and lifecycle
 
 | Example | Tutorial | Main question |
 | --- | --- | --- |
-| [03](https://github.com/VisualDust/fhelium/blob/main/examples/03_plaintext_ciphertext_memory.py) | [Values, memory, and persistence](value-memory-and-persistence.md) | How do device movement, exact value files, and artifact policy differ? |
+| [03](https://github.com/VisualDust/fhelium/blob/main/examples/03_plaintext_ciphertext_memory.py) | [Values, memory, and persistence](value-memory-and-persistence.md) | How do device movement, value files, and artifact policy differ? |
 | [11](https://github.com/VisualDust/fhelium/blob/main/examples/11_cuda_graph_matrix_vector.py) | [CUDA Graph matrix-vector](cuda-graph-matvec.md) | How are static keys and weights separated from changing request ciphertexts? |
 | [12](https://github.com/VisualDust/fhelium/blob/main/examples/12_reusable_value_buffer.py) | [Reusable value buffers](reusable-value-buffer.md) | How can pinned-host tiles stream through two fixed CUDA allocations? |
 | [13](https://github.com/VisualDust/fhelium/blob/main/examples/13_explicit_residency.py) | [Explicit residency plans and CUDA leases](explicit-residency.md) | How do opaque handles, lazy local locations, optional budgets, scoped reservations, and event-backed CUDA leases compose? |
-| [14](https://github.com/VisualDust/fhelium/blob/main/examples/14_automatic_residency.py) | [Automatic residency admission](automatic-residency.md) | How does an exact working-set request become a deterministic, inspectable, state-bound admission decision under managed pressure? |
+| [14](https://github.com/VisualDust/fhelium/blob/main/examples/14_automatic_residency.py) | [Automatic residency admission](automatic-residency.md) | How does a working-set request become a deterministic, inspectable, state-bound admission decision under managed pressure? |
 | [15](https://github.com/VisualDust/fhelium/blob/main/examples/15_homogeneous_batching.py) | [Homogeneous batching](homogeneous-batching.md) | How does a leading message batch compare with an explicit loop? |
 | [16](https://github.com/VisualDust/fhelium/blob/main/examples/16_compressed_plaintext.py) | [Compressed plaintexts](compressed-plaintext.md) | When can an operation-ready plaintext use the versioned compressed encoded-axis layout? |
 
@@ -121,4 +121,4 @@ applicable examples separately from VitePress generation.
 
 Use [Concepts](../concepts/index.md) for the underlying invariants,
 [How-to guides](../how-to/index.md) for focused tasks, and the
-[API reference](../api/index.md) for exact signatures.
+[API reference](../api/index.md) for signatures.

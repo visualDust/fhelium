@@ -76,7 +76,7 @@ Plan:
 ```mermaid
 flowchart LR
     INPUT[Broadcast/prepare complete input]
-    ASSIGN[Assign additive terms<br/>and exact keys to ranks]
+    ASSIGN[Assign additive terms<br/>and direct keys to ranks]
     PARTIAL[Build one local partial per rank]
     REDUCE[reduce_ciphertext with<br/>modular engine addition]
 

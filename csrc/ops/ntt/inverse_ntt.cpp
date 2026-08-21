@@ -6,7 +6,7 @@
 // execution device with final
 // extent N and lazy Montgomery residues in [0, 2q_i). Native code collapses
 // only *batch; it does not broadcast or allocate. Twiddle row, rns_params
-// column, and operand limb j all refer to the same exact prime_ids[j]. Indexed
+// column, and operand limb j all refer to the same prime_ids[j]. Indexed
 // schedules are int32 [stage, N/2]; compact tables are [limb, N], and strict
 // fixed-radix tables are [limb, N-1] plus [limb, radix]. All tables are on the
 // operand device, residue tables are Montgomery, and inputs other than the

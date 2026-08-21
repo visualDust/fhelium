@@ -1,4 +1,4 @@
-"""Exact operation-ready CKKS plaintexts with repeated encoded values."""
+"""Operation-ready CKKS plaintexts with repeated encoded values."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ _SUPPORTED_COMPRESSION_LAYOUTS: tuple[CompressedPlaintextLayout, ...] = (
 
 @dataclass(eq=False)
 class CompressedPlaintext(TensorResident):
-    r"""An exact operation-ready RNS plaintext with compressed storage.
+    r"""An operation-ready RNS plaintext with compressed storage.
 
     ``data`` is a dense integral tensor with layout
     ``[*batch, limb, unique_index]`` rather than the dense
@@ -43,7 +43,7 @@ class CompressedPlaintext(TensorResident):
     determines whether the expanded last
     axis indexes coefficients or NTT evaluations. Operation-ready compressed
     values always use Montgomery residues. ``compression_layout`` defines the
-    exact, lossless expansion of each compact row:
+    lossless expansion of each compact row:
 
     - ``"cyclic"`` expands ``[a, b]`` as ``[a, b, a, b, ...]``;
     - ``"contiguous"`` expands ``[a, b]`` as
@@ -57,14 +57,14 @@ class CompressedPlaintext(TensorResident):
     user-visible CKKS slot order. CKKS encoding permutes slots, and coefficient
     rounding can destroy repetition that exists only in semantic slot space.
     Construct this type from a dense operation-ready plaintext with
-    :meth:`from_plaintext`; that conversion verifies exact representability.
+    :meth:`from_plaintext`; that conversion verifies bit-for-bit representability.
 
     ``implicit_data`` is absent except for ``"strided_sparse"``, where it has
     layout ``[*batch, limb]`` and the same integral dtype and device as
     ``data``. Direct construction retains supplied storage. :meth:`clone` and
     decompression allocate independent storage; batch selection and unbinding
     return storage-sharing views. All batch entries share level, actual scale
-    $\Delta(p)$, domain, basis, residue form, and exact ``prime_ids``. The value
+    $\Delta(p)$, domain, basis, residue form, and ``prime_ids``. The value
     has no engine, cache, placement, or persistence policy.
     """
 
@@ -252,7 +252,7 @@ class CompressedPlaintext(TensorResident):
 
         The encoded last axis is checked bit-for-bit. The compact tensor is
         cloned so it does not retain the dense input's backing storage. Level,
-        actual scale, domain, basis, residue form, dtype, device, and exact
+        actual scale, domain, basis, residue form, dtype, device, and
         ``prime_ids`` are preserved.
         """
 
@@ -336,7 +336,7 @@ class CompressedPlaintext(TensorResident):
         )
 
     def decompress_data(self) -> torch.Tensor:
-        """Materialize the exact dense RNS encoded tensor.
+        """Materialize the dense RNS encoded tensor.
 
         The output layout is
         ``[*batch, limb, coefficient_or_ntt_index]`` with last extent
@@ -364,7 +364,7 @@ class CompressedPlaintext(TensorResident):
         return dense
 
     def to_plaintext(self) -> Plaintext:
-        """Materialize the exact equivalent dense RNS :class:`Plaintext`.
+        """Materialize the equivalent dense RNS :class:`Plaintext`.
 
         "Standard" here means the ordinary dense value type; the returned
         residue representation remains exactly ``self.residue_representation``.
@@ -389,7 +389,7 @@ class CompressedPlaintext(TensorResident):
         )
 
     def with_data(self, data: torch.Tensor) -> CompressedPlaintext:
-        """Return the same exact metadata around replacement tensor storage."""
+        """Return unchanged metadata around replacement tensor storage."""
 
         tensors = (
             (data,)

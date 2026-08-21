@@ -151,7 +151,7 @@ def decode_slots(
 
     The result is complex binary64 ``[*batch, canonical_slot]`` with final
     extent $N$ on the input device; callers select the first $S=N/2$ semantic
-    slots. ``m`` may contain exact integer coefficients or bounded binary64
+    slots. ``m`` may contain integer coefficients or bounded binary64
     approximate decrypt coefficients. The operation is functional.
     """
 

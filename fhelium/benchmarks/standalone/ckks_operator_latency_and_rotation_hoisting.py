@@ -491,9 +491,9 @@ def _rotation_workload(
     }
     timed_boundary = BenchmarkTimedBoundary(
         id="paired-rotation-schedules-v1",
-        description="Paired independent and hoisted exact-key rotation schedules.",
+        description="Paired independent and hoisted direct-key rotation schedules.",
         includes=(
-            "one ordered set of exact-key rotations per side of each pair",
+            "one ordered set of direct-key rotations per side of each pair",
             "alternating first-executed schedule",
         ),
         excludes=(

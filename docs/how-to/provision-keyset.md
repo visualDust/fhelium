@@ -1,6 +1,6 @@
 # Provision the minimum required keyset
 
-Generate, load, move, and retain keys from the evaluator's exact operation
+Generate, load, move, and retain keys from the evaluator's operation
 schedule. Avoid a default policy of creating every possible key on every rank.
 
 ## 1. Inventory key-requiring operations
@@ -26,7 +26,7 @@ ring/slot convention used by the engine, remove duplicates, and confirm each
 step against the cleartext oracle.
 
 Do not generate keys from matrix dimensions alone if padding, baby-step/giant-
-step decomposition, or negative rotations change the exact schedule.
+step decomposition, or negative rotations change the schedule.
 
 ## 3. Decide direct keys versus decomposition
 
@@ -34,7 +34,7 @@ Compare two strategies:
 
 ```mermaid
 flowchart LR
-    DIRECT[One exact key per direct step]
+    DIRECT[One key per direct step]
     LARGE[Larger keyset]
     FEWER[Fewer sequential rotations]
     DECOMP[Smaller decomposition basis]
@@ -84,7 +84,7 @@ engine.set_relinearization_key(relin_key)
 ```
 
 Add only the rotation keys required by the schedule. Use the current API
-reference for exact construction and installation signatures.
+reference for construction and installation signatures.
 
 For a production evaluator, disable implicit secret-key generation and fail
 clearly if a required key is missing.

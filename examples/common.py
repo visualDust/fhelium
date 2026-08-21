@@ -65,7 +65,7 @@ def add_engine_args(
         choices=SUPPORTED_NTT_BACKENDS,
         default=None,
         help=(
-            "Optional exact NTT backend name, e.g. radix16_compact. Strict "
+            "Optional NTT backend name, e.g. radix16_compact. Strict "
             "fixed-radix backends reject incompatible logN values; omit to "
             "use the config default."
         ),

@@ -106,7 +106,7 @@ class RnsLayout:
     def prime_ids(
         self, level: int, *, include_p: bool = False
     ) -> tuple[int, ...]:
-        """Return exact modulus ids in tensor limb order."""
+        """Return modulus ids in tensor limb order."""
 
         return self.chain.prime_ids(level, include_p=include_p)
 

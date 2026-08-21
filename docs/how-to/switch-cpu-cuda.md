@@ -95,7 +95,7 @@ For a complete application transition between CPU and CUDA:
    them.
 
 Context identity, value state, dtype, device, and complete RNS layout are
-validated after movement. A destination engine created from the same exact
+validated after movement. A destination engine created from the same
 configuration can consume a moved core value when the operation's required keys
 and operands have also been moved or regenerated. Engine-owned caches,
 installed defaults, resources, buffers, Residency handles, JIT workspaces, and

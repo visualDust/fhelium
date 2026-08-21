@@ -28,18 +28,18 @@ The application decides what constitutes one program, which inputs are dynamic,
 which resources are bound statically, when payloads move, and whether an eager
 call or graph replay is appropriate.
 
-## Exact, device-independent signatures
+## Device-independent value signatures
 
 `ValueTreeSignature` recursively describes supported lists, tuples,
-dictionaries, raw tensors, and exact FHElium values.
+dictionaries, raw tensors, and FHElium values.
 
 A `TensorSignature` records:
 
-- exact shape and stride;
+- shape and stride;
 - dtype and tensor layout;
 - `requires_grad`.
 
-A `ValueSignature` additionally records the exact serialization type and schema,
+A `ValueSignature` additionally records the serialization type and schema,
 context identity, normalized cryptographic metadata, and ordered tensor-leaf
 signatures. That metadata includes fields such as level, scale, representation,
 domain, basis, `prime_ids`, and key identity where present.
@@ -52,7 +52,7 @@ owns target residency.
 graph LR
     TREE[Python value tree]
     TS[TensorSignature<br/>shape / stride / dtype / layout]
-    VS[ValueSignature<br/>exact state + tensor signatures]
+    VS[ValueSignature<br/>value state + tensor signatures]
     VTS[ValueTreeSignature<br/>container structure]
     TARGET[Buffer target device]
 
@@ -62,13 +62,13 @@ graph LR
 ```
 
 Validation walks the complete candidate tree before the first copy. A structure,
-tensor topology, or exact-state mismatch therefore cannot leave a reusable
+tensor topology, or value-state mismatch therefore cannot leave a reusable
 buffer partially updated.
 
 ## Fixed-address value buffers
 
 `ReusableValueBuffer.like(example, device=...)` allocates an independent tree
-whose tensor structure and exact metadata match `example`. Its tensor addresses
+whose tensor structure and value metadata match `example`. Its tensor addresses
 remain stable while `copy_from` replaces payload bytes.
 
 The buffer reconstructs ordinary `torch.Tensor` and FHElium value objects around
@@ -95,7 +95,7 @@ target, unsupported leaves, and aliased representative storage. `pin_memory`
 requires a CPU target and creates pinned host staging suitable for non-blocking
 host-to-device copies.
 
-A `ReusableValueBuffer` owns fixed storage identified by an exact value
+A `ReusableValueBuffer` owns fixed storage identified by a value
 signature. Deployment code associates buffers with models and requests and
 chooses tile order, prefetch, and eviction policy. Double buffering uses two
 independent buffers.
@@ -104,7 +104,7 @@ independent buffers.
 
 A CPU-target copy completes synchronously and returns a handle with no CUDA
 event. A CUDA-target copy can be enqueued on a caller-selected stream. Its
-`CopyHandle` retains the exact submitted source tensor leaves until the recorded
+`CopyHandle` retains the submitted source tensor leaves until the recorded
 event completes, preventing the source storage from being released or replaced
 while a DMA operation may still read it.
 
@@ -197,7 +197,7 @@ graph LR
 CUDA Graph capture fixes:
 
 - target CUDA device;
-- nested dynamic input structure and exact metadata;
+- nested dynamic input structure and value metadata;
 - target tensor shape, stride, dtype, and addresses;
 - Python-resolved operation schedule;
 - statically bound keys, plaintexts, tables, and other closure resources;
@@ -215,7 +215,7 @@ The application retains responsibility for:
 
 | Responsibility | Source |
 | --- | --- |
-| Tensor, exact-value, and nested-tree signatures | `fhelium/execution/signature.py` |
+| Tensor, value, and nested-tree signatures | `fhelium/execution/signature.py` |
 | Fixed storage, payload copying, and `CopyHandle` | `fhelium/execution/buffer.py` |
 | Capture, replay, output lifetime, and statistics | `fhelium/execution/cuda_graph.py` |
 | Public package surface | `fhelium/execution/__init__.py` |
@@ -225,7 +225,7 @@ The application retains responsibility for:
 Execution changes should cover:
 
 - nested structures and unsupported leaves;
-- exact-state and tensor-topology mismatch before the first copy;
+- value-state and tensor-topology mismatch before the first copy;
 - CPU, pageable host, pinned host, and CUDA source paths as applicable;
 - source lifetime until copy-event completion;
 - cross-stream waits and wrong-device stream rejection;
@@ -240,7 +240,7 @@ The focused suites are `tests/test_execution_buffer.py` and
 
 ## Continue
 
-- [Exact signatures and buffers](../concepts/execution/exact-signatures-and-buffers.md)
+- [Value signatures and buffers](../concepts/execution/signatures-and-buffers.md)
 - [CUDA Graph model](../concepts/execution/cuda-graph-model.md)
 - [Distributed internals](distributed-internals.md)
 - [Residency plans and execution](residency-plans-and-execution.md)

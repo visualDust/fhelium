@@ -14,7 +14,7 @@ FHElium is a CPU- and CUDA-accelerated homomorphic-encryption library for Python
 
 FHElium currently supports Linux x86-64 and macOS Apple Silicon with Python 3.12 or 3.13, PyTorch `>=2.10,<2.14`, and a C++17 host compiler. The default build follows the target Torch package: CPU-only Torch produces a CPU-only extension, while CUDA-enabled Torch produces one extension with CPU and CUDA implementations. CUDA builds are Linux x86-64 only and additionally require a matching CUDA toolkit and CUDA C++17 compiler. macOS execution uses the native CPU backend, not PyTorch MPS.
 
-Use the [installation selector](https://fhelium.550w.host/#install-fhelium) for an exact prebuilt Linux wheel or a source-build command for the selected Torch environment. Prebuilt wheels are complete `fhelium` wheels served from FHElium's static release store; PyPI provides the source distribution.
+Use the [installation selector](https://fhelium.550w.host/#install-fhelium) for a compatible prebuilt Linux wheel or a source-build command for the selected Torch environment. Prebuilt wheels are complete `fhelium` wheels served from FHElium's static release store; PyPI provides the source distribution.
 
 For a source build, install the intended PyTorch build first, following the [official PyTorch instructions](https://pytorch.org/get-started/locally/). Then build FHElium in the same Python environment:
 

@@ -8,7 +8,7 @@
 // Key-switch tensor requirements. ModDown takes integral coefficient/standard
 // canonical q_residues [*batch, Q_limb, coefficient] in [0, q_i) and
 // p_residues [*batch, P_limb, coefficient] in [0, p_j). rns_params columns are
-// exact concatenated QP prime_ids. moddown_p_drop_inverses_montgomery has shape
+// concatenated QP prime_ids order. moddown_p_drop_inverses_montgomery has shape
 // [P_limb, at least Q_limb+P_limb-1] and stores each sequentially dropped P
 // prime inverse in Montgomery form. It computes a rounded divide by
 // $P=\prod_jp_j$ and returns newly allocated Q-only standard canonical

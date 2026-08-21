@@ -185,13 +185,13 @@ const stages: readonly GraphStage[] = [
     id: 'execute',
     label: 'Execute',
     eyebrow: 'Independent readiness check',
-    description: 'The selected entry, transformed operations, and bound Workspace capabilities must satisfy the exact interpreter schemas before execution.',
+    description: 'The selected entry, transformed operations, and bound Workspace capabilities must satisfy the interpreter schemas before execution.',
     path: ['requirements', 'Workspace bindings', 'readiness', 'Program.run'],
     nodes: [
       { id: 'ei', x: 65, y: 85, width: 100, label: 'Program', detail: 'selected entry', tone: 'input' },
       { id: 'ew', x: 65, y: 188, width: 110, label: 'Workspace', detail: 'engine + keys', tone: 'input' },
       { id: 'er', x: 260, y: 136, width: 125, label: 'readiness', detail: 'pure check', tone: 'mechanic' },
-      { id: 'eh', x: 430, y: 136, width: 125, label: 'exact handlers', detail: 'trusted extension', tone: 'mechanic' },
+      { id: 'eh', x: 430, y: 136, width: 125, label: 'bound handlers', detail: 'trusted extension', tone: 'mechanic' },
       { id: 'ex', x: 600, y: 136, width: 105, label: 'Program.run', detail: 'run request', tone: 'output' },
     ],
     edges: [
@@ -202,7 +202,7 @@ const stages: readonly GraphStage[] = [
     ],
     facts: [
       { value: 'pure', label: 'readiness invokes no resolver or operation' },
-      { value: 'exact', label: 'versions, schemas, keys, and references checked' },
+      { value: 'checked', label: 'versions, schemas, keys, and references checked' },
       { value: 'trusted', label: 'extension handlers require trusted bindings' },
     ],
     diagnostic: 'ProgramNotReadyError preserves the complete readiness report when a Program.run(...) call is blocked.',

@@ -126,7 +126,7 @@ looped_result = [matrix_vector(value, ...) for value in individual_sources]
 
 `unbind_batch` makes the logical members visible. The example clones the views
 so the loop represents independently owned request values. It then uses
-`Ciphertext.stack_batch(looped_result)` only to verify exact equivalence:
+`Ciphertext.stack_batch(looped_result)` only to verify bit-for-bit equivalence:
 
 ```python
 torch.testing.assert_close(

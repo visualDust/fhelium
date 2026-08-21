@@ -2,7 +2,7 @@
 
 This glossary defines FHElium's canonical value-state and rank-local
 terminology. A glossary entry does not replace expansion at first use on a
-standalone page. API signatures remain authoritative for exact identifiers and
+standalone page. API signatures remain authoritative for identifiers and
 types.
 
 ## Construction and identity
@@ -43,7 +43,7 @@ particular secret key or encode device placement.
 ### Active rows
 
 The Q or QP residue rows represented at a value's current level. `prime_ids`
-map the physical row order to exact canonical moduli.
+map the physical row order to canonical moduli.
 
 ### Basis (`Q` / `QP`)
 
@@ -151,7 +151,7 @@ count. The public one-level operation is named `rescale_to_next_level`.
 ### Rescale drop prime
 
 The leading active Q prime used as the divisor and removed by one rescale.
-`engine.rescale_to_next_drop_prime(level=...)` returns this exact integer for a
+`engine.rescale_to_next_drop_prime(level=...)` returns this integer for a
 non-final public level.
 
 ### Actual scale
@@ -180,7 +180,7 @@ One polynomial component in an encrypted value. Fresh ciphertexts have two;
 ciphertext-ciphertext multiplication naturally creates three until
 relinearization.
 
-### Exact value state
+### CKKS value state
 
 The stored combination of concrete type, tensor topology, context, level,
 actual scale, `prime_ids`, plaintext representation where applicable,
@@ -198,7 +198,7 @@ secret relation.
 
 ### Homogeneous batch
 
-Zero or more local message dimensions whose members share one value's exact
+Zero or more local message dimensions whose members share one value's
 CKKS metadata. RNS plaintexts use
 `[*batch, limb, coefficient_or_ntt_index]`; ciphertexts use
 `[component, *batch, limb, coefficient_or_ntt_index]`. A homogeneous batch is
@@ -211,9 +211,9 @@ Relinearization, rotation, and conjugation use specialized key-switch material.
 
 ### Operation-ready plaintext
 
-A plaintext already encoded at an exact level and arithmetic state suitable for
+A plaintext already encoded at a level and arithmetic state suitable for
 an evaluator operation. It avoids repeated preparation but usually occupies
-more memory than a semantic slots value or exact `integer_coefficients` value.
+more memory than a semantic slots value or `integer_coefficients` value.
 
 ### Relinearization
 
@@ -233,7 +233,7 @@ output storage remain.
 
 ### `TensorResident`
 
-The protocol for exact values whose declared tensor fields move together. It
+The protocol for tensor-resident values whose declared tensor fields move together. It
 supplies device/byte inspection and .to(...) without placement
 history or cache policy.
 
@@ -296,7 +296,7 @@ list rather than reduced into one ciphertext.
 
 ### Descriptor/payload separation
 
-A typed transport pattern that exchanges exact metadata first, allocates and
+A typed transport pattern that exchanges value metadata first, allocates and
 validates the receiver, and then transfers dense tensor payloads.
 
 ### Gather
@@ -375,7 +375,7 @@ storage and exposes completion/wait operations for stream-safe consumption.
 ### CUDA Graph
 
 A captured fixed GPU execution schedule replayed with stable addresses. In
-FHElium, graph capture is a process-local mechanism with exact dynamic-input
+FHElium, graph capture is a process-local mechanism with dynamic-input value
 signatures.
 
 ### Eager execution
@@ -383,9 +383,9 @@ signatures.
 Immediate Python/operator dispatch performed call by call, outside a captured
 CUDA Graph replay.
 
-### Exact signature
+### Value signature
 
-A device-independent description of nested tensor structure and exact value
+A device-independent description of nested tensor structure and value
 state used to validate reusable copies and graph inputs. It cannot encode an
 external cryptographic relation that a concrete value does not store.
 
@@ -419,7 +419,7 @@ move-source constraint, and removal.
 
 ### `ReusableValueBuffer`
 
-Fixed-address storage for one exact value-tree signature on one target device.
+Fixed-address storage for one value-tree signature on one target device.
 It supports scheduled copying and synchronization for eager streaming or graph
 input staging.
 

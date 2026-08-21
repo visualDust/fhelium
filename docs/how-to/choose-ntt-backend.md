@@ -3,7 +3,7 @@
 This guide is for a deployment where the target GPU and CKKS preset are known,
 but backend measurements are close, inconsistent, or different between raw
 NTT kernels and CKKS operations. It explains how to identify the limiting
-resource before selecting an exact `CkksEngine(ntt_backend=...)` policy.
+resource before selecting a `CkksEngine(ntt_backend=...)` policy.
 
 For the screening command, decision thresholds, and a complete example result,
 start with [Screen NTT backends on the target GPU](screen-ntt-backends.md).
@@ -78,7 +78,7 @@ organize its factorization and stages differently:
 - `radix2_compact_group4_smem8`, `group8`, and `group16` fuse groups of radix-2
   stages and use a compiled shared-memory region;
 - `radix4_compact`, `radix8_compact`, and `radix16_compact` use genuine strict
-  high-radix butterflies and require exact divisibility;
+  high-radix butterflies and require divisibility;
 - `radix2_indexed` stores expanded schedules, is the CPU production default,
   and provides the cross-device validation baseline for compact CUDA policies;
   CUDA deployment screening ordinarily compares the compact candidates.
@@ -239,7 +239,7 @@ Use this order:
 4. Keep the stable fallback for a near tie or inconsistent repetitions.
 5. Benchmark the full production evaluator with representative levels, batch
    sizes, and rotation/key-switch schedule.
-6. Pass the chosen exact backend name to every constructed engine that must
+6. Pass the chosen backend name to every constructed engine that must
    reproduce the deployment.
 7. Archive the command, JSON evidence, GPU/software provenance, and application
    benchmark together.

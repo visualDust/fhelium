@@ -73,7 +73,7 @@ flowchart LR
     ciphertext2["rank 2 ciphertext"] --> rank2["rank 2"]
 ```
 
-The typed collective transmits enough metadata to reconstruct the exact
+The typed collective transmits enough metadata to reconstruct the
 receiver `Ciphertext`. It does not infer application sample identity.
 
 ## 4. Broadcast one shared public parameter

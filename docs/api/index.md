@@ -12,11 +12,11 @@ package initializers and modules that publish interfaces through ``__all__``.
 | Task | Start with | Related guidance |
 | --- | --- | --- |
 | Configure CKKS parameters | [`fhelium.config.ckks`](fhelium/config/ckks.md) and [`fhelium.config.ntt`](fhelium/config/ntt.md) | [Choose a preset and depth](../how-to/choose-preset-and-depth.md) |
-| Assess an exact security-table row | [`fhelium.config.security`](fhelium/config/security.md) | [Security scope](../tutorial/support-and-security.md) |
+| Assess a supported security-table row | [`fhelium.config.security`](fhelium/config/security.md) | [Security scope](../tutorial/support-and-security.md) |
 | Create and use an evaluator | [`fhelium.engine.ckks_engine`](fhelium/engine/ckks_engine.md) | [Quickstart](../tutorial/tutorials.md) |
 | Control scale and level with separate operations | [`fhelium.engine.ckks_engine`](fhelium/engine/ckks_engine.md) | [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md) |
 | Inspect typed values and keys | [`fhelium.core.ciphertext`](fhelium/core/ciphertext.md), [`fhelium.core.plaintext`](fhelium/core/plaintext.md), and [`fhelium.core.keys`](fhelium/core/keys.md) | [Value model and identity](../concepts/ckks/value-model-and-identity.md) |
-| Persist an exact value | [`fhelium.serialization.value`](fhelium/serialization/value.md) | [Serialization and artifacts](../concepts/execution/serialization-and-artifacts.md) |
+| Persist a value | [`fhelium.serialization.value`](fhelium/serialization/value.md) | [Serialization and artifacts](../concepts/execution/serialization-and-artifacts.md) |
 | Capture or reuse repeated work | [`fhelium.execution.cuda_graph`](fhelium/execution/cuda_graph.md) and [`fhelium.execution.buffer`](fhelium/execution/buffer.md) | [Execution concepts](../concepts/execution/cuda-graph-model.md) |
 | Manage local value placement, admission, lifetimes, plans, and deterministic automation | [`fhelium.residency.manager`](fhelium/residency/manager.md), [`model`](fhelium/residency/model.md), [`plan`](fhelium/residency/plan.md), [`request`](fhelium/residency/request.md), and [`controller`](fhelium/residency/controller.md) | [Residency lifetimes](../concepts/execution/residency-lifetimes.md) |
 | Trace, import, transform, and execute a mixed-dialect program | [`fhelium.experimental.jit`](fhelium/experimental/jit.md) and [`fhelium.experimental.jit.passes`](fhelium/experimental/jit/passes.md) | [JIT programs](../concepts/unified-jit-programs.md) |

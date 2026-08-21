@@ -1,6 +1,6 @@
 """Permissive pass protocol for the canonical xDSL ``Program``.
 
-A pipeline clones its source Program once, gives each ordered pass the exact
+A pipeline clones its source Program once, gives each ordered pass the
 same mutable Workspace, and accepts both transformations and reported legal
 no-ops. Each pass defines its own matching scope. The standard local rewriting
 passes scan direct operations in every block of every top-level function;
@@ -138,7 +138,7 @@ class PassPipeline:
 
     One clone is made before the first pass, preserving the caller's source
     Program while allowing xDSL rewriters to mutate the private module in
-    place. Every pass receives the exact same Workspace object, including when
+    place. Every pass receives the same Workspace object, including when
     a pass returns a replacement Program. The pipeline retains all Workspace
     entries with their caller- or pass-defined interpretation and invalidation
     policy. After each pass, xDSL structural verification checks the returned

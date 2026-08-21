@@ -52,7 +52,7 @@ npm --prefix docs run build
 
 Native, CUDA, distributed, packaging, or opt-in bootstrap changes require their
 corresponding targeted builds and representative workloads in addition to this
-baseline. Record exact commands, results, skipped validation, and remaining
+baseline. Record commands, results, skipped validation, and remaining
 risk in the contribution description.
 
 Do not loosen a numerical tolerance merely to make a failure pass. Reconcile
@@ -83,7 +83,7 @@ state:
 - validation evidence and hardware/software environment;
 - migration steps when existing public behavior or requirements change.
 
-Security-sensitive changes need an documented threat model. Performance claims
+Security-sensitive changes need a documented threat model. Performance claims
 need a reproducible benchmark definition and environment; a faster isolated
 kernel is not sufficient evidence for a faster CKKS workload.
 

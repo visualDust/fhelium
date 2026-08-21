@@ -1,5 +1,9 @@
 #pragma once
 
+#if defined(_MSC_VER) && defined(_M_X64)
+#include <intrin.h>
+#endif
+
 #include "power_of_two_radix_butterfly.cuh"
 
 // Genuine power-of-two radix forward DIF digit kernels and host launch
@@ -61,8 +65,8 @@ __global__ void forward_ntt_power_of_two_radix_digit_kernel(
       neg_inv_modulus_lo,
       neg_inv_modulus_hi);
 
-  // Radix-2 DIF produces digit-bit-reversed output order. Preserve that exact
-  // domain layout so every family remains bit-exact with the indexed oracle.
+  // Radix-2 DIF produces digit-bit-reversed output order. Preserve that domain
+  // layout so every family remains bit-for-bit equal to the indexed oracle.
 #pragma unroll
   for (int lane = 0; lane < RADIX; ++lane) {
     const int natural_frequency =
@@ -669,7 +673,13 @@ void launch_forward_ntt_fixed_radix_cuda(torch::Tensor a,
   auto params_acc = FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2);
 
   const int N = static_cast<int>(a.size(2));
+#if defined(_MSC_VER) && defined(_M_X64)
+  unsigned long log_n_index = 0;
+  _BitScanForward(&log_n_index, static_cast<unsigned long>(N));
+  const int logN = static_cast<int>(log_n_index);
+#else
   const int logN = __builtin_ctz(static_cast<unsigned>(N));
+#endif
   const int digit_count = logN / RADIX_BITS;
   const int shared_digit_count =
       std::min(digit_count, shared_memory_log_n / RADIX_BITS);

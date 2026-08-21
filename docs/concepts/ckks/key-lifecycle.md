@@ -1,6 +1,6 @@
 # Key lifecycle
 
-FHElium treats keys as exact typed values with controlled creation, placement,
+FHElium treats keys as typed values with controlled creation, placement,
 installation, persistence, and use. This separation supports production key
 custody, minimal evaluator keysets, distributed ownership, and repeatable
 benchmarks.
@@ -26,7 +26,7 @@ graph TD
 
 | Key | Main purpose | Stored state or specialization |
 | --- | --- | --- |
-| `SecretKey` | Decrypt and derive other keys | Context and exact dense state |
+| `SecretKey` | Decrypt and derive other keys | Context and dense state |
 | `PublicKey` | Public-key encryption | Context, Q rows, and arithmetic state |
 | `RelinearizationKey` | Switch the multiplication $s^2$ component | Context and QP key layout |
 | `RotationKey` | Automorphism-specific key switch | Context plus canonical signed step |
@@ -68,19 +68,19 @@ This design allows an evaluator to load externally managed keys without ever
 creating a secret key locally. It also makes setup cost and steady-state
 execution cost separable.
 
-## Rotation keys bind exact steps
+## Rotation keys bind steps
 
 A `RotationKey` describes one canonical signed slot step. Equivalent modular
 steps canonicalize to a stable range, but a key for one canonical step cannot
 be used for another merely because tensor shapes match.
 
-A `RotationKeySet` maps canonical steps to exact keys. Generate only steps the
+A `RotationKeySet` maps canonical steps to direct keys. Generate only steps the
 packing/evaluator actually needs unless a measured decomposition strategy is
 better.
 
 ```mermaid
 flowchart LR
-    DIRECT["direct exact keys"]
+    DIRECT["direct keys"]
     DIRECT_MEMORY["more key memory"]
     DIRECT_ROTATIONS["fewer sequential rotations"]
     BASIS["small decomposition basis"]
@@ -115,7 +115,7 @@ This is a workload trade-off, not a universally safe automatic choice.
 Use [Provision the minimum required keyset](../../how-to/provision-keyset.md)
 for the operational checklist, specialist key-switch example, custody checks,
 and reporting procedure. The [Engine API](../../api/fhelium/engine/ckks_engine.md) defines the
-exact construction and installation methods.
+construction and installation methods.
 
 ## Continue
 

@@ -1,6 +1,6 @@
 # Benchmark a workload correctly
 
-A trustworthy FHElium benchmark defines the mathematical workload, exact CKKS
+A trustworthy FHElium benchmark defines the mathematical workload, CKKS
 state, timed work, synchronization, memory accounting, and correctness
 criterion. Latency without those fields is not reproducible.
 
@@ -41,7 +41,7 @@ Record:
 - input amplitude/distribution and seed;
 - output region and mask/padding behavior;
 - expected maximum absolute/relative error;
-- exact operation schedule and rotation steps.
+- operation schedule and rotation steps.
 
 Run the same oracle for every configuration in an ablation.
 
@@ -54,7 +54,7 @@ Record:
 - active Q/P row counts and relevant `prime_ids`;
 - polynomial domain, modulus basis, residue representation, and components;
 - NTT backend/grouping;
-- hoist chunk and exact keyset.
+- hoist chunk and direct keyset.
 
 A later-level operation can be much cheaper than level zero because fewer rows
 are active. Compare like with like.
@@ -202,7 +202,7 @@ RTX PRO 6000 policies:
 | 16 / 34 | 2 | `radix16_compact` | 64 | loop | yes | 377.8936 | 25.669 |
 
 These are synchronized three-block, ten-run median-of-medians results. Every
-configuration passed exact ciphertext checks and the cleartext oracle; the
+configuration passed ciphertext residue checks and the cleartext oracle; the
 maximum absolute error remained below `3.881e-8`. One-to-two-rank speedup was
 1.899x for `logN = 14` and 1.988x for `logN = 15`.
 
@@ -268,7 +268,7 @@ fhelium benchmark recommend ntt --suite ckks-primitive --preset slots32768-scale
 
 The command reports a recommendation and confidence but never changes the
 library default or caches a hidden device choice. Preserve the JSON evidence
-and pass the selected exact name to `CkksEngine(ntt_backend=...)`. See the
+and pass the selected name to `CkksEngine(ntt_backend=...)`. See the
 focused [NTT backend screening guide](screen-ntt-backends.md)
 for the first-use workflow and example output. Use
 [Analyze and choose an NTT backend](choose-ntt-backend.md) when kernel and

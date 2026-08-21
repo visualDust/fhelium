@@ -7,7 +7,7 @@
 // homogeneous *batch axes. There is no limb or polynomial-index broadcasting;
 // the only batch broadcast is a validated unbatched plaintext. rns_params is
 // [parameter, limb], and column j
-// describes the exact prime_ids[j] of operand limb j. All tensors in one call
+// describes the prime_ids[j] of operand limb j. All tensors in one call
 // share dtype/device. Functional output is newly allocated; a trailing
 // underscore mutates and preserves only schema-annotated storage. SPMD
 // communication and rank iteration remains in application Python code.

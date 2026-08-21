@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import multiprocessing as mp
 import os
 import shutil
@@ -84,6 +85,18 @@ def _concurrent_put(
         results.put(("error", type(error).__name__, str(error), fill))
     else:
         results.put(("ok", ref.artifact_id, "", fill))
+
+
+def _concurrent_open(root: str, start: Any, results: Any) -> None:
+    """Open one not-yet-initialized store in a fresh spawned process."""
+
+    try:
+        start.wait(timeout=20)
+        store = ArtifactStore(root)
+    except BaseException as error:
+        results.put(("error", type(error).__name__, str(error)))
+    else:
+        results.put(("ok", store.store_id, ""))
 
 
 def _abrupt_put_before_catalog_commit(root: str) -> None:
@@ -303,30 +316,41 @@ def test_catalog_identity_and_schema_fail_closed(tmp_path: Path) -> None:
         ArtifactStore(trigger_root)
 
 
-def test_store_owned_paths_reject_links_and_have_private_permissions(
+def test_store_owned_paths_reject_symbolic_and_hard_links(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "caller-owned"
     target.write_text("unchanged")
-    target.chmod(0o644)
+    if os.name != "nt":
+        target.chmod(0o644)
     linked_root = tmp_path / "linked-lock"
     linked_root.mkdir()
-    (linked_root / ".store.lock").symlink_to(target)
-
-    with pytest.raises(ValueError, match="lock.*symlink"):
-        ArtifactStore(linked_root)
-    assert target.read_text() == "unchanged"
-    assert target.stat().st_mode & 0o777 == 0o644
+    try:
+        (linked_root / ".store.lock").symlink_to(target)
+    except OSError as error:
+        # Creating symlinks can require an explicit Windows privilege. This
+        # says nothing about the root's ACL and does not waive hard-link checks.
+        if os.name != "nt" or getattr(error, "winerror", None) != 1314:
+            raise
+    else:
+        with pytest.raises(ValueError, match="lock.*symlink"):
+            ArtifactStore(linked_root)
+        assert target.read_text() == "unchanged"
+        if os.name != "nt":
+            assert target.stat().st_mode & 0o777 == 0o644
 
     hardlink_target = tmp_path / "hardlink-target"
     hardlink_target.write_text("unchanged")
-    hardlink_target.chmod(0o644)
+    if os.name != "nt":
+        hardlink_target.chmod(0o644)
     hardlinked_root = tmp_path / "hardlinked-lock"
     hardlinked_root.mkdir()
     os.link(hardlink_target, hardlinked_root / ".store.lock")
-    with pytest.raises(ValueError, match="private regular file"):
+    with pytest.raises(ValueError, match="exactly one hard link"):
         ArtifactStore(hardlinked_root)
-    assert hardlink_target.stat().st_mode & 0o777 == 0o644
+    assert hardlink_target.read_text() == "unchanged"
+    if os.name != "nt":
+        assert hardlink_target.stat().st_mode & 0o777 == 0o644
 
     source_root = tmp_path / "catalog-source"
     source = ArtifactStore(source_root)
@@ -337,7 +361,7 @@ def test_store_owned_paths_reject_links_and_have_private_permissions(
         _catalog_path(source_root),
         _catalog_path(hardlinked_catalog_root),
     )
-    with pytest.raises(ValueError, match="catalog.*private regular file"):
+    with pytest.raises(ValueError, match="catalog.*exactly one hard link"):
         ArtifactStore(hardlinked_catalog_root)
     assert _catalog_path(source_root).read_bytes() == source_catalog_bytes
     _catalog_path(hardlinked_catalog_root).unlink()
@@ -345,6 +369,12 @@ def test_store_owned_paths_reject_links_and_have_private_permissions(
     assert reopened_source.store_id == source.store_id
     assert reopened_source.list() == []
 
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="POSIX mode bits neither configure nor verify Windows ACL privacy",
+)
+def test_store_owned_posix_paths_apply_private_modes(tmp_path: Path) -> None:
     root = tmp_path / "permissions"
     root.mkdir(mode=0o750)
     root.chmod(0o750)
@@ -356,6 +386,31 @@ def test_store_owned_paths_reject_links_and_have_private_permissions(
     assert (root / "objects").stat().st_mode & 0o777 == 0o700
     assert (root / "tmp").stat().st_mode & 0o777 == 0o700
     assert _payload_path(root, ref.name).stat().st_mode & 0o777 == 0o600
+
+
+def test_payload_publication_is_write_once_and_no_replace(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "published.safetensors"
+    destination.write_bytes(b"committed")
+    colliding_source = tmp_path / "collision.safetensors"
+    colliding_source.write_bytes(b"replacement")
+
+    with pytest.raises(FileExistsError) as collision:
+        artifact_store_module._publish_file(colliding_source, destination)
+
+    assert collision.value.errno == errno.EEXIST
+    if os.name == "nt":
+        assert getattr(collision.value, "winerror", None) in {80, 183}
+    assert destination.read_bytes() == b"committed"
+    assert colliding_source.read_bytes() == b"replacement"
+
+    source = tmp_path / "new.safetensors"
+    published = tmp_path / "new-published.safetensors"
+    source.write_bytes(b"new payload")
+    artifact_store_module._publish_file(source, published)
+    assert not source.exists()
+    assert published.read_bytes() == b"new payload"
 
 
 def test_artifact_id_collision_cannot_replace_a_committed_payload(
@@ -456,6 +511,37 @@ def test_two_processes_cannot_both_create_one_absent_name(
     winning_value = ArtifactStore(tmp_path).get("race/item")
     assert winning_value is not None
     _assert_same_exact_value(winning_value, _ciphertext(winning_fill))
+
+
+def test_two_processes_safely_initialize_one_new_store(tmp_path: Path) -> None:
+    root = tmp_path / "concurrent-initialization"
+    context = mp.get_context("spawn")
+    start = context.Event()
+    results = context.Queue()
+    processes = [
+        context.Process(
+            target=_concurrent_open,
+            args=(str(root), start, results),
+        )
+        for _ in range(2)
+    ]
+    for process in processes:
+        process.start()
+    start.set()
+    for process in processes:
+        process.join(timeout=30)
+        assert not process.is_alive()
+        assert process.exitcode == 0
+
+    try:
+        outcomes = [results.get(timeout=5) for _ in processes]
+    except Empty as error:
+        raise AssertionError(
+            "Artifact store opener did not report an outcome"
+        ) from error
+    assert all(outcome[0] == "ok" for outcome in outcomes), outcomes
+    assert len({outcome[1] for outcome in outcomes}) == 1
+    assert ArtifactStore(root).store_id == outcomes[0][1]
 
 
 def test_failed_catalog_commit_preserves_previous_generation(

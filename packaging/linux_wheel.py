@@ -37,7 +37,7 @@ class ReleaseMatrix(Protocol):
 
 
 def load_release_matrix_module(source: Path) -> Any:
-    path = source / "packaging" / "release_matrix.py"
+    path = source / "packaging" / "matrix.py"
     spec = importlib.util.spec_from_file_location(
         "_fhelium_release_matrix", path
     )
@@ -54,9 +54,7 @@ def load_release_matrix_module(source: Path) -> Any:
 
 def load_release_matrix(source: Path) -> ReleaseMatrix:
     module = load_release_matrix_module(source)
-    return module.load_release_matrix(
-        source / "packaging" / "release_matrix.json"
-    )
+    return module.load_matrix(source / "packaging" / "release_matrix.json")
 
 
 def assert_torch_identity(
@@ -274,7 +272,7 @@ def main() -> None:
         )
     run(
         str(python),
-        str(source / "packaging" / "check_linux_wheel.py"),
+        str(source / "packaging" / "linux_wheel_check.py"),
         str(repaired_wheels[0]),
         "--matrix",
         str(source / "packaging" / "release_matrix.json"),

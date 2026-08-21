@@ -4,7 +4,7 @@
 
 This example accumulates three-component products before relinearization and
 reuses fixed multiplication operands in NTT form. The tutorial explains the
-exact state preconditions that make both optimizations valid.
+state preconditions that make both optimizations valid.
 
 ## Run the example
 
@@ -64,7 +64,7 @@ flowchart LR
     add --> relinearize["one relinearize"] --> rescale["one rescale"]
 ```
 
-The optimization is valid only while all terms share a matching exact layout
+The optimization is valid only while all terms share a matching layout
 and scale. An intervening operation that requires an ordinary two-component
 ciphertext creates a point at which relinearization becomes necessary.
 
@@ -97,7 +97,7 @@ domain.
 The application must still account for:
 
 - the memory cost of retaining the prepared operand;
-- its exact level and scale;
+- its level and scale;
 - whether consumers mutate it;
 - whether later operations require coefficient-domain form.
 
@@ -115,7 +115,7 @@ but the wrong domain or Montgomery representation is not a compatible operand.
 ::: danger Late does not mean automatic
 FHElium does not keep a hidden pending-relinearization flag and later
 materialize it implicitly. The three-component value is a normal `Ciphertext`,
-and the caller chooses the exact relinearization point.
+and the caller chooses the relinearization point.
 :::
 
 ::: details Complete runnable source

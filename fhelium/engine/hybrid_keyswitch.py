@@ -47,7 +47,7 @@ class PreparedRotationKeySwitch:
     explicitly without expanding the production artifact representation.
 
     ``ntt_digits_qp`` is an integral tensor on the engine device with shape
-    ``[digit, *batch, limb, ntt_index]``. Limb order is the exact active
+    ``[digit, *batch, limb, ntt_index]``. Limb order is the active
     ``rns_layout.prime_ids(level, include_p=True)`` order; every residue is
     Montgomery/lazy. ``digit`` is local active order and callers resolve each
     stable ``key_digit_index`` separately before indexing key storage.
@@ -114,7 +114,7 @@ class HybridKeySwitcher:
 
         ``component`` is integral ``[*batch, active_q_limb, coefficient]`` on the
         runtime device in coefficient/standard lazy form. ``digit_spec`` keeps
-        local active order separate from stable key storage order. If its exact
+        local active order separate from stable key storage order. If its
         source prime ids are $b_0,\ldots,b_{D-1}$, the non-aliasing output has shape
         ``[*batch, D, coefficient]`` and standard digits satisfying
         $x=\sum_r d_r\prod_{t<r}b_t$ modulo the source product. Prime-row
@@ -540,7 +540,7 @@ class HybridKeySwitcher:
         in place, then each P prime is rounded away using
         ``moddown_p_drop_inverses_montgomery_by_level[level]``. Returned
         tensors are newly allocated coefficient/standard Q-only residues with
-        exact $Q_\ell$ rows and the same public batch axes.
+        $Q_\ell$ rows and the same public batch axes.
         """
 
         self.rns_runtime.inverse_to_standard_(accumulator0_qp, include_p=True)

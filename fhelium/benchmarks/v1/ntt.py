@@ -178,7 +178,7 @@ def _run_indexed_ntt(
                 BenchmarkCheck(
                     name=f"indexed-ntt-level-{level}-{basis.lower()}-roundtrip",
                     passed=mismatch_count == 0,
-                    oracle="Forward followed by inverse NTT preserves every active residue modulo its exact prime.",
+                    oracle="Forward followed by inverse NTT preserves every active residue modulo its prime.",
                     metric="residue_mismatch_count",
                     observed=mismatch_count,
                     comparison="==",

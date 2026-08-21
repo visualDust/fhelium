@@ -7,7 +7,7 @@ capture, and workload tuning are optional optimization layers.
 
 ## One-sentence mental model
 
-FHElium stores CKKS values as dense PyTorch tensors with exact metadata,
+FHElium stores CKKS values as dense PyTorch tensors with typed metadata,
 executes local arithmetic through one `CkksEngine` per process-local CPU or
 GPU device, uses SPMD schedules for multi-GPU work, and delegates
 RNS/NTT/key-switch arithmetic to native CPU or CUDA operators selected by
@@ -15,9 +15,9 @@ PyTorch tensor-device dispatch.
 
 ## Five principles
 
-### 1. Values carry exact state
+### 1. Values carry CKKS state
 
-A ciphertext combines an integer tensor payload with the following exact state:
+A ciphertext combines an integer tensor payload with the following state:
 
 - context identity;
 - level and scale;
@@ -79,7 +79,7 @@ material is present on an evaluator. See [Key lifecycle](ckks/key-lifecycle.md).
 
 ### 5. Mechanism is separate from policy
 
-Core and execution modules provide exact value state, typed transport, fixed
+Core and execution modules provide value state, typed transport, fixed
 buffers, events, and graph replay. Deployment code provides tenant routing,
 cache admission, eviction priorities, and model policy.
 See [Ownership and runtime responsibilities](architecture/ownership-and-responsibilities.md).

@@ -211,7 +211,7 @@ const routeNodes = computed<readonly RouteNode[]>(() => {
       },
       {
         label: 'Readiness',
-        detail: 'selected entry + exact schemas',
+        detail: 'selected entry + interpreter schemas',
         tone: 'plan',
       },
     )

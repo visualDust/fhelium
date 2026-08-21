@@ -18,7 +18,7 @@ CONTAINER_PROJECT = "/tmp/fhelium-source"
 
 
 def load_matrix_module() -> ModuleType:
-    path = Path(__file__).with_name("release_matrix.py")
+    path = Path(__file__).with_name("matrix.py")
     spec = importlib.util.spec_from_file_location(
         "_fhelium_release_matrix", path
     )
@@ -37,11 +37,18 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--configuration", required=True)
     parser.add_argument(
+        "--platform",
+        choices=("manylinux_2_28_x86_64", "win_amd64"),
+        default="manylinux_2_28_x86_64",
+    )
+    parser.add_argument(
         "--python-abi",
         required=True,
         choices=("cp312-cp312", "cp313-cp313"),
     )
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--python", type=Path)
+    parser.add_argument("--cuda-toolkit-root", type=Path)
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--build-image", action="store_true")
     return parser.parse_args()
@@ -53,8 +60,17 @@ def run(*command: str) -> None:
 
 def main() -> None:
     args = parse_args()
+    if args.platform == "win_amd64":
+        if args.python is None:
+            raise ValueError("Windows builds require --python")
+        from windows_wheel import build
+
+        build(args)
+        return
+    if args.python is not None or args.cuda_toolkit_root is not None:
+        raise ValueError("Linux container builds do not accept Windows options")
     module = load_matrix_module()
-    matrix = module.load_release_matrix()
+    matrix = module.load_matrix()
     configuration = matrix.configuration(args.configuration)
     if args.python_abi not in matrix.python_abis:
         raise ValueError(f"unsupported Python ABI: {args.python_abi}")
@@ -79,7 +95,7 @@ def main() -> None:
     matrix_path = f"{CONTAINER_PROJECT}/packaging/release_matrix.json"
     build_command = [
         f"/opt/python/{args.python_abi}/bin/python",
-        f"{CONTAINER_PROJECT}/packaging/build_manylinux_wheel.py",
+        f"{CONTAINER_PROJECT}/packaging/linux_wheel.py",
         "--configuration",
         configuration.id,
         "--python",
@@ -96,7 +112,7 @@ def main() -> None:
         f"/opt/python/{args.python_abi}/bin/python -m pip install "
         f"jsonschema=={matrix.jsonschema_version} && "
         f"/opt/python/{args.python_abi}/bin/python "
-        f"{CONTAINER_PROJECT}/packaging/release_matrix.py "
+        f"{CONTAINER_PROJECT}/packaging/matrix.py "
         f"--matrix {matrix_path} validate && "
         + shlex.join(build_command)
         + f" && chown -R {os.getuid()}:{os.getgid()} /output"

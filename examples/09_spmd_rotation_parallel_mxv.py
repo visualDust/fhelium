@@ -64,7 +64,7 @@ def _provision_owned_rotation_keys(
     secret_key: fh.SecretKey | None,
     size: int,
 ) -> dict[int, fh.RotationKey]:
-    """Create each exact key on rank 0 and retain it only on its owner."""
+    """Create each direct rotation key on rank 0 and retain it only on its owner."""
 
     local_keys: dict[int, fh.RotationKey] = {}
     for rotation_step in range(1, size):

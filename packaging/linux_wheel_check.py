@@ -21,7 +21,7 @@ FORBIDDEN_PATH_PREFIXES = ("/home/", "/project/", "/tmp/", "/usr/local/cuda")
 
 
 def load_release_matrix_module(matrix_path: Path) -> ModuleType:
-    implementation = matrix_path.with_name("release_matrix.py")
+    implementation = matrix_path.with_name("matrix.py")
     spec = importlib.util.spec_from_file_location(
         "_fhelium_release_matrix", implementation
     )
@@ -75,7 +75,7 @@ def main() -> None:
     args = parse_args()
     wheel = args.wheel.resolve()
     module = load_release_matrix_module(args.matrix.resolve())
-    matrix = module.load_release_matrix(args.matrix.resolve())
+    matrix = module.load_matrix(args.matrix.resolve())
     configuration = matrix.configuration(args.configuration)
     expected_external_libraries = {
         "libc10.so",

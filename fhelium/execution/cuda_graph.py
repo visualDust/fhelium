@@ -1,6 +1,6 @@
 """CUDA Graph capture and replay for fixed-schedule FHElium evaluators.
 
-``CudaGraphProgram`` stages dynamic positional tensor and exact-value inputs
+``CudaGraphProgram`` stages dynamic positional tensor and FHElium-value inputs
 through reusable fixed-address buffers. Callers bind encryption, keys,
 resources, and schedule before capture; captured callables use fixed Python
 control flow.
@@ -66,11 +66,11 @@ class CudaGraphProgram(Generic[_OutputT]):
     Construct programs with :meth:`capture`; direct construction is not public.
     Parameters bound by a closure, :class:`functools.partial`, or a callable
     object are static program state. Positional ``example_inputs`` define the
-    reusable dynamic argument tree. Supported leaves are tensors and exact
+    reusable dynamic argument tree. Supported leaves are tensors and
     serializable FHElium values nested in lists, tuples, and dictionaries.
 
     Dynamic source values may later reside on CPU or CUDA as long as their
-    device-independent structure and exact metadata match capture. CPU-to-CUDA
+    device-independent structure and metadata match capture. CPU-to-CUDA
     overlap requires pinned sources and the advanced :meth:`copy_inputs_from`
     plus :meth:`replay_prepared` path. Ordinary :meth:`replay` remains a
     same-call convenience.
@@ -180,7 +180,7 @@ class CudaGraphProgram(Generic[_OutputT]):
         Bind static parameters through a closure, ``functools.partial``, or a
         callable object. This method intentionally does not accept dynamic
         keyword arguments or arbitrary Python control objects. Use a positional
-        adapter for a dynamic keyword-only tensor or exact value.
+        adapter for a dynamic keyword-only tensor or FHElium value.
 
         Passing ``function`` directly is the canonical API. Omitting it returns
         a decorator shorthand that captures at function-definition time::
@@ -196,10 +196,10 @@ class CudaGraphProgram(Generic[_OutputT]):
         Args:
             function: Optional callable evaluator whose Python control flow and
                 CUDA work are fixed at capture. Output must be a CUDA tensor,
-                exact FHElium value, nested list/tuple/dict of those leaves, or
+                FHElium value, nested list/tuple/dict of those leaves, or
                 ``None``. Omit it only for the decorator shorthand.
             example_inputs: CUDA-resident positional prototypes. Their
-                structure and exact metadata specialize this program.
+                structure and metadata specialize this program.
             warmup: Number of fresh-buffer side-stream evaluations before
                 capture.
             check_input_liveness: Forwarded to ``torch.cuda.graph``.
@@ -403,7 +403,7 @@ class CudaGraphProgram(Generic[_OutputT]):
             A :class:`CopyHandle` accepted by :meth:`replay_prepared`.
 
         Raises:
-            CudaGraphInputError: If structure or exact state differs from
+            CudaGraphInputError: If structure or value state differs from
                 capture.
             ExecutionError: If the program is closed.
         """
@@ -503,7 +503,7 @@ class CudaGraphProgram(Generic[_OutputT]):
         :meth:`replay_prepared` on a compute stream.
 
         Tensor source devices may differ from capture, but structure, tensor
-        topology, and exact FHElium metadata must match. The default output is
+        topology, and FHElium metadata must match. The default output is
         borrowed; ``copy_output=True`` returns independent storage.
         """
 

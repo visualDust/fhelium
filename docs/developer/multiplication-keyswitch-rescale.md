@@ -1,6 +1,6 @@
 # Multiplication, key switching, and rescale
 
-These paths combine many arithmetic stages and exact-state transitions. They
+These paths combine many arithmetic stages and CKKS state transitions. They
 are frequent correctness and performance hotspots because they depend on
 active rows, hybrid digits, Q/QP conversion, NTT/Montgomery representation, and
 large evaluation keys.
@@ -167,7 +167,7 @@ flowchart TB
 ```
 
 Step-specific work and outputs remain. Hoist chunking must account for live
-prepared digits, accumulators, rotated outputs, and exact key residency.
+prepared digits, accumulators, rotated outputs, and key residency.
 
 ## Rescale
 

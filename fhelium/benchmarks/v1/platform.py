@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import math
 import os
@@ -224,6 +225,49 @@ def _cpu() -> dict[str, Any]:
 
 
 def _memory() -> dict[str, Any]:
+    if sys.platform == "win32":
+        from ctypes import wintypes
+
+        class _MemoryStatusEx(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", wintypes.DWORD),
+                ("dwMemoryLoad", wintypes.DWORD),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = _MemoryStatusEx()
+        status.dwLength = ctypes.sizeof(status)
+        global_memory_status = ctypes.WinDLL(
+            "kernel32", use_last_error=True
+        ).GlobalMemoryStatusEx
+        global_memory_status.argtypes = (ctypes.POINTER(_MemoryStatusEx),)
+        global_memory_status.restype = wintypes.BOOL
+        if not global_memory_status(ctypes.byref(status)):
+            error = ctypes.get_last_error()
+            raise ctypes.WinError(error)
+
+        total_bytes = int(status.ullTotalPhys)
+        available_bytes = int(status.ullAvailPhys)
+        if total_bytes <= 0:
+            raise ValueError(
+                "GlobalMemoryStatusEx returned non-positive physical memory"
+            )
+        if not 0 <= available_bytes <= total_bytes:
+            raise ValueError(
+                "GlobalMemoryStatusEx returned physical-memory values outside "
+                "the valid range"
+            )
+        return {
+            "total_bytes": total_bytes,
+            "available_bytes": available_bytes,
+        }
+
     page_size = os.sysconf("SC_PAGE_SIZE")
     physical_pages = os.sysconf("SC_PHYS_PAGES")
     available_pages = None

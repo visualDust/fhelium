@@ -240,7 +240,7 @@ alone does not establish collective lineage.
 
 ## 6. Fuse an unsafe collective-decryption output
 
-Protocol 3 forms one secret-dependent share per party for an exact
+Protocol 3 forms one secret-dependent share per party for a specified
 coefficient-domain two-component ciphertext. The example supplies opposite
 fixed coefficient impulses, which cancel for an arithmetic check but provide
 no smudging or privacy property.
@@ -320,7 +320,7 @@ zeroization.
   detection, retry and abort, freshness lifetimes, and mapping this local tuple
   to independent processes.
 - [Multiparty CKKS API](../api/fhelium/experimental/mpc.md)
-  provides exact signatures and value requirements.
+  provides signatures and value requirements.
 - [Key material lifecycle](key-materials.md) explains core key state and
   storage after aggregation.
 - [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)

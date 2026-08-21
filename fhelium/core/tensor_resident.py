@@ -1,4 +1,4 @@
-"""Tensor storage, device transfer, and byte accounting for exact values."""
+"""Tensor storage, device transfer, and byte accounting for FHElium values."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ import torch
 
 
 class TensorResident(ABC):
-    """An exact FHElium value whose declared tensor fields move together.
+    """A FHElium value whose declared tensor fields move together.
 
     Subclasses enumerate their direct tensor fields and reconstruct the same
-    exact value state around replacement tensors. The capability exposes one
+    value state around replacement tensors. The capability exposes one
     common device, logical payload bytes, unique backing-storage bytes, and
     functional movement for one value.
 
@@ -28,7 +28,7 @@ class TensorResident(ABC):
 
     @abstractmethod
     def _with_resident_tensors(self, tensors: tuple[torch.Tensor, ...]) -> Self:
-        """Reconstruct this exact value around replacement tensors."""
+        """Reconstruct this value around replacement tensors."""
 
     @property
     def device(self) -> torch.device:
@@ -128,12 +128,12 @@ class TensorResident(ABC):
         return self._with_resident_tensors(moved)
 
     def cpu(self, *, copy: bool = False) -> Self:
-        """Return this exact value in ordinary pageable CPU storage."""
+        """Return this value in ordinary pageable CPU storage."""
 
         return self.to("cpu", copy=copy or self.is_pinned)
 
     def pin_memory(self, *, copy: bool = False) -> Self:
-        """Return this exact value backed by pinned CPU tensor storage.
+        """Return this value backed by pinned CPU tensor storage.
 
         Args:
             copy: Create independent pinned storage even when every source

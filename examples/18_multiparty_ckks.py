@@ -129,7 +129,7 @@ def main() -> None:
     announce("ACTIVE", "material and evaluation requests may now run")
 
     # Application-owned RKG child state machine under ACTIVE.
-    # Protocol 2 retains one local ephemeral QP secret per party.  The exact
+    # Protocol 2 retains one local ephemeral QP secret per party. The
     # same objects are passed to that party's round-one and round-two calls.
     digit_count = engine.rns_layout.key_digit_count
     rkg_common_a = mpc.sample_common_uniform(
@@ -193,7 +193,7 @@ def main() -> None:
         rotation_common_a,
         rotation_step,
     )
-    announce("ROTATION:COMPLETE", "one exact rotation-key request completed")
+    announce("ROTATION:COMPLETE", "one rotation-key request completed")
 
     conjugation_common_a = mpc.sample_common_uniform(
         engine,

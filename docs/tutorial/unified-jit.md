@@ -106,9 +106,9 @@ captured = jit.trace(
 
 | Declaration | Runtime meaning | Semantic reference meaning |
 | --- | --- | --- |
-| `encrypted()` | A compatible core `Ciphertext`, or a Tensor encrypted online with `workspace["public_key"]`; the declaration carries exact level, scale, slot-extent, and batch policy | Tensor |
+| `encrypted()` | A compatible core `Ciphertext`, or a Tensor encrypted online with `workspace["public_key"]`; the declaration carries level, scale, slot-extent, and batch policy | Tensor |
 | `message()` | Public Python/PyTorch data; public-only computation remains a preserved Torch call until an encrypted consumer requires preparation | The same public value |
-| `plaintext()` | A caller-owned core [`Plaintext`](../api/fhelium/core/plaintext.md#plaintext) whose representation and CKKS state reach the exact consumer | Public Tensor/scalar shadow |
+| `plaintext()` | A caller-owned core [`Plaintext`](../api/fhelium/core/plaintext.md#plaintext) whose representation and CKKS state match its consumer | Public Tensor/scalar shadow |
 | `static(value)` | A finite immutable scalar specialized during capture and omitted from the runtime signature | The specialized value restored by `CaptureResult.reference()` |
 
 `encrypted()` defaults to level zero and the selected engine's default scale at
@@ -118,7 +118,7 @@ requires one slot axis, while `"any"` permits leading batch axes.
 
 `message()` and `plaintext()` describe distinct public roles. A message is
 semantic Python/PyTorch data that can pass through public preprocessing. A
-plaintext is already a FHElium encoded value with exact representation,
+plaintext is already a FHElium encoded value with its representation,
 level, scale, basis, domain, and residue state.
 
 ## 3. Inspect the capture result
@@ -186,7 +186,7 @@ The default pipeline currently runs:
 8. conservative late-rescale and late-relinearization passes.
 
 Each pass handles only the local operations and roles it recognizes. A pass
-with no applicable pattern returns a legal unchanged result. Inspect the exact
+with no applicable pattern returns a legal unchanged result. Inspect the full
 behavior through `lowered.reports`:
 
 ```python
@@ -246,7 +246,7 @@ from a diverse light palette derived from FHElium's cobalt, spectral-blue,
 helium-amber, warm-bridge, and neutral colors. Every fill uses the same
 high-contrast deep-neutral text color. Preserved `torch.call` nodes also
 distinguish their function or method target. `fields` selects complete
-node-record sections, while `attribute_names` optionally limits the exact xDSL
+node-record sections, while `attribute_names` optionally limits the xDSL
 attributes shown inside the `attributes` section.
 
 Rendering requires the Python `pydot` package and the system Graphviz `dot`
@@ -324,7 +324,7 @@ part of its execution requirements.
 
 ## 7. Check readiness before execution
 
-Readiness compares the selected entry with the exact workspace without running
+Readiness compares the selected entry with the current workspace without running
 or materializing anything:
 
 ```python
@@ -339,7 +339,7 @@ The report covers:
 
 - the versioned program schema and dialect;
 - one structurally executable selected entry;
-- exact built-in operation schemas and cleared scheduling obligations;
+- built-in operation schemas and cleared scheduling obligations;
 - trusted handlers for extension operations or FHE-touching Torch
   targets;
 - symbolic material and resource bindings;
@@ -389,13 +389,13 @@ result = program.run(
 Input names recorded by capture allow either positional or keyword binding. A
 caller-owned `Ciphertext` must match the workspace engine's context, device,
 dtype, ring dimension, declared level and actual scale, and batch policy. A
-`plaintext()` argument must be a core `Plaintext`; its exact representation
+`plaintext()` argument must be a core `Plaintext`; its representation
 state is handled at the consuming preparation operation.
 
 The interpreter executes preserved public Torch calls through its audited
 public target table. A preserved Torch call that touches encrypted or plaintext
-roles requires an exact binding under `workspace["torch_handlers"]`.
-Unknown extension operations require an exact handler under
+roles requires a target binding under `workspace["torch_handlers"]`.
+Unknown extension operations require a handler under
 `workspace["handlers"]`.
 
 ## 9. Decrypt and apply the example's acceptance criterion
@@ -460,5 +460,5 @@ and runtime services separately for the intended execution request.
 - [Input-role API](../api/fhelium/experimental/jit.md),
   [Program API](../api/fhelium/experimental/jit.md),
   [execution/readiness API](../api/fhelium/experimental/jit.md), and
-  [pass API](../api/fhelium/experimental/jit/passes.md) provide exact
+  [pass API](../api/fhelium/experimental/jit/passes.md) provide current
   current signatures.
