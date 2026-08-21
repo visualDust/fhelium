@@ -1,0 +1,113 @@
+name: Bug report
+description: Report reproducible incorrect behavior in FHElium.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a problem. For usage questions, use [GitHub Discussions](https://github.com/visualDust/fhelium/discussions). Report security vulnerabilities through [GitHub Security Advisories](https://github.com/visualDust/fhelium/security/advisories/new), not a public issue.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Python API
+        - Encryption, decryption, or evaluator behavior
+        - CPU native backend
+        - CUDA native backend
+        - Distributed execution
+        - JIT
+        - Residency
+        - Serialization or ArtifactStore
+        - Build, installation, or packaging
+        - Documentation website
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: FHElium version or commit
+      description: Provide the installed version or full commit ID.
+      placeholder: "0.10.0 or a66c5260bc9accc9e1b8d648b8c64279aabf1031"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation source
+      options:
+        - PyPI source distribution
+        - FHElium binary repository
+        - Editable source checkout
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the operating system and architecture, Python, Torch build, CUDA runtime and Toolkit when applicable, and CPU or GPU model.
+      placeholder: |
+        OS and architecture:
+        Python:
+        Torch:
+        CUDA runtime / Toolkit:
+        CPU or GPU:
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the incorrect behavior and when it occurs.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproducer
+    attributes:
+      label: Minimal reproducer
+      description: Provide the smallest self-contained program or command that demonstrates the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed result
+      description: Include the exception, numerical result, or state transition actually observed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      description: State the behavior or result you expected and why.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Traceback or logs
+      description: Paste the complete relevant traceback or diagnostic output.
+      render: shell
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: The reproducer and logs contain no credentials, secret keys, or private data.
+          required: true

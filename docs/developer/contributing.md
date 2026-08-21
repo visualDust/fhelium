@@ -30,9 +30,9 @@ built. Do not validate a change against an unrelated cached wheel.
    [Mathematical notation and cross-layer invariants](mathematical-notation-and-invariants.md)
    when the change affects CKKS state, RNS/NTT representation, tensor layout,
    scale, level, keys, or a native operation.
-3. Identify the public import path, state transition, mutation/aliasing rule,
-   numerical oracle, and smallest regression that exercises the affected
-   semantics or invariant.
+3. Identify the affected interface or owned subsystem and the smallest check
+   that exercises the proposed change. For evaluator changes, also identify
+   the state transition, mutation or aliasing rule, and numerical oracle.
 4. Keep unrelated staged and unstaged work unchanged.
 
 ## Validation order
@@ -79,7 +79,7 @@ state:
 
 - the problem and supported behavior after the change;
 - affected public paths and serialized formats;
-- mathematical, numerical, security, and ownership assumptions;
+- mathematical, numerical, security, and ownership assumptions when affected;
 - validation evidence and hardware/software environment;
 - migration steps when existing public behavior or requirements change.
 

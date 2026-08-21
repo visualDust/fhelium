@@ -1,0 +1,82 @@
+name: Feature proposal
+description: Propose supported behavior for a concrete FHE or developer workload.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Begin with the problem and supported behavior. A complete implementation design is not required for an initial proposal.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or workload
+      description: Describe the task that cannot be expressed, executed, or maintained satisfactorily with the current API.
+    validations:
+      required: true
+
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Proposed behavior
+      description: Define what FHElium should support from the user's perspective.
+    validations:
+      required: true
+
+  - type: textarea
+    id: api
+    attributes:
+      label: Public API or configuration
+      description: Sketch affected imports, methods, configuration, or command-line behavior if known.
+
+  - type: textarea
+    id: semantics
+    attributes:
+      label: Technical constraints
+      description: When relevant, describe numerical behavior, state transitions, data formats, ownership, distributed execution, or platform requirements.
+
+  - type: textarea
+    id: security
+    attributes:
+      label: Security considerations
+      description: When relevant, state trust assumptions, sensitive material, authorization requirements, and security properties the proposal must preserve.
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and migration impact
+      description: Identify affected public behavior, serialized data, build requirements, or migration steps.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe existing FHElium mechanisms or other designs considered and why they do not meet the workload.
+
+  - type: textarea
+    id: performance
+    attributes:
+      label: Performance evidence
+      description: If performance motivates the proposal, provide a reproducible workload, correctness result, and measurement environment.
+
+  - type: dropdown
+    id: participation
+    attributes:
+      label: Participation
+      options:
+        - I can implement this proposal.
+        - I can help implement or validate it.
+        - I can provide the workload and requirements.
+        - I am proposing the behavior for discussion.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and discussions for the same proposal.
+          required: true
