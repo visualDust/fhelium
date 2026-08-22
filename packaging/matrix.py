@@ -125,6 +125,27 @@ class Configuration:
         toolkit = self.toolkit(LINUX)
         return None if toolkit is None else toolkit.runtime_library
 
+    @property
+    def cmake_cuda_architectures(self) -> tuple[str, ...]:
+        """Return native cubin targets followed by selected PTX targets."""
+
+        return (
+            *(f"{item}-real" for item in self.cuda_architectures),
+            *(f"{item}-virtual" for item in self.cuda_ptx_architectures),
+        )
+
+    @property
+    def torch_cuda_architectures(self) -> tuple[str, ...]:
+        """Return the equivalent Torch architecture declarations."""
+
+        ptx = set(self.cuda_ptx_architectures)
+        values = []
+        for item in self.cuda_architectures:
+            number = int(item)
+            value = f"{number // 10}.{number % 10}"
+            values.append(value + ("+PTX" if item in ptx else ""))
+        return tuple(values)
+
 
 @dataclass(frozen=True)
 class Matrix:
@@ -270,15 +291,18 @@ def _validate(matrix: Matrix) -> None:
         raise ValueError("Linux Dockerfiles do not match matrix environments")
 
 
-def load_matrix(path: Path = MATRIX_PATH) -> Matrix:
+def load_matrix(
+    path: Path = MATRIX_PATH, *, validate_schema: bool = True
+) -> Matrix:
     raw = _json(path)
-    try:
-        import jsonschema
-    except ImportError as error:
-        raise RuntimeError(
-            "jsonschema is required to validate the release matrix"
-        ) from error
-    jsonschema.Draft202012Validator(_json(SCHEMA_PATH)).validate(raw)
+    if validate_schema:
+        try:
+            import jsonschema
+        except ImportError as error:
+            raise RuntimeError(
+                "jsonschema is required to validate the release matrix"
+            ) from error
+        jsonschema.Draft202012Validator(_json(SCHEMA_PATH)).validate(raw)
     matrix = Matrix(
         project=raw["project"],
         requires_python=raw["requires_python"],

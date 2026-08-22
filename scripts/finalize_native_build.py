@@ -99,6 +99,13 @@ def main() -> None:
                         ).split(";")
                         if value
                     ],
+                    "build_cuda_ptx_architectures": [
+                        value
+                        for value in os.environ.get(
+                            "FHELIUM_RELEASE_CUDA_PTX_ARCHITECTURES", ""
+                        ).split(";")
+                        if value
+                    ],
                 }
                 if (
                     release_configuration_id := os.environ.get(

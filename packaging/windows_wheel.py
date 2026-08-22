@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import email.parser
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import tempfile
@@ -190,25 +192,29 @@ def toolkit_root(
     return root
 
 
-def architecture_flags(configuration: Configuration) -> tuple[str, str]:
-    cmake = [f"{item}-real" for item in configuration.cuda_architectures]
-    cmake.extend(
-        f"{item}-virtual" for item in configuration.cuda_ptx_architectures
+def cuda_compiler_root(root: Path) -> Path:
+    """Return a no-space Toolkit spelling accepted by nvcc host options."""
+
+    if " " not in str(root):
+        return root
+    buffer = ctypes.create_unicode_buffer(32768)
+    length = ctypes.windll.kernel32.GetShortPathNameW(  # type: ignore[attr-defined]
+        str(root), buffer, len(buffer)
     )
-    ptx = set(configuration.cuda_ptx_architectures)
-    torch = []
-    for item in configuration.cuda_architectures:
-        number = int(item)
-        value = f"{number // 10}.{number % 10}"
-        torch.append(value + ("+PTX" if item in ptx else ""))
-    return ";".join(cmake), ";".join(torch)
+    if length == 0 or length >= len(buffer) or " " in buffer.value:
+        raise RuntimeError(
+            "CUDA Toolkit has no no-space Windows path for native compilation: "
+            f"{root}"
+        )
+    return Path(buffer.value)
 
 
 def build(args: argparse.Namespace) -> Path:
     if os.name != "nt" or platform.machine().upper() != "AMD64":
         raise RuntimeError("Windows wheel builds require Windows AMD64")
     source = args.source.resolve()
-    matrix = load_matrix(source / "packaging" / "release_matrix.json")
+    matrix_path = source / "packaging" / "release_matrix.json"
+    matrix = load_matrix(matrix_path, validate_schema=False)
     configuration = matrix.configuration(args.configuration)
     if (
         not configuration.supports(WINDOWS)
@@ -256,6 +262,16 @@ def build(args: argparse.Namespace) -> Path:
     run(
         str(python),
         "-I",
+        str(source / "packaging" / "matrix.py"),
+        "--matrix",
+        str(matrix_path),
+        "validate",
+        cwd=source,
+        env=clean_environment(),
+    )
+    run(
+        str(python),
+        "-I",
         "-m",
         "pip",
         "install",
@@ -269,23 +285,25 @@ def build(args: argparse.Namespace) -> Path:
     environment = vs_environment(builder)
     environment["PATH"] = str(python.parent) + os.pathsep + environment["PATH"]
     root = toolkit_root(configuration, args.cuda_toolkit_root)
+    compiler_root = None if root is None else cuda_compiler_root(root)
     backends = "+".join(item.upper() for item in configuration.native_backends)
     cmake_args = [
         f"-DFHELIUM_NATIVE_BACKENDS={backends}",
         "-DCMAKE_BUILD_TYPE=Release",
     ]
-    if root is not None:
-        cmake_arch, torch_arch = architecture_flags(configuration)
+    if compiler_root is not None:
+        cmake_arch = ";".join(configuration.cmake_cuda_architectures)
+        torch_arch = ";".join(configuration.torch_cuda_architectures)
         environment.update(
-            CUDA_HOME=str(root),
-            CUDA_PATH=str(root),
-            CUDACXX=str(root / "bin" / "nvcc.exe"),
+            CUDA_HOME=str(compiler_root),
+            CUDA_PATH=str(compiler_root),
+            CUDACXX=str(compiler_root / "bin" / "nvcc.exe"),
             CUDAARCHS=cmake_arch,
             TORCH_CUDA_ARCH_LIST=torch_arch,
         )
         cmake_args.extend(
             (
-                f"-DCUDAToolkit_ROOT={root}",
+                f"-DCUDAToolkit_ROOT={compiler_root}",
                 f"-DCMAKE_CUDA_ARCHITECTURES={cmake_arch}",
             )
         )
@@ -301,6 +319,9 @@ def build(args: argparse.Namespace) -> Path:
         ),
         FHELIUM_RELEASE_CUDA_ARCHITECTURES=";".join(
             configuration.cuda_architectures
+        ),
+        FHELIUM_RELEASE_CUDA_PTX_ARCHITECTURES=";".join(
+            configuration.cuda_ptx_architectures
         ),
         FHELIUM_RELEASE_TORCH_REQUIREMENT=configuration.torch_requirement,
     )
@@ -377,7 +398,18 @@ def check_wheel(
     expected_suffix = f".cp3{python_abi[3:5]}-win_amd64.pyd"
     with ZipFile(wheel) as archive:
         names = archive.namelist()
-        binaries = [name for name in names if name.endswith(".pyd")]
+        ops_binaries = [
+            name
+            for name in names
+            if name.startswith("fhelium/native/torchops/_ops")
+            and name.endswith(".pyd")
+        ]
+        cuda_info_binaries = [
+            name
+            for name in names
+            if name.startswith("fhelium/native/cuda/cuda_info")
+            and name.endswith(".pyd")
+        ]
         manifests = [
             name
             for name in names
@@ -385,9 +417,13 @@ def check_wheel(
             and name.endswith(".json")
         ]
         if (
-            len(binaries) != 1
+            len(ops_binaries) != 1
+            or len(cuda_info_binaries) != int(configuration.has_cuda)
             or len(manifests) != 1
-            or not binaries[0].endswith(expected_suffix)
+            or not all(
+                name.endswith(expected_suffix)
+                for name in (*ops_binaries, *cuda_info_binaries)
+            )
         ):
             raise RuntimeError("wheel native-extension layout is invalid")
         metadata = _metadata(archive)
@@ -411,6 +447,9 @@ def check_wheel(
                 None if selected_toolkit is None else selected_toolkit.version
             ),
             "build_cuda_architectures": list(configuration.cuda_architectures),
+            "build_cuda_ptx_architectures": list(
+                configuration.cuda_ptx_architectures
+            ),
         }
         for key, value in expected.items():
             if manifest.get(key) != value:
@@ -418,8 +457,8 @@ def check_wheel(
                     f"native manifest {key} differs: {manifest.get(key)!r}"
                 )
         with tempfile.TemporaryDirectory(prefix="fhelium-wheel-") as temporary:
-            binary = Path(temporary) / Path(binaries[0]).name
-            binary.write_bytes(archive.read(binaries[0]))
+            binary = Path(temporary) / Path(ops_binaries[0]).name
+            binary.write_bytes(archive.read(ops_binaries[0]))
             text = run(
                 str(dumpbin),
                 "/dependents",
@@ -434,7 +473,7 @@ def check_wheel(
             raw = binary.read_bytes()
             forbidden = [source, Path.home() / ".fhelium-build"]
             if toolkit is not None:
-                forbidden.append(toolkit)
+                forbidden.extend((toolkit, cuda_compiler_root(toolkit)))
             for path in forbidden:
                 for encoded in (
                     str(path).encode().lower(),
@@ -458,14 +497,24 @@ def check_wheel(
                     cwd=source,
                     capture=True,
                 ).stdout
-                for architecture in configuration.cuda_architectures:
-                    if f"sm_{architecture}" not in sass:
-                        raise RuntimeError(f"wheel lacks sm_{architecture}")
-                for architecture in configuration.cuda_ptx_architectures:
-                    if f"compute_{architecture}" not in ptx:
-                        raise RuntimeError(
-                            f"wheel lacks compute_{architecture} PTX"
-                        )
+                sass_architectures = set(re.findall(r"sm_([0-9]+)", sass))
+                ptx_architectures = set(
+                    re.findall(r"(?:sm|compute)_([0-9]+)", ptx)
+                )
+                expected_sass = set(configuration.cuda_architectures)
+                expected_ptx = set(configuration.cuda_ptx_architectures)
+                if sass_architectures != expected_sass:
+                    raise RuntimeError(
+                        "wheel CUDA cubin targets differ: "
+                        f"expected={sorted(expected_sass)!r}, "
+                        f"actual={sorted(sass_architectures)!r}"
+                    )
+                if ptx_architectures != expected_ptx:
+                    raise RuntimeError(
+                        "wheel CUDA PTX targets differ: "
+                        f"expected={sorted(expected_ptx)!r}, "
+                        f"actual={sorted(ptx_architectures)!r}"
+                    )
 
 
 def smoke_wheel(

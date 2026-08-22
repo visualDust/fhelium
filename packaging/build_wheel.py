@@ -63,8 +63,15 @@ def main() -> None:
     if args.platform == "win_amd64":
         if args.python is None:
             raise ValueError("Windows builds require --python")
-        from windows_wheel import build
 
+        packaging_root = str(Path(__file__).resolve().parent)
+        sys.path.insert(0, packaging_root)
+        try:
+            from windows_wheel import build
+        finally:
+            sys.path.remove(packaging_root)
+
+        args.source = ROOT
         build(args)
         return
     if args.python is not None or args.cuda_toolkit_root is not None:

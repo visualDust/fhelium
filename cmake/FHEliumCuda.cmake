@@ -141,6 +141,35 @@ endif()
 enable_language(CUDA)
 find_package(CUDAToolkit REQUIRED)
 
+if(_FHELIUM_REQUESTED_CUDA_ARCHITECTURES)
+  set(_FHELIUM_CUDA_ARCHITECTURES "${_FHELIUM_REQUESTED_CUDA_ARCHITECTURES}")
+else()
+  set(_FHELIUM_CUDA_ARCHITECTURES "")
+  unset(_FHELIUM_CUDA_PTX_ARCHITECTURE)
+  if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 11.0)
+    list(APPEND _FHELIUM_CUDA_ARCHITECTURES 80-real)
+    set(_FHELIUM_CUDA_PTX_ARCHITECTURE 80)
+  endif()
+  if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 11.8)
+    list(APPEND _FHELIUM_CUDA_ARCHITECTURES 90-real)
+    set(_FHELIUM_CUDA_PTX_ARCHITECTURE 90)
+  endif()
+  if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8)
+    list(APPEND _FHELIUM_CUDA_ARCHITECTURES 120-real)
+    set(_FHELIUM_CUDA_PTX_ARCHITECTURE 120)
+  endif()
+  if(NOT _FHELIUM_CUDA_ARCHITECTURES)
+    message(FATAL_ERROR "FHElium CUDA builds require CUDA 11.0 or newer, or "
+                        "an explicit CMAKE_CUDA_ARCHITECTURES override")
+  endif()
+  list(APPEND _FHELIUM_CUDA_ARCHITECTURES
+       "${_FHELIUM_CUDA_PTX_ARCHITECTURE}-virtual")
+endif()
+set(CMAKE_CUDA_ARCHITECTURES
+    "${_FHELIUM_CUDA_ARCHITECTURES}"
+    CACHE STRING "CUDA architectures selected by FHElium" FORCE)
+set(CMAKE_CUDA_ARCHITECTURES "${_FHELIUM_CUDA_ARCHITECTURES}")
+
 # TorchConfig still uses legacy FindCUDA. Reuse the modern discovery result so
 # toolkits that store libcudart under targets/<triple>/lib need no extra build
 # variables.
@@ -320,24 +349,8 @@ if(NOT TARGET CUDA::nvToolsExt)
   endif()
 endif()
 
-if(_FHELIUM_REQUESTED_CUDA_ARCHITECTURES)
-  set(_FHELIUM_CUDA_ARCHITECTURES "${_FHELIUM_REQUESTED_CUDA_ARCHITECTURES}")
-else()
-  set(_FHELIUM_CUDA_ARCHITECTURES "")
-  if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 11.0)
-    list(APPEND _FHELIUM_CUDA_ARCHITECTURES 80)
-  endif()
-  if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 11.8)
-    list(APPEND _FHELIUM_CUDA_ARCHITECTURES 90)
-  endif()
-  if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.8)
-    list(APPEND _FHELIUM_CUDA_ARCHITECTURES 120)
-  endif()
-  if(NOT _FHELIUM_CUDA_ARCHITECTURES)
-    message(FATAL_ERROR "FHElium CUDA builds require CUDA 11.0 or newer, or "
-                        "an explicit CMAKE_CUDA_ARCHITECTURES override")
-  endif()
-endif()
+# TorchConfig mutates CMAKE_CUDA_ARCHITECTURES while configuring its legacy CUDA
+# integration. Restore FHElium's declaration before creating native targets.
 set(CMAKE_CUDA_ARCHITECTURES
     "${_FHELIUM_CUDA_ARCHITECTURES}"
     CACHE STRING "CUDA architectures selected by FHElium" FORCE)

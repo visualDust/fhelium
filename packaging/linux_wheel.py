@@ -25,9 +25,16 @@ class ReleaseConfiguration(Protocol):
     native_backends: tuple[str, ...]
     toolkit_version: str | None
     cuda_architectures: tuple[str, ...]
+    cuda_ptx_architectures: tuple[str, ...]
 
     @property
     def has_cuda(self) -> bool: ...
+
+    @property
+    def cmake_cuda_architectures(self) -> tuple[str, ...]: ...
+
+    @property
+    def torch_cuda_architectures(self) -> tuple[str, ...]: ...
 
 
 class ReleaseMatrix(Protocol):
@@ -89,26 +96,11 @@ print(json.dumps({
         )
 
 
-def torch_cuda_architecture_list(
-    cuda_architectures: tuple[str, ...],
-) -> str:
-    """Translate CMake architecture numbers to Torch's dotted syntax."""
-
-    values = []
-    for architecture in cuda_architectures:
-        if not architecture.isdecimal() or len(architecture) < 2:
-            raise ValueError(
-                f"invalid numeric CUDA architecture: {architecture!r}"
-            )
-        number = int(architecture)
-        values.append(f"{number // 10}.{number % 10}")
-    return ";".join(values)
-
-
 def build_environment(
     configuration: ReleaseConfiguration,
 ) -> dict[str, str]:
     environment = os.environ.copy()
+    toolkit_root: str | None = None
     cmake_arguments = [
         "-DFHELIUM_NATIVE_BACKENDS="
         + "+".join(backend.upper() for backend in configuration.native_backends)
@@ -123,15 +115,15 @@ def build_environment(
             {
                 "CUDA_HOME": toolkit_root,
                 "CUDACXX": f"{toolkit_root}/bin/nvcc",
-                "TORCH_CUDA_ARCH_LIST": torch_cuda_architecture_list(
-                    configuration.cuda_architectures
+                "TORCH_CUDA_ARCH_LIST": ";".join(
+                    configuration.torch_cuda_architectures
                 ),
             }
         )
         cmake_arguments.extend(
             (
                 "-DCMAKE_CUDA_ARCHITECTURES="
-                + ";".join(configuration.cuda_architectures),
+                + ";".join(configuration.cmake_cuda_architectures),
                 f"-DCUDAToolkit_ROOT={toolkit_root}",
                 f"-DCUDA_TOOLKIT_ROOT_DIR={toolkit_root}",
             )
@@ -146,6 +138,9 @@ def build_environment(
     )
     environment["FHELIUM_RELEASE_CUDA_ARCHITECTURES"] = ";".join(
         configuration.cuda_architectures
+    )
+    environment["FHELIUM_RELEASE_CUDA_PTX_ARCHITECTURES"] = ";".join(
+        configuration.cuda_ptx_architectures
     )
     environment["FHELIUM_RELEASE_TORCH_REQUIREMENT"] = (
         configuration.torch_requirement
@@ -270,7 +265,7 @@ def main() -> None:
         raise RuntimeError(
             f"expected one repaired wheel, found {repaired_wheels!r}"
         )
-    run(
+    check_command = [
         str(python),
         str(source / "packaging" / "linux_wheel_check.py"),
         str(repaired_wheels[0]),
@@ -280,7 +275,15 @@ def main() -> None:
         configuration.id,
         "--project-version",
         project_version,
-    )
+    ]
+    if configuration.has_cuda:
+        if configuration.torch_cuda_version is None:
+            raise RuntimeError(
+                "CUDA configuration is missing torch_cuda_version"
+            )
+        toolkit_root = "/usr/local/cuda-" + configuration.torch_cuda_version
+        check_command.extend(("--cuobjdump", f"{toolkit_root}/bin/cuobjdump"))
+    run(*check_command)
     if args.smoke:
         run(
             str(python),

@@ -10,6 +10,9 @@ JIT, Residency, or application workloads.
 
 - `release_matrix.json` declares four Linux and four Windows configuration
   identities, each built for CPython 3.12 and 3.13 (16 cells total).
+- CUDA configurations declare native cubin targets separately from the selected
+  PTX target; the same declaration drives Linux and Windows compiler flags,
+  native manifests, and wheel image checks.
 - `release_matrix.schema.json` validates the JSON structure.
 - `matrix.py` validates cross-field rules and projects the documentation install
   catalog.

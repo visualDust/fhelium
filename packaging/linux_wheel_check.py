@@ -43,6 +43,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--configuration", required=True)
     parser.add_argument("--project-version", required=True)
     parser.add_argument(
+        "--cuobjdump",
+        type=Path,
+        help="cuobjdump executable required for a CUDA wheel",
+    )
+    parser.add_argument(
         "--platform-tag",
         default="manylinux_2_28_x86_64",
         help="required tag in the wheel filename and WHEEL metadata",
@@ -71,12 +76,29 @@ def assert_no_build_paths(text: str, *, label: str) -> None:
         raise RuntimeError(f"{label} contains build paths: {', '.join(leaked)}")
 
 
+def cuda_image_architectures(
+    cuobjdump: Path, binary: Path, option: str
+) -> set[str]:
+    listing = subprocess.run(
+        [str(cuobjdump), option, str(binary)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return set(re.findall(r"(?:sm|compute)_([0-9]+)", listing))
+
+
 def main() -> None:
     args = parse_args()
     wheel = args.wheel.resolve()
     module = load_release_matrix_module(args.matrix.resolve())
     matrix = module.load_matrix(args.matrix.resolve())
     configuration = matrix.configuration(args.configuration)
+    if configuration.has_cuda:
+        if args.cuobjdump is None or not args.cuobjdump.is_file():
+            raise RuntimeError("CUDA wheel validation requires --cuobjdump")
+    elif args.cuobjdump is not None:
+        raise RuntimeError("CPU wheel validation does not accept --cuobjdump")
     expected_external_libraries = {
         "libc10.so",
         "libtorch_cpu.so",
@@ -179,6 +201,12 @@ def main() -> None:
             raise RuntimeError(
                 "native manifest CUDA architectures do not match"
             )
+        if manifest.get("build_cuda_ptx_architectures") != list(
+            configuration.cuda_ptx_architectures
+        ):
+            raise RuntimeError(
+                "native manifest CUDA PTX architectures do not match"
+            )
         torch_identity = manifest.get("torch", {})
         if torch_identity.get("version") != configuration.torch_runtime_version:
             raise RuntimeError("native manifest Torch version does not match")
@@ -199,6 +227,28 @@ def main() -> None:
                 f"_ops runtime path must be {EXPECTED_OPS_RUNPATH!r}, got {ops_paths!r}"
             )
         assert_no_build_paths(ops_section, label="_ops dynamic section")
+
+        if args.cuobjdump is not None:
+            actual_cubins = cuda_image_architectures(
+                args.cuobjdump, ops_files[0], "--list-elf"
+            )
+            actual_ptx = cuda_image_architectures(
+                args.cuobjdump, ops_files[0], "--list-ptx"
+            )
+            expected_cubins = set(configuration.cuda_architectures)
+            expected_ptx = set(configuration.cuda_ptx_architectures)
+            if actual_cubins != expected_cubins:
+                raise RuntimeError(
+                    "wheel CUDA cubin targets differ: "
+                    f"expected={sorted(expected_cubins)!r}, "
+                    f"actual={sorted(actual_cubins)!r}"
+                )
+            if actual_ptx != expected_ptx:
+                raise RuntimeError(
+                    "wheel CUDA PTX targets differ: "
+                    f"expected={sorted(expected_ptx)!r}, "
+                    f"actual={sorted(actual_ptx)!r}"
+                )
 
         for cuda_info in cuda_info_files:
             section = dynamic_section(cuda_info)

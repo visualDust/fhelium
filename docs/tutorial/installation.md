@@ -30,7 +30,8 @@ CUDA source builds require a toolkit with the same major version as the
 preinstalled Torch CUDA build; using the same minor version is preferred.
 CPU-only builds set `CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS=CPU"`.
 `CMAKE_CUDA_ARCHITECTURES` optionally overrides the generated architecture
-list.
+list. The generated list emits native images for its default targets and PTX
+for the newest target recognized by the selected toolkit.
 
 ## Verify
 
