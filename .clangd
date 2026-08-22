@@ -1,36 +1,49 @@
 CompileFlags:
   Compiler: clang++
   CompilationDatabase: build
-  Add:
-    - -x
-    - cuda
-    - "-std=c++17"
-    - "--cuda-gpu-arch=sm_86"
   Remove:
-    # strip CUDA fatbin args
+    # Strip NVCC-only arguments from both CUDA sources and headers whose
+    # compilation command is inferred from an owning .cu file.
     - "-Xfatbin*"
     - "-Xcompiler*"
     - "-Xcudafe*"
     - "-rdc=*"
     - "-gpu=*"
     - "--diag_suppress*"
-    # strip CUDA arch flags
+    - "--frandom-seed=*"
     - "-gencode*"
     - "--generate-code*"
-    # strip gcc's -fcoroutines
-    - -fcoroutines
-    # strip CUDA flags unknown to clang
-    - "-rdc=true"
     - "-ccbin*"
     - "--compiler-options*"
     - "--expt-extended-lambda"
     - "--expt-relaxed-constexpr"
     - "-forward-unknown-to-host-compiler"
     - "-Werror=cross-execution-space-call"
+    - -fcoroutines
+
+---
+If:
+  PathMatch: .*\.cu
+CompileFlags:
+  Add:
+    - -x
+    - cuda
+    - "-std=c++17"
+    - "-ferror-limit=0"
+    - "--cuda-host-only"
+    # PyTorch exposes CUDA-only tensor traits under NVCC's compatibility macro.
+    - "-D__CUDACC__"
+    # clangd 21 does not recognize sm_120; sm_86 is sufficient for parsing
+    # portable CUDA source while the owning NVCC build uses the declared fatbin.
+    - "--cuda-gpu-arch=sm_86"
+Diagnostics:
+  # clangd 21 mis-models PyTorch Tensor inheritance and CUDA-only accessor
+  # aliases under CUDA 13. NVCC diagnoses each owning translation unit.
+  Suppress: "*"
 
 ---
 # Detail headers depend on declarations assembled by their owning .cu file.
-# The owning translation unit remains fully diagnosed through compile_commands.
+# NVCC diagnoses the owning translation unit through compile_commands.
 If:
   PathMatch: csrc/ops/.*/cuda/.*\.(inc\.)?cuh
 CompileFlags:
