@@ -1,8 +1,11 @@
-#include "ckks_cuda.h"
+#include <torch/library.h>
+#include <torch/torch.h>
 
 #include "../../common/cuda/kernel_support.cuh"
 #include "../../common/cuda/montgomery.cuh"
 #include "../../common/rns_batch.h"
+
+namespace {
 
 // Galois automorphism representation requirements. Input is integral CUDA
 // [*batch, limb, coefficient_or_ntt_index]; output is newly allocated with the
@@ -109,4 +112,12 @@ torch::Tensor apply_ntt_galois_automorphism_cuda(
                 FHELIUM_CUDA_ACCESSOR32(source_indices, int32_t, 1));
       });
   return out;
+}
+
+}  // namespace
+
+TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
+  m.impl("apply_coefficient_galois_automorphism",
+         &apply_coefficient_galois_automorphism_cuda);
+  m.impl("apply_ntt_galois_automorphism", &apply_ntt_galois_automorphism_cuda);
 }

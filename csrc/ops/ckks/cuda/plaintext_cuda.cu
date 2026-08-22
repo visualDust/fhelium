@@ -1,10 +1,13 @@
-#include "ckks_cuda.h"
+#include <torch/library.h>
+#include <torch/torch.h>
 
 #include "../../common/cuda/kernel_support.cuh"
 #include "../../common/cuda/montgomery.cuh"
 #include "../../common/cuda/repetition.cuh"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
+
+namespace {
 
 // Prepared-plaintext addition requirements. Ciphertext components are integral
 // CUDA [*batch, limb, coefficient] standard residues. Prepared plaintexts use
@@ -181,8 +184,6 @@ void ckks_add_prepared_plaintext_component_inplace_cuda(
       });
 }
 
-namespace {
-
 void validate_add_compressed_plaintext(
     const torch::Tensor& ciphertext,
     const torch::Tensor& compressed_plaintext,
@@ -263,8 +264,6 @@ void add_compressed_plaintext_component_inplace(
       });
 }
 
-}  // namespace
-
 torch::Tensor ckks_add_cyclic_compressed_plaintext_component_cuda(
     const torch::Tensor ciphertext_component,
     const torch::Tensor compressed_plaintext,
@@ -308,8 +307,6 @@ void ckks_add_contiguous_compressed_plaintext_component_inplace_cuda(
       rns_params,
       "ckks_add_contiguous_compressed_plaintext_component_inplace");
 }
-
-namespace {
 
 void validate_add_strided_plaintext(const torch::Tensor& ciphertext,
                                     const torch::Tensor& strided_plaintext,
@@ -366,8 +363,6 @@ void launch_ckks_add_strided_plaintext_component_cuda(
           support_shift);
 }
 
-}  // namespace
-
 torch::Tensor ckks_add_strided_plaintext_component_cuda(
     const torch::Tensor ciphertext_component,
     const torch::Tensor strided_plaintext,
@@ -421,4 +416,25 @@ void ckks_add_strided_plaintext_component_inplace_cuda(
             implicit_rows,
             rns_params);
       });
+}
+
+}  // namespace
+
+TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
+  m.impl("add_prepared_plaintext_component",
+         &ckks_add_prepared_plaintext_component_cuda);
+  m.impl("add_prepared_plaintext_component_",
+         &ckks_add_prepared_plaintext_component_inplace_cuda);
+  m.impl("add_cyclic_compressed_plaintext_component",
+         &ckks_add_cyclic_compressed_plaintext_component_cuda);
+  m.impl("add_cyclic_compressed_plaintext_component_",
+         &ckks_add_cyclic_compressed_plaintext_component_inplace_cuda);
+  m.impl("add_contiguous_compressed_plaintext_component",
+         &ckks_add_contiguous_compressed_plaintext_component_cuda);
+  m.impl("add_contiguous_compressed_plaintext_component_",
+         &ckks_add_contiguous_compressed_plaintext_component_inplace_cuda);
+  m.impl("add_strided_plaintext_component",
+         &ckks_add_strided_plaintext_component_cuda);
+  m.impl("add_strided_plaintext_component_",
+         &ckks_add_strided_plaintext_component_inplace_cuda);
 }

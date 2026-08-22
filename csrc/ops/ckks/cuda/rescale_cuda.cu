@@ -1,4 +1,5 @@
-#include "ckks_cuda.h"
+#include <torch/library.h>
+#include <torch/torch.h>
 
 #include "../../common/cuda/kernel_support.cuh"
 #include "../../common/cuda/montgomery.cuh"
@@ -141,8 +142,6 @@ void rescale_inplace(torch::Tensor remaining_residues,
       });
 }
 
-}  // namespace
-
 torch::Tensor ckks_rescale_drop_leading_prime_nearest_cuda(
     const torch::Tensor remaining_residues,
     const torch::Tensor drop_prime_inverse_mont,
@@ -195,4 +194,17 @@ void ckks_rescale_drop_leading_prime_truncate_inplace_cuda(
                          rns_params,
                          0,
                          "ckks_rescale_drop_leading_prime_truncate");
+}
+
+}  // namespace
+
+TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
+  m.impl("rescale_drop_leading_prime_nearest",
+         &ckks_rescale_drop_leading_prime_nearest_cuda);
+  m.impl("rescale_drop_leading_prime_nearest_",
+         &ckks_rescale_drop_leading_prime_nearest_inplace_cuda);
+  m.impl("rescale_drop_leading_prime_truncate",
+         &ckks_rescale_drop_leading_prime_truncate_cuda);
+  m.impl("rescale_drop_leading_prime_truncate_",
+         &ckks_rescale_drop_leading_prime_truncate_inplace_cuda);
 }

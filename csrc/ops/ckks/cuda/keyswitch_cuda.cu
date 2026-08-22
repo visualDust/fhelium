@@ -1,9 +1,12 @@
-#include "ckks_cuda.h"
+#include <torch/library.h>
+#include <torch/torch.h>
 
 #include "../../common/cuda/kernel_support.cuh"
 #include "../../common/cuda/montgomery.cuh"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
+
+namespace {
 
 // Key-switch tensor requirements. ModDown takes integral coefficient/standard
 // canonical q_residues [*batch, Q_limb, coefficient] in [0, q_i) and
@@ -289,4 +292,12 @@ void keyswitch_accumulate_digit_products_inplace_cuda(
                 FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2),
                 static_cast<int>(key_digit_row_start));
       });
+}
+
+}  // namespace
+
+TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
+  m.impl("keyswitch_moddown_qp_to_q", &keyswitch_moddown_qp_to_q_cuda);
+  m.impl("keyswitch_accumulate_digit_products_",
+         &keyswitch_accumulate_digit_products_inplace_cuda);
 }
