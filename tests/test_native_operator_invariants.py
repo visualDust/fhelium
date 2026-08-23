@@ -293,6 +293,7 @@ def test_cpu_and_cuda_complete_native_dispatch_sets_match() -> None:
             "mixed_radix_basis_extend_to_montgomery",
         ),
         "fhelium_ckks_ops": (
+            "multiply_two_component_ntt_montgomery",
             "add_prepared_plaintext_component",
             "add_prepared_plaintext_component_",
             "add_cyclic_compressed_plaintext_component",

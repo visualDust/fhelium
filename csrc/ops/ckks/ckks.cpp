@@ -25,8 +25,15 @@
 // [0, p_j) interval, sequentially divides and rounds by every P prime, and
 // returns newly allocated canonical coefficient/standard Q rows; its inverse
 // table is specifically `moddown_p_drop_inverses_montgomery`.
+// Two-component multiplication consumes equal
+// [2, *batch, limb, ntt_index] NTT/Montgomery lazy payloads, performs
+// component convolution, and returns a newly allocated
+// [3, *batch, limb, ntt_index] NTT/Montgomery lazy payload.
 
 TORCH_LIBRARY_FRAGMENT(fhelium_ckks_ops, m) {
+  m.def(
+      "multiply_two_component_ntt_montgomery(Tensor lhs_components, Tensor "
+      "rhs_components, Tensor rns_params) -> Tensor");
   m.def(
       "add_prepared_plaintext_component(Tensor ciphertext_component, Tensor "
       "prepared_plaintext, Tensor rns_params) -> Tensor");

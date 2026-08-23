@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+
 import torch
 
 
@@ -137,6 +138,17 @@ def _fake_fhelium_ckks_ops_keyswitch__moddown__qp__to__q(
     rns_params: torch.Tensor,
 ) -> torch.Tensor:
     return torch.empty_like(q_residues)
+
+
+@torch.library.register_fake(
+    "fhelium_ckks_ops::multiply_two_component_ntt_montgomery"
+)
+def _fake_fhelium_ckks_ops_multiply__two__component__ntt__montgomery(
+    lhs_components: torch.Tensor,
+    rhs_components: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> torch.Tensor:
+    return lhs_components.new_empty((3, *lhs_components.shape[1:]))
 
 
 @torch.library.register_fake(

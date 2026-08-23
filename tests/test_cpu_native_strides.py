@@ -81,6 +81,29 @@ def test_cpu_rns_and_ckks_vector_and_parameter_strides() -> None:
     )
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
+    lhs_components = torch.stack((residues, torch.roll(residues, 1, -1)))
+    rhs_components = torch.stack((rhs, torch.roll(rhs, 3, -1)))
+    d0 = rns_ops.montgomery_mul(
+        lhs_components[0], rhs_components[0], parameters
+    )
+    cross01 = rns_ops.montgomery_mul(
+        lhs_components[0], rhs_components[1], parameters
+    )
+    cross10 = rns_ops.montgomery_mul(
+        lhs_components[1], rhs_components[0], parameters
+    )
+    d1 = rns_ops.add_lazy(cross01, cross10, parameters)
+    d2 = rns_ops.montgomery_mul(
+        lhs_components[1], rhs_components[1], parameters
+    )
+    expected_product = torch.stack((d0, d1, d2))
+    actual_product = ckks_ops.multiply_two_component_ntt_montgomery(
+        _gap_last_axis(lhs_components),
+        _gap_last_axis(rhs_components),
+        strided_parameters,
+    )
+    torch.testing.assert_close(actual_product, expected_product, rtol=0, atol=0)
+
     source_indices = torch.arange(63, -1, -1, dtype=torch.int32)
     source_sign = torch.where(
         torch.arange(64) % 3 == 0,

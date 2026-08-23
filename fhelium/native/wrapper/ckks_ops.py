@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+
 import torch
 
 
@@ -325,6 +326,31 @@ def keyswitch_moddown_qp_to_q(
     _require_native()
     return torch.ops.fhelium_ckks_ops.keyswitch_moddown_qp_to_q(
         q_residues, p_residues, moddown_p_drop_inverses_montgomery, rns_params
+    )
+
+
+def multiply_two_component_ntt_montgomery(
+    lhs_components: torch.Tensor,
+    rhs_components: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_ckks_ops::multiply_two_component_ntt_montgomery``.
+
+    Torch schema::
+
+        fhelium_ckks_ops::multiply_two_component_ntt_montgomery(Tensor lhs_components, Tensor rhs_components, Tensor rns_params) -> Tensor
+
+    Args:
+        lhs_components: torch.Tensor.
+        rhs_components: torch.Tensor.
+        rns_params: torch.Tensor.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_ckks_ops.multiply_two_component_ntt_montgomery(
+        lhs_components, rhs_components, rns_params
     )
 
 

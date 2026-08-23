@@ -1582,27 +1582,26 @@ class CkksEngine:
             lhs.scale * rhs.scale,
             value_name="multiply result",
         )
-        d0 = self.rns_runtime.montgomery_mul(
-            lhs.c0, rhs.c0, prime_ids=lhs.prime_ids
+        parameters = self.rns_runtime.rns_parameters_for_prime_ids(
+            lhs.prime_ids
         )
-        x0y1 = self.rns_runtime.montgomery_mul(
-            lhs.c0, rhs.c1, prime_ids=lhs.prime_ids
+        # Native CPU/CUDA dispatch computes
+        # (x0*y0, x0*y1 + x1*y0, x1*y1) in one pass; the cross term remains
+        # lazy modulo 2q.
+        product_data = ckks_ops.multiply_two_component_ntt_montgomery(
+            lhs.data,
+            rhs.data,
+            parameters,
         )
-        x1y0 = self.rns_runtime.montgomery_mul(
-            lhs.c1, rhs.c0, prime_ids=lhs.prime_ids
-        )
-        d1 = self.rns_runtime.add_lazy(x0y1, x1y0, prime_ids=lhs.prime_ids)
-        d2 = self.rns_runtime.montgomery_mul(
-            lhs.c1, rhs.c1, prime_ids=lhs.prime_ids
-        )
-        return self._ciphertext_from_components(
-            (d0, d1, d2),
+        return Ciphertext(
+            data=product_data,
             level=lhs.level,
             scale=product_scale,
+            context_id=self.context.context_id,
+            prime_ids=lhs.prime_ids,
             polynomial_domain="ntt",
             modulus_basis=lhs.modulus_basis,
             residue_representation="montgomery",
-            prime_ids=lhs.prime_ids,
         )
 
     def relinearize(

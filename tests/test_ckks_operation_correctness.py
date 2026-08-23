@@ -939,6 +939,48 @@ def test_multiply_and_relinearize_pipeline_is_correct(
     )
 
 
+def test_multiply_matches_reference_component_convolution(
+    engine: CkksEngine,
+) -> None:
+    left = engine.coefficient_domain_to_ntt_domain(
+        engine.encrypt_message(_message(engine))
+    )
+    right = engine.coefficient_domain_to_ntt_domain(
+        engine.encrypt_message(_other_message(engine))
+    )
+    left_before = left.data.clone()
+    right_before = right.data.clone()
+    d0 = engine.rns_runtime.montgomery_mul(
+        left.c0, right.c0, prime_ids=left.prime_ids
+    )
+    cross01 = engine.rns_runtime.montgomery_mul(
+        left.c0, right.c1, prime_ids=left.prime_ids
+    )
+    cross10 = engine.rns_runtime.montgomery_mul(
+        left.c1, right.c0, prime_ids=left.prime_ids
+    )
+    d1 = engine.rns_runtime.add_lazy(cross01, cross10, prime_ids=left.prime_ids)
+    d2 = engine.rns_runtime.montgomery_mul(
+        left.c1, right.c1, prime_ids=left.prime_ids
+    )
+
+    actual = engine.multiply(left, right)
+
+    assert torch.equal(actual.data, torch.stack((d0, d1, d2)))
+    assert torch.equal(left.data, left_before)
+    assert torch.equal(right.data, right_before)
+    assert actual.data.data_ptr() not in {
+        left.data.data_ptr(),
+        right.data.data_ptr(),
+    }
+    assert actual.component_count == 3
+    assert actual.level == left.level
+    assert actual.scale == left.scale * right.scale
+    assert actual.prime_ids == left.prime_ids
+    assert actual.polynomial_domain == "ntt"
+    assert actual.residue_representation == "montgomery"
+
+
 @pytest.mark.gpu
 def test_final_legal_level_remains_decryptable() -> None:
     """A short chain must support decryption at its last legal level."""
