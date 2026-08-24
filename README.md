@@ -12,14 +12,14 @@ FHElium is a CPU- and CUDA-accelerated homomorphic-encryption library for Python
 
 ## Install
 
-FHElium currently supports Linux x86-64 and macOS Apple Silicon with Python 3.12 or 3.13, PyTorch `>=2.10,<2.14`, and a C++17 host compiler. The default build follows the target Torch package: CPU-only Torch produces a CPU-only extension, while CUDA-enabled Torch produces one extension with CPU and CUDA implementations. CUDA builds are Linux x86-64 only and additionally require a matching CUDA toolkit and CUDA C++17 compiler. macOS execution uses the native CPU backend, not PyTorch MPS.
+FHElium currently supports Linux x86-64, Windows x86-64, and macOS Apple Silicon with Python 3.12 or 3.13, PyTorch `>=2.10,<2.14`, and a C++17 host compiler. The default build follows the target Torch package: CPU-only Torch produces a CPU-only extension, while CUDA-enabled Torch produces one extension with CPU and CUDA implementations. CUDA builds on Linux or Windows additionally require a matching CUDA toolkit and CUDA C++17 compiler. macOS execution uses the native CPU backend, not PyTorch MPS.
 
 Use the [installation selector](https://fhelium.550w.host/#install-fhelium) for a compatible prebuilt Linux wheel or a source-build command for the selected Torch environment. Prebuilt wheels are complete `fhelium` wheels served from FHElium's static release store; PyPI provides the source distribution.
 
 For a source build, install the intended PyTorch build first, following the [official PyTorch instructions](https://pytorch.org/get-started/locally/). Then build FHElium in the same Python environment:
 
 ```bash
-python -m pip install "scikit-build-core>=1.0.3" "cmake>=3.18" ninja
+python -m pip install "scikit-build-core==1.0.3" "cmake>=3.18" ninja
 python -m pip install \
   --no-binary=fhelium \
   --no-build-isolation --no-cache-dir --verbose \
@@ -31,16 +31,6 @@ The build uses the installed Torch stack. `--no-build-isolation` keeps that stac
 Set `CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS=CPU"` for a CPU-only build even
 with CUDA-enabled Torch, `CUDA` for CUDA-only, or `CPU+CUDA` for an explicit
 combined build.
-
-For an editable checkout:
-
-```bash
-git clone https://github.com/VisualDust/fhelium.git
-cd fhelium
-python -m pip install "scikit-build-core>=1.0.3" "cmake>=3.18" ninja
-python -m pip install \
-  --editable . --no-build-isolation --no-cache-dir --verbose
-```
 
 The [installation guide](https://fhelium.550w.host/tutorial/installation) covers CUDA architecture selection and build troubleshooting.
 
@@ -144,16 +134,87 @@ Start with [`examples/01_basic_ckks_flow.py`](./examples/01_basic_ckks_flow.py) 
 
 ## Development
 
-After installing an editable checkout:
+Development uses an editable checkout. Clone the repository, then choose one
+of two environment paths:
 
 ```bash
+git clone https://github.com/VisualDust/fhelium.git
+cd fhelium
+```
+
+- Use **uv** for the maintained default environment. uv resolves the tracked
+  lock, creates `.venv`, installs the development dependencies, and builds
+  FHElium as an editable package.
+- Use **pip** when the environment must retain a selected Torch build, such as
+  a different CUDA variant. Install that Torch build first; pip then builds
+  FHElium against the active environment without replacing its Torch choice.
+
+These paths are alternatives for one environment. Use separate virtual
+environments when testing both: `uv sync --locked` restores the default locked
+Torch line, while the pip path preserves the Torch package already selected.
+
+The repository files have separate responsibilities:
+
+- `pyproject.toml` is the package-manager interface for dependency metadata. It
+  declares the build and development groups and identifies the provider for
+  dynamic runtime dependencies.
+- `uv.lock` records one tested resolution of those declarations for the
+  default developer environment, currently using Torch 2.13.
+- `packaging/release_matrix.json` declares the Python, Torch, CUDA, and
+  operating-system configurations for published artifacts. The developer lock
+  does not replace this matrix.
+- `justfile` provides optional shortcuts over the commands below. It does not
+  define dependencies or supported release configurations.
+
+### Default environment with uv
+
+```bash
+uv --preview-features extra-build-dependencies sync --locked
+```
+
+Activate the resulting environment with `source .venv/bin/activate` on Linux
+or macOS, or `.venv\Scripts\Activate.ps1` in Windows PowerShell. The repository
+requires a validated minimum uv version because uv 0.9 labels package-specific
+build dependencies as a preview feature.
+
+### Environment with a selected Torch build
+
+After installing the intended Torch package in the active environment:
+
+```bash
+python -m pip install --group build
+python -m pip install \
+  --editable . --no-build-isolation --no-cache-dir --verbose
 python -m pip install --group dev
+```
+
+`--no-build-isolation` makes the selected Torch ABI visible to the native
+build. `--no-cache-dir` prevents reuse of a wheel compiled for another Torch
+environment.
+
+### Validate a change
+
+Install the repository hooks once from either environment:
+
+```bash
 pre-commit install
+```
+
+Then run the project checks:
+
+```bash
 python -m pytest -q
 ruff check .
 ruff format --check .
 pyright
 ```
+
+If `just` is installed, `just check` runs the Ruff, Pyright, and pytest commands
+above. Use `just NATIVE_BACKENDS=CPU build-uv` in the uv environment or
+`just NATIVE_BACKENDS=CPU build-pip` in the pip environment to rebuild through
+the corresponding path. Select `CPU+CUDA` only when that environment contains
+a CUDA-enabled Torch package and matching toolkit. uv and `just` remain
+optional: pip is the public installation and release-validation path.
 
 The [developer guide](https://fhelium.550w.host/developer/) follows calls across the Python API, PyTorch dispatcher, C++, and CUDA kernels.
 

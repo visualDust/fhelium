@@ -17,23 +17,28 @@ clean-venv: # remove virtual environment folder
 
 clean-all: clean-build clean-cache clean-pycache clean-venv
 
-# number of build threads (override with `just install BUILD_JOBS=16`)
-BUILD_JOBS := `nproc`
+# number of build threads (override with `just BUILD_JOBS=16 build-uv`)
+BUILD_JOBS := `python -c "import os; print(os.cpu_count() or 1)"`
 
 # native backends: AUTO, CPU, CUDA, or CPU+CUDA
 NATIVE_BACKENDS := "AUTO"
 
-build: install # the supported developer build is an editable install
+export CMAKE_BUILD_PARALLEL_LEVEL := BUILD_JOBS
+export CMAKE_ARGS := "-DFHELIUM_NATIVE_BACKENDS=" + NATIVE_BACKENDS
 
-install:
-    CMAKE_BUILD_PARALLEL_LEVEL={{BUILD_JOBS}} \
-    CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS={{NATIVE_BACKENDS}}" \
-    pip install --editable . --verbose --no-build-isolation --no-cache-dir
+bootstrap-uv: # create the locked developer environment and editable native build
+    uv --preview-features extra-build-dependencies sync --locked
 
-install-uv:
-    CMAKE_BUILD_PARALLEL_LEVEL={{BUILD_JOBS}} \
-    CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS={{NATIVE_BACKENDS}}" \
-    uv pip install --editable . --verbose --no-build-isolation --no-cache
+build-uv: # rebuild FHElium inside the uv-managed environment
+    uv --preview-features extra-build-dependencies sync --locked --reinstall-package fhelium
+
+bootstrap-pip: # selected Torch must already be installed in the active environment
+    python -m pip install --group build
+    python -m pip install --editable . --verbose --no-build-isolation --no-cache-dir
+    python -m pip install --group dev
+
+build-pip: # rebuild FHElium against the active environment's selected Torch
+    python -m pip install --editable . --verbose --no-build-isolation --no-cache-dir
 
 generate-prime-catalog:
     python scripts/generate_prime_catalog.py --force
@@ -54,8 +59,8 @@ docs-build:
     npm --prefix docs run build
 
 lint:
-    ruff check fhelium tests examples scripts
-    ruff format --check fhelium tests examples scripts
+    ruff check .
+    ruff format --check .
 
 typecheck:
     pyright

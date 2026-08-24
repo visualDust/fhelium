@@ -18,7 +18,7 @@ The following command builds from the PyPI source distribution against the
 preinstalled target Torch environment:
 
 ```bash
-python -m pip install "scikit-build-core>=1.0.3" "cmake>=3.18" ninja
+python -m pip install "scikit-build-core==1.0.3" "cmake>=3.18" ninja
 CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS=CPU+CUDA" \
   python -m pip install \
     --no-binary=fhelium \

@@ -91,24 +91,29 @@ than execute a different algorithm silently.
 
 ## 5. Build from a clean enough state
 
-The repository provides direct build/install recipes through `just`:
+Rebuild the editable native extension through the selected environment
+frontend. The uv-managed environment uses:
 
 ```bash
-just clean-build
-just build
+uv --preview-features extra-build-dependencies \
+  sync --locked --reinstall-package fhelium
 ```
 
-or an editable installation with the configured build backend:
+The pip-managed environment uses:
 
 ```bash
-just install-uv
+python -m pip install \
+  --editable . --verbose --no-build-isolation --no-cache-dir
 ```
 
-Set the intended native build when backend coverage matters:
+Set `CMAKE_ARGS=-DFHELIUM_NATIVE_BACKENDS=CPU` or `CPU+CUDA` in the current
+shell before either command when backend coverage matters. Set
+`CMAKE_BUILD_PARALLEL_LEVEL` to control build parallelism. Contributors who
+install `just` may use the corresponding optional shortcuts:
 
 ```bash
-just install NATIVE_BACKENDS=CPU
-just install NATIVE_BACKENDS=CPU+CUDA
+just NATIVE_BACKENDS=CPU build-uv
+just NATIVE_BACKENDS=CPU+CUDA build-pip
 ```
 
 Use the project environment and the selected Python/Torch/CUDA toolchain.

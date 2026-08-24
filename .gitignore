@@ -3,7 +3,6 @@ experiments/
 dev-examples/
 .ignored
 *.pyi
-uv.lock
 tests/FxGraphDrawer/
 
 # poetry

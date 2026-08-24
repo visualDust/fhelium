@@ -6,17 +6,34 @@ generated API reference, examples, and documentation.
 
 ## Prepare the source tree
 
-Clone the repository, create an isolated environment with the supported Python
-version, and install the selected CPU-only or CUDA-enabled PyTorch build first.
-Then install the build tools, the project, and the development dependencies using the
-workflow defined by the repository's `pyproject.toml` and `uv.lock`.
-
-After the editable native build, install the declared development group:
+Clone the repository with a supported Python version. The recommended uv
+workflow resolves the tracked developer snapshot, installs the declared
+development group, and builds the editable native extension:
 
 ```bash
-python -m pip install --group dev
+uv --preview-features extra-build-dependencies sync --locked
+```
+
+Activate `.venv` for the current shell, then install the repository hooks:
+
+```bash
 pre-commit install
 ```
+
+Use `source .venv/bin/activate` on Linux or macOS, or
+`.venv\Scripts\Activate.ps1` in Windows PowerShell.
+
+The lock is a reproducible default development environment, not the supported
+release matrix. `packaging/release_matrix.json` remains the authority for
+formal Python, Torch, CUDA, and operating-system artifact configurations.
+
+Contributors who use a custom Torch build or do not use uv can follow the
+pip-compatible editable installation in the repository README: install the
+selected Torch package and native build tools, install FHElium with
+`--no-build-isolation --no-cache-dir`, then install the `dev` dependency group.
+Both environment paths consume dependency declarations from `pyproject.toml`.
+The validation commands below work directly in either environment; the
+`justfile` provides optional shortcuts for contributors who use `just`.
 
 Native binaries are specific to the Python, PyTorch, CUDA, and C++ application
 binary interfaces (ABIs) and to the GPU architectures selected when they were
