@@ -39,8 +39,10 @@ python -m pytest packaging/test_release_repository.py
 
 Installed-wheel verification uses a caller-owned `--work-root`; Windows builds
 require the same root for their build environment. The release workflow places
-these roots under the runner's temporary directory, while standalone operators
-can select one dedicated task root. Each Windows matrix cell receives separate
+the physical root under the runner's temporary directory and maps it through a
+temporary short drive alias for Windows path-length limits. The alias is removed
+after the build. Standalone operators can select one dedicated task root. Each
+Windows matrix cell receives separate
 build-environment, native-build, archive-inspection, and installed-wheel
 verification directories below that root. FHElium's CMake configuration
 supplies deterministic MSVC and CUDA host-link options. Windows wheels import
@@ -84,7 +86,17 @@ workflow. Its default `build-only` mode accepts a branch, commit SHA, or tag as
 4. prepares and validates one combined repository candidate;
 5. preserves the candidate as a workflow artifact.
 
+Selecting `build_scope=windows-only` resolves the source identity, validates the
+release matrix, and builds and uploads only the eight Windows cells. It skips
+project verification, Linux wheels, release-candidate preparation, and all
+publication jobs. This scope supports targeted recovery after a complete Linux
+build and project verification have already passed.
+
 Protected `publish` mode requires an existing release `tag` matching the project
-version and performs publication only after both platform builds and candidate
-preparation succeed. The Windows runner receives no PyPI or R2 publication
-credentials.
+version and `build_scope=all`. It performs publication only after both platform
+builds and candidate preparation succeed. The Windows runner receives no PyPI
+or R2 publication credentials. After public Linux and Windows installation
+checks pass, the workflow preserves the source distribution, release manifest,
+and generated installation-catalog patch as one Actions artifact. The release
+operator writes the release notes and creates the GitHub Release manually from
+the existing tag and those files.

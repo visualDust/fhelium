@@ -83,8 +83,10 @@ target host and execute one FHElium native CUDA operator on a real GPU.
 Windows cells build on the Windows x64 self-hosted runner with the matrix-selected
 CPython, Torch, Visual Studio 2022 toolset, Windows SDK, and CUDA Toolkit. Each
 cell uses a clean directory below the caller-owned `--work-root`. The release
-workflow supplies a root below the runner's temporary directory; standalone
-validation can supply a dedicated task root without writing into a user profile.
+workflow keeps the physical root below the runner's temporary directory and
+maps it through a temporary short drive alias to satisfy Windows path-length
+limits. It removes the alias after the build. Standalone validation can supply a
+dedicated task root without writing into a user profile.
 
 The builder checks:
 
@@ -123,11 +125,22 @@ is manual only. Its default `build-only` mode:
 5. prepares one combined static-repository candidate;
 6. preserves the candidate as a workflow artifact.
 
-Protected `publish` mode is a separate operator choice. It publishes immutable
-R2 objects only from an existing release tag matching the project version,
-verifies the PyPI source distribution, updates cumulative indexes, checks public
-Linux and Windows installs, and finally creates the GitHub Release. FHElium
-0.10.0 remains immutable; Windows wheels begin with FHElium 0.20.0.
+`build_scope=windows-only` resolves the source identity, validates the release
+matrix, and runs all eight Windows cells. It skips project verification, Linux
+wheels, release-candidate preparation, and publication. It is a targeted build
+path after a prior complete Linux build and project verification have passed.
+
+Protected `publish` mode is a separate operator choice. It requires an existing
+release tag matching the project version and `build_scope=all`. It publishes
+immutable R2 objects, verifies the PyPI source distribution, updates cumulative
+indexes, and checks public Linux and Windows installs. Once those checks pass,
+it preserves the source distribution, release manifest, and generated
+installation-catalog patch as a workflow artifact. The release operator writes
+the release notes and creates the GitHub Release manually from the existing tag
+and those three files. The catalog patch is reviewed and applied only after the
+public release exists, so the documentation does not advertise unavailable
+wheel recipes. FHElium 0.10.0 remains immutable; Windows wheels begin with
+FHElium 0.20.0.
 
 ## Packaging validation
 

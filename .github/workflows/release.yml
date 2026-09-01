@@ -9,6 +9,12 @@ on:
         default: build-only
         type: choice
         options: [build-only, publish]
+      build_scope:
+        description: Build the complete matrix or only the Windows matrix
+        required: true
+        default: all
+        type: choice
+        options: [all, windows-only]
       source_ref:
         description: Branch, commit SHA, or tag to build in build-only mode
         required: false
@@ -24,13 +30,7 @@ on:
         required: false
         default: ''
         type: string
-      prerelease:
-        description: Mark the GitHub Release as a pre-release
-        required: true
-        default: false
-        type: boolean
-
-run-name: FHElium ${{ inputs.mode }} ${{ inputs.mode == 'publish' && inputs.tag || inputs.source_ref }}
+run-name: FHElium ${{ inputs.mode }} ${{ inputs.build_scope }} ${{ inputs.mode == 'publish' && inputs.tag || inputs.source_ref }}
 
 permissions:
   contents: read
@@ -43,7 +43,7 @@ env:
   RELEASE_OUTPUT: ${{ github.workspace }}/release-output
 
 jobs:
-  build-linux:
+  resolve-source:
     runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -57,6 +57,7 @@ jobs:
         id: version
         shell: bash
         env:
+          BUILD_SCOPE: ${{ inputs.build_scope }}
           RELEASE_MODE: ${{ inputs.mode }}
           RELEASE_TAG: ${{ inputs.tag }}
           SOURCE_REF: ${{ inputs.source_ref }}
@@ -64,6 +65,10 @@ jobs:
           set -euo pipefail
           source_commit=$(git rev-parse HEAD)
           if [ "$RELEASE_MODE" = publish ]; then
+            if [ "$BUILD_SCOPE" != all ]; then
+              echo 'publish mode requires build_scope=all' >&2
+              exit 1
+            fi
             if [ -z "$RELEASE_TAG" ]; then
               echo 'publish mode requires tag' >&2
               exit 1
@@ -89,6 +94,16 @@ jobs:
             "$version" "$source_commit" >> "$GITHUB_OUTPUT"
           python -m pip install "jsonschema==4.26.0" "scikit-build-core==1.0.3"
           python -I packaging/matrix.py validate
+
+  verify-project:
+    if: inputs.build_scope == 'all'
+    needs: resolve-source
+    runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve-source.outputs.source_commit }}
+          fetch-depth: 0
       - name: Verify source tree
         shell: bash
         run: |
@@ -111,11 +126,22 @@ jobs:
           npm --prefix docs ci
           npm --prefix docs run build
           git diff --check
+
+  build-linux:
+    if: inputs.build_scope == 'all'
+    needs: resolve-source
+    runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.resolve-source.outputs.source_commit }}
+          fetch-depth: 0
       - name: Build Linux wheels
         shell: bash
         run: |
           set -euo pipefail
           rm -rf "$RELEASE_OUTPUT"
+          python -m pip install "jsonschema==4.26.0"
           docker build --file packaging/manylinux_2_28.Dockerfile \
             --tag fhelium-manylinux-cpu .
           docker build --file packaging/manylinux_2_28_cuda12_9.Dockerfile \
@@ -143,63 +169,125 @@ jobs:
           python -m twine check "$RELEASE_OUTPUT"/sdist/*
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: fhelium-linux-${{ steps.version.outputs.source_commit }}
+          name: fhelium-linux-${{ needs.resolve-source.outputs.source_commit }}
           path: ${{ env.RELEASE_OUTPUT }}/**
           if-no-files-found: error
           retention-days: 30
 
   build-windows:
-    needs: build-linux
+    needs: resolve-source
     runs-on: [self-hosted, Windows, X64, fhelium-release, gpu]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ needs.build-linux.outputs.source_commit }}
+          ref: ${{ needs.resolve-source.outputs.source_commit }}
           fetch-depth: 0
       - name: Build Windows wheels
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           Remove-Item -Recurse -Force $env:RELEASE_OUTPUT -ErrorAction SilentlyContinue
-          $py312 = (& py -3.12 -c 'import sys; print(sys.executable)').Trim()
-          $py313 = (& py -3.13 -c 'import sys; print(sys.executable)').Trim()
-          $workRoot = Join-Path $env:RUNNER_TEMP 'fhelium-windows-release-build'
-          & $py312 -m pip install 'jsonschema==4.26.0'
-          $cells = (& $py312 -I packaging/matrix.py cells `
-            --platform win_amd64 --json | ConvertFrom-Json)
-          foreach ($cell in $cells) {
-            $python = if ($cell.python_abi -eq 'cp312-cp312') { $py312 } else { $py313 }
-            & $python -I packaging/build_wheel.py `
-              --platform win_amd64 `
-              --configuration $cell.configuration `
-              --python-abi $cell.python_abi `
-              --python $python `
-              --work-root $workRoot `
-              --output $env:RELEASE_OUTPUT `
-              --verify-install
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          function Resolve-Python([string] $version) {
+            $installKeys = @(
+              "Registry::HKEY_LOCAL_MACHINE\Software\Python\PythonCore\$version\InstallPath",
+              "Registry::HKEY_CURRENT_USER\Software\Python\PythonCore\$version\InstallPath"
+            )
+            foreach ($installKey in $installKeys) {
+              if (-not (Test-Path $installKey)) { continue }
+              $installRoot = (Get-Item $installKey).GetValue('')
+              $candidate = Join-Path $installRoot 'python.exe'
+              if (-not (Test-Path $candidate -PathType Leaf)) { continue }
+              & $candidate -I -c `
+                'import platform,sys; expected=sys.argv[1]; actual=str(sys.version_info.major)+chr(46)+str(sys.version_info.minor); raise SystemExit(0 if actual == expected and platform.machine().upper() == sys.argv[2] else 1)' `
+                $version AMD64
+              if ($LASTEXITCODE -eq 0) {
+                return $candidate
+              }
+            }
+            throw "CPython $version AMD64 is not registered for this runner"
           }
+          $py312 = Resolve-Python '3.12'
+          $py313 = Resolve-Python '3.13'
+          $physicalWorkRoot = Join-Path $env:RUNNER_TEMP `
+            'fhelium-windows-release-build'
+          New-Item -ItemType Directory -Force $physicalWorkRoot | Out-Null
+          $workDrive = 'W:'
+          if (Test-Path "$workDrive\") {
+            throw "$workDrive is already in use"
+          }
+          & subst.exe $workDrive $physicalWorkRoot
+          if ($LASTEXITCODE -ne 0) { throw 'failed to map the build root' }
+          $workRoot = "$workDrive\"
+          try {
+            Remove-Item -Recurse -Force "$workRoot*" `
+              -ErrorAction SilentlyContinue
+            $matrixEnvironment = Join-Path $workRoot 'matrix-environment'
+            & $py312 -I -m venv --copies $matrixEnvironment
+            if ($LASTEXITCODE -ne 0) {
+              throw 'failed to create the matrix environment'
+            }
+            $matrixPython = Join-Path $matrixEnvironment 'Scripts\python.exe'
+            & $matrixPython -I -m pip install --only-binary=:all: `
+              'jsonschema==4.26.0'
+            if ($LASTEXITCODE -ne 0) {
+              throw 'failed to install the matrix validator'
+            }
+            $cellsJson = & $matrixPython -I packaging/matrix.py cells `
+              --platform win_amd64 --json
+            if ($LASTEXITCODE -ne 0) {
+              throw 'failed to read the Windows release cells'
+            }
+            $cells = $cellsJson | ConvertFrom-Json
+            Remove-Item -Recurse -Force $matrixEnvironment
+            foreach ($cell in $cells) {
+              $python = if ($cell.python_abi -eq 'cp312-cp312') {
+                $py312
+              } else {
+                $py313
+              }
+              & $python -I packaging/build_wheel.py `
+                --platform win_amd64 `
+                --configuration $cell.configuration `
+                --python-abi $cell.python_abi `
+                --python $python `
+                --work-root $workRoot `
+                --output $env:RELEASE_OUTPUT `
+                --verify-install
+              if ($LASTEXITCODE -ne 0) {
+                throw "Windows cell failed: $($cell.configuration) $($cell.python_abi)"
+              }
+            }
+            Remove-Item -Recurse -Force "$workRoot*" `
+              -ErrorAction SilentlyContinue
+          } finally {
+            & subst.exe $workDrive /D
+            if ($LASTEXITCODE -ne 0) {
+              throw 'failed to remove the build-root mapping'
+            }
+          }
+          Remove-Item -Recurse -Force $physicalWorkRoot
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: fhelium-windows-${{ needs.build-linux.outputs.source_commit }}
+          name: fhelium-windows-${{ needs.resolve-source.outputs.source_commit }}
           path: ${{ env.RELEASE_OUTPUT }}/**
           if-no-files-found: error
           retention-days: 30
 
   prepare-release:
-    needs: [build-linux, build-windows]
+    if: inputs.build_scope == 'all'
+    needs: [resolve-source, verify-project, build-linux, build-windows]
     runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
     outputs:
-      version: ${{ needs.build-linux.outputs.version }}
-      source_commit: ${{ needs.build-linux.outputs.source_commit }}
+      version: ${{ needs.resolve-source.outputs.version }}
+      source_commit: ${{ needs.resolve-source.outputs.source_commit }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ needs.build-linux.outputs.source_commit }}
+          ref: ${{ needs.resolve-source.outputs.source_commit }}
           fetch-depth: 0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: fhelium-*-${{ needs.build-linux.outputs.source_commit }}
+          pattern: fhelium-*-${{ needs.resolve-source.outputs.source_commit }}
           path: ${{ env.RELEASE_OUTPUT }}
           merge-multiple: true
       - name: Prepare repository candidate
@@ -227,7 +315,7 @@ jobs:
             "$RELEASE_OUTPUT/prepared-site" --source-commit "$(git rev-parse HEAD)"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: fhelium-${{ needs.build-linux.outputs.source_commit }}
+          name: fhelium-${{ needs.resolve-source.outputs.source_commit }}
           path: |
             ${{ env.RELEASE_OUTPUT }}/sdist/*
             ${{ env.RELEASE_OUTPUT }}/prepared-site/**
@@ -449,37 +537,75 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $py312 = (& py -3.12 -c 'import sys; print(sys.executable)').Trim()
-          $py313 = (& py -3.13 -c 'import sys; print(sys.executable)').Trim()
-          & $py312 -m pip install 'jsonschema==4.26.0'
-          $cells = (& $py312 -I packaging/matrix.py cells `
-            --platform win_amd64 --json | ConvertFrom-Json)
-          foreach ($cell in $cells) {
-            $base = if ($cell.python_abi -eq 'cp312-cp312') { $py312 } else { $py313 }
-            $configuration = (& $py312 -I packaging/matrix.py show `
-              $cell.configuration | ConvertFrom-Json)
-            $environment = Join-Path $env:RUNNER_TEMP `
-              "public-$($cell.configuration)-$($cell.python_abi)"
-            Remove-Item -Recurse -Force $environment -ErrorAction SilentlyContinue
-            & $base -m venv --copies $environment
-            $python = Join-Path $environment 'Scripts\python.exe'
-            & $python -m pip install --index-url $configuration.torch_index_url `
-              $configuration.torch_requirement
-            & $python -m pip install --only-binary=fhelium `
-              --extra-index-url `
-              "https://download.fhelium.550w.host/$($cell.configuration)/simple/" `
-              "fhelium==${{ needs.prepare-release.outputs.version }}"
-            & $python -I -c `
-              'import torch; import fhelium; from fhelium.native import native_status; s=native_status(); assert s.available; x=torch.tensor([[[1,2]]],dtype=torch.int64); p=torch.zeros((8,1),dtype=torch.int64); p[0,0]=34; assert torch.equal(torch.ops.fhelium_rns_ops.add_standard(x,x,p),x+x)'
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          function Resolve-Python([string] $version) {
+            $installKeys = @(
+              "Registry::HKEY_LOCAL_MACHINE\Software\Python\PythonCore\$version\InstallPath",
+              "Registry::HKEY_CURRENT_USER\Software\Python\PythonCore\$version\InstallPath"
+            )
+            foreach ($installKey in $installKeys) {
+              if (-not (Test-Path $installKey)) { continue }
+              $installRoot = (Get-Item $installKey).GetValue('')
+              $candidate = Join-Path $installRoot 'python.exe'
+              if (-not (Test-Path $candidate -PathType Leaf)) { continue }
+              & $candidate -I -c `
+                'import platform,sys; expected=sys.argv[1]; actual=str(sys.version_info.major)+chr(46)+str(sys.version_info.minor); raise SystemExit(0 if actual == expected and platform.machine().upper() == sys.argv[2] else 1)' `
+                $version AMD64
+              if ($LASTEXITCODE -eq 0) {
+                return $candidate
+              }
+            }
+            throw "CPython $version AMD64 is not registered for this runner"
           }
+          $py312 = Resolve-Python '3.12'
+          $py313 = Resolve-Python '3.13'
+          $physicalWorkRoot = Join-Path $env:RUNNER_TEMP `
+            'fhelium-windows-public-verification'
+          New-Item -ItemType Directory -Force $physicalWorkRoot | Out-Null
+          $workDrive = 'V:'
+          if (Test-Path "$workDrive\") {
+            throw "$workDrive is already in use"
+          }
+          & subst.exe $workDrive $physicalWorkRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw 'failed to map the public verification root'
+          }
+          $workRoot = "$workDrive\"
+          try {
+            Remove-Item -Recurse -Force "$workRoot*" `
+              -ErrorAction SilentlyContinue
+            $driverEnvironment = Join-Path $workRoot 'driver-environment'
+            & $py312 -I -m venv --copies $driverEnvironment
+            if ($LASTEXITCODE -ne 0) {
+              throw 'failed to create the public verification driver'
+            }
+            $driverPython = Join-Path $driverEnvironment 'Scripts\python.exe'
+            & $driverPython -I -m pip install --only-binary=:all: `
+              'jsonschema==4.26.0'
+            if ($LASTEXITCODE -ne 0) {
+              throw 'failed to install the matrix validator'
+            }
+            & $driverPython -I packaging/verify_public_windows.py `
+              --python-312 $py312 `
+              --python-313 $py313 `
+              --work-root $workRoot `
+              --version '${{ needs.prepare-release.outputs.version }}'
+            if ($LASTEXITCODE -ne 0) {
+              throw 'public Windows wheel verification failed'
+            }
+            Remove-Item -Recurse -Force "$workRoot*" `
+              -ErrorAction SilentlyContinue
+          } finally {
+            & subst.exe $workDrive /D
+            if ($LASTEXITCODE -ne 0) {
+              throw 'failed to remove the public verification mapping'
+            }
+          }
+          Remove-Item -Recurse -Force $physicalWorkRoot
 
-  publish-github-release:
+  prepare-github-release-assets:
     if: inputs.mode == 'publish'
     needs: [prepare-release, publish, verify-public-windows]
     runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -490,7 +616,7 @@ jobs:
         with:
           name: fhelium-${{ needs.prepare-release.outputs.source_commit }}
           path: ${{ env.RELEASE_OUTPUT }}
-      - name: Prepare installation-catalog patch
+      - name: Prepare GitHub Release assets
         shell: bash
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -514,38 +640,17 @@ jobs:
             --stdout \
             > "$RELEASE_OUTPUT/install-catalog.patch"
           git switch --detach "$SOURCE_COMMIT"
-      - name: Publish GitHub release record
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PRERELEASE: ${{ inputs.prerelease }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          SOURCE_COMMIT: ${{ needs.prepare-release.outputs.source_commit }}
-        run: |
-          set -euo pipefail
-          python packaging/release_identity.py \
-            --tag "$RELEASE_TAG" \
-            --source-commit "$SOURCE_COMMIT" \
-            --remote origin
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" \
-              "$RELEASE_OUTPUT"/sdist/* \
-              "$RELEASE_OUTPUT/prepared-site/release-manifest.json" \
-              "$RELEASE_OUTPUT/install-catalog.patch" \
-              --clobber
-          else
-            release_flags=()
-            if [ "$PRERELEASE" = true ]; then
-              release_flags+=(--prerelease)
-            fi
-            gh release create "$RELEASE_TAG" \
-              "$RELEASE_OUTPUT"/sdist/* \
-              "$RELEASE_OUTPUT/prepared-site/release-manifest.json" \
-              "$RELEASE_OUTPUT/install-catalog.patch" \
-              --verify-tag \
-              --generate-notes \
-              --title "FHElium $RELEASE_TAG" \
-              "${release_flags[@]}"
-          fi
-          gh release edit "$RELEASE_TAG" \
-            --prerelease="$PRERELEASE"
+          release_assets="$RELEASE_OUTPUT/github-release"
+          mkdir -p "$release_assets"
+          cp "$RELEASE_OUTPUT"/sdist/* "$release_assets/"
+          cp \
+            "$RELEASE_OUTPUT/prepared-site/release-manifest.json" \
+            "$release_assets/"
+          cp "$RELEASE_OUTPUT/install-catalog.patch" "$release_assets/"
+      - name: Preserve GitHub Release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fhelium-github-release-${{ inputs.tag }}
+          path: ${{ env.RELEASE_OUTPUT }}/github-release/*
+          if-no-files-found: error
+          retention-days: 30
