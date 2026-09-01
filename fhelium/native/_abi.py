@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import sysconfig
 from collections.abc import Mapping
@@ -45,15 +46,27 @@ def torch_cxx11_abi(torch_module: Any) -> bool:
     return bool(torch_module._C._GLIBCXX_USE_CXX11_ABI)
 
 
+def python_abi_identity() -> dict[str, str]:
+    """Return the CPython fields that identify a native extension ABI."""
+
+    ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ""
+    soabi = sysconfig.get_config_var("SOABI") or ""
+    if not soabi and sys.platform == "win32":
+        match = re.fullmatch(r"\.(cp[0-9]+-win_amd64)\.pyd", ext_suffix)
+        if match is not None:
+            soabi = match.group(1)
+    return {
+        "implementation": sys.implementation.name,
+        "soabi": soabi,
+        "ext_suffix": ext_suffix,
+    }
+
+
 def runtime_identity(torch_module: Any) -> dict[str, Any]:
     """Return only the Python/Torch fields that govern binary compatibility."""
 
     return {
-        "python": {
-            "implementation": sys.implementation.name,
-            "soabi": sysconfig.get_config_var("SOABI") or "",
-            "ext_suffix": sysconfig.get_config_var("EXT_SUFFIX") or "",
-        },
+        "python": python_abi_identity(),
         "torch": {
             "version": str(torch_module.__version__),
             "cuda_version": torch_module.version.cuda,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from fhelium.legacy.engine import CkksEngine
+
 import gc
 import math
 from collections.abc import Callable, Mapping, Sequence
@@ -10,7 +12,7 @@ from typing import Any, Literal, cast
 
 import torch
 
-from fhelium import Ciphertext, CkksConfig, CkksEngine, Plaintext, Preset
+from fhelium import Ciphertext, CkksConfig, Plaintext, Preset
 from fhelium.benchmarks.model import (
     BenchmarkCheck,
     BenchmarkDefinition,
@@ -71,7 +73,7 @@ _CORRECTNESS_ATOL = {
 }
 
 _PARAMETER_SELECTION_RATIONALE = (
-    "The maintained slots8192-scale40-levels7-int64 preset fixes logN=14, "
+    "The fixed slots8192-scale40-levels7-int64 Preset uses logN=14, "
     "8,192 "
     "complex slots, seven public levels, one key-switch P prime, and an "
     "enforced 128-bit security-table budget. The indexed radix-2 backend is "
@@ -81,7 +83,7 @@ _PARAMETER_SELECTION_RATIONALE = (
 _TIMED_BOUNDARY = BenchmarkTimedBoundary(
     id="depth-aware-single-public-ckks-call",
     description=(
-        "One functional public CkksEngine call at one exact entry level, with "
+        "One functional public CkksEngine call at one entry level, with "
         "synchronized device completion."
     ),
     includes=(
@@ -134,7 +136,7 @@ class _OperationFixture:
     workload_multiplicative_depth_before_entry: int
     multiplicative_depth_added_by_call: int
     public_chain_transitions_consumed_by_call: int
-    canonicalize_for_oracle: Callable[[Ciphertext | Plaintext], torch.Tensor]
+    decode_for_oracle: Callable[[Ciphertext | Plaintext], torch.Tensor]
 
     @property
     def input_states(self) -> list[dict[str, Any]]:
@@ -278,7 +280,7 @@ class _LevelBundle:
                 workload_multiplicative_depth_before_entry=0,
                 multiplicative_depth_added_by_call=0,
                 public_chain_transitions_consumed_by_call=0,
-                canonicalize_for_oracle=decode_ciphertext,
+                decode_for_oracle=decode_ciphertext,
             )
         if operation == "decrypt":
             return _OperationFixture(
@@ -293,7 +295,7 @@ class _LevelBundle:
                 workload_multiplicative_depth_before_entry=0,
                 multiplicative_depth_added_by_call=0,
                 public_chain_transitions_consumed_by_call=0,
-                canonicalize_for_oracle=lambda value: engine.decode(
+                decode_for_oracle=lambda value: engine.decode(
                     _require_plaintext(value)
                 ),
             )
@@ -315,7 +317,7 @@ class _LevelBundle:
                 workload_multiplicative_depth_before_entry=0,
                 multiplicative_depth_added_by_call=0,
                 public_chain_transitions_consumed_by_call=0,
-                canonicalize_for_oracle=lambda value: _decode_ciphertext(
+                decode_for_oracle=lambda value: _decode_ciphertext(
                     engine,
                     engine.ntt_domain_to_coefficient_domain(
                         _require_ciphertext(value)
@@ -342,7 +344,7 @@ class _LevelBundle:
                 workload_multiplicative_depth_before_entry=0,
                 multiplicative_depth_added_by_call=0,
                 public_chain_transitions_consumed_by_call=0,
-                canonicalize_for_oracle=decode_ciphertext,
+                decode_for_oracle=decode_ciphertext,
             )
         if operation == "add":
             return _OperationFixture(
@@ -365,7 +367,7 @@ class _LevelBundle:
                 workload_multiplicative_depth_before_entry=0,
                 multiplicative_depth_added_by_call=0,
                 public_chain_transitions_consumed_by_call=0,
-                canonicalize_for_oracle=decode_ciphertext,
+                decode_for_oracle=decode_ciphertext,
             )
         if operation == "add_plaintext":
             return _OperationFixture(
@@ -390,7 +392,7 @@ class _LevelBundle:
                 workload_multiplicative_depth_before_entry=0,
                 multiplicative_depth_added_by_call=0,
                 public_chain_transitions_consumed_by_call=0,
-                canonicalize_for_oracle=decode_ciphertext,
+                decode_for_oracle=decode_ciphertext,
             )
         if operation == "multiply_plaintext":
             return _OperationFixture(
@@ -415,7 +417,7 @@ class _LevelBundle:
                 workload_multiplicative_depth_before_entry=0,
                 multiplicative_depth_added_by_call=1,
                 public_chain_transitions_consumed_by_call=0,
-                canonicalize_for_oracle=lambda value: _decode_ciphertext(
+                decode_for_oracle=lambda value: _decode_ciphertext(
                     engine,
                     engine.ntt_domain_to_coefficient_domain(
                         _require_ciphertext(value)
@@ -443,7 +445,7 @@ class _LevelBundle:
                 workload_multiplicative_depth_before_entry=0,
                 multiplicative_depth_added_by_call=1,
                 public_chain_transitions_consumed_by_call=0,
-                canonicalize_for_oracle=decode_ciphertext,
+                decode_for_oracle=decode_ciphertext,
             )
         if operation == "relinearize":
             return _OperationFixture(
@@ -465,7 +467,7 @@ class _LevelBundle:
                 workload_multiplicative_depth_before_entry=1,
                 multiplicative_depth_added_by_call=0,
                 public_chain_transitions_consumed_by_call=0,
-                canonicalize_for_oracle=decode_ciphertext,
+                decode_for_oracle=decode_ciphertext,
             )
         if operation == "rotate_with_key":
             return _OperationFixture(
@@ -487,7 +489,7 @@ class _LevelBundle:
                 workload_multiplicative_depth_before_entry=0,
                 multiplicative_depth_added_by_call=0,
                 public_chain_transitions_consumed_by_call=0,
-                canonicalize_for_oracle=decode_ciphertext,
+                decode_for_oracle=decode_ciphertext,
             )
         if operation == "rescale_to_next_level":
             if self.rescale_pending is None:
@@ -517,7 +519,7 @@ class _LevelBundle:
                 workload_multiplicative_depth_before_entry=1,
                 multiplicative_depth_added_by_call=0,
                 public_chain_transitions_consumed_by_call=1,
-                canonicalize_for_oracle=decode_ciphertext,
+                decode_for_oracle=decode_ciphertext,
             )
         if operation == "mod_switch_to_next_level":
             return _OperationFixture(
@@ -537,7 +539,7 @@ class _LevelBundle:
                 workload_multiplicative_depth_before_entry=0,
                 multiplicative_depth_added_by_call=0,
                 public_chain_transitions_consumed_by_call=1,
-                canonicalize_for_oracle=decode_ciphertext,
+                decode_for_oracle=decode_ciphertext,
             )
         raise KeyError(f"Unsupported operation {operation!r}")
 
@@ -873,7 +875,7 @@ def _validate_fixed_parameters(
         )
         != operations
     ):
-        raise ValueError("operations must retain canonical workload order")
+        raise ValueError("operations must retain specification workload order")
     return levels, operations
 
 
@@ -1029,7 +1031,7 @@ def _run_depth_aware_operations(
                 include_samples=include_raw_samples,
             )
 
-            # Correctness and all canonicalization are deliberately outside
+            # Correctness and all decoding are deliberately outside
             # the timed samples.
             correctness_output = fixture.call()
             synchronize(engine.device)
@@ -1037,7 +1039,7 @@ def _run_depth_aware_operations(
             mismatches = _state_mismatches(
                 fixture.predicted_exit_state, observed_exit_state
             )
-            decoded = fixture.canonicalize_for_oracle(correctness_output)
+            decoded = fixture.decode_for_oracle(correctness_output)
             synchronize(engine.device)
             error = _semantic_error_stats(decoded, fixture.expected_slots)
             atol = _CORRECTNESS_ATOL[operation]
@@ -1170,7 +1172,7 @@ def _run_depth_aware_operations(
                         passed=semantic_passed,
                         oracle=(
                             "All decoded slots are compared with the fixed "
-                            "cleartext operation after untimed canonicalization."
+                            "cleartext operation after untimed decoding."
                         ),
                         metric="max_abs_error",
                         observed=error["max_abs_error"],
@@ -1275,8 +1277,8 @@ DEFINITION = register_benchmark(
         description=(
             "Measures twelve functional public CKKS calls on one fixed "
             "cross-backend CKKS plan "
-            "while sweeping exact active-Q entry levels. Setup and correctness "
-            "canonicalization are excluded from synchronized call timing."
+            "while sweeping active-Q entry levels. Setup and correctness "
+            "decoding are excluded from synchronized call timing."
         ),
         profiles=(
             BenchmarkProfile(

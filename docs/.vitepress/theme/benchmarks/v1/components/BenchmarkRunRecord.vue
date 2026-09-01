@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import NavArrow from '../../../components/NavArrow.vue'
 import type { BenchmarkHighlight, BenchmarkV1Run } from '../data/catalog'
 import {
   cpuSummary,
   displayIdentifier,
   formatDate,
   formatScalar,
+  gpuSummary,
   resultUrl,
   runExecutionBackendLabel,
   runExecutionBackends,
@@ -58,7 +60,7 @@ function updateSelection(event: Event): void {
       <div>
         <p class="run-kicker"><span>{{ runExecutionBackendLabel(run) }}</span> execution</p>
         <h2>{{ runExecutionHardwareSummary(run) }}</h2>
-        <p class="host-line"><b>Device</b>{{ run.execution.device }}<template v-if="run.execution.backend === 'cuda'"><i>·</i><b>Host</b>{{ cpuSummary(run) }}</template></p>
+        <p class="host-line"><b>Selected device</b>{{ run.execution.device }}<template v-if="run.execution.backend === 'cuda'"><i>·</i><b>Visible CUDA</b>{{ gpuSummary(run) }}<i>·</i><b>Host</b>{{ cpuSummary(run) }}</template></p>
       </div>
     </section>
 
@@ -82,7 +84,7 @@ function updateSelection(event: Event): void {
       </div>
       <div class="run-actions">
         <label :class="{ selected }"><input type="checkbox" :checked="selected" :disabled="!canSelect" :aria-label="selected ? 'Remove Benchmark v1 run from comparison' : 'Select Benchmark v1 run for comparison'" @change="updateSelection"><span>{{ selected ? 'Selected' : 'Compare' }}</span></label>
-        <a :href="resultUrl(run)">Open report <span aria-hidden="true">→</span></a>
+        <a :href="resultUrl(run)">Open report <NavArrow /></a>
       </div>
     </footer>
   </article>

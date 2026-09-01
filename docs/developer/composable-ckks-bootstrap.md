@@ -1,7 +1,7 @@
 # CKKS bootstrap internals
 
 This page specifies the mathematical, value-state, and actual-scale invariants
-of the built-in full-slot composition executed through `CkksEngine`.
+of the built-in full-slot composition executed through `fhelium.eager.Engine`.
 
 ## Evaluator stack
 
@@ -10,7 +10,7 @@ flowchart TB
     FACTORY[Versioned bootstrap preset]
     COMPILE[Python compilers<br/>linear maps and polynomial approximations]
     STAGES[Full-slot Python evaluator<br/>ModRaise, CoeffsToSlots, reduction, SlotsToCoeffs]
-    ENGINE[CkksEngine operations<br/>rotate, multiply, relinearize, rescale]
+    ENGINE[eager Engine operations<br/>rotate, multiply, relinearize, rescale]
     RUNTIME[RNS and NTT runtime]
     OPS[torch.ops CPU / CUDA primitives]
 
@@ -19,7 +19,7 @@ flowchart TB
 
 `fhelium.experimental.bootstrap` compiles diagonal linear maps and polynomial
 approximations, then evaluates those stages through the ordinary
-`CkksEngine`, `Ciphertext`, NTT, and native-operator stack.
+`fhelium.eager.Engine`, `Ciphertext`, NTT, and native-operator stack.
 
 `fhelium.experimental.bootstrap.presets` constructs versioned measured
 compositions. Compiler and evaluator objects are paired by protocol: a
@@ -38,8 +38,8 @@ Let:
 - $L$ be `engine.public_level_count`, so the final public level is $L-1$;
 - $q_s$ be the leading scale prime at level $L-1$;
 - $q_b$ be the final structural Q prime;
-- $Q_\ell$ be the exact ordered Q basis named by
-  `engine.rns_layout.prime_ids(level=ell)`;
+- $Q_\ell$ be the ordered Q basis recorded by a ciphertext's `prime_ids` at
+  level $\ell$;
 - $C$ and $T$ be the unscaled CoeffsToSlots and SlotsToCoeffs maps;
 - $B$ be `modular_reduction.input_bound`;
 - $D$ be `modular_reduction.fused_input_divisor`, either $1$ or $B$ for the
@@ -87,7 +87,8 @@ $\Delta_0^2$:
    and then deliberately changes only metadata from
    $\Delta_b^{\rm actual}$ to $\Delta_0$. This reinterpretation changes the
    represented message by the factor
-   $\Delta_b^{\rm actual}/\Delta_0$; it is not an exact-scale rescale result.
+   $\Delta_b^{\rm actual}/\Delta_0$; it is a metadata reinterpretation, not a
+   rescale result.
 
 This private structural level is not a public CKKS computation level.
 
@@ -159,7 +160,7 @@ rounding order can prevent bitwise equality.
 
 For either evaluator, diagonal plaintexts are unbatched
 `[limb, ntt_index]` tensors in NTT domain with Montgomery residues, Q basis,
-actual scale $\Delta_0$, and exact active `prime_ids`. An unbatched diagonal
+actual scale $\Delta_0$, and active `prime_ids`. An unbatched diagonal
 broadcasts across homogeneous ciphertext batch axes. If a stage starts at
 level $\ell_j$ with scale $\Delta_j$ and leading prime $q_j$, then
 
@@ -208,7 +209,7 @@ converts the latter to $2\operatorname{Im}(w)/D$. Therefore:
 
 Conjugation, branch addition/subtraction, and monomial multiplication preserve
 level, actual scale, two components, Q basis, domain, residue representation,
-and exact `prime_ids`.
+and `prime_ids`.
 
 ## Periodic reduction
 
@@ -326,8 +327,8 @@ $$
 
 The compiled SlotsToCoeffs factor $q_b/(2\Delta_0)$ cancels the branch-split
 factor two and the structural normalization. If SlotsToCoeffs begins at level
-$\ell_T$ with scale $\Delta_0$ and contains $m_T$ stages, its exact metadata
-recurrence gives
+$\ell_T$ with scale $\Delta_0$ and contains $m_T$ stages, its scale recurrence
+gives
 
 $$
 \Delta_{\rm out}=\Delta_0
@@ -343,12 +344,12 @@ $$
 where $m_C$ and $m_T$ are the declared CoeffsToSlots and SlotsToCoeffs stage
 costs and $m_\rho$ is `modular_reduction.required_levels`. The output is a
 functional two-component coefficient-domain standard-RNS Q ciphertext with
-unchanged batch axes and exact `Q_ell_out` `prime_ids`.
+unchanged batch axes and `Q_ell_out` `prime_ids`.
 
 ## Primitive keys, caches, and factory requirements
 
 `required_rotations` is the union of direct or BSGS transform offsets.
-`key_steps("exact")` returns that inventory. `key_steps("power_of_two")` returns
+`key_steps("direct")` returns that inventory. `key_steps("power_of_two")` returns
 signed-power components that `_rotate_with_key_inventory()` composes online.
 `create_rotation_keys()` generates only the selected `RotationKeySet`. The
 callable accepts that set and a `ConjugationKey` as required keyword-only
@@ -365,8 +366,8 @@ modulus-dependent arithmetic tables. `clear_cache()` releases all three. None is
 part of ciphertext identity or serialized arithmetic state.
 
 The versioned `logn16` factories document a measured configuration derived
-from `Preset.slots32768_scale50_levels27_int64` with `base_prime_bits=50` and bound
-to an engine using `galois_generator=5`. Construction enforces only:
+from `Preset.slots32768_scale50_levels27_int64` with `base_prime_bits=50` for
+a `CkksConfig` configured with `galois_generator=5`. Construction enforces only:
 
 - a valid target level;
 - $q_b/\Delta_0\in[0.5,2]$;

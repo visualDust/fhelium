@@ -1,8 +1,82 @@
-# Inspect the runtime and CUDA topology
+# Inspect runtime, memory, and CUDA topology
 
 Use the `fhelium` command-line interface to record the installed package
 version, inspect CUDA devices, and verify peer topology before running a
 benchmark or distributed workload.
+
+FHElium exposes related observations with different responsibilities:
+
+- `fhelium.runtime.CpuTopology` reads the host CPU model and processor counts;
+- `fhelium.runtime.CudaTopology` reads process-visible CUDA devices and
+  directional peer-access capability;
+- `fhelium.runtime.MemorySnapshot` reads current host or CUDA memory capacity
+  and availability;
+- `fhelium.native.native_status()` reports native-extension discovery, ABI
+  validation, and loading;
+- `fhelium.native.cuda` uses the compiled CUDA extension for device inspection
+  and may run an opt-in peer-bandwidth probe.
+
+## Inspect CPU and CUDA topology
+
+```python
+from fhelium.runtime import CpuTopology, CudaTopology
+
+cpu = CpuTopology.probe()
+cuda = CudaTopology.probe()
+
+print(cpu.as_dict())
+print(cuda.as_dict())
+```
+
+`CudaTopology` contains all process-visible CUDA devices and the directional
+peer-access matrix:
+
+```python
+for device in cuda.devices:
+    print(device.device, device.name, device.compute_capability)
+
+print(cuda.peer_access)
+```
+
+CUDA indices follow the process-visible order after variables such as
+`CUDA_VISIBLE_DEVICES` are applied. `CpuTopology.probe()` does not inspect or
+initialize CUDA. Call `CudaTopology.probe()` only when CUDA inventory is
+needed. A JIT Session performs the observation required by its selected
+`device`; ordinary JIT callers do not probe topology first.
+
+In `peer_access[source][destination]`, the row is the source device and the
+column is the destination device. FHElium records diagonal entries as `True`;
+off-diagonal entries come from `torch.cuda.can_device_access_peer(source,
+destination)`. The matrix does not allocate buffers or measure bandwidth.
+
+## Read current memory availability
+
+Hardware topology and live memory availability have different lifetimes. Read
+a new memory snapshot whenever current availability matters:
+
+```python
+from fhelium.runtime import MemorySnapshot
+
+cpu_memory = MemorySnapshot.read("cpu")
+gpu_memory = MemorySnapshot.read("cuda:0")
+
+print(cpu_memory.available_bytes)
+print(gpu_memory.available_bytes)
+print(gpu_memory.torch_allocated_bytes)
+print(gpu_memory.torch_reserved_bytes)
+```
+
+CPU snapshots use psutil's operating-system memory report on Linux, Windows,
+and macOS. `available_bytes` estimates memory that can be supplied without
+swapping. CUDA snapshots use `torch.cuda.mem_get_info`: their availability
+covers the whole device and therefore reflects other processes and non-PyTorch
+allocations.
+`torch_allocated_bytes` and `torch_reserved_bytes` describe only the current
+process's PyTorch caching allocator and are `None` for CPU snapshots.
+
+Each object is an immutable point-in-time reading. Call `read` again to obtain
+new counters. Global available memory is a process-wide capacity observation;
+Residency reports values owned by its manager against caller-supplied budgets.
 
 ## Record the installed version
 
@@ -11,9 +85,9 @@ fhelium version
 ```
 
 Run the command in the same environment that will import FHElium. Package
-version alone is not a complete native application binary interface (ABI)
-record; also preserve the Python,
-PyTorch, CUDA, driver, and GPU information reported by the environment.
+version is one part of the native application binary interface (ABI) record;
+also preserve the Python,
+PyTorch, CUDA, driver, and GPU information reported by the relevant tools.
 
 ## Inspect CUDA devices
 

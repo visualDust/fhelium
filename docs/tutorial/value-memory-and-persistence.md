@@ -3,11 +3,11 @@
 **Example source:** [`examples/03_plaintext_ciphertext_memory.py`](https://github.com/VisualDust/fhelium/blob/main/examples/03_plaintext_ciphertext_memory.py)
 
 This example compares level-dependent value sizes, moves live values between
-devices, and round-trips exact values through direct files and optional
+devices, and round-trips values through direct files and optional
 artifacts. The tutorial separates three concepts that are easy to conflate:
 
 1. a live value's current device residency;
-2. an exact value file at a caller-selected path;
+2. a value file at a caller-selected path;
 3. artifact naming and durability policy.
 
 ## Run the example
@@ -45,11 +45,11 @@ A ciphertext owns one tensor with shape
 so its `*batch` prefix is empty. As the level increases, active Q rows are
 removed and the dense tensor becomes smaller.
 
-An unprepared or canonical plaintext can be much smaller than an
+An unprepared plaintext can be much smaller than an
 operation-ready RNS plaintext. Compare:
 
 ```python
-canonical = engine.encode(factor_message, level=ciphertext.level)
+encoded = engine.encode(factor_message, level=ciphertext.level)
 prepared = engine.prepare_plaintext_for_multiplication(
     engine.encode(factor_message, level=ciphertext.level)
 )
@@ -73,7 +73,7 @@ value after synchronization and after all consumers have finished.
 `torch.cuda.empty_cache()` concerns allocator-reserved blocks and is normally
 not an object-level lifecycle operation.
 
-## 3. Save one exact value file
+## 3. Save one value file
 
 ```python
 fh.save_value(
@@ -84,7 +84,7 @@ fh.save_value(
 ```
 
 The core serialization API writes one versioned safetensors file. It preserves
-the exact value type and cryptographic metadata but deliberately owns no
+the value type and cryptographic metadata but deliberately owns no
 namespace, tenant, cache, or eviction policy.
 
 Inspect without materializing tensors:
@@ -99,7 +99,7 @@ Restore to the target device and require the expected type:
 restored = fh.load_value(
     "activation.safetensors",
     expected_type=fh.Ciphertext,
-    device=engine.device,
+    device=torch.get_default_device(),
 )
 ```
 
@@ -123,7 +123,7 @@ store = ArtifactStore(root / "artifact-store")
 prepared = store.get(
     "model/example/prepared-factor",
     expected_type=fh.Plaintext,
-    device=engine.device,
+    device=torch.get_default_device(),
 )
 if prepared is None:
     prepared = engine.prepare_plaintext_for_multiplication(
@@ -137,8 +137,8 @@ result_ntt = engine.multiply_plaintext(
 ```
 
 `get(name)` returns `None` only when that logical name has no current
-generation. Corrupt payloads, checksum failures, context mismatches, and type
-mismatches remain errors; they are not treated as cache misses.
+generation. Corrupt payloads, checksum failures, and type mismatches remain
+errors; they are not treated as cache misses.
 
 ### Persist a live value
 
@@ -157,18 +157,21 @@ activation_ref = store.put(
   the input value.
 - `activation_ref` is a tensor-free `ArtifactRef[Ciphertext]`; it contains no
   ciphertext tensor payload. It records the store identity, logical name,
-  exact generation, value type, context identity, logical tensor bytes, and
+  identified generation, value type, logical tensor bytes, and
   payload checksum.
 - The store now owns an independent durable payload and binds
   `"requests/example/activation"` to that generation.
 
-Materialize that exact generation by passing the reference back to the store:
+The application separately records which CKKS parameters and keys are valid
+for the stored generation.
+
+Materialize that generation by passing the reference back to the store:
 
 ```python
 restored_activation = store.get(
     activation_ref,
     expected_type=fh.Ciphertext,
-    device=engine.device,
+    device=torch.get_default_device(),
 )
 ```
 
@@ -208,7 +211,7 @@ when the computation no longer needs them.
 
 ### Supported persisted value state
 
-Artifact payloads use the same exact-value schema as `save_value`. Supported
+Artifact payloads use the same value schema as `save_value`. Supported
 types and their persisted state are:
 
 | Value type | Tensor payloads | Persisted type-specific state |
@@ -217,7 +220,7 @@ types and their persisted state are:
 | `CompressedPlaintext` | `data` and optional `implicit_data` | Context ID, ring dimension, compression layout/version, level, scale, domain/basis/residue state, and prime IDs |
 | `Ciphertext` | `data` | Context ID, level, actual scale, polynomial domain, modulus basis, residue representation, and prime IDs |
 | `PublicKey`, `KeySwitchKey`, `RelinearizationKey`, `ConjugationKey` | `data` | Concrete key type, context ID, prime IDs, and domain/basis/residue state |
-| `RotationKey` | `data` | The common key state plus canonical `rotation_step` |
+| `RotationKey` | `data` | The common key state plus normalized `rotation_step` |
 | `SecretKey` | `data` | The common key state; persistence requires `allow_secret=True` and remains unencrypted |
 
 Each tensor is snapshotted as a dense contiguous CPU payload. Logical shape,
@@ -244,13 +247,13 @@ replacement_ref = store.put(
 artifact_ciphertext = store.get(
     replacement_ref,
     expected_type=fh.Ciphertext,
-    device=engine.device,
+    device=torch.get_default_device(),
 )
 ```
 
 `ArtifactStore` is layered on the same typed value-file primitives. A SQLite
 catalog records each logical name's one current generation, while immutable
-store-controlled safetensors objects retain the exact payloads. The store adds
+store-controlled safetensors objects retain the payloads. The store adds
 typed references, collections, checksums, and transactional replacement
 without changing the reconstructed `Ciphertext` or `Plaintext` type.
 
@@ -295,7 +298,7 @@ flowchart LR
 None of these operations implicitly destroys another live value. Residency,
 durability, and application cache policy remain separate decisions.
 
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/03_plaintext_ciphertext_memory.py
 :::
 
@@ -303,5 +306,5 @@ durability, and application cache policy remain separate decisions.
 
 - [Value model and identity](../concepts/ckks/value-model-and-identity.md)
 - [Serialization and artifacts](../concepts/execution/serialization-and-artifacts.md)
-- [Manage exact artifacts by logical name](../how-to/manage-exact-artifacts.md)
+- [Manage artifacts by logical name](../how-to/manage-artifacts.md)
 - [Residency lifetimes](../concepts/execution/residency-lifetimes.md)

@@ -1,0 +1,56 @@
+name: Documentation issue
+description: Report missing, incorrect, incomplete, or unclear FHElium documentation.
+title: "[Documentation]: "
+labels:
+  - documentation
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Relevant page, section, or topic
+      description: Provide a URL or source path when one exists. Otherwise, name the topic that needs documentation.
+      placeholder: "https://fhelium.550w.host/..., docs/..., or a topic"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Affected FHElium version
+      description: Complete this field when the documentation differs by release or commit.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Documentation problem
+      description: Explain what is incorrect, incomplete, ambiguous, or difficult to follow.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-content
+    attributes:
+      label: Current content
+      description: Quote only the relevant text, code, navigation label, or generated output.
+
+  - type: textarea
+    id: needed-change
+    attributes:
+      label: Needed information or change
+      description: Describe what should be added, corrected, clarified, reorganized, or made easier to find.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Include platform or configuration details only when they affect the documentation.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing documentation issues for the same problem.
+          required: true

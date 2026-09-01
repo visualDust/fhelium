@@ -136,8 +136,7 @@ __global__ void rns_unary_inplace_kernel(
                               params[RNS_PARAM_NEG_INV_MODULUS_LO][row],
                               params[RNS_PARAM_NEG_INV_MODULUS_HI][row]);
   } else if constexpr (operation == UnaryRnsOperation::kCanonicalize) {
-    value =
-        canonicalize_lazy_residue(value, params[RNS_PARAM_TWICE_MODULUS][row]);
+    value = reduce_lazy_residue(value, params[RNS_PARAM_TWICE_MODULUS][row]);
   } else if constexpr (operation == UnaryRnsOperation::kCenter) {
     value = center_residue(value, params[RNS_PARAM_TWICE_MODULUS][row]);
   } else {
@@ -327,10 +326,10 @@ void rns_from_montgomery_inplace_cuda(torch::Tensor montgomery_residues,
                                                         "rns_from_montgomery");
 }
 
-void rns_canonicalize_residues_inplace_cuda(torch::Tensor lazy_residues,
-                                            const torch::Tensor rns_params) {
+void rns_reduce_to_standard_inplace_cuda(torch::Tensor lazy_residues,
+                                         const torch::Tensor rns_params) {
   unary_rns_inplace<UnaryRnsOperation::kCanonicalize>(
-      lazy_residues, rns_params, "lazy_residues", "rns_canonicalize");
+      lazy_residues, rns_params, "lazy_residues", "rns_reduce_to_standard");
 }
 
 torch::Tensor rns_add_lazy_cuda(const torch::Tensor lhs,
@@ -379,11 +378,11 @@ torch::Tensor rns_sub_lazy_cuda(const torch::Tensor lhs,
       lhs, rhs, rns_params, "rns_sub_lazy");
 }
 
-void rns_center_residues_inplace_cuda(torch::Tensor canonical_residues,
+void rns_center_residues_inplace_cuda(torch::Tensor standard_residues,
                                       const torch::Tensor rns_params) {
-  unary_rns_inplace<UnaryRnsOperation::kCenter>(canonical_residues,
+  unary_rns_inplace<UnaryRnsOperation::kCenter>(standard_residues,
                                                 rns_params,
-                                                "canonical_residues",
+                                                "standard_residues",
                                                 "rns_center_residues");
 }
 

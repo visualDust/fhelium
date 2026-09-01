@@ -20,7 +20,7 @@ CUDA is required. The workload rotates one encrypted message by one slot,
 multiplies it by a prepared `0.5` plaintext, rescales, decrypts, and compares
 with the cleartext result.
 
-## 1. Start with live exact values
+## 1. Start with live values
 
 The example creates:
 
@@ -42,11 +42,11 @@ source = engine.encrypt_message(message)
 
 ## 2. Configure optional admission budgets
 
-Locations are immutable identities. Host locations are canonical constants;
-CUDA locations require an device index.
+Locations are immutable identities. Host locations use predefined constants;
+CUDA locations require a device index.
 
 ```python
-device_location = cuda_location(engine.device)
+device_location = cuda_location(torch.get_default_device())
 residency = ResidencyManager(
     budgets={
         PINNED_HOST: pinned_capacity,
@@ -191,7 +191,7 @@ version before mutation.
 ## 6. Protect a CUDA consumer stream
 
 ```python
-compute_stream = torch.cuda.Stream(device=engine.device)
+compute_stream = torch.cuda.Stream(device=torch.get_default_device())
 scope = residency.scope(plan)
 with scope:
     with residency.acquire(
@@ -240,7 +240,7 @@ values. Evaluation still requires a lease.
 This example deliberately keeps placement actions and plan order under direct
 application control. Use the separate
 [automatic residency admission](./automatic-residency.md) workflow when the
-application should state exact working-set endpoints and headroom while a
+application should state working-set endpoints and headroom while a
 deterministic policy selects legal reclaim actions. Both workflows execute
 through the same manager authority and strict leases; automation does not
 change `ResidencyManager.acquire()` or introduce background movement.
@@ -266,8 +266,8 @@ CUDA device represented by its allocator sample.
 The example prints manager accounting beside:
 
 ```python
-torch.cuda.memory_allocated(engine.device)
-torch.cuda.memory_reserved(engine.device)
+torch.cuda.memory_allocated(torch.get_default_device())
+torch.cuda.memory_reserved(torch.get_default_device())
 ```
 
 These numbers answer different questions:
@@ -297,10 +297,10 @@ residency.close()
 `discard` ends each managed value. `close` rejects active or
 pending lifetimes unless the caller explicitly chooses its force escape hatch.
 
-The evaluator output is not adopted in this example; it remains an ordinary
-application-owned ciphertext.
+The evaluator output remains an ordinary application-owned ciphertext in this
+example.
 
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/13_explicit_residency.py
 :::
 

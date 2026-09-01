@@ -68,7 +68,7 @@ same transport/control phases.
 
 ## 5. Check typed descriptors before payloads
 
-Compare the exact descriptor on every rank:
+Compare the descriptor fields on every rank:
 
 - concrete value/key type;
 - tensor shapes and dtypes;

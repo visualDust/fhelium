@@ -7,7 +7,7 @@ from typing import cast
 
 import torch
 
-from fhelium.core import Ciphertext
+from fhelium.values import Ciphertext
 from fhelium.distributed._collective_common import (
     _collect_argument_errors,
     _group_info,
@@ -36,7 +36,7 @@ def scatter_ciphertext_limbs(
     Args:
         shards_or_none: On ``src``, exactly one caller-prepared ciphertext limb
             shard per group rank, ordered by process-group rank and increasing
-            canonical prime interval.  Every non-source rank must pass
+            contiguous prime interval. Every non-source rank must pass
             ``None``.
         src: Global rank of the source process, which must belong to ``group``.
         group: Participating process group.  ``None`` selects the default
@@ -83,7 +83,7 @@ def gather_ciphertext_limbs(
     """Gather and reconstruct one ciphertext from disjoint RNS limb shards.
 
     Group-rank order defines prime-interval order.  On ``dst``, compatible,
-    nonempty, contiguous canonical intervals are concatenated along the RNS
+    nonempty, contiguous parameter intervals are concatenated along the RNS
     limb dimension.  This is structural reconstruction, not ciphertext
     addition; use ``reduce_ciphertext`` for additive partials.  The operation
     is synchronous, accepts no ``async_op`` argument, and returns no
@@ -136,7 +136,6 @@ def _validate_limb_shards(
 
     first = shards[0]
     common_fields = (
-        "context_id",
         "level",
         "scale",
         "polynomial_domain",
@@ -168,7 +167,7 @@ def _validate_limb_shards(
         stop = start + len(shard.prime_ids)
         if shard.prime_ids != tuple(range(start, stop)):
             raise ValueError(
-                "Each ciphertext limb shard must contain a contiguous canonical "
+                "Each ciphertext limb shard must contain a contiguous parameter "
                 f"prime interval; rank={rank}, prime_ids={shard.prime_ids}"
             )
         if (
@@ -193,7 +192,6 @@ def _concatenate_limb_shards(
         data=torch.cat([shard.data for shard in shards], dim=-2),
         level=first.level,
         scale=first.scale,
-        context_id=first.context_id,
         prime_ids=tuple(
             prime_id for shard in shards for prime_id in shard.prime_ids
         ),

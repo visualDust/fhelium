@@ -18,12 +18,12 @@ class IndexedRadix2Policy:
     """
 
     name: str
-    """Canonical name used by the backend registry and engine API."""
+    """Name used by the backend registry and engine API."""
 
 
 @dataclass(frozen=True)
 class CompactRadix2Policy:
-    """Grouped radix-2 execution over canonical compact twiddle rows.
+    """Grouped radix-2 execution over compact twiddle rows.
 
     ``grouped_radix2_stage_count`` counts radix-2 stages fused into a global
     kernel. The ``smem8`` backend-name suffix records the current native
@@ -32,7 +32,7 @@ class CompactRadix2Policy:
     """
 
     name: str
-    """Canonical name used by the backend registry and engine API."""
+    """Name used by the backend registry and engine API."""
 
     grouped_radix2_stage_count: Literal[2, 3, 4]
     """Number of radix-2 stages fused by each global-memory kernel."""
@@ -60,10 +60,10 @@ class CompactFixedRadixPolicy:
     """
 
     name: str
-    """Canonical name used by the backend registry and engine API."""
+    """Name used by the backend registry and engine API."""
 
     radix: Literal[4, 8, 16]
-    """Exact butterfly radix used by every transform digit."""
+    """Butterfly radix used by every transform digit."""
 
     def __post_init__(self) -> None:
         if self.radix not in (4, 8, 16):
@@ -118,8 +118,8 @@ NTT_BACKEND_POLICIES: Final = MappingProxyType(
 SUPPORTED_NTT_BACKENDS: Final = tuple(NTT_BACKEND_POLICIES)
 # One versioned, process-independent fallback is used for every supported
 # logN and CUDA device. Selection never consults hardware, runs a benchmark,
-# or dispatches through a per-logN table; applications opt into any other
-# exact policy name on CkksEngine.
+# or dispatches through a per-logN table; execution owners may select another
+# named policy when constructing their NTT resources.
 DEFAULT_NTT_BACKEND: Final[str] = "radix2_compact_group8_smem8"
 # The indexed radix-2 policy is the CPU production backend as well as the
 # cross-device validation baseline. Compact/grouped policies remain CUDA.
@@ -127,7 +127,7 @@ DEFAULT_CPU_NTT_BACKEND: Final[str] = "radix2_indexed"
 
 
 def resolve_ntt_backend_policy(name: str) -> NttBackendPolicy:
-    """Return the exact policy named by configuration.
+    """Return the policy named by configuration.
 
     Names are deliberately not case-normalized and no compatibility aliases
     are accepted.
@@ -159,7 +159,7 @@ def validate_ntt_backend_for_log_n(
 
 
 def compatible_ntt_backends(log_ring_dimension: int) -> tuple[str, ...]:
-    """Return canonical policy names executable for one ``logN``.
+    """Return registered policy names executable for one ``logN``.
 
     Names retain registry order. Strict fixed-radix policies whose digit width
     does not divide ``log_ring_dimension`` are omitted; grouped radix-2

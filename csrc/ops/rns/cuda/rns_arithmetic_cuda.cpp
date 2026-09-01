@@ -61,14 +61,14 @@ torch::Tensor sub_lazy(const torch::Tensor lhs,
   return rns_sub_lazy_cuda(lhs, rhs, rns_params);
 }
 
-void canonicalize_residues_(torch::Tensor lazy_residues,
-                            const torch::Tensor rns_params) {
-  rns_canonicalize_residues_inplace_cuda(lazy_residues, rns_params);
+void reduce_to_standard_(torch::Tensor lazy_residues,
+                         const torch::Tensor rns_params) {
+  rns_reduce_to_standard_inplace_cuda(lazy_residues, rns_params);
 }
 
-void center_residues_(torch::Tensor canonical_residues,
+void center_residues_(torch::Tensor standard_residues,
                       const torch::Tensor rns_params) {
-  rns_center_residues_inplace_cuda(canonical_residues, rns_params);
+  rns_center_residues_inplace_cuda(standard_residues, rns_params);
 }
 
 void shift_residues_positive_(torch::Tensor centered_residues,
@@ -123,7 +123,7 @@ TORCH_LIBRARY_IMPL(fhelium_rns_ops, CUDA, m) {
   m.impl("add_lazy", &add_lazy);
   m.impl("add_lazy_with_twice_modulus", &add_lazy_with_twice_modulus);
   m.impl("sub_lazy", &sub_lazy);
-  m.impl("canonicalize_residues_", &canonicalize_residues_);
+  m.impl("reduce_to_standard_", &reduce_to_standard_);
   m.impl("center_residues_", &center_residues_);
   m.impl("shift_residues_positive_", &shift_residues_positive_);
   m.impl("lift_centered_coefficients", &lift_centered_coefficients);

@@ -5,21 +5,19 @@ FHElium implements direct CKKS arithmetic and validates selected structural
 and parameter requirements. It does not establish the security or numerical
 correctness of an application protocol.
 
-::: warning Active development
-FHElium is under active development. APIs may change significantly between
-releases. Record the exact FHElium, PyTorch, compiler, and—when applicable—CUDA
-and driver versions used to produce a result.
-:::
-
 ## What FHElium validates
 
 FHElium validates operation-specific state before native execution, including
-context identity, tensor device and dtype, CKKS level and actual scale,
+tensor device and dtype, CKKS level and actual scale,
 polynomial domain, residue representation, RNS layout, component count, and
 required key material.
 
-When `enforce_security_budget=True`, `CkksEngine` also checks the complete
-configured QP modulus against an exact published parameter row for the selected
+Runtime values do not carry a CKKS parameter-set identifier. Applications must
+retain parameter and key provenance and avoid combining mathematically
+incompatible objects.
+
+When `enforce_security_budget=True`, `fhelium.eager.Engine` also checks the complete
+configured QP modulus against a supported published parameter row for the selected
 ring dimension, security category, secret distribution, and error model. It
 does not interpolate or extrapolate an unsupported parameter set.
 
@@ -83,4 +81,4 @@ only.
 - Run one local evaluator: [Quickstart](tutorials.md)
 - Plan parameters and depth: [Choose a preset and chain depth](../how-to/choose-preset-and-depth.md)
 - Manage key lifecycles: [Key lifecycle](../concepts/ckks/key-lifecycle.md)
-- Inspect exact value state: [Programming model](../concepts/programming-model.md)
+- Inspect value state: [Value model and identity](../concepts/ckks/value-model-and-identity.md)

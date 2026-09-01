@@ -1,0 +1,40 @@
+{
+  "thresholdPercent": 3,
+  "rows": [
+    {
+      "backend": "radix2_compact_group8_smem8",
+      "display": "group8",
+      "nttOnlyPercentSlower": 0,
+      "ckksPercentSlower": 4.004,
+      "recommended": false
+    },
+    {
+      "backend": "radix2_compact_group16_smem8",
+      "display": "group16",
+      "nttOnlyPercentSlower": 0.891,
+      "ckksPercentSlower": 0,
+      "recommended": true
+    },
+    {
+      "backend": "radix16_compact",
+      "display": "radix16",
+      "nttOnlyPercentSlower": 1.445,
+      "ckksPercentSlower": 3.456,
+      "recommended": false
+    },
+    {
+      "backend": "radix2_compact_group4_smem8",
+      "display": "group4",
+      "nttOnlyPercentSlower": 5.524,
+      "ckksPercentSlower": 6.347,
+      "recommended": false
+    },
+    {
+      "backend": "radix4_compact",
+      "display": "radix4",
+      "nttOnlyPercentSlower": 6.991,
+      "ckksPercentSlower": 7.144,
+      "recommended": false
+    }
+  ]
+}

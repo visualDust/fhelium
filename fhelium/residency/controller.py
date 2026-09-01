@@ -1,6 +1,7 @@
 """Inspectable deterministic automation over explicit residency mechanisms.
 
-A controller owns no tensor materializations. It decides state-bound placement
+A controller owns no tensor materializations. It decides placement for one
+manager state version
 from declarative requests and delegates all validation, copying, accounting,
 and lifetime enforcement to one :class:`ResidencyManager`.
 """
@@ -16,7 +17,7 @@ from typing import Any
 
 import torch
 
-from fhelium.core import TensorResident
+from fhelium.values import TensorResident
 from fhelium.errors import (
     ResidencyHandleError,
     ResidencyOwnershipError,
@@ -117,7 +118,7 @@ class ResidencyEviction:
 
 @dataclass(frozen=True, slots=True)
 class ResidencyDecision:
-    """Immutable state-bound result of automatic residency decision-making.
+    """Immutable result tied to its issuing manager and state version.
 
     A decision is valid only for the issuing manager at
     ``expected_state_version``. It is process-local evidence, not a serialized
@@ -293,7 +294,7 @@ class _SearchMemo:
 
 
 class ResidencyController:
-    """Deterministic optional automation bound to one residency manager.
+    """Deterministic optional automation configured for one residency manager.
 
     The manager remains the only materialization owner and transition executor.
     This controller stores only policy metadata and logical access epochs. It
@@ -1182,7 +1183,7 @@ class ResidencyUse:
 
     @property
     def decision(self) -> ResidencyDecision:
-        """State-bound decision after successful context entry."""
+        """State-versioned decision after successful context entry."""
 
         if self._decision is None:
             raise RuntimeError(
@@ -1192,7 +1193,7 @@ class ResidencyUse:
 
     @property
     def values(self) -> Mapping[ResidencyRequirement, TensorResident]:
-        """Borrowed values keyed by exact requirement during this context."""
+        """Borrowed values keyed by requirement during this context."""
 
         if self._values is None:
             raise RuntimeError(
@@ -1206,7 +1207,7 @@ class ResidencyUse:
         *,
         at: ResidencyLocation,
     ) -> TensorResident:
-        """Return the borrow for one exact ``(handle, location)`` endpoint."""
+        """Return the borrow for one ``(handle, location)`` endpoint."""
 
         return self.values[ResidencyRequirement(handle, at)]
 

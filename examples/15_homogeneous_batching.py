@@ -31,7 +31,8 @@ from common import (
     sync_if_cuda,
 )
 
-from fhelium import Ciphertext, CkksEngine, Plaintext, RotationKey
+from fhelium import Ciphertext, Plaintext, RotationKey
+from fhelium.eager import Engine
 
 
 def _parse_batch_sizes(text: str) -> list[int]:
@@ -55,7 +56,9 @@ def matrix_and_vectors(
     column = torch.arange(size, dtype=torch.float64).view(1, -1)
     matrix = 0.018 * torch.sin((row + 1) * (column + 2) * 0.17)
     matrix += 0.007 * torch.cos((row + column + 1) * 0.23)
-    generator = torch.Generator().manual_seed(seed)
+    generator = torch.Generator(device=torch.get_default_device()).manual_seed(
+        seed
+    )
     vectors = (
         torch.randn(
             (batch_size, size),
@@ -82,7 +85,7 @@ def cyclic_diagonal_slots(
 
 
 def prepare_constants(
-    engine: CkksEngine,
+    engine: Engine,
     matrix: torch.Tensor,
     *,
     level: int,
@@ -105,7 +108,7 @@ def prepare_constants(
 def matrix_vector(
     source: Ciphertext,
     *,
-    engine: CkksEngine,
+    engine: Engine,
     diagonals: list[Plaintext],
     rotation_keys: dict[int, RotationKey],
 ) -> Ciphertext:
@@ -143,7 +146,6 @@ def matrix_vector(
             level=diagonal_batch.level,
             scale=diagonal_batch.scale,
             data=expanded,
-            context_id=diagonal_batch.context_id,
             representation=diagonal_batch.representation,
             polynomial_domain=diagonal_batch.polynomial_domain,
             modulus_basis=diagonal_batch.modulus_basis,
@@ -230,10 +232,10 @@ def main() -> None:
     args = parser.parse_args()
 
     engine = make_engine(args)
-    if engine.device.type == "cuda":
+    if torch.get_default_device().type == "cuda":
         # The shared synchronization helper and allocator statistics follow
         # the process-current CUDA device.
-        torch.cuda.set_device(engine.device)
+        torch.cuda.set_device(torch.get_default_device())
     if args.size <= 0 or engine.num_slots % args.size != 0:
         parser.error(
             f"--size must be positive and divide num_slots={engine.num_slots}"
@@ -264,8 +266,7 @@ def main() -> None:
         f"  active rows: Q={active_q_rows}, QP={active_qp_rows}\n"
         "  one extended QP digit per message: "
         f"{format_bytes(qp_digit_bytes)}\n"
-        "  policy: the application executes and compares and compares both "
-        "paths"
+        "  policy: the application executes and compares both paths"
     )
 
     rows = []
@@ -313,7 +314,7 @@ def main() -> None:
             rtol=0,
             atol=0,
         )
-        actual = engine.decrypt_message(batched_result, is_real=True)[
+        actual = engine.decrypt_message(batched_result, is_real=True).cpu()[
             ..., : args.size
         ]
         error = error_stats(actual, vectors @ matrix.T)
@@ -324,12 +325,16 @@ def main() -> None:
             looped,
             warmup=args.warmup,
             runs=args.runs,
-            device=engine.device,
+            device=torch.get_default_device(),
         )
         speedup = looped_ms / batched_ms
         faster_path = "batch" if speedup >= 1.0 else "loop"
-        batch_peak = peak_allocated_mib(batched, device=engine.device)
-        loop_peak = peak_allocated_mib(looped, device=engine.device)
+        batch_peak = peak_allocated_mib(
+            batched, device=torch.get_default_device()
+        )
+        loop_peak = peak_allocated_mib(
+            looped, device=torch.get_default_device()
+        )
         rows.append(
             [
                 batch_size,

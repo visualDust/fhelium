@@ -23,8 +23,9 @@ from common import (
     time_ms,
 )
 
-from fhelium import Ciphertext, CkksEngine, Plaintext, RotationKey
-from fhelium.execution import CudaGraphProgram
+from fhelium import Ciphertext, Plaintext, RotationKey
+from fhelium.eager import Engine
+from fhelium.runtime import CudaGraphProgram
 
 
 def matrix_and_vector(
@@ -34,7 +35,9 @@ def matrix_and_vector(
     column = torch.arange(size, dtype=torch.float64).view(1, -1)
     matrix = 0.018 * torch.sin((row + 1) * (column + 2) * 0.17)
     matrix += 0.007 * torch.cos((row + column + 1) * 0.23)
-    generator = torch.Generator().manual_seed(seed)
+    generator = torch.Generator(device=torch.get_default_device()).manual_seed(
+        seed
+    )
     vector = torch.randn(size, generator=generator, dtype=torch.float64) * 0.025
     return matrix, vector
 
@@ -57,7 +60,7 @@ def cyclic_diagonal_slots(
 
 
 def prepare_constants(
-    engine: CkksEngine,
+    engine: Engine,
     matrix: torch.Tensor,
 ) -> tuple[list[Plaintext], dict[int, RotationKey]]:
     diagonals = [
@@ -77,11 +80,11 @@ def prepare_constants(
 def matrix_vector(
     source: Ciphertext,
     *,
-    engine: CkksEngine,
+    engine: Engine,
     diagonals: list[Plaintext],
     rotation_keys: dict[int, RotationKey],
 ) -> Ciphertext:
-    """Evaluate one vector with statically bound program state."""
+    """Evaluate one vector with fixed program state."""
 
     rotated_values = []
     for step in range(len(diagonals)):
@@ -108,7 +111,6 @@ def main() -> None:
     add_engine_args(
         parser,
         default_preset="slots8192-scale40-levels7-int64",
-        default_device="cuda:0",
     )
     parser.add_argument("--size", type=int, default=8)
     parser.add_argument("--capture-warmup", type=int, default=3)
@@ -117,7 +119,7 @@ def main() -> None:
     args = parser.parse_args()
 
     engine = make_engine(args)
-    if engine.device.type != "cuda":
+    if torch.get_default_device().type != "cuda":
         parser.error("this CUDA Graph example requires CUDA")
     if args.size <= 0 or engine.num_slots % args.size != 0:
         parser.error(
@@ -152,7 +154,7 @@ def main() -> None:
         )
         result = program.replay(encrypted, synchronize=True)
         borrowed_pointer = result.data.data_ptr()
-        actual = engine.decrypt_message(result, is_real=True)[: args.size]
+        actual = engine.decrypt_message(result, is_real=True).cpu()[: args.size]
         error = error_stats(actual, matrix @ vector)
         correctness_rows.append(
             [
@@ -172,13 +174,13 @@ def main() -> None:
         lambda: schedule(prototype),
         warmup=args.benchmark_warmup,
         runs=args.runs,
-        device=engine.device,
+        device=torch.get_default_device(),
     )
     graph_stats, _ = time_ms(
         lambda: program.replay(prototype),
         warmup=args.benchmark_warmup,
         runs=args.runs,
-        device=engine.device,
+        device=torch.get_default_device(),
     )
     print("\nFixed matrix-vector evaluator latency:")
     print_table(

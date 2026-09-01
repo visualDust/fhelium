@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import torch
+from fhelium.legacy.engine import CkksEngine
 
-from fhelium import CkksEngine
+import torch
 
 
 def ckks_message(engine: CkksEngine, *, phase: float = 0.0) -> torch.Tensor:
-    """Create a bounded real message spanning every available CKKS slot."""
+    """Create a real message with magnitudes at most 0.02 in every CKKS slot."""
 
     slots = torch.linspace(
         -0.02,

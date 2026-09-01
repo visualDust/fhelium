@@ -24,14 +24,14 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from fhelium.core import Ciphertext, ConjugationKey, RelinearizationKey
+from fhelium.values import Ciphertext, ConjugationKey, RelinearizationKey
 from fhelium.experimental.bootstrap._polynomial import (
     BalancedPowerEvaluator,
     PolynomialApproximation,
 )
 
 if TYPE_CHECKING:
-    from fhelium.engine.ckks_engine import CkksEngine
+    from fhelium.eager import Engine
 
 
 @dataclass(frozen=True)
@@ -65,7 +65,7 @@ class CosineDoubleAngleReduction:
 
     The homomorphic input is a two-component coefficient-domain, standard-RNS
     Q ciphertext with payload axes
-    `[component, *batch, limb, coefficient]`, exact active `prime_ids`, and
+    `[component, *batch, limb, coefficient]`, active `prime_ids`, and
     actual scale near `engine.config.default_scale`. Evaluation is functional.
     Each multiplication returns to coefficient-domain standard RNS, drops one
     leading Q row on rescale, and is explicitly reinterpreted at the default
@@ -167,7 +167,7 @@ class CosineDoubleAngleReduction:
 
     def evaluate(
         self,
-        engine: CkksEngine,
+        engine: Engine,
         ciphertext: Ciphertext,
         *,
         relinearization_key: RelinearizationKey | None,
@@ -323,7 +323,7 @@ class ExponentialSquaringReduction:
 
     def evaluate(
         self,
-        engine: CkksEngine,
+        engine: Engine,
         ciphertext: Ciphertext,
         *,
         relinearization_key: RelinearizationKey | None,

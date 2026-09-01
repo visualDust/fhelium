@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from fhelium.core import Ciphertext
+from fhelium.values import Ciphertext
 from fhelium.distributed._collective_common import (
     _check_global_rank,
     _check_identical_layout,
@@ -16,7 +16,7 @@ from fhelium.distributed._collective_common import (
 )
 
 if TYPE_CHECKING:
-    from fhelium.engine import CkksEngine
+    from fhelium.eager import Engine
 
 
 def _tree_reduce_phases(
@@ -65,7 +65,7 @@ def _reduce_ciphertext_tree(
     value: Ciphertext,
     *,
     dst: int,
-    engine: CkksEngine,
+    engine: Engine,
     info: _GroupInfo,
 ) -> None:
     _check_global_rank(dst, info, "reduce_ciphertext dst")
@@ -122,7 +122,7 @@ def reduce_ciphertext(
     value: Ciphertext,
     *,
     dst: int = 0,
-    engine: CkksEngine,
+    engine: Engine,
     group: torch.distributed.ProcessGroup | None = None,
 ) -> None:
     """Synchronously sum ciphertext partials onto ``dst`` using ``add``.
@@ -179,7 +179,7 @@ def reduce_ciphertext(
 def all_reduce_ciphertext(
     value: Ciphertext,
     *,
-    engine: CkksEngine,
+    engine: Engine,
     group: torch.distributed.ProcessGroup | None = None,
 ) -> None:
     """Synchronously sum ciphertext partials and update every rank in place.

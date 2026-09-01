@@ -17,6 +17,11 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import fhelium
+from fhelium.runtime import (
+    CpuTopology,
+    CudaTopology,
+    MemorySnapshot,
+)
 
 from .model import FHEliumBuildIdentity, PlatformSnapshot, ProbeError
 
@@ -168,81 +173,10 @@ def _system() -> dict[str, Any]:
     }
 
 
-def _cpu() -> dict[str, Any]:
-    processor = platform.processor()
-    model = ""
-    physical_cores: set[tuple[str, str]] = set()
-    package_ids: set[str] = set()
-    cpuinfo = Path("/proc/cpuinfo")
-    if cpuinfo.is_file():
-        records = (
-            cpuinfo.read_text(encoding="utf-8", errors="replace")
-            .strip()
-            .split("\n\n")
-        )
-        for record in records:
-            fields = {
-                line.partition(":")[0].strip().lower(): line.partition(":")[
-                    2
-                ].strip()
-                for line in record.splitlines()
-                if ":" in line
-            }
-            model = model or fields.get("model name", "")
-            package_id = fields.get("physical id")
-            core_id = fields.get("core id")
-            if package_id is not None:
-                package_ids.add(package_id)
-            if package_id is not None and core_id is not None:
-                physical_cores.add((package_id, core_id))
-    physical_core_count = len(physical_cores) or None
-    package_count = len(package_ids) or None
-    if platform.system() == "Darwin":
-
-        def sysctl(name: str) -> str:
-            completed = subprocess.run(
-                ["sysctl", "-n", name],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return completed.stdout.strip() if completed.returncode == 0 else ""
-
-        model = sysctl("machdep.cpu.brand_string") or model
-        physical = sysctl("hw.physicalcpu")
-        packages = sysctl("hw.packages")
-        physical_core_count = int(physical) if physical.isdigit() else None
-        package_count = int(packages) if packages.isdigit() else None
-    return {
-        "logical_count": os.cpu_count(),
-        "physical_core_count": physical_core_count,
-        "package_count": package_count,
-        "model": model or processor or platform.machine(),
-        "architecture": platform.machine(),
-    }
-
-
-def _memory() -> dict[str, Any]:
-    page_size = os.sysconf("SC_PAGE_SIZE")
-    physical_pages = os.sysconf("SC_PHYS_PAGES")
-    available_pages = None
-    try:
-        available_pages = os.sysconf("SC_AVPHYS_PAGES")
-    except (OSError, ValueError):
-        pass
-    return {
-        "total_bytes": page_size * physical_pages,
-        "available_bytes": (
-            None if available_pages is None else page_size * available_pages
-        ),
-    }
-
-
 def _python() -> dict[str, Any]:
     return {
         "version": platform.python_version(),
-        "implementation": sys.implementation.name,
+        "implementation": platform.python_implementation(),
         "compiler": platform.python_compiler(),
         "executable": Path(sys.executable).name,
         "soabi": sysconfig.get_config_var("SOABI") or "",
@@ -348,7 +282,9 @@ def _native() -> dict[str, Any]:
     )
 
 
-def _torch() -> dict[str, Any]:
+def _torch(
+    cuda_topology: CudaTopology | None,
+) -> dict[str, Any]:
     import torch
 
     abi_query = getattr(torch, "compiled_with_cxx11_abi", None)
@@ -371,18 +307,20 @@ def _torch() -> dict[str, Any]:
             "version": torch.__version__,
             "cuda_build_version": torch.version.cuda,
             "cxx11_abi": cxx11_abi,
-            "cuda_available": torch.cuda.is_available(),
-            "cuda_device_count": torch.cuda.device_count(),
+            "cuda_available": (
+                None if cuda_topology is None else bool(cuda_topology.devices)
+            ),
+            "cuda_device_count": (
+                None if cuda_topology is None else len(cuda_topology.devices)
+            ),
             "nccl_version": nccl_version,
         },
         path="torch",
     )
 
 
-def _cuda() -> dict[str, Any]:
-    from fhelium.native.cuda import get_cuda_info
-
-    return _collected_json(get_cuda_info(test_p2p_bandwidth=False), path="cuda")
+def _cuda(topology: CudaTopology) -> dict[str, Any]:
+    return topology.as_dict()
 
 
 def collect_platform(
@@ -394,7 +332,7 @@ def collect_platform(
 
     Optional probe failures are represented in ``probe_errors``. CUDA device
     and P2P inventory deliberately disables the disruptive bandwidth test.
-    Environment capture is limited to a fixed CUDA/NCCL allowlist.
+    Environment-variable collection is limited to a fixed CUDA/NCCL allowlist.
     """
 
     errors: list[ProbeError] = []
@@ -410,15 +348,30 @@ def collect_platform(
 
         return _probe(name, collect, errors, {})
 
+    cpu_topology = _probe("cpu-topology", CpuTopology.probe, errors, None)
+    memory_snapshot = _probe(
+        "memory", lambda: MemorySnapshot.read("cpu"), errors, None
+    )
+    cuda_topology = _probe("cuda-topology", CudaTopology.probe, errors, None)
     system = json_probe("system", _system)
-    cpu = json_probe("cpu", _cpu)
-    memory = json_probe("memory", _memory)
+    cpu = (
+        {} if cpu_topology is None else json_probe("cpu", cpu_topology.as_dict)
+    )
     python = json_probe("python", _python)
+    torch = json_probe("torch", lambda: _torch(cuda_topology))
+    memory = (
+        {}
+        if memory_snapshot is None
+        else json_probe("memory-record", memory_snapshot.as_dict)
+    )
     distribution = json_probe("distribution", _distribution)
     source_git = json_probe("source-git", _source_git)
     native = json_probe("native", _native)
-    torch = json_probe("torch", _torch)
-    cuda = json_probe("cuda", _cuda)
+    cuda = (
+        {}
+        if cuda_topology is None
+        else json_probe("cuda", lambda: _cuda(cuda_topology))
+    )
 
     source_environment = os.environ if environ is None else environ
     environment = {

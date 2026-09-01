@@ -1,17 +1,20 @@
-#include "ckks_cuda.h"
+#include <torch/library.h>
+#include <torch/torch.h>
 
 #include "../../common/cuda/kernel_support.cuh"
 #include "../../common/cuda/montgomery.cuh"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
 
+namespace {
+
 // Key-switch tensor requirements. ModDown takes integral coefficient/standard
-// canonical q_residues [*batch, Q_limb, coefficient] in [0, q_i) and
+// standard q_residues [*batch, Q_limb, coefficient] in [0, q_i) and
 // p_residues [*batch, P_limb, coefficient] in [0, p_j). rns_params columns are
-// exact concatenated QP prime_ids. moddown_p_drop_inverses_montgomery has shape
+// concatenated QP prime_ids order. moddown_p_drop_inverses_montgomery has shape
 // [P_limb, at least Q_limb+P_limb-1] and stores each sequentially dropped P
 // prime inverse in Montgomery form. It computes a rounded divide by
-// $P=\prod_jp_j$ and returns newly allocated Q-only standard canonical
+// $P=\prod_jp_j$ and returns newly allocated Q-only standard
 // [*batch, Q_limb, coefficient]. Public inputs are read-only: P preparation
 // mutates only an operator-owned clone.
 //
@@ -75,12 +78,12 @@ __global__ void keyswitch_moddown_prepare_p_basis_kernel(
     for (int lower = p_row_count - 1; lower > row; --lower) {
       const scalar_t difference = sub_lazy_residues(
           value, p_scratch[batch][lower][coefficient], twice_modulus);
-      // Match the CPU multiply_split recurrence by canonicalizing this lazy
+      // Match the CPU multiply_split recurrence by reducing this lazy
       // difference before multiplication. Canonicalize the result as well
       // because later P steps reinterpret the stored residue as an ordinary
       // integer under a different prime.
-      value = canonicalize_lazy_residue(
-          montgomery_mul(canonicalize_lazy_residue(difference, twice_modulus),
+      value = reduce_lazy_residue(
+          montgomery_mul(reduce_lazy_residue(difference, twice_modulus),
                          inverse[p_row_count - lower - 1][row + q_row_count],
                          modulus_lo,
                          modulus_hi,
@@ -124,9 +127,9 @@ __global__ void keyswitch_moddown_qp_to_q_kernel(
                        neg_inv_modulus_lo,
                        neg_inv_modulus_hi);
     value = sub_lazy_residues(value, p_value_mont, twice_modulus);
-    // Match CPU multiply_split: a lazy subtraction result must be canonical
+    // Match CPU multiply_split: a lazy subtraction result must be reduced
     // before entering the split-word Montgomery multiplication.
-    value = montgomery_mul(canonicalize_lazy_residue(value, twice_modulus),
+    value = montgomery_mul(reduce_lazy_residue(value, twice_modulus),
                            inverse[p_count - p_row - 1][row],
                            modulus_lo,
                            modulus_hi,
@@ -135,8 +138,7 @@ __global__ void keyswitch_moddown_qp_to_q_kernel(
   }
   value = montgomery_reduce(
       value, modulus_lo, modulus_hi, neg_inv_modulus_lo, neg_inv_modulus_hi);
-  out[batch][row][coefficient] =
-      canonicalize_lazy_residue(value, twice_modulus);
+  out[batch][row][coefficient] = reduce_lazy_residue(value, twice_modulus);
 }
 
 torch::Tensor keyswitch_moddown_qp_to_q_cuda(
@@ -289,4 +291,12 @@ void keyswitch_accumulate_digit_products_inplace_cuda(
                 FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2),
                 static_cast<int>(key_digit_row_start));
       });
+}
+
+}  // namespace
+
+TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
+  m.impl("keyswitch_moddown_qp_to_q", &keyswitch_moddown_qp_to_q_cuda);
+  m.impl("keyswitch_accumulate_digit_products_",
+         &keyswitch_accumulate_digit_products_inplace_cuda);
 }

@@ -32,7 +32,7 @@ rendezvous is supplied, but still creates an ordinary PyTorch `ProcessGroup`.
 The package also re-exports selected `torch.distributed` APIs. Raw tensor calls
 retain their PyTorch signatures, mutation behavior, group semantics, and
 `Work` handles. FHElium-specific names such as `broadcast_ciphertext` and
-`all_reduce_ciphertext` identify operations that require exact-value metadata
+`all_reduce_ciphertext` identify operations that require value metadata
 or CKKS arithmetic.
 
 ## Rank and device identity
@@ -44,24 +44,102 @@ Three integer namespaces appear in distributed code:
 - **local rank** commonly identifies a process on one host and selects a local
   CUDA device.
 
-They are not interchangeable. Public collective arguments such as `src` and
-`dst` use the rank namespace stated by their PyTorch or FHElium interface. A
-CUDA device index is local process state, not a process rank.
+Public collective arguments such as `src` and `dst` use the rank namespace
+stated by their PyTorch or FHElium interface. CUDA device indices identify
+process-local placement.
 
-Each rank constructs a local `CkksEngine` and local values. Engines and process
+Each rank constructs a local `fhelium.eager.Engine` and local values. Engines and process
 groups have independent lifetimes:
 
 ```mermaid
 graph LR
     RANK[One process / rank]
     DEV[One selected local device]
-    ENG[Rank-local CkksEngine]
+    ENG[Rank-local eager Engine]
     VALUES[Local values and keys]
     GROUP[PyTorch ProcessGroup]
 
     RANK --> DEV --> ENG --> VALUES
     RANK --> GROUP
 ```
+
+## Rank-local distributed IR
+
+A Compile `Program` represents one rank. A distributed pass receives a
+participating-device count and emits a rank-local graph that may read its group
+rank at launch. An SPMD launcher binds the same graph template, or a
+rank-specialized derivative, to one process-group member per rank. Process-group
+creation and destruction remain outside the Program.
+
+The registered distributed vocabulary is:
+
+| Operator | Rank-local meaning |
+| --- | --- |
+| `fhelium_dist.rank` | Read the current process-group-relative rank. |
+| `fhelium_dist.group_size` | Read the number of participating group ranks. |
+| `fhelium_dist.broadcast` | Functionally broadcast one local Tensor value from a group-relative root. |
+| `fhelium_dist.all_reduce` | Reduce local Tensor values using a visible two-argument combine region. |
+| `fhelium_dist.all_reduce_add_ciphertext` | Preserve ciphertext-add reduction intent for a whole-operation implementation or later lowering. |
+| `fhelium_dist.yield` | Return one result from a generic combine region. |
+
+`!fhelium_dist.group` is a launch-bound resource type. Its live binding is a
+`ProcessGroupExecutionResource`; the Program does not own the PyTorch
+`ProcessGroup` lifecycle. Rank and group size are distinct from the local CUDA
+device index. A separate `!fhelium_memory.device` resource selects transfer
+destinations.
+
+The IR also loads xDSL `arith` and structured control flow (`scf`). A rank may
+therefore select its local loop interval without embedding one multi-rank
+module:
+
+```text
+group rank -> rank-local loop bounds -> local arithmetic -> collective
+```
+
+Compile transformations recurse into `scf.for`, `scf.if`, and generic
+all-reduce combine regions. Unknown vendor region owners stay opaque. Current
+Backend execution supports scalar index arithmetic, one-block `scf.for` and
+`scf.if` regions, and registered Tensor implementations inside those regions.
+This structured executor is independent of the current JIT planner design.
+
+Distributed IR is permissive. Structural verification checks local operand,
+result, attribute, and region shape only. It does not prove that predicates or
+loop trip counts are uniform, that ranks execute matching collective sequences,
+that a combine function is associative, or that execution is deadlock-free.
+Caller-selected analysis passes may diagnose those properties; Backend and
+launch do not silently add handshakes, barriers, or corrective collectives.
+
+`LowerSpecializedCollectivesPass` may replace
+`fhelium_dist.all_reduce_add_ciphertext` with generic
+`fhelium_dist.all_reduce`. The generated combine region contains a visible
+`fhelium_ckks.add`. Callers may instead preserve the specialized operator and
+bind a whole-operation implementation. Both representations use the same
+operation registry and arithmetic resources.
+
+The initial generic implementation is a correctness baseline: it all-gathers
+equal-layout local Tensor payloads and folds them in process-group rank order
+through the compiled combine region. It does not establish a permanent
+tree/ring/hierarchical algorithm policy. Provider or pass implementations may
+select another inspectable communication plan later.
+
+## Rank-local transfer IR
+
+`fhelium_memory.transfer` is the placement-changing operation for an existing
+SSA value. It consumes a value and a launch-bound
+`!fhelium_memory.device` resource and produces the same IR value type.
+Ordinary arithmetic operations do not receive a generic device attribute.
+
+The first implementation is synchronous and functional. Its `memory_space`
+attribute accepts `default`, `pageable_host`, or `pinned_host`; CPU and
+concrete-index CUDA targets are runtime resources. A same-device transfer may
+return the input storage. Cross-device movement delegates to PyTorch. Async
+copy tokens, streams, fixed-buffer allocation, and Residency integration are
+not part of this slice.
+
+The Backend transfer ABI consumes one Tensor payload. Public Ciphertext,
+Plaintext, and key objects remain public boundaries whose adapters decompose
+and reconstruct Tensor leaves. In particular, this primitive does not turn
+cross-device key replication into an automatic placement policy.
 
 ## Descriptor and payload phases
 
@@ -70,12 +148,12 @@ sender converts a value into a `ValueEnvelope`-derived descriptor containing:
 
 - transfer protocol version;
 - concrete FHElium value type and value-schema version;
-- context identity and exact non-tensor metadata;
+- non-tensor arithmetic metadata;
 - tensor names, shapes, dtypes, and CPU/CUDA device type.
 
 The receiver validates the descriptor, allocates the corresponding tensor
 leaves on its rank-local device, transfers those leaves, and reconstructs the
-typed value through the exact value schema.
+typed value through the value schema.
 
 ```mermaid
 sequenceDiagram
@@ -84,22 +162,22 @@ sequenceDiagram
     participant R as Receiver rank
     participant P as Tensor payload collectives
 
-    S->>C: exact value descriptor
+    S->>C: value descriptor
     C->>C: validate protocol, arguments, and rank agreement
     C->>R: accepted descriptor
     R->>R: allocate typed receiver storage
     S->>P: ordered dense tensor leaves
     P->>R: transfer payloads
-    R->>R: reconstruct exact FHElium value
+    R->>R: reconstruct FHElium value
 ```
 
 The transfer protocol and durable serialization schema have independent
-versions. Raw `torch.Tensor` is a transport descriptor kind, but is not added to
-the FHElium exact-value serialization registry.
+versions. Raw `torch.Tensor` has its own transport descriptor kind outside the
+FHElium value serialization registry.
 
 Control errors must become group-consistent before a rank enters a payload
-collective. A rank-local exception followed by peer ranks waiting in NCCL or
-Gloo is a distributed deadlock, not useful validation behavior.
+collective. Otherwise, a rank-local exception can leave peers waiting in NCCL
+or Gloo.
 
 ## Whole-value collectives
 
@@ -111,7 +189,7 @@ position:
 - scatter distributes a source sequence of complete ciphertext values;
 - gather and all-gather reconstruct complete values in process-group order.
 
-These are transport operations. They preserve payload bits and exact metadata;
+These are transport operations. They preserve payload bits and value metadata;
 they do not add ciphertexts, concatenate RNS rows, align levels, or change
 scale.
 
@@ -125,11 +203,11 @@ The transfer layer does not silently change the sender's declared device type.
 RNS partitioning. A shard carries a subset of the ordered `prime_ids` and the
 matching tensor limb rows. Reconstruction requires:
 
-- one context and public level;
+- one public level and caller-established CKKS parameter provenance;
 - identical component and batch axes;
 - identical scale, polynomial domain, modulus basis, and residue form;
 - non-overlapping requested prime IDs;
-- complete requested coverage in canonical prime order.
+- complete requested coverage in configured prime order.
 
 Gather concatenates rows into the declared mathematical layout. It does not
 perform modular addition. Conversely, whole-value gather does not reconstruct a
@@ -148,7 +226,7 @@ graph LR
     A[Rank-local ciphertext partials]
     P2P[batch_isend_irecv tree edge]
     TMP[Temporary complete ciphertext]
-    ADD[CkksEngine.add_<br/>modular native operation]
+    ADD[Engine.add_<br/>modular native operation]
     ROOT[Root ciphertext sum]
     BCAST[Payload broadcast]
     ALL[Sum on every rank]
@@ -180,6 +258,14 @@ addition.
 | Modular ciphertext reduce/all-reduce | `fhelium/distributed/_ciphertext_reduction.py` |
 | Private public-API aggregation | `fhelium/distributed/_typed_collectives.py` |
 | Public PyTorch-compatible facade | `fhelium/distributed/__init__.py` |
+| Distributed IR declarations | `fhelium/ir/dialects/distributed.py` |
+| Memory-transfer IR declaration | `fhelium/ir/dialects/memory.py` |
+| Structured Compile traversal | `fhelium/compile/passes/_operation_transforms.py` |
+| Specialized collective lowering | `fhelium/compile/passes/distributed/_lower_specialized_collectives.py` |
+| Process-group resource binding | `fhelium/backend/distributed/resources.py` |
+| Registered collective implementations | `fhelium/backend/distributed/operations.py` |
+| Registered Tensor transfer implementation | `fhelium/backend/memory/operations.py` |
+| Structured Program execution | `fhelium/backend/execution.py` |
 
 ## Validation
 
@@ -190,12 +276,21 @@ Distributed implementation changes should cover:
 - global versus group-relative rank arguments;
 - CPU/Gloo and CUDA/NCCL paths supported by the change;
 - descriptor or argument mismatch before payload transfer;
-- exact reconstructed value state and device;
+- reconstructed value state and device;
 - whole-value, additive, and limb-partition semantics as distinct cases;
 - cleanup and timeout diagnostics after a failed collective.
 
+IR-specific behavior coverage additionally checks:
+
+- textual parse/print and dialect catalog registration;
+- CKKS lowering and implementation assignment inside known structured regions;
+- specialized-to-generic collective lowering;
+- CPU/CUDA transfer and pinned-host allocation;
+- rank query, `scf` execution, broadcast, and visible combine-region execution;
+- Gloo and NCCL operation execution without an Eager Engine fallback.
+
 The focused implementation suite starts at
-`tests/test_distributed_transfer.py`. Public multi-rank examples and benchmark
+`tests/distributed/test_distributed_transfer.py`. Public multi-rank examples and benchmark
 workers provide workload-level validation after the protocol tests.
 
 ## Continue
@@ -203,4 +298,4 @@ workers provide workload-level validation after the protocol tests.
 - [Rank-local SPMD model](../concepts/distributed/spmd-model.md)
 - [Communication semantics](../concepts/distributed/communication-semantics.md)
 - [Execution buffers and CUDA Graphs](execution-buffers-and-cuda-graphs.md)
-- [Python-to-native execution stack](engine-native-stack.md)
+- [Eager, Compile, and native execution](engine-native-stack.md)

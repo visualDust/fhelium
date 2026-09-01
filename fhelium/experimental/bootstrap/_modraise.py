@@ -1,4 +1,4 @@
-"""Centered modulus raising and its exact-RNS reference helpers."""
+"""Centered modulus raising and its integer-RNS reference helpers."""
 
 from __future__ import annotations
 
@@ -9,13 +9,58 @@ from typing import Any
 
 import torch
 
-from fhelium.core import Ciphertext
-from fhelium.engine.ckks_engine import CkksEngine
+from fhelium.values import Ciphertext
+from fhelium.eager import Engine
 from fhelium.native.wrapper import rns_ops
 
 
+def _validate_structural_ciphertext(
+    engine: Engine,
+    value: Ciphertext,
+) -> None:
+    """Validate the one-prime private ciphertext consumed by ModRaise."""
+
+    if not isinstance(value, Ciphertext):
+        raise TypeError(f"Expected Ciphertext, got {type(value).__name__}")
+    Ciphertext(
+        data=value.data,
+        level=value.level,
+        scale=value.scale,
+        prime_ids=value.prime_ids,
+        polynomial_domain=value.polynomial_domain,
+        modulus_basis=value.modulus_basis,
+        residue_representation=value.residue_representation,
+    )
+    if value.level != engine.public_level_count:
+        raise ValueError(
+            "Structural-base Ciphertext must use private level "
+            f"{engine.public_level_count}, got {value.level}"
+        )
+    if value.data.dtype != engine.dtype:
+        raise TypeError("Ciphertext dtype differs from the engine")
+    if value.data.size(-1) != engine.ring_dimension:
+        raise ValueError("Ciphertext ring dimension differs from the engine")
+    if value.modulus_basis != "Q":
+        raise ValueError("Structural-base Ciphertext requires Q basis")
+    value.assert_state(
+        polynomial_domain="coefficient",
+        residue_representation="standard",
+        components=2,
+    )
+    rns_context = engine._rns_context_for(value.device)
+    expected_prime_ids = rns_context.rns_layout.prime_ids(
+        engine.public_level_count
+    )
+    if value.prime_ids != expected_prime_ids:
+        raise ValueError(
+            "Structural-base Ciphertext prime IDs differ from the engine: "
+            f"{value.prime_ids} != {expected_prime_ids}"
+        )
+
+
 def _mixed_radix_tables(
-    engine: CkksEngine,
+    engine: Engine,
+    device: torch.device,
     source_prime_ids: tuple[int, ...],
     target_prime_ids: tuple[int, ...],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -37,18 +82,19 @@ def _mixed_radix_tables(
     A one-row source has no higher mixed-radix digits, so the tables have zero
     prefix rows while direct residue copying remains valid.
 
-    Outputs are separately allocated integral CUDA tensors on ``engine.device``
+    Outputs are separately allocated integral tensors on ``device``
     with shapes ``[source_limb - 1]``,
     ``[source_limb - 1, source_limb]``, and
     ``[source_limb - 1, destination_limb]``. Source and destination columns map
     exactly to the supplied ``prime_ids`` order.
     """
 
-    moduli = engine.montgomery_parameters.moduli
+    rns_context = engine._rns_context_for(device)
+    moduli = rns_context.montgomery_parameters.moduli
     source_moduli = [int(moduli[index]) for index in source_prime_ids]
     target_moduli = [int(moduli[index]) for index in target_prime_ids]
     target_r2 = [
-        int(engine.montgomery_parameters.montgomery_r2[index])
+        int(rns_context.montgomery_parameters.montgomery_r2[index])
         for index in target_prime_ids
     ]
     width = len(source_moduli)
@@ -63,17 +109,20 @@ def _mixed_radix_tables(
     propagation = torch.zeros(
         (max(width - 1, 0), width),
         dtype=engine.config.torch_dtype,
-        device=engine.device,
+        device=device,
     )
     for component_index, prefix in enumerate(prefix_products):
         next_modulus = source_moduli[component_index + 1]
         normalizers.append(
-            (pow(prefix, -1, next_modulus) * engine.montgomery_parameters.R)
+            (
+                pow(prefix, -1, next_modulus)
+                * rns_context.montgomery_parameters.R
+            )
             % next_modulus
         )
         for target_index in range(component_index + 2, width):
             propagation[component_index, target_index] = (
-                prefix * engine.montgomery_parameters.R
+                prefix * rns_context.montgomery_parameters.R
             ) % source_moduli[target_index]
 
     extension = torch.tensor(
@@ -85,19 +134,19 @@ def _mixed_radix_tables(
             for prefix in prefix_products
         ],
         dtype=engine.config.torch_dtype,
-        device=engine.device,
+        device=device,
     )
     if width == 1:
         extension = torch.empty(
             (0, len(target_prime_ids)),
             dtype=engine.config.torch_dtype,
-            device=engine.device,
+            device=device,
         )
     return (
         torch.tensor(
             normalizers,
             dtype=engine.config.torch_dtype,
-            device=engine.device,
+            device=device,
         ),
         propagation,
         extension,
@@ -157,7 +206,7 @@ def reference_centered_basis_extend(
         source_moduli: Modulus corresponding to each source row.
         target_moduli: Moduli of the desired output rows.
         centered: Choose signed half-interval representatives instead of
-            canonical nonnegative representatives.
+            least nonnegative representatives.
 
     Returns:
         Tensor on the original device with shape
@@ -220,7 +269,7 @@ class ModRaisedCiphertext:
     @classmethod
     def from_engine(
         cls,
-        engine: CkksEngine,
+        engine: Engine,
         ciphertext: Ciphertext,
         *,
         source_level: int,
@@ -228,9 +277,10 @@ class ModRaisedCiphertext:
     ) -> ModRaisedCiphertext:
         """Attach the source basis needed by the first raised transform."""
 
-        source_prime_ids = engine.rns_layout.prime_ids(source_level)
+        rns_context = engine._rns_context_for(ciphertext.device)
+        source_prime_ids = rns_context.rns_layout.prime_ids(source_level)
         source_modulus = math.prod(
-            engine.montgomery_parameters.moduli[index]
+            rns_context.montgomery_parameters.moduli[index]
             for index in source_prime_ids
         )
         return cls(
@@ -243,7 +293,7 @@ class ModRaisedCiphertext:
 
 
 def _prepare_entry(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
 ) -> Ciphertext:
     r"""Prepare the pending scale required by the structural-base rescale.
@@ -265,7 +315,7 @@ def _prepare_entry(
         residue_representation="standard",
         components=2,
     )
-    engine._assert_engine_ciphertext(ciphertext)
+    engine.validate_ciphertext(ciphertext)
     ordinary_ratio = ciphertext.scale / engine.config.default_scale
     pending_ratio = ciphertext.scale / engine.config.default_scale**2
     if 0.5 <= pending_ratio <= 2.0:
@@ -278,7 +328,9 @@ def _prepare_entry(
     identity = engine.prepare_plaintext_for_multiplication(
         engine.encode(
             torch.ones(
-                engine.num_slots, dtype=torch.float64, device=engine.device
+                engine.num_slots,
+                dtype=torch.float64,
+                device=ciphertext.device,
             ),
             level=ciphertext.level,
             scale=engine.config.default_scale,
@@ -293,7 +345,7 @@ def _prepare_entry(
 
 
 def _rescale_to_structural_base(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
 ) -> Ciphertext:
     r"""Drop the final public prime and enter the structural-base representation.
@@ -311,7 +363,7 @@ def _rescale_to_structural_base(
         residue_representation="standard",
         components=2,
     )
-    engine._assert_engine_ciphertext(ciphertext)
+    engine.validate_ciphertext(ciphertext)
     expected_level = engine.final_public_level
     if ciphertext.level != expected_level:
         raise ValueError(
@@ -324,7 +376,7 @@ def _rescale_to_structural_base(
             'bootstrap entry requires pending scale near Delta**2; '
             f'got scale/Delta**2={pending_ratio:.6g}'
         )
-    structural_value = engine._rescale_final_public_level_to_structural_base(
+    structural_value = engine.rescale_to_structural_base(
         ciphertext,
         rounding='nearest',
     )
@@ -336,7 +388,7 @@ def _rescale_to_structural_base(
 
 
 def _modulus_raise(
-    engine: CkksEngine,
+    engine: Engine,
     cache: MutableMapping[Any, Any],
     ciphertext: Ciphertext,
     *,
@@ -355,11 +407,11 @@ def _modulus_raise(
 
     Input payload is integral CUDA
     ``[component=2, *batch, source_limb, coefficient]`` in
-    coefficient/standard/canonical Q state. Each coefficient is interpreted in
+    coefficient/standard Q state with residues in $[0,q_i)$. Each coefficient is interpreted in
     the centered interval modulo the source product, then reduced exactly into
     every ``target_prime_ids`` row. Output owns newly allocated
     ``[component=2, *batch, destination_limb, coefficient]`` storage in
-    coefficient/standard/canonical Q state. Component count, batch axes, exact
+    coefficient/standard Q state with residues in $[0,q_i)$. Component count, batch axes,
     integer polynomial, and actual scale are preserved; no input aliases or is
     mutated by the returned ciphertext.
     """
@@ -370,13 +422,14 @@ def _modulus_raise(
         modulus_basis='Q',
         components=2,
     )
-    engine._assert_structural_base_ciphertext(ciphertext)
+    _validate_structural_ciphertext(engine, ciphertext)
     if not 0 <= target_level < ciphertext.level:
         raise ValueError(
             f'target_level must satisfy 0 <= target_level < {ciphertext.level}'
         )
     source_prime_ids: tuple[int, ...] = ciphertext.prime_ids
-    target_prime_ids: tuple[int, ...] = engine.rns_layout.prime_ids(
+    rns_context = engine._rns_context_for(ciphertext.device)
+    target_prime_ids: tuple[int, ...] = rns_context.rns_layout.prime_ids(
         target_level
     )
     if not source_prime_ids or not target_prime_ids:
@@ -391,31 +444,31 @@ def _modulus_raise(
     cache_key = (source_prime_ids, target_prime_ids)
     runtime = cache.get(cache_key)
     if runtime is None:
-        source_parameters = engine.rns_runtime.row_parameters(source_prime_ids)
+        source_parameters = rns_context.row_parameters(source_prime_ids)
         normalizers, propagation, extension = _mixed_radix_tables(
-            engine, source_prime_ids, target_prime_ids
+            engine, ciphertext.device, source_prime_ids, target_prime_ids
         )
-        target_params = engine.rns_runtime.rns_parameter_tensor[
+        target_params = rns_context.rns_parameter_tensor[
             :, target_prime_ids[0] : target_prime_ids[-1] + 1
         ]
         source_moduli = tuple(
-            int(engine.montgomery_parameters.moduli[index])
+            int(rns_context.montgomery_parameters.moduli[index])
             for index in source_prime_ids
         )
         target_moduli = tuple(
-            int(engine.montgomery_parameters.moduli[index])
+            int(rns_context.montgomery_parameters.moduli[index])
             for index in target_prime_ids
         )
         source_product = math.prod(source_moduli)
         corrections = torch.tensor(
             [source_product % modulus for modulus in target_moduli],
             dtype=engine.config.torch_dtype,
-            device=engine.device,
+            device=ciphertext.device,
         )
         target_moduli_tensor = torch.tensor(
             target_moduli,
             dtype=engine.config.torch_dtype,
-            device=engine.device,
+            device=ciphertext.device,
         )
         runtime = (
             source_parameters,
@@ -440,13 +493,13 @@ def _modulus_raise(
     ) = runtime
     source_start = min(source_prime_ids)
     source_stop = max(source_prime_ids) + 1
-    source_params = engine.rns_runtime.rns_parameter_tensor[
+    source_params = rns_context.rns_parameter_tensor[
         :, source_start:source_stop
     ]
     raised_components = []
     for component in (ciphertext.c0, ciphertext.c1):
         source = component.clone()
-        rns_ops.canonicalize_residues_(source, source_params)
+        rns_ops.reduce_to_standard_(source, source_params)
         if len(source_prime_ids) == 1:
             digits = source
         else:
@@ -462,7 +515,7 @@ def _modulus_raise(
                 neg_lo,
                 neg_hi,
             )
-            rns_ops.canonicalize_residues_(digits, source_params)
+            rns_ops.reduce_to_standard_(digits, source_params)
         raised = rns_ops.mixed_radix_basis_extend_to_montgomery(
             digits,
             extension,
@@ -470,7 +523,7 @@ def _modulus_raise(
             len(target_prime_ids),
         )
         rns_ops.from_montgomery_(raised, target_params)
-        rns_ops.canonicalize_residues_(raised, target_params)
+        rns_ops.reduce_to_standard_(raised, target_params)
         negative = _mixed_radix_is_above_half(digits, source_moduli)
         corrections = corrections_1d.view(*([1] * (raised.ndim - 2)), -1, 1)
         moduli = target_moduli_1d.view(*([1] * (raised.ndim - 2)), -1, 1)
@@ -481,15 +534,16 @@ def _modulus_raise(
         )
         raised_components.append(torch.remainder(raised, moduli))
 
-    raised_ct = engine._ciphertext_from_components(
-        raised_components,
+    raised_ct = Ciphertext(
+        data=torch.stack(raised_components, dim=0),
         level=target_level,
         scale=ciphertext.scale,
+        prime_ids=target_prime_ids,
         polynomial_domain='coefficient',
         modulus_basis='Q',
         residue_representation="standard",
-        prime_ids=target_prime_ids,
     )
+    engine.validate_ciphertext(raised_ct)
     return ModRaisedCiphertext.from_engine(
         engine,
         raised_ct,

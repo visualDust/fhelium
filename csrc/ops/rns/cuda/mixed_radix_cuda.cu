@@ -11,7 +11,7 @@
 // Generic mixed-radix requirements (coefficient domain).
 //
 // source_residues is integral CUDA [*batch, source_limb, coefficient] in
-// standard lazy range [0, 2q_i), with source limb j mapped to one exact ordered
+// standard lazy range [0, 2q_i), with source limb j mapped to one ordered
 // source prime id. Native code collapses only *batch. For source bases b_r, let
 // M_0=1 and $M_r=\prod_{t<r}b_t$. `mixed_radix_decompose` returns non-aliasing
 // standard lazy digits of the same shape such that
@@ -22,7 +22,7 @@
 //
 // `mixed_radix_basis_extend_to_montgomery` consumes standard digits
 // [*batch, digit, coefficient]. extension_coefficients has shape
-// [digit-1, destination_limb] and stores $M_rR^2$ for r>=1 in exact
+// [digit-1, destination_limb] and stores $M_rR^2$ for r>=1 in
 // destination-prime order; rns_params is [parameter, destination_limb] in that
 // same order. It returns newly allocated
 // [*batch, destination_limb, coefficient] Montgomery lazy residues in
@@ -45,7 +45,7 @@ __global__ void mixed_radix_decompose_kernel(
   if (coefficient >= source.size(2) || row_count > MAX_DIGIT_ROWS) return;
 
   scalar_t digits[MAX_DIGIT_ROWS];
-  const scalar_t first_residue = canonicalize_lazy_montgomery_operand(
+  const scalar_t first_residue = reduce_lazy_montgomery_operand(
       source[batch][0][coefficient], modulus_lo[0], modulus_hi[0]);
   for (int row = 0; row < row_count; ++row) digits[row] = first_residue;
 
@@ -56,13 +56,13 @@ __global__ void mixed_radix_decompose_kernel(
         (modulus_lo[row] + (modulus_hi[row] << (sizeof(scalar_t) * 4 - 1)))
         << 1;
     const scalar_t digit =
-        canonicalize_lazy_residue(montgomery_mul_split(difference,
-                                                       normalizer[step],
-                                                       modulus_lo[row],
-                                                       modulus_hi[row],
-                                                       neg_inv_modulus_lo[row],
-                                                       neg_inv_modulus_hi[row]),
-                                  twice_modulus);
+        reduce_lazy_residue(montgomery_mul_split(difference,
+                                                 normalizer[step],
+                                                 modulus_lo[row],
+                                                 modulus_hi[row],
+                                                 neg_inv_modulus_lo[row],
+                                                 neg_inv_modulus_hi[row]),
+                            twice_modulus);
     digits[row] = digit;
     for (int target = row + 1; target < row_count; ++target) {
       digits[target] += montgomery_mul(digit,

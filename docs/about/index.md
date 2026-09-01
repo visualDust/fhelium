@@ -1,6 +1,6 @@
 ---
 title: About FHElium
-description: FHElium's motivation, characteristics, work in progress, and history.
+description: FHElium's motivation, characteristics, and work in progress.
 ---
 
 # About FHElium
@@ -17,29 +17,23 @@ FHElium provides a modular research framework in which cross-layer designs can b
 
 ## What characterizes FHElium
 
-### 1. Across the stack and modular
+### 1. Full-stack by design
 
-FHElium provides coordinated layers across the encrypted-execution stack:
+FHElium connects encrypted programming, compilation, execution, runtime systems, and hardware optimization in one research stack. Immediate execution with Eager and program-based execution with Compile are both first-class ways to work across this stack.
 
-```text
-express → transform → execute → observe → validate
-```
+### 2. Choices remain visible
 
-Each layer retains a precise responsibility and a replaceable interface. A researcher can study one component independently or use shared value semantics and evidence to trace its numerical and system-level consequences across the framework.
+FHElium exposes the decisions that shape an encrypted computation. Researchers can change representations, transformations, execution strategies, and runtime policies at the layer that owns them.
 
-### 2. Multiple levels of control
+### 3. Evidence across layers
 
-The same computation can be approached through high-level tensor programs, program transformation, direct evaluator operations, or runtime orchestration without changing its underlying value semantics. Program representation does not require every execution decision to become static, so runtime information can still influence behavior where it is useful.
-
-### 3. Orthogonal and explainable
-
-FHElium represents computation, cryptographic state, resource ownership, placement, lifetime, communication, and runtime evidence as related but distinct concerns. Each component states what it owns, requires, and changes, allowing local reasoning while preserving an inspectable explanation of cross-layer effects.
+FHElium evaluates numerical correctness alongside latency, memory, communication, and hardware behavior. A local optimization can be traced to its effect on the complete workload.
 
 ## Work in progress
 
 ### Multiple execution backends
 
-The current implementation provides native CPU and CUDA execution backends through common value semantics, operator schemas, and validation requirements. Each backend retains platform-specific execution policies: CPU uses PyTorch intra-op parallelism and an indexed radix-2 NTT, while CUDA adds tuned NTT families, CUDA Graph execution, and application-owned multi-GPU composition. Future backends should preserve the shared semantics while exposing their own kernels, memory hierarchies, and optimization opportunities. This would support research across NVIDIA and AMD GPUs, TPUs, and future encrypted-computing hardware without hiding hardware evidence behind a lowest-common-denominator interface. We are seeking donated hardware or sustained remote access to representative datacenter accelerators, to explore different micro-architectures. Interested organizations are invited to contact us.
+FHElium develops execution backends optimized for different microarchitectures under shared value and operator semantics. To expand this research, we welcome donated hardware or sustained remote access to representative datacenter accelerators; interested organizations are invited to contact us.
 
 ### Compiler and ecosystem interoperability
 
@@ -48,11 +42,3 @@ FHElium's versioned CKKS operation vocabulary and extensible representation supp
 ### Agentic AI ready
 
 FHElium's CKKS state, structured requirements, diagnostics, and reproducible evidence are intended to give agentic systems feedback they can act on. The goal is for an agent to translate a cleartext program into an encrypted program or tune an encrypted workload's performance while keeping each transformation, assumption, and validation result observable and debuggable.
-
-## History
-
-FHElium emerged from **Slackoffhe**, an internal redesign of [Tiberate-FHE](https://github.com/visualDust/tiberate-fhe). As the intended programming model, runtime responsibilities, and cross-layer research goals became clearer, the redesign expanded into a near-complete reconstruction of the system and was established as **FHElium**, with a new abstraction hierarchy for encrypted execution and resource management.
-
-Tiberate-FHE had itself begun as an independently maintained continuation of the archived [Liberate-FHE](https://github.com/Desilo/liberate-fhe). That earlier connection is development background rather than FHElium's architectural baseline. FHElium does not preserve API or architecture compatibility with Tiberate-FHE or Liberate-FHE and is not a drop-in continuation of either project.
-
-The name places **F** before *helium*, making FHE visible while reflecting the goal of a light, modular, and extensible system. Tiberate-FHE, Slackoffhe, and FHElium are research-oriented projects initially developed by [Gavin Gong](https://github.com/VisualDust) while working under the supervision of [Dr. Wujie Wen](https://wenwujie.github.io/) at NC State University.

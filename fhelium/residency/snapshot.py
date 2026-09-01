@@ -13,7 +13,7 @@ from typing import Generic, TypeVar
 
 import torch
 
-from fhelium.core import TensorResident
+from fhelium.values import TensorResident
 from fhelium.residency.location import ResidencyLocation
 from fhelium.residency.model import (
     ResidencyHandle,
@@ -386,7 +386,7 @@ class ResidencySnapshot(Generic[ValueT_co]):
 class ResidencyTransitionReport:
     """Measured result of one completed residency action.
 
-    ``action`` is the exact requested action.  ``source`` records the resolved
+    ``action`` is the requested action. ``source`` records the resolved
     source when an action left it implicit, and ``destination`` records the
     target when applicable.  CUDA allocator metrics are optional because host
     transitions and managers without allocator instrumentation cannot provide

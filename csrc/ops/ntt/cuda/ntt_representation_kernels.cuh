@@ -4,7 +4,7 @@
 #include "../../common/cuda/montgomery.cuh"
 #include "../../common/rns_parameters.h"
 
-// Representation-changing NTT kernels use the canonical
+// Representation-changing NTT kernels use the standard
 // [batch, prime, coefficient] operand ABI. Grid x selects the prime row,
 // grid y selects the coefficient tile, and grid z selects the batch member.
 
@@ -100,7 +100,7 @@ __global__ void inverse_ntt_normalize_to_standard_kernel(
   scalar_t value = inverse_ntt_to_standard_lazy(
       residues[batch][row][coefficient], row, params);
   residues[batch][row][coefficient] =
-      canonicalize_lazy_residue(value, params[RNS_PARAM_TWICE_MODULUS][row]);
+      reduce_lazy_residue(value, params[RNS_PARAM_TWICE_MODULUS][row]);
 }
 
 template <typename scalar_t>
@@ -113,8 +113,7 @@ __global__ void inverse_ntt_normalize_to_centered_kernel(
   if (coefficient >= residues.size(2)) return;
   scalar_t value = inverse_ntt_to_standard_lazy(
       residues[batch][row][coefficient], row, params);
-  value =
-      canonicalize_lazy_residue(value, params[RNS_PARAM_TWICE_MODULUS][row]);
+  value = reduce_lazy_residue(value, params[RNS_PARAM_TWICE_MODULUS][row]);
   residues[batch][row][coefficient] =
       center_residue(value, params[RNS_PARAM_TWICE_MODULUS][row]);
 }

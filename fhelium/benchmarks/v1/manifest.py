@@ -28,7 +28,7 @@ class DefinitionRegistry(Protocol):
 
 @dataclass(frozen=True)
 class ResolvedCase:
-    """A Benchmark v1 case bound to its exact definition and parameters."""
+    """A Benchmark v1 case resolved with its definition and profile."""
 
     case: BenchmarkCase
     definition: BenchmarkDefinition
@@ -58,14 +58,14 @@ class ResolvedCase:
 
 @dataclass(frozen=True)
 class ResolvedManifest:
-    """Canonical Benchmark v1 description and its SHA-256 identity."""
+    """Resolved Benchmark v1 description and its SHA-256 identity."""
 
     specification: BenchmarkSpecification
     cases: tuple[ResolvedCase, ...]
     sha256: str
 
     def manifest_dict(self) -> dict[str, Any]:
-        """Return the exact payload covered by :attr:`sha256`."""
+        """Return the payload covered by :attr:`sha256`."""
 
         return {
             "benchmark_version": self.specification.benchmark_version,
@@ -79,13 +79,13 @@ class ResolvedManifest:
         payload["manifest_sha256"] = self.sha256
         return payload
 
-    def canonical_bytes(self) -> bytes:
-        """Serialize the covered manifest in canonical UTF-8 JSON."""
+    def identity_bytes(self) -> bytes:
+        """Serialize the covered manifest as deterministic UTF-8 JSON."""
 
-        return _canonical_bytes(self.manifest_dict())
+        return _identity_bytes(self.manifest_dict())
 
 
-def _canonical_bytes(payload: Mapping[str, Any]) -> bytes:
+def _identity_bytes(payload: Mapping[str, Any]) -> bytes:
     normalized = normalize_json(payload, path="manifest")
     return json.dumps(
         normalized,
@@ -100,7 +100,7 @@ def resolve_benchmark(
     specification: BenchmarkSpecification,
     definitions: DefinitionRegistry,
 ) -> ResolvedManifest:
-    """Bind the fixed Benchmark v1 cases to their exact leaf definitions."""
+    """Bind the fixed Benchmark v1 cases to their leaf definitions."""
 
     if not isinstance(specification, BenchmarkSpecification):
         raise TypeError("specification must be a BenchmarkSpecification")
@@ -155,7 +155,7 @@ def resolve_benchmark(
         "description": specification.description,
         "cases": [case.to_manifest_dict() for case in case_tuple],
     }
-    digest = hashlib.sha256(_canonical_bytes(body)).hexdigest()
+    digest = hashlib.sha256(_identity_bytes(body)).hexdigest()
     return ResolvedManifest(
         specification=specification,
         cases=case_tuple,
@@ -164,7 +164,7 @@ def resolve_benchmark(
 
 
 def validate_report_specification(report: BenchmarkReport) -> None:
-    """Require the exact fixed manifest and five case identities of v1."""
+    """Require the fixed manifest and five case identities of v1."""
 
     if not isinstance(report, BenchmarkReport):
         raise TypeError("report must be a BenchmarkReport")

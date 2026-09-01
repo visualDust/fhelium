@@ -27,8 +27,8 @@ into:
 | --- | --- |
 | engine and CKKS context | encrypted input vector |
 | encoded matrix diagonals | ciphertext payload |
-| exact rotation keys | request-specific values |
-| operation schedule | matching exact-value input signature |
+| direct rotation keys | request-specific values |
+| operation schedule | matching value input signature |
 
 Encryption and decryption remain outside the graph.
 
@@ -81,16 +81,16 @@ program = CudaGraphProgram.capture(
 )
 ```
 
-[`CudaGraphProgram`](../api/fhelium/execution/cuda_graph.md#cudagraphprogram) performs side-stream
+[`CudaGraphProgram`](../api/fhelium/runtime/cuda_graph.md#cudagraphprogram) performs side-stream
 warmup, allocates fixed dynamic-input storage, captures the evaluator, records
-the output storage, and derives an exact input signature.
+the output storage, and derives an input signature.
 
 The prototype determines structure, including:
 
 - value-tree shape;
-- exact value type;
+- value type;
 - tensor shape and dtype;
-- CKKS context and level;
+- CKKS level and caller-recorded parameter provenance;
 - polynomial domain, modulus basis, residue representation, scale, and prime IDs.
 
 ## 5. Replay with changing ciphertexts
@@ -148,21 +148,15 @@ program.close()
 ```
 
 Closing releases graph-owned inputs, outputs, and capture state. Do not treat
-a captured program as an unbounded global singleton when different contexts,
+a captured program as an unbounded global singleton when different parameter sets,
 models, or input signatures require independent storage.
 
-::: danger Application-owned serving policy
-A serving extension assigns models and users, admits requests, manages
-per-user keys and eviction, and composes those policies around one or more
-fixed captured programs.
-:::
-
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/11_cuda_graph_matrix_vector.py
 :::
 
 ## Related concepts and guides
 
 - [CUDA Graph execution model](../concepts/execution/cuda-graph-model.md)
-- [Exact signatures and buffers](../concepts/execution/exact-signatures-and-buffers.md)
+- [Value signatures and buffers](../concepts/execution/signatures-and-buffers.md)
 - [Capture a repeated evaluator](../how-to/capture-repeated-evaluator.md)

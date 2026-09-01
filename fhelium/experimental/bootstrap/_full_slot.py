@@ -1,4 +1,4 @@
-r"""Engine-bound callable full-slot CKKS bootstrap composition.
+r"""Full-slot CKKS bootstrap composition configured for one Engine.
 
 The composition accepts and returns two-component,
 coefficient-domain, standard-residue Q RNS values. Temporary
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fhelium.core import (
+from fhelium.values import (
     Ciphertext,
     EvaluationKeyRequirements,
     EvaluationKeySet,
@@ -21,7 +21,7 @@ from fhelium.core import (
     RotationKeySet,
     SecretKey,
 )
-from fhelium.engine.ckks_engine import CkksEngine
+from fhelium.eager import Engine
 from fhelium.experimental.bootstrap._modraise import (
     _modulus_raise,
     _prepare_entry,
@@ -34,7 +34,7 @@ from fhelium.experimental.bootstrap._ops import (
     _multiply_by_monomial,
     _multiply_scalar,
 )
-from fhelium.core.rotation import (
+from fhelium.utils.rotation import (
     decompose_signed_power_of_two_rotation,
 )
 
@@ -42,8 +42,8 @@ from fhelium.core.rotation import (
 class FullSlotBootstrap:
     r"""Compiled full-slot refresh callable with replaceable components.
 
-    Construction binds transform compilers/evaluators and modular reduction to
-    one engine. Calling the object executes the visible full-slot algorithm with
+    Construction configures transform compilers/evaluators and modular reduction
+    for one engine. Calling the object executes the visible full-slot algorithm with
     one validated evaluator-only key inventory.
 
     Let $\Delta_0$ be `engine.config.default_scale`, $q_b$ the one-prime
@@ -91,7 +91,7 @@ class FullSlotBootstrap:
 
     def __init__(
         self,
-        engine: CkksEngine,
+        engine: Engine,
         *,
         coeffs_to_slots_compiler: Any,
         coeffs_to_slots_evaluator: Any,
@@ -178,12 +178,12 @@ class FullSlotBootstrap:
 
     @property
     def required_rotations(self) -> tuple[int, ...]:
-        r"""Return canonical signed $\operatorname{Rot}_r$ steps for both maps."""
+        r"""Return normalized signed $\operatorname{Rot}_r$ steps for both maps."""
 
         return tuple(
             sorted(
                 {
-                    RotationKey.canonical_step(
+                    RotationKey.normalize_step(
                         step,
                         ring_dimension=self.engine.config.N,
                     )
@@ -208,22 +208,22 @@ class FullSlotBootstrap:
             )
         )
 
-    def key_steps(self, strategy: str = 'exact') -> tuple[int, ...]:
+    def key_steps(self, strategy: str = 'direct') -> tuple[int, ...]:
         """Return the rotation-key inventory for one composition strategy.
 
-        ``exact`` returns every logical transform step as a direct key.
+        ``direct`` returns every logical transform step as a direct key.
         ``power_of_two`` returns the deduplicated signed-power steps whose
         compositions cover those transforms. The latter therefore describes
         actual inventory entries, not the original transform offsets.
 
         Raises:
-            ValueError: If ``strategy`` is not ``exact`` or ``power_of_two``.
+            ValueError: If ``strategy`` is not ``direct`` or ``power_of_two``.
         """
 
-        if strategy == 'exact':
+        if strategy == 'direct':
             return self.required_rotations
         if strategy != 'power_of_two':
-            raise ValueError("strategy must be 'exact' or 'power_of_two'")
+            raise ValueError("strategy must be 'direct' or 'power_of_two'")
         return tuple(
             sorted(
                 {
@@ -345,7 +345,7 @@ class FullSlotBootstrap:
         r"""Refresh a final-public-level full-slot ciphertext or dense batch.
 
         The input must be a context-compatible two-component Q ciphertext in
-        coefficient domain with standard residues, exact active `prime_ids`,
+        coefficient domain with standard residues, active `prime_ids`,
         data axes `[component, *batch, limb, coefficient]`, ring extent $N$,
         final public level $L-1$, and actual scale near either $\Delta_0$ or
         $\Delta_0^2$. All $S$ slots are transformed; there is no sparse-slot
@@ -399,8 +399,8 @@ class FullSlotBootstrap:
 
         The functional result does not alias the input. It is a two-component
         coefficient-domain standard-RNS Q ciphertext with unchanged batch
-        axes, level `output_level`, and exact
-        `engine.rns_layout.prime_ids(output_level)`. The method does not enforce
+        axes, level `output_level`, and
+        the Engine's Q basis at `output_level`. The method does not enforce
         an application error bound or the reducer's encrypted input range.
         """
 

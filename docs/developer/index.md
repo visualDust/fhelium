@@ -1,21 +1,21 @@
 # Developer Guide
 
-The Developer Guide explains how FHElium is implemented: Python CKKS
-orchestration, PyTorch operator dispatch, CPU and CUDA arithmetic, distributed
-transport, reusable execution, persistent artifacts, live Residency, JIT
-lowering, source ownership, and contributor validation.
+The Developer Guide explains how FHElium is implemented: Eager and Compile
+execution, shared Backend operation dispatch, CPU and CUDA arithmetic,
+distributed transport, reusable execution, persistent artifacts, live
+Residency, source ownership, and contributor validation.
 
 ## Implementation map
 
 <DocGrid>
   <DocCard
-    title="Repository and implementation map"
-    description="Locate values, engine algorithms, native registrations, runtime subsystems, generated interfaces, and focused tests."
+    title="Current source tree and ownership"
+    description="Locate the Eager, Compile, Backend, native, runtime, storage, and distributed implementation owners and their focused tests."
     href="/developer/source-tree"
   />
   <DocCard
-    title="Python-to-native execution stack"
-    description="Follow the Python API, generated wrappers, torch.ops schemas, PyTorch dispatch, CPU/OpenMP execution, CUDA kernels, and native ABI loading."
+    title="Eager, Compile, and native execution"
+    description="Follow both Python use models into shared Backend implementations, generated wrappers, torch.ops dispatch, CPU execution, and CUDA kernels."
     href="/developer/engine-native-stack"
   />
   <DocCard
@@ -25,18 +25,33 @@ lowering, source ownership, and contributor validation.
   />
   <DocCard
     title="Distributed internals"
-    description="Trace torch.distributed initialization, exact-value descriptors, payload collectives, limb reconstruction, and modular ciphertext reduction."
+    description="Trace torch.distributed initialization, value descriptors, payload collectives, limb reconstruction, and modular ciphertext reduction."
     href="/developer/distributed-internals"
   />
   <DocCard
     title="Buffers and CUDA Graphs"
-    description="Inspect exact execution signatures, fixed-address value buffers, CUDA-event copy lifetime, graph capture, replay, and output ownership."
+    description="Inspect execution signatures, fixed-address value buffers, CUDA-event copy lifetime, graph capture, replay, and output ownership."
     href="/developer/execution-buffers-and-cuda-graphs"
   />
   <DocCard
-    title="JIT internals"
-    description="Inspect the xDSL vocabulary, pass interfaces, executable schemas, readiness, and extension handling."
-    href="/developer/unified-jit-internals"
+    title="Compiler stack internals"
+    description="Inspect neutral xDSL IR, Compile passes, Backend linking, and Experimental JIT runtime specialization."
+    href="/developer/compiler-stack-internals"
+  />
+  <DocCard
+    title="Compiler state and eager execution"
+    description="Understand why compiler passes reason about CKKS state while Eager applies operation metadata directly and Backend kernels dispatch from Tensor dimensions."
+    href="/developer/compiler-state-and-eager-execution"
+  />
+  <DocCard
+    title="Operation declaration and implementation selection"
+    description="Follow dialect-owned operation semantics, named lowerings, Backend registration, Compile assignments, Backend resolution, and Eager routing."
+    href="/developer/operation-registration-and-selection"
+  />
+  <DocCard
+    title="IR operation and implementation index"
+    description="Map every registered IR operation to its lowering, CPU, CUDA, Triton, interpreter, direct, or value implementation owner."
+    href="/developer/ir-operation-implementation-index"
   />
   <DocCard
     title="Storage and residency"
@@ -54,23 +69,18 @@ lowering, source ownership, and contributor validation.
     href="/developer/contributing"
   />
   <DocCard
-    title="Mathematical and state invariants"
-    description="Use the canonical symbols, tensor axes, CKKS states, scale laws, and frontend-to-backend terminology."
-    href="/developer/mathematical-notation-and-invariants"
-  />
-  <DocCard
     title="Native operator workflow"
     description="Change one torch.ops schema coherently across Python, generated wrappers, CPU/CUDA registrations, kernels, and ABI tests."
     href="/developer/native-operator-workflow"
   />
   <DocCard
     title="Documentation workflow"
-    description="Choose the right documentation family, maintain source ownership, and validate VitePress, Mermaid, generated API pages, and examples."
+    description="Choose the right documentation family, preserve source ownership, and validate VitePress, Mermaid, generated API pages, and examples."
     href="/developer/documentation"
   />
   <DocCard
     title="Binary packaging and release"
-    description="Build the exact Torch and CUDA wheel matrix, publish immutable artifacts and cumulative package indexes, and operate the self-hosted release workflow."
+    description="Build the declared Torch and CUDA wheel matrix, publish immutable artifacts and cumulative package indexes, and operate the self-hosted release workflow."
     href="/developer/binary-packaging-and-release"
   />
 </DocGrid>
@@ -81,7 +91,7 @@ A native operation is implemented as one cross-layer path:
 
 ```mermaid
 graph LR
-    SEM[Mathematical and state invariants]
+    SEM[Terminology and mathematical model]
     ENG[Engine/runtime composition]
     SCHEMA[C++ dispatcher schema]
     BACKEND[CPU and CUDA registrations]
@@ -92,6 +102,8 @@ graph LR
 
 Changes to shape, mutation, row mapping, polynomial domain, modulus basis, or residue range must be
 represented consistently at every layer.
+Project vocabulary and equations are defined in
+[Terminology and mathematical model](../concepts/terminology-and-mathematical-model.md).
 
 ## Start from an execution path
 
@@ -105,6 +117,6 @@ entry point to the storage or native operation that performs the work. Record:
 - source commit and loaded native ABI manifest;
 - smallest correctness oracle and focused tests.
 
-For numerical work, retain the exact preset, level, scale, NTT backend, and
+For numerical work, retain the preset, level, scale, NTT backend, and
 first failing stage. Synchronize only around the suspected CUDA stage when
 locating asynchronous failures.

@@ -1,37 +1,74 @@
-# Screen NTT backends on the target GPU
+# Select an NTT backend from measured evidence
 
 FHElium provides several mathematically equivalent Number Theoretic Transform
 (NTT) implementations. Their relative latency depends on the GPU, ring
-dimension, active Residue Number System (RNS) rows, and surrounding CKKS
-operation. Use the default for a first evaluator. Screen alternatives only
-after a correct, representative workload exists on the target GPU.
+dimension, number of active modulus primes, and surrounding CKKS operation.
+Use the default for a first evaluator. Compare alternatives only after a
+correct, representative workload exists on the target GPU.
 
-Backend choice is a `CkksEngine` execution option. It does not change
+Backend choice is an `Engine` execution option. It does not change
 CKKS parameters, ciphertext compatibility, or the library default.
 
 The library default is one static backend name for every supported `logN` and
 GPU. FHElium does not inspect the device or benchmark during engine
-construction. The commands below only produce evidence for a
-application choice.
+construction. The commands below only produce evidence for an application
+choice.
 
-## The three-step workflow
+## What the two commands measure
 
-1. **Screen kernels** to find obviously slow candidates.
-2. **Confirm CKKS primitives** to include encryption, key switching, and
-   rotation behavior.
-3. **Apply one exact name** only when the evidence supports a choice.
+An **NTT backend** is one implementation of the same forward and inverse
+Number Theoretic Transform. Changing the backend changes how the GPU executes
+the transform; it does not change the CKKS parameters or mathematical result.
 
-The following real example shows the kind of result the command produces.
+The CLI calls each fixed list of measured operations a `suite`:
 
-![Two NTT recommendation suites on an RTX PRO 6000 Blackwell GPU](/figures/ntt-backend-recommendation-example-sm120.svg)
+- `--suite kernel` measures prepared forward NTT, inverse NTT, and an NTT
+  round trip. Despite the CLI name, this test does not report one CUDA kernel
+  launch. It reports complete NTT method calls while excluding engine and
+  input construction. This page calls it the **NTT-only test**.
+- `--suite ckks-primitive` measures complete eager evaluator method calls:
+  encryption, decryption, multiplication followed by relinearization (reducing
+  a three-component multiplication result to two components), one rotation,
+  and four rotations that reuse one ciphertext decomposition (grouped
+  hoisting). This page calls it the **complete-CKKS test**.
 
-*Figure 1. Example `logN = 16` measurements recorded on 2026-07-23 with a FHElium
-0.10 development build and PyTorch 2.13/CUDA 13 on one NVIDIA RTX PRO 6000
-Blackwell (sm_120) GPU. Bars show aggregate latency gap from the numerical
-winner; lower is better. Orange marks the stable group8 fallback. These values
-illustrate the decision process and are not portable performance claims.*
+The first test answers “which transform implementations are clearly slower?”
+The second answers “which backend gives the best result after NTT work is
+combined with the other work inside common CKKS operations?”
 
-## 1. Run the kernel screening suite
+## How the percentage is calculated
+
+Each test contains operations with different latency scales. The command gives
+every operation equal weight:
+
+1. For each operation, divide a backend's median latency by the smallest median
+   latency observed for that operation.
+2. Multiply those ratios and take the root whose degree is the number of
+   operations—the geometric mean. This combines the operation latencies into
+   one **relative latency** for that test; lower is faster.
+3. Report how much that relative latency exceeds the fastest backend's result
+   in the same test.
+
+Therefore:
+
+- `0%` means the backend is fastest by that test's equal-weight calculation;
+- `4%` means its relative latency is 4% higher than the fastest result; and
+- the percentage does not mean that every operation, or the complete
+  application, is 4% slower.
+
+FHElium treats results from `0%` through `3%` as too close to justify replacing
+the current default backend. When the default falls in that range, the command
+keeps it. Otherwise, it recommends the backend with the lowest relative
+latency.
+
+## Measure in three steps
+
+1. **Time NTT operations only** and remove clearly slower implementations.
+2. **Time complete CKKS operations** and compare the remaining backends after
+   encryption, key-switch, and rotation work is included.
+3. **Measure the application** before fixing the deployment choice.
+
+### 1. Time NTT operations only
 
 ```bash
 fhelium benchmark recommend ntt \
@@ -42,30 +79,10 @@ fhelium benchmark recommend ntt \
 ```
 
 The command tests every compatible production backend using forward NTT,
-inverse NTT, and roundtrip latency. A shortened view of the example output is:
+inverse NTT, and round-trip latency. Engine construction and input preparation
+are outside the timed region.
 
-| Rank | Backend | Pick | Gap from best | Repetition wins |
-| ---: | --- | :---: | ---: | ---: |
-| 1 | `radix2_compact_group8_smem8` | yes | 0.00% | 2 / 3 |
-| 2 | `radix16_compact` | no | 0.47% | 1 / 3 |
-| 3 | `radix2_compact_group16_smem8` | no | 1.20% | 0 / 3 |
-| 4 | `radix2_compact_group4_smem8` | no | 5.34% | 0 / 3 |
-| 5 | `radix4_compact` | no | 9.12% | 0 / 3 |
-
-```text
-recommended_backend  radix2_compact_group8_smem8
-confidence           low
-reason               0.47% runner-up margin; winner changed across repetitions
-```
-
-### Judgment from this result
-
-Do **not** claim that group8 is universally faster. The leading two backends
-are separated by less than 1%, and the repetition winner changes. The useful
-conclusion is narrower: group4 and radix4 are poor candidates for this exact
-kernel case, while group8 and radix16 require higher-level confirmation.
-
-## 2. Confirm with CKKS primitives
+### 2. Time complete CKKS operations
 
 ```bash
 fhelium benchmark recommend ntt \
@@ -75,7 +92,7 @@ fhelium benchmark recommend ntt \
   --output results/ntt-ckks-primitives.json
 ```
 
-This suite creates keys before timing, validates decrypted results, and
+This command creates keys before timing, validates decrypted results, and
 measures:
 
 - `encrypt_message` and `decrypt_message`;
@@ -83,39 +100,87 @@ measures:
 - one keyed rotation;
 - four rotations through grouped hoisting.
 
-In Figure 1, group16 and radix16 have nearly identical aggregate scores, while
-group8 remains only 2.01% behind. All three are inside the 3% near-tie band, so
-the command selects the stable group8 fallback and reports **low confidence**.
-That is an actionable result: keep the current default choice rather
-than encoding a noisy machine-specific winner.
+Key generation and correctness checking remain outside the timed region.
 
-A different result should lead to a different action:
+### 3. Confirm the application
 
-| Observation | Action |
-| --- | --- |
-| Same backend wins all repetitions by at least 5%, with low variation | Select that backend, then validate the application workload. |
-| Winner leads by 3–5% | Treat it as medium-confidence evidence; repeat under production conditions. |
-| Gap is below 3%, or repetition winners disagree | Keep the stable fallback; record the result as a near tie. |
-| Kernel and primitive suites disagree | Prefer primitives for a general CKKS evaluator, then benchmark the real workload. |
+The complete-CKKS comparison gives every measured operation equal weight. A
+production workload does not. Confirm the remaining candidates with
+representative levels, batch sizes, numbers of relinearizations and rotations,
+and whether the application uses ordinary eager calls or captured CUDA Graph
+replay. Preserve the two reports with the application measurement so that the
+scope of each decision remains visible.
 
-## 3. Apply the exact recommendation
+## Worked example: why group16 is selected
 
-The CLI prints a constructor expression. Copy the exact backend name:
+The following measurement used GPU 1 on an otherwise idle two-GPU host:
+
+- NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition (compute capability
+  12.0, also written `sm_120`);
+- `slots32768-scale40-levels34-int64`, whose ring dimension is $2^{16}$;
+- FHElium 0.10.0, PyTorch 2.13.0+cu130, and CUDA 13.0;
+- 3 warmups, 10 timed runs per operation, and 3 repetitions; and
+- seed `20260823`; each repetition started with a different backend to reduce
+  measurement-order bias.
+
+<NttBackendSelectionChart />
+
+| Backend | NTT-only relative latency | Complete-CKKS relative latency | Meaning for this example |
+| --- | ---: | ---: | --- |
+| `radix2_compact_group8_smem8` | fastest | +4.004% | Keep after the first test; do not select after the second. |
+| `radix2_compact_group16_smem8` | +0.891% | fastest | Keep after the first test; select after the second. |
+| `radix16_compact` | +1.445% | +3.456% | Keep after the first test; do not select after the second. |
+| `radix2_compact_group4_smem8` | +5.524% | +6.347% | Remove after the first test. |
+| `radix4_compact` | +6.991% | +7.144% | Remove after the first test. |
+
+### Result of test 1
+
+Group8 is fastest under the NTT-only calculation. Group16's relative latency
+is 0.891% higher and radix16's is 1.445% higher. Because both differences are
+at most 3%, the first test keeps all three candidates. Group4 and radix4 have
+relative latency more than 5% higher than group8, so they can be removed for
+this preset and device. The recorded second test still measured all five
+backends so that the table shows the complete results.
+
+### Result of test 2
+
+Group16 is fastest under the complete-CKKS calculation in all three
+repetitions. Radix16's relative latency is 3.456% higher and group8's is 4.004%
+higher. Both exceed 3%, so the rule that retains the current default for a
+close result does not apply. The command selects group16.
+
+For every timed operation, the command divides the sample standard deviation
+by the sample mean; this **coefficient of variation** describes how tightly
+the repeated timings cluster. The median of those values for group16 is
+0.784%. The command labels the recommendation **medium confidence** because
+group16 is fastest in every repetition and its lead exceeds 3%, but the lead
+does not reach the 5% required for high confidence.
+
+The first test did not select group8 for deployment; it only prevented
+group16 and radix16 from being removed too early. The second test provides the
+more relevant result for common eager `Engine` operations.
+
+## Apply the measured choice
+
+The CLI prints a constructor expression. Copy the backend name:
 
 ```python
 import fhelium as fh
+from fhelium.eager import Engine
 
-engine = fh.CkksEngine(
+engine = Engine(
     fh.Preset.slots32768_scale40_levels34_int64,
     device="cuda:0",
-    ntt_backend="radix2_compact_group8_smem8",
+    ntt_backend="radix2_compact_group16_smem8",
 )
 ```
 
 The recommendation command does not rewrite `DEFAULT_NTT_BACKEND`, modify
 native shared-memory tuning, or cache a machine-global selection. Re-run it
 when the GPU model, CUDA/PyTorch stack, FHElium version, preset, or important
-workload changes.
+workload changes. This example supports group16 only for the measured
+environment, and an application benchmark must still confirm it. The result
+does not establish a library-wide default.
 
 ## Compare a focused candidate set
 
@@ -125,17 +190,19 @@ Repeat `--backend` to restrict a follow-up comparison:
 fhelium benchmark recommend ntt \
   --suite ckks-primitive \
   --preset slots32768-scale40-levels34-int64 \
-  --backend radix2_compact_group8_smem8 \
+  --backend radix2_compact_group16_smem8 \
   --backend radix16_compact
 ```
 
-At least two exact compatible names are required. The indexed radix-2
-correctness oracle is omitted by default because it is not a production
-candidate, but it remains available for diagnostic runs.
+At least two compatible names are required. The command omits
+`radix2_indexed` by default because the diagnostic variant serves controlled
+experiments. Add that
+backend by name only when a diagnostic comparison needs the indexed
+implementation as another result-equality reference.
 
 ## Understand why performance changes
 
-The two suites intentionally answer different questions. To analyze launch
+The two tests intentionally answer different questions. To analyze launch
 count, memory coalescing, shared-memory fusion, register pressure, occupancy,
 RNS row count, and key-switch composition, continue with
 [Analyze and choose an NTT backend](choose-ntt-backend.md).

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from fhelium.legacy.engine import CkksEngine
+
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -172,7 +174,7 @@ _PARAMETERS = {
 }
 
 
-def _state(engine: fh.CkksEngine, value: fh.Ciphertext) -> dict[str, Any]:
+def _state(engine: CkksEngine, value: fh.Ciphertext) -> dict[str, Any]:
     return {
         "level": value.level,
         "scale": value.scale,
@@ -191,7 +193,7 @@ def _run_polynomial(
     execution: BenchmarkExecution,
 ) -> BenchmarkResult:
     parameters = dict(profile.parameters)
-    engine = fh.CkksEngine(
+    engine = CkksEngine(
         fh.Preset(PRESET),
         device=execution.device,
         ntt_backend=NTT_BACKEND,

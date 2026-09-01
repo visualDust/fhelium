@@ -17,6 +17,7 @@ import {
   resolveInstall,
   type InstallAxis,
 } from '../data/installResolver'
+import NavArrow from './NavArrow.vue'
 
 const props = withDefaults(defineProps<{
   showBadges?: boolean
@@ -107,7 +108,10 @@ onBeforeUnmount(() => {
         </a>
       </div>
     </div>
-    <a v-if="props.showDetailsLink" :href="withBase('/tutorial/installation')">Requirements and editable builds →</a>
+    <a v-if="props.showDetailsLink" :href="withBase('/tutorial/installation')">
+      Requirements and editable builds
+      <NavArrow />
+    </a>
 
     <div class="home-install-selector">
       <div

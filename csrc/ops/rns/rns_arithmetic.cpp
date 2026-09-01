@@ -6,7 +6,7 @@
 // tensors on a registered execution device. Native views collapse only
 // *batch and never broadcast a non-singleton batch, coefficient, or limb axis.
 // rns_params is integral
-// [parameter, limb] on the same device; its column j describes the exact
+// [parameter, limb] on the same device; its column j describes the
 // prime_ids[j] represented by operand limb j. Binary functional outputs have
 // lhs shape/state and do not alias inputs. A trailing underscore mutates only
 // its schema write argument, preserves storage, and treats tables/other
@@ -19,12 +19,17 @@
 // `add_lazy` and `sub_lazy` compute modulo $2q_i$ from lazy inputs. Conversion
 // by `to_montgomery_` maps standard $x_i$ to $x_iR\bmod q_i$;
 // `from_montgomery_` applies REDC and returns standard lazy residues. These
-// operations preserve coefficient versus NTT domain. `canonicalize_residues_`
-// maps [0, 2q_i) to [0, q_i); `center_residues_` maps canonical values to the
+// operations preserve coefficient versus NTT domain. `reduce_to_standard_`
+// maps [0, 2q_i) to [0, q_i); `center_residues_` maps standard residues to the
 // centered interval; `shift_residues_positive_` adds q_i to centered values.
+// `add_standard` and `sub_standard` compute modulo q_i and return [0, q_i);
+// their trailing-underscore forms mutate and preserve lhs storage.
+// `montgomery_mul_row_scalars_standard` computes a_i b_i R^{-1} mod q_i in
+// [0, q_i). These standard-range operations allow only the validated singleton
+// RHS batch broadcast; limb and final-index axes never broadcast.
 // `lift_centered_coefficients` maps integral [*batch, coefficient] to
 // [*batch, limb, coefficient]; the caller aligns twice_modulus[j] with the
-// exact prime_ids[j] for limb j. It allocates non-aliasing standard lazy
+// prime_ids[j] for limb j. It allocates non-aliasing standard lazy
 // output.
 
 TORCH_LIBRARY_FRAGMENT(fhelium_rns_ops, m) {
@@ -48,11 +53,18 @@ TORCH_LIBRARY_FRAGMENT(fhelium_rns_ops, m) {
       "add_lazy_with_twice_modulus(Tensor lhs, Tensor rhs, Tensor "
       "twice_modulus) -> Tensor");
   m.def("sub_lazy(Tensor lhs, Tensor rhs, Tensor rns_params) -> Tensor");
+  m.def("add_standard(Tensor lhs, Tensor rhs, Tensor rns_params) -> Tensor");
+  m.def("add_standard_(Tensor(a!) lhs, Tensor rhs, Tensor rns_params) -> ()");
+  m.def("sub_standard(Tensor lhs, Tensor rhs, Tensor rns_params) -> Tensor");
+  m.def("sub_standard_(Tensor(a!) lhs, Tensor rhs, Tensor rns_params) -> ()");
   m.def(
-      "canonicalize_residues_(Tensor(a!) lazy_residues, Tensor rns_params) -> "
+      "montgomery_mul_row_scalars_standard(Tensor residues, Tensor "
+      "row_scalars, Tensor rns_params) -> Tensor");
+  m.def(
+      "reduce_to_standard_(Tensor(a!) lazy_residues, Tensor rns_params) -> "
       "()");
   m.def(
-      "center_residues_(Tensor(a!) canonical_residues, Tensor rns_params) -> "
+      "center_residues_(Tensor(a!) standard_residues, Tensor rns_params) -> "
       "()");
   m.def(
       "shift_residues_positive_(Tensor(a!) centered_residues, Tensor "

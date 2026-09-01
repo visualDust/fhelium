@@ -2,9 +2,11 @@
 
 **Example source:** [`examples/07_rotation_hoisting_benchmark.py`](https://github.com/VisualDust/fhelium/blob/main/examples/07_rotation_hoisting_benchmark.py)
 
-This example benchmarks independent rotations against a grouped request over
-the same source and exact keys. The tutorial explains which decomposition and
-preparation work can be shared and how to interpret the timings.
+This example benchmarks caller-selected independent rotations against one
+caller-selected hoisted group over the same source and direct keys. Rotation
+hoisting shares decomposition and preparation derived from one ciphertext; it
+is a scheduling choice rather than an implementation selected invisibly by a
+backend.
 
 ## Rotation API
 
@@ -21,6 +23,11 @@ material:
 The step-based methods may use installed keys, generate direct keys when
 allowed, or compose an available engine-owned key path. The key-based methods
 use exactly the supplied direct key objects and do not install them.
+
+Both sequence methods accept `use_hoisting`. `True` forms one scheduled group
+from the direct keys in the supplied sequence. `False` executes those direct
+rotations independently. Eager execution preserves the caller's offsets and
+order; it does not search surrounding operations or regroup them.
 
 ## Run the benchmark
 
@@ -42,7 +49,7 @@ python examples/07_rotation_hoisting_benchmark.py \
   --runs 3
 ```
 
-## 1. Provision every exact key before timing
+## 1. Provision every direct key before timing
 
 ```python
 for rotation_step in rotation_steps_all:
@@ -66,18 +73,38 @@ Independent path:
 Grouped path:
 
 ```python
-engine.rotate_many_by_steps(ciphertext, rotation_steps)
+engine.rotate_many_by_steps(
+    ciphertext,
+    rotation_steps,
+    use_hoisting=True,
+)
 ```
 
 Both request the same set of rotated ciphertexts. The sequence-form API gives
-the engine a direct opportunity to hoist input-dependent work shared by
-all requested steps.
+the caller a way to select one hoisted group containing all direct requested
+steps. Passing `use_hoisting=False` selects independent execution through the
+same Eager API.
+
+## Compile-time scheduling
+
+Compile IR represents independent scheduling with primitive
+`fhelium_ckks.rotate` operations. A caller-composed hoisting pass may search
+rotations that share an input and replace one selected group with
+`fhelium_ckks.hoisted_rotate_many`. The scheduled operation records the chosen
+offsets and key symbols. It does not contain the memory budget or policy that
+led to the choice.
+
+`HoistRotationsPass` provides deterministic local grouping for callers that
+want it. A resource-aware compiler can
+instead read caller policy from its Compile workspace, compute groups under
+the selected memory limit, and emit the same scheduled operation. The backend consumes that group;
+it does not add offsets, split the group, or fall back to independent rotation.
 
 ## 3. What can be shared
 
 A rotation applies a Galois automorphism and a key switch. When many rotations
 use the same source ciphertext, decomposition and extension work derived from
-that source can be prepared once and reused across exact rotation keys.
+that source can be prepared once and reused across direct rotation keys.
 
 Conceptually:
 
@@ -98,7 +125,8 @@ flowchart LR
 
 The result still contains one ciphertext per requested step. Hoisting reduces
 repeated preparation; it does not remove the per-key automorphism/key-switch
-work or output memory.
+work or output memory. The currently selected group therefore remains visible
+in the Program rather than existing only inside a native implementation.
 
 ## 4. Benchmark without launch-order bias
 
@@ -131,13 +159,7 @@ source increases. Actual benefit depends on active RNS rows, decomposition
 shape, backend, GPU, key residency, and whether the surrounding algorithm can
 consume all produced rotations.
 
-::: warning Do not mix unrelated optimizations into a scaling comparison
-When comparing devices, ranks, or partition strategies, keep hoisting, NTT
-backend, key residency, warmup, and synchronization policy fixed. A faster
-result is otherwise not attributable to one variable.
-:::
-
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/07_rotation_hoisting_benchmark.py
 :::
 

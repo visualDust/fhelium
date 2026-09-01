@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from fhelium.legacy.engine import CkksEngine
+
 import math
 import statistics
 import time
@@ -90,7 +92,7 @@ def make_standard_residue_rows(
 
 
 def _run_operation(
-    engine: fh.CkksEngine,
+    engine: CkksEngine,
     data: torch.Tensor,
     operation: NttOperation,
     *,
@@ -103,7 +105,7 @@ def _run_operation(
 
 
 def _prepare(
-    engine: fh.CkksEngine,
+    engine: CkksEngine,
     rows: torch.Tensor,
     *,
     level: int,
@@ -144,7 +146,7 @@ def _run_indexed_ntt(
     parameters = dict(profile.parameters)
     warmup = int(parameters["warmup"])
     runs = int(parameters["runs"])
-    engine = fh.CkksEngine(PRESET, device=execution.device, ntt_backend=BACKEND)
+    engine = CkksEngine(PRESET, device=execution.device, ntt_backend=BACKEND)
     rows = make_standard_residue_rows(engine.config)
     metrics: list[BenchmarkMetric] = []
     checks: list[BenchmarkCheck] = []
@@ -178,7 +180,7 @@ def _run_indexed_ntt(
                 BenchmarkCheck(
                     name=f"indexed-ntt-level-{level}-{basis.lower()}-roundtrip",
                     passed=mismatch_count == 0,
-                    oracle="Forward followed by inverse NTT preserves every active residue modulo its exact prime.",
+                    oracle="Forward followed by inverse NTT preserves every active residue modulo its prime.",
                     metric="residue_mismatch_count",
                     observed=mismatch_count,
                     comparison="==",

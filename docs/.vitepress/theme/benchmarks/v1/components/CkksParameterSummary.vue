@@ -254,7 +254,7 @@ const expandedContext = computed(() => JSON.stringify(props.context, null, 2))
         </div>
       </details>
       <details>
-        <summary>Exact CKKS parameters and states</summary>
+        <summary>CKKS parameters and states</summary>
         <pre>{{ expandedContext }}</pre>
       </details>
     </div>

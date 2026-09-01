@@ -8,7 +8,7 @@ one mechanism, and retaining the same oracle and state invariants.
 Keep a reproducible single-rank eager evaluator with:
 
 - CKKS state schedule;
-- exact keyset;
+- direct keyset;
 - cleartext oracle;
 - synchronized latency;
 - memory profile;
@@ -42,12 +42,12 @@ it.
 | Dominant cost | First mechanisms to test |
 | --- | --- |
 | Repeated relinearization | Late relinearization where triplets align |
-| Repeated plaintext preparation | Operation-ready exact-level plaintexts |
+| Repeated plaintext preparation | Operation-ready level-specific plaintexts |
 | Repeated fixed NTT operand | Reuse prepared NTT/Montgomery value |
-| Many rotations/key switches | Hoisting, exact keyset, packing/schedule changes |
+| Many rotations/key switches | Hoisting, direct keyset, packing/schedule changes |
 | NTT table/launch traffic | Indexed/compact and grouping ablation |
 | Python/dispatcher launches | Rank-local CUDA Graph |
-| CUDA footprint | Prepared-state audit, streaming, bounded residency |
+| CUDA footprint | Prepared-state audit, streaming, budget-constrained residency |
 | Independent requests | Data parallelism |
 | Additive rotation terms | Additive-term parallelism with typed reduction |
 | One huge value with long row-local phase | Limb parallelism, cautiously |
@@ -80,7 +80,7 @@ Hold fixed:
 
 Measure latency, memory, and error together.
 
-## 6. Tune bounded parameters
+## 6. Tune workload-control parameters
 
 Several mechanisms have a non-monotonic control:
 
@@ -101,7 +101,7 @@ After each change, verify:
 - level and scale schedule;
 - active rows and basis;
 - component count;
-- exact rotation direction and keys;
+- rotation direction and direct keys;
 - in-place/borrowed storage lifetime;
 - distributed gather/reduce/reconstruct semantics.
 

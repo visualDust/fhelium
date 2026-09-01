@@ -17,13 +17,14 @@ import torch
 
 import fhelium as fh
 import fhelium.distributed as dist
+from fhelium.eager import Engine
 from fhelium.benchmarks.model import (
     BenchmarkCheck,
     BenchmarkMetric,
     BenchmarkResult,
     BenchmarkTimedBoundary,
 )
-from fhelium.execution import CudaGraphProgram
+from fhelium.runtime import CudaGraphProgram, CudaTopology, MemorySnapshot
 
 COLLECTIVES_WORKLOAD_ID = "spmd-collectives"
 ROTATION_MATVEC_WORKLOAD_ID = "spmd-ckks-rotation-workload"
@@ -197,7 +198,7 @@ def _collective_benchmark(
                 oracle=(
                     "Broadcast output equals rank-0 fill value on every rank."
                     if operation == "broadcast"
-                    else "All-reduce output equals the exact sum of rank fill values on every rank."
+                    else "All-reduce output equals the sum of rank fill values on every rank."
                 ),
                 metric="invalid_rank_count",
                 observed=invalid_ranks,
@@ -216,8 +217,9 @@ def _collective_benchmark(
                     f"{size_mib} MiB on {invalid_ranks} rank(s)"
                 )
 
+    cuda_topology = CudaTopology.probe()
     names = [
-        torch.cuda.get_device_name(index)
+        cuda_topology.devices[index].name
         for index in range(dist.get_world_size())
     ]
     effective_parameters = dict(parameters)
@@ -227,7 +229,7 @@ def _collective_benchmark(
         "resolved_backend": dist.get_backend(),
     }
     timed_boundary = BenchmarkTimedBoundary(
-        id="barrier-bounded-collective-v1",
+        id="barrier-synchronized-collective-v1",
         description="One in-place collective measured as the slowest participating rank.",
         includes=("rank-local tensor fill", "one in-place collective"),
         excludes=(
@@ -296,15 +298,15 @@ def _cyclic_diagonal_slots(
 
 
 def _allocate_rotation_key_buffer(
-    engine: fh.CkksEngine,
+    engine: Engine,
 ) -> fh.RotationKey:
     """Preallocate a reusable receiver so timing excludes setup transfer."""
 
-    prime_ids = engine.rns_layout.prime_ids(0, include_p=True)
+    prime_ids = engine.level0_qp_prime_ids
     return fh.RotationKey(
         data=torch.empty(
             (
-                engine.rns_layout.key_digit_count,
+                engine.key_digit_count,
                 2,
                 len(prime_ids),
                 engine.config.N,
@@ -312,7 +314,6 @@ def _allocate_rotation_key_buffer(
             device=dist.local_device(),
             dtype=engine.config.torch_dtype,
         ),
-        context_id=engine.context.context_id,
         prime_ids=prime_ids,
         rotation_step=1,
     )
@@ -331,7 +332,7 @@ def _timed_key_broadcast(
 
 
 def _evaluate_rotation_matvec(
-    engine: fh.CkksEngine,
+    engine: Engine,
     source: fh.Ciphertext,
     local_rotation_steps: list[int],
     local_keys: fh.RotationKeySet,
@@ -341,7 +342,7 @@ def _evaluate_rotation_matvec(
     batch_diagonal_terms: bool,
     diagonal_batch_size: int,
 ) -> fh.Ciphertext:
-    """Evaluate one rank's terms with bounded grouped-rotation batches."""
+    """Evaluate one rank's terms in rotation groups limited by the configured chunk size."""
 
     if hoist_chunk_size <= 0:
         raise ValueError("hoist_chunk_size must be positive")
@@ -405,7 +406,7 @@ def _evaluate_rotation_matvec(
 
 
 def _run_rotation_matvec(
-    engine: fh.CkksEngine,
+    engine: Engine,
     source: fh.Ciphertext,
     evaluate_local: Callable[[fh.Ciphertext], fh.Ciphertext],
 ) -> tuple[fh.Ciphertext, float, float, float]:
@@ -468,10 +469,9 @@ def _ckks_rotation_matvec_benchmark(
     dist.barrier()
     _sync()
     setup_start = time.perf_counter()
-    engine = fh.CkksEngine(
+    engine = Engine(
         preset,
-        device=dist.local_device(),
-        allow_sk_gen=False,
+        allow_automatic_key_generation=False,
         ntt_backend=str(parameters["ntt_backend"]),
     )
     if engine.num_slots % matrix_size != 0:
@@ -481,7 +481,7 @@ def _ckks_rotation_matvec_benchmark(
 
     matrix, vector = _matrix_and_vector(matrix_size)
     if dist.get_rank() == 0:
-        secret_key = engine.create_secret_key()
+        secret_key = engine.create_secret_key(device=dist.local_device())
         public_key = engine.create_public_key(secret_key)
         root_source = engine.encrypt_message(
             _periodic_slots(vector, engine.num_slots),
@@ -502,7 +502,7 @@ def _ckks_rotation_matvec_benchmark(
                 engine.create_rotation_key(rotation_step, secret_key).data
             )
         key_broadcast_samples.append(_timed_key_broadcast(selected_key))
-        selected_key.rotation_step = fh.RotationKey.canonical_step(
+        selected_key.rotation_step = fh.RotationKey.normalize_step(
             rotation_step,
             ring_dimension=engine.config.N,
         )
@@ -520,6 +520,7 @@ def _ckks_rotation_matvec_benchmark(
             engine.encode(
                 _cyclic_diagonal_slots(matrix, rotation_step, engine.num_slots),
                 level=source.level,
+                device=source.device,
             )
         )
         for rotation_step in local_rotation_steps
@@ -596,8 +597,11 @@ def _ckks_rotation_matvec_benchmark(
 
     gc.collect()
     _sync()
+    memory_snapshot = MemorySnapshot.read(dist.local_device())
+    if memory_snapshot.torch_allocated_bytes is None:
+        raise RuntimeError("CUDA memory snapshot omitted allocated bytes")
     resident_allocated = _values_across_ranks(
-        float(torch.cuda.memory_allocated(dist.local_device())),
+        float(memory_snapshot.torch_allocated_bytes),
         dist.local_device(),
     )
     torch.cuda.reset_peak_memory_stats(dist.local_device())
@@ -655,7 +659,8 @@ def _ckks_rotation_matvec_benchmark(
         process_group_init_ms,
         dist.local_device(),
     )
-    devices = [torch.cuda.get_device_name(index) for index in range(world_size)]
+    cuda_topology = CudaTopology.probe()
+    devices = [cuda_topology.devices[index].name for index in range(world_size)]
     local_diagonal_counts = [
         len(range(rank, matrix_size, world_size)) for rank in range(world_size)
     ]
@@ -859,7 +864,7 @@ def _ckks_rotation_matvec_benchmark(
                 value / gib for value in peak_reserved
             ],
             "rotation_step_assignment": "round-robin",
-            "rotation_mode": "bounded grouped exact-key rotations",
+            "rotation_mode": "chunk-limited grouped direct-key rotations",
             "hoist_chunk_size": hoist_chunk_size,
             "batch_diagonal_terms": batch_diagonal_terms,
             "diagonal_batch_size": diagonal_batch_size,
@@ -884,8 +889,8 @@ def _ckks_rotation_matvec_benchmark(
         },
         notes=[
             "CUDA_VISIBLE_DEVICES defines the local GPU set; profiles launch one rank per visible device unless world_size is overridden.",
-            "Launcher-to-ready startup includes torchrun process creation, Python imports, process-group initialization, engine construction, input encryption, exact-key provisioning, diagonal encoding, and optional graph capture.",
-            "Grouped rotations are bounded by the configured hoist chunk size; completed chunks are accumulated immediately.",
+            "Launcher-to-ready startup includes torchrun process creation, Python imports, process-group initialization, engine construction, input encryption, direct-key provisioning, diagonal encoding, and optional graph capture.",
+            "Rotation groups contain at most the configured hoist chunk size; completed groups are accumulated immediately.",
             "When batch_diagonal_terms is enabled, each completed rotation chunk is split into homogeneous message batches of at most diagonal_batch_size for matching batched plaintext multiply and rescale before its terms are accumulated.",
             "A batched term group is summed through contiguous-half modular-addition rounds, preserving the zero-copy native RNS batch ABI while avoiding one under-filled addition launch per message.",
             "CUDA Graph capture, when selected, covers only rank-local encrypted evaluation; final ciphertext reduction remains eager.",

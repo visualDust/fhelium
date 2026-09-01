@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+
 import torch
 
 
@@ -10,48 +11,6 @@ def _require_native() -> None:
     from fhelium.native import require_native
 
     require_native()
-
-
-def add_canonical(
-    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
-) -> torch.Tensor:
-    """
-    Typed wrapper for ``fhelium_rns_ops::add_canonical``.
-
-    Torch schema::
-
-        fhelium_rns_ops::add_canonical(Tensor lhs, Tensor rhs, Tensor rns_params) -> Tensor
-
-    Args:
-        lhs: torch.Tensor.
-        rhs: torch.Tensor.
-        rns_params: torch.Tensor.
-
-    Returns: torch.Tensor.
-    """
-    _require_native()
-    return torch.ops.fhelium_rns_ops.add_canonical(lhs, rhs, rns_params)
-
-
-def add_canonical_(
-    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
-) -> None:
-    """
-    Typed wrapper for ``fhelium_rns_ops::add_canonical_``.
-
-    Torch schema::
-
-        fhelium_rns_ops::add_canonical_(Tensor(a!) lhs, Tensor rhs, Tensor rns_params) -> ()
-
-    Args:
-        lhs: torch.Tensor (modified in-place).
-        rhs: torch.Tensor.
-        rns_params: torch.Tensor.
-
-    Returns: None.
-    """
-    _require_native()
-    torch.ops.fhelium_rns_ops.add_canonical_(lhs, rhs, rns_params)
 
 
 def add_lazy(
@@ -98,44 +57,66 @@ def add_lazy_with_twice_modulus(
     )
 
 
-def canonicalize_residues_(
-    lazy_residues: torch.Tensor, rns_params: torch.Tensor
-) -> None:
+def add_standard(
+    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
+) -> torch.Tensor:
     """
-    Typed wrapper for ``fhelium_rns_ops::canonicalize_residues_``.
+    Typed wrapper for ``fhelium_rns_ops::add_standard``.
 
     Torch schema::
 
-        fhelium_rns_ops::canonicalize_residues_(Tensor(a!) lazy_residues, Tensor rns_params) -> ()
+        fhelium_rns_ops::add_standard(Tensor lhs, Tensor rhs, Tensor rns_params) -> Tensor
 
     Args:
-        lazy_residues: torch.Tensor (modified in-place).
+        lhs: torch.Tensor.
+        rhs: torch.Tensor.
+        rns_params: torch.Tensor.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.add_standard(lhs, rhs, rns_params)
+
+
+def add_standard_(
+    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::add_standard_``.
+
+    Torch schema::
+
+        fhelium_rns_ops::add_standard_(Tensor(a!) lhs, Tensor rhs, Tensor rns_params) -> ()
+
+    Args:
+        lhs: torch.Tensor (modified in-place).
+        rhs: torch.Tensor.
         rns_params: torch.Tensor.
 
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_rns_ops.canonicalize_residues_(lazy_residues, rns_params)
+    torch.ops.fhelium_rns_ops.add_standard_(lhs, rhs, rns_params)
 
 
 def center_residues_(
-    canonical_residues: torch.Tensor, rns_params: torch.Tensor
+    standard_residues: torch.Tensor, rns_params: torch.Tensor
 ) -> None:
     """
     Typed wrapper for ``fhelium_rns_ops::center_residues_``.
 
     Torch schema::
 
-        fhelium_rns_ops::center_residues_(Tensor(a!) canonical_residues, Tensor rns_params) -> ()
+        fhelium_rns_ops::center_residues_(Tensor(a!) standard_residues, Tensor rns_params) -> ()
 
     Args:
-        canonical_residues: torch.Tensor (modified in-place).
+        standard_residues: torch.Tensor (modified in-place).
         rns_params: torch.Tensor.
 
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_rns_ops.center_residues_(canonical_residues, rns_params)
+    torch.ops.fhelium_rns_ops.center_residues_(standard_residues, rns_params)
 
 
 def from_montgomery_(
@@ -339,15 +320,15 @@ def montgomery_mul_row_scalars_(
     )
 
 
-def montgomery_mul_row_scalars_canonical(
+def montgomery_mul_row_scalars_standard(
     residues: torch.Tensor, row_scalars: torch.Tensor, rns_params: torch.Tensor
 ) -> torch.Tensor:
     """
-    Typed wrapper for ``fhelium_rns_ops::montgomery_mul_row_scalars_canonical``.
+    Typed wrapper for ``fhelium_rns_ops::montgomery_mul_row_scalars_standard``.
 
     Torch schema::
 
-        fhelium_rns_ops::montgomery_mul_row_scalars_canonical(Tensor residues, Tensor row_scalars, Tensor rns_params) -> Tensor
+        fhelium_rns_ops::montgomery_mul_row_scalars_standard(Tensor residues, Tensor row_scalars, Tensor rns_params) -> Tensor
 
     Args:
         residues: torch.Tensor.
@@ -357,9 +338,29 @@ def montgomery_mul_row_scalars_canonical(
     Returns: torch.Tensor.
     """
     _require_native()
-    return torch.ops.fhelium_rns_ops.montgomery_mul_row_scalars_canonical(
+    return torch.ops.fhelium_rns_ops.montgomery_mul_row_scalars_standard(
         residues, row_scalars, rns_params
     )
+
+
+def reduce_to_standard_(
+    lazy_residues: torch.Tensor, rns_params: torch.Tensor
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::reduce_to_standard_``.
+
+    Torch schema::
+
+        fhelium_rns_ops::reduce_to_standard_(Tensor(a!) lazy_residues, Tensor rns_params) -> ()
+
+    Args:
+        lazy_residues: torch.Tensor (modified in-place).
+        rns_params: torch.Tensor.
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.reduce_to_standard_(lazy_residues, rns_params)
 
 
 def shift_residues_positive_(
@@ -384,48 +385,6 @@ def shift_residues_positive_(
     )
 
 
-def sub_canonical(
-    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
-) -> torch.Tensor:
-    """
-    Typed wrapper for ``fhelium_rns_ops::sub_canonical``.
-
-    Torch schema::
-
-        fhelium_rns_ops::sub_canonical(Tensor lhs, Tensor rhs, Tensor rns_params) -> Tensor
-
-    Args:
-        lhs: torch.Tensor.
-        rhs: torch.Tensor.
-        rns_params: torch.Tensor.
-
-    Returns: torch.Tensor.
-    """
-    _require_native()
-    return torch.ops.fhelium_rns_ops.sub_canonical(lhs, rhs, rns_params)
-
-
-def sub_canonical_(
-    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
-) -> None:
-    """
-    Typed wrapper for ``fhelium_rns_ops::sub_canonical_``.
-
-    Torch schema::
-
-        fhelium_rns_ops::sub_canonical_(Tensor(a!) lhs, Tensor rhs, Tensor rns_params) -> ()
-
-    Args:
-        lhs: torch.Tensor (modified in-place).
-        rhs: torch.Tensor.
-        rns_params: torch.Tensor.
-
-    Returns: None.
-    """
-    _require_native()
-    torch.ops.fhelium_rns_ops.sub_canonical_(lhs, rhs, rns_params)
-
-
 def sub_lazy(
     lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
 ) -> torch.Tensor:
@@ -445,6 +404,48 @@ def sub_lazy(
     """
     _require_native()
     return torch.ops.fhelium_rns_ops.sub_lazy(lhs, rhs, rns_params)
+
+
+def sub_standard(
+    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
+) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_rns_ops::sub_standard``.
+
+    Torch schema::
+
+        fhelium_rns_ops::sub_standard(Tensor lhs, Tensor rhs, Tensor rns_params) -> Tensor
+
+    Args:
+        lhs: torch.Tensor.
+        rhs: torch.Tensor.
+        rns_params: torch.Tensor.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.sub_standard(lhs, rhs, rns_params)
+
+
+def sub_standard_(
+    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::sub_standard_``.
+
+    Torch schema::
+
+        fhelium_rns_ops::sub_standard_(Tensor(a!) lhs, Tensor rhs, Tensor rns_params) -> ()
+
+    Args:
+        lhs: torch.Tensor (modified in-place).
+        rhs: torch.Tensor.
+        rns_params: torch.Tensor.
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.sub_standard_(lhs, rhs, rns_params)
 
 
 def to_montgomery_(

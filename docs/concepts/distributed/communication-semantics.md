@@ -1,8 +1,8 @@
 # Communication semantics
 
 Before choosing a collective, identify the **mathematical relationship** among
-rank-local values. Equal tensor types and shapes do not imply that the same
-communication operation is correct.
+rank-local values. Communication compatibility includes this relationship in
+addition to Tensor type and shape.
 
 ## Three relationships, three operations
 
@@ -90,9 +90,9 @@ operations are row-local, but others require the complete active-row layout.
 | Some row-wise RNS/NTT stages | Relinearize/key switch |
 | Local tensor transforms | Rotation |
 
-`Ciphertext.slice_limbs()` creates a storage-sharing local view. It is not a
-placement object and does not make a partial value legal for complete-row
-operations. The application must reconstruct the complete layout first.
+`Ciphertext.slice_limbs()` creates a storage-sharing local view of selected
+rows. Complete-row operations require the application to reconstruct the full
+active layout first.
 
 ## Why raw integer all-reduce is wrong
 
@@ -103,7 +103,7 @@ c_i=(a_i+b_i)\bmod q_i.
 $$
 
 A raw NCCL `SUM` over `int64` tensors knows neither $q_i$ nor the required
-canonical/lazy residue-range invariant and may overflow machine arithmetic.
+standard/lazy residue-range invariant and may overflow machine arithmetic.
 
 ```mermaid
 flowchart LR
@@ -117,8 +117,8 @@ flowchart LR
     P --> T --> ADD --> GOOD
 ```
 
-`reduce_ciphertext` uses communication plus local engine modular addition. It
-is not a thin alias for an integer reduction.
+`reduce_ciphertext` combines communication with local modular ciphertext
+addition at reduction receivers.
 
 ## Gather, reduce, and reconstruct at a glance
 
@@ -132,8 +132,8 @@ is not a thin alias for an integer reduction.
 
 ## Rank-local CUDA Graph capture
 
-CUDA Graph capture applies to a deterministic local evaluator, not to dynamic
-process-group control:
+CUDA Graph capture records the deterministic local evaluator on each rank.
+Process-group control remains in the surrounding SPMD program:
 
 ```mermaid
 graph TB

@@ -11,7 +11,7 @@ plaintext preparation.
 
 ## Value-state axes
 
-An exact local CKKS value is described by several distinct axes:
+A local CKKS value is described by several distinct axes:
 
 | Axis | Values | Responsibility |
 | --- | --- | --- |
@@ -19,18 +19,19 @@ An exact local CKKS value is described by several distinct axes:
 | Polynomial domain | `coefficient`, `ntt` | Distinguishes polynomial coefficients from NTT evaluations |
 | Residue representation | `standard`, `montgomery` | Distinguishes ordinary residues from Montgomery residues |
 | Modulus basis | `Q`, `QP` | Selects the active Q rows or active Q plus auxiliary P rows |
-| Level | Public Q-chain level | Selects the active Q suffix, together with exact `prime_ids` |
+| Level | Public Q-chain level | Selects the active Q suffix, together with `prime_ids` |
 | Scale | Positive finite binary64 | Records the actual CKKS scale of the value |
 | Component count | Two or three for ciphertexts | Records the current secret-key polynomial degree |
-| Placement | CPU or CUDA device | Identifies storage location, not mathematical state |
+| Placement | CPU or CUDA device | Identifies storage location |
 
-The axes are not interchangeable. In particular:
+The axes vary independently except for the ciphertext coupling described
+below:
 
-- NTT domain does not imply Montgomery representation as a general concept.
-- Montgomery representation does not imply NTT domain.
-- QP basis is not a level.
-- `level` does not replace exact ordered `prime_ids`.
-- placement does not change the represented polynomial or CKKS message.
+- polynomial domain and residue representation remain separate coordinates;
+- modulus basis and level remain separate coordinates;
+- `level` and ordered `prime_ids` jointly identify the active Q suffix;
+- placement changes storage location while preserving the represented
+  polynomial and CKKS message.
 
 ## Plaintext state orthogonality
 
@@ -49,10 +50,9 @@ plaintext transitions. The currently supported RNS plaintext states are:
 (ntt, montgomery)
 ```
 
-The absence of `(ntt, standard)` does not collapse the two axes. It records the
-implementation invariant that public NTT data uses Montgomery residues, while
-coefficient-domain plaintexts can be converted between standard and Montgomery
-residues without applying an NTT.
+Public NTT data uses Montgomery residues. Coefficient-domain plaintexts can
+still move between standard and Montgomery residues independently of an NTT,
+which preserves the distinction between the two state axes.
 
 ```mermaid
 stateDiagram-v2
@@ -67,10 +67,9 @@ stateDiagram-v2
     ApproximateCoefficients --> DecodedSlotTensor: decode
 ```
 
-`ApproximateCoefficients` is produced by decryption, not by an exact
-`integer_coefficients` transition. It is finite binary64 data for decoding and
-cannot be reduced back to RNS. `DecodedSlotTensor` is a semantic CPU tensor,
-not a new `Plaintext` object with `representation="slots"`.
+Decryption produces finite binary64 `ApproximateCoefficients` for decoding.
+Full-CRT integer reconstruction requires a separate operation and numerical
+contract. `DecodedSlotTensor` is the semantic CPU Tensor returned by `decode`.
 
 ## Ciphertext state coupling
 
@@ -94,7 +93,7 @@ For ciphertexts,
 `coefficient_domain_to_ntt_domain` applies a forward NTT and converts standard
 residues to Montgomery form. `ntt_domain_to_coefficient_domain` applies the
 normalized inverse NTT and returns standard residues. Both preserve the ring
-element, component count, level, scale, Q/QP basis, and exact `prime_ids`.
+element, component count, level, scale, Q/QP basis, and `prime_ids`.
 
 Ciphertext multiplication primitives consume and produce the
 `(ntt, montgomery)` state. This common rule covers both `multiply` and
@@ -111,7 +110,7 @@ preserved, as for plaintexts, or follows the ciphertext coupling rule.
 
 | API | Accepted source | Target | Preserved state |
 | --- | --- | --- | --- |
-| `integer_coefficients_to_rns` | Exact `integer_coefficients` plaintext | RNS `(coefficient, standard)` plaintext | Level, scale, semantic polynomial; basis is provided as an argument |
+| `integer_coefficients_to_rns` | `integer_coefficients` plaintext | RNS `(coefficient, standard)` plaintext | Level, scale, semantic polynomial; basis is provided as an argument |
 | `standard_residues_to_montgomery_residues` | RNS `(coefficient, standard)` plaintext | RNS `(coefficient, montgomery)` plaintext | Representation, domain, level, scale, basis, `prime_ids` |
 | `coefficient_domain_to_ntt_domain` | RNS `(coefficient, montgomery)` plaintext | RNS `(ntt, montgomery)` plaintext | Representation, residue form, level, scale, basis, `prime_ids` |
 | `coefficient_domain_to_ntt_domain` | `(coefficient, standard)` ciphertext | `(ntt, montgomery)` ciphertext | Components, level, scale, basis, `prime_ids` |
@@ -119,10 +118,10 @@ preserved, as for plaintexts, or follows the ciphertext coupling rule.
 | `ntt_domain_to_coefficient_domain` | `(ntt, montgomery)` ciphertext | `(coefficient, standard)` ciphertext | Components, level, scale, basis, `prime_ids` |
 | `montgomery_residues_to_standard_residues` | RNS `(coefficient, montgomery)` plaintext | RNS `(coefficient, standard)` plaintext | Representation, domain, level, scale, basis, `prime_ids` |
 
-Every primitive method has a strict source-state precondition. Passing a value
-already in the target state is an error, not an idempotent conversion or an
-implicit clone. A caller that conditionally transforms heterogeneous states
-must inspect the relevant state field and choose the transition deliberately.
+Every primitive method has a strict source-state precondition and rejects an
+input already in its target state. A caller that conditionally transforms
+heterogeneous states must inspect the relevant state field and choose the
+transition deliberately.
 
 Functional forms allocate independent output storage. An underscore-suffixed
 form, where provided, mutates the source object and returns that same object:
@@ -132,12 +131,10 @@ ntt = engine.coefficient_domain_to_ntt_domain(coefficient)
 engine.coefficient_domain_to_ntt_domain_(coefficient)
 ```
 
-No compatibility aliases retain the former target-only `to_*` names.
-
 ## Operation-oriented plaintext preparation
 
-Two convenience APIs name their intended arithmetic role rather than one
-primitive state axis:
+Two convenience APIs name an intended arithmetic role and compose the required
+primitive transitions:
 
 ```python
 addition_operand = engine.prepare_plaintext_for_addition(encoded)
@@ -159,14 +156,14 @@ multiplication_operand = engine.coefficient_domain_to_ntt_domain(
 ```
 
 The convenience implementations may reuse their newly allocated intermediate
-storage. They do not weaken the source-state preconditions of the public primitive
-methods.
+storage. Their constituent primitive methods retain the source-state
+preconditions listed above.
 
 ## Transitions on other axes
 
-Domain and residue conversion are only one part of evaluator state management.
-Other operations retain their mathematical names because their source and
-target values are runtime-dependent:
+Evaluator state management also includes level, scale, component count, key
+relations, and placement. These operations retain their mathematical names
+because their source and target values are runtime-dependent:
 
 | Axis or relation | APIs | Semantics |
 | --- | --- | --- |
@@ -177,17 +174,15 @@ target values are runtime-dependent:
 | Key dependency | `switch_key`, rotation, conjugation | Apply the supplied or engine-owned key relation |
 | Placement | `value.to(device)` | Move storage while preserving mathematical state |
 
-A generic modulus-basis conversion is not part of the public primitive state
-surface. QP extension and reduction occur inside operations with a declared
-key-switch or bootstrapping state-transition specification.
+QP extension and reduction occur inside operations with a declared key-switch
+or bootstrapping state-transition specification.
 
-## No implicit CRT reconstruction
+## CRT reconstruction requires its own contract
 
-`ntt_domain_to_coefficient_domain` changes polynomial domain; it does not
-convert RNS data into `integer_coefficients`. FHElium deliberately exposes no
-implicit `RNS -> integer_coefficients` arrow. Such an operation would need to
+`ntt_domain_to_coefficient_domain` changes polynomial domain while preserving
+RNS representation. An `RNS -> integer_coefficients` operation would need to
 specify the composite modulus, representative interval, output numeric type,
-and exact versus approximate reconstruction semantics.
+and integer or approximate reconstruction semantics.
 
 Decryption instead produces bounded `approximate_coefficients` for decoding.
 The semantic round trip consists of these operations:

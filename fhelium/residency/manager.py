@@ -17,8 +17,8 @@ from weakref import finalize
 
 import torch
 
-from fhelium.core import TensorResident
-from fhelium.core.tensor_resident import (
+from fhelium.values import TensorResident
+from fhelium.values.tensor_resident import (
     _cpu_pinning_is_uniform,
     _storage_keys,
 )
@@ -289,7 +289,7 @@ class ResidencyManager:
     ) -> ResidencyHandle[ValueT]:
         """Register a trusted reconstruction source without loading a value.
 
-        The source must reproduce the exact contents and CKKS state identified
+        The source must reproduce the contents and CKKS state identified
         by the new handle. The manager later validates runtime type, declared
         location, logical bytes, and storage ceiling; the source owns
         content-identity correctness.

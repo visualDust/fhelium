@@ -1,6 +1,6 @@
 [project]
 name = "fhelium"
-version = "0.10.0"
+version = "0.20.0"
 description = "A tensor-native CKKS framework for fully homomorphic encryption on CPU and NVIDIA CUDA with Python and PyTorch."
 authors = [
     { name = "Gavin Gong", email = "gavin@gong.host" },
@@ -31,6 +31,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: C++",
     "Programming Language :: Python",
@@ -56,7 +57,7 @@ cmake.args = ["-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"]
 build.verbose = true
 wheel.install-dir = "fhelium"
 wheel.packages = ["fhelium"]
-sdist.exclude = ["cloudflare/**", "third_party/triton-csprng/**"]
+sdist.exclude = ["cloudflare/**", "third_party/triton-csprng/**", "uv.lock"]
 
 [[tool.dynamic-metadata]]
 provider = { path = "scripts", module = "release_dependencies" }
@@ -64,7 +65,7 @@ field = "dependencies"
 
 [build-system]
 requires = [
-    "scikit-build-core>=1.0.3",
+    "scikit-build-core==1.0.3",
 ]
 build-backend = "scikit_build_core.build"
 
@@ -113,9 +114,31 @@ reportMissingImports = "error"
 reportMissingTypeStubs = "none"
 
 [dependency-groups]
+build = [
+    "cmake==4.4.2",
+    "ninja==1.13.0",
+    "scikit-build-core==1.0.3",
+]
 dev = [
+    "jsonschema==4.26.0",
+    "packaging==26.3",
     "pre-commit==4.5.1",
     "pyright==1.1.411",
     "pytest==9.1.1",
     "ruff==0.15.22",
+    "rust-just==1.58.0",
 ]
+
+[tool.uv.extra-build-dependencies]
+fhelium = [
+    "cmake==4.4.2",
+    "ninja==1.13.0",
+    "torch==2.13.0",
+]
+
+[tool.uv]
+# Keep the default developer Torch line aligned with the current configurations
+# in packaging/release_matrix.json. The public dependency range remains wider.
+constraint-dependencies = ["torch==2.13.0"]
+default-groups = ["build", "dev"]
+required-version = ">=0.9.17"

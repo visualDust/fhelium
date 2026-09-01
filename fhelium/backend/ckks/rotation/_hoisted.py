@@ -1,0 +1,411 @@
+r"""Concrete rotate-many key-switch execution with shared digit preparation.
+
+`_RotationHoistExecutor` prepares the hybrid-RNS digits of one coefficient-domain
+ciphertext component once, then consumes those NTT/Montgomery QP digits for
+multiple direct rotation keys.  The caller supplies the coefficient-automorphed
+$c_0$ component for each rotation.  This module owns the concrete native
+execution choice; it does not define a CKKS semantic operation or select a
+fallback implementation.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import torch
+
+from fhelium.config import CkksConfig
+from fhelium.values import RotationKey
+from fhelium.backend.ntt.context import NttContext
+from fhelium.backend.rns.context import RnsContext
+from fhelium.backend.rns.layout import RnsDigitSpec
+from fhelium.native.wrapper import ckks_ops, rns_ops
+
+
+@dataclass(frozen=True)
+class _PreparedRotationDigits:
+    r"""Reusable NTT/Montgomery QP digits for one ciphertext component.
+
+    `ntt_digits_qp` has shape
+    ``[digit, *batch, active_qp_limb, ntt_index]``.  `digit` uses active local
+    order at `level`; each consumer separately resolves the corresponding
+    stable key-storage digit through `RnsDigitSpec.key_digit_index`. The
+    executor creates and consumes this private value within one rotate-many
+    call.
+    """
+
+    level: int
+    ntt_digits_qp: torch.Tensor
+
+
+class _RotationHoistExecutor:
+    """Prepare and consume shared hybrid-RNS digits for direct rotations."""
+
+    def __init__(
+        self,
+        *,
+        config: CkksConfig,
+        rns_context: RnsContext,
+        ntt_context: NttContext,
+        moddown_p_drop_inverses_montgomery_by_level: tuple[torch.Tensor, ...],
+        galois_generator: int = 3,
+    ) -> None:
+        self.config = config
+        self.rns_context = rns_context
+        self.ntt_context = ntt_context
+        self.moddown_p_drop_inverses_montgomery_by_level = (
+            moddown_p_drop_inverses_montgomery_by_level
+        )
+        self.galois_generator = galois_generator
+        self._mixed_radix_native_arg_cache: dict[
+            tuple[int, int],
+            tuple[
+                torch.Tensor,
+                torch.Tensor,
+                torch.Tensor,
+                torch.Tensor,
+                torch.Tensor,
+                torch.Tensor,
+            ],
+        ] = {}
+        self._bit_reverse_index_cache: dict[tuple[int, str], torch.Tensor] = {}
+        self._ntt_galois_source_index_cache: dict[
+            tuple[int, int, str], torch.Tensor
+        ] = {}
+        self._coefficient_galois_cache: dict[
+            tuple[int, str], tuple[torch.Tensor, torch.Tensor]
+        ] = {}
+
+    def rotate_component(
+        self,
+        component: torch.Tensor,
+        *,
+        level: int,
+        key: RotationKey,
+    ) -> torch.Tensor:
+        """Apply the coefficient-domain automorphism for one slot rotation."""
+
+        normalized = key.rotation_step % self.config.N
+        if normalized == 0:
+            return component.clone()
+        cache_key = (normalized, str(component.device))
+        tables = self._coefficient_galois_cache.get(cache_key)
+        if tables is None:
+            modulus = 2 * self.config.N
+            exponent = -normalized if self.galois_generator == 5 else normalized
+            galois_element = pow(
+                self.galois_generator,
+                exponent % self.config.N,
+                modulus,
+            )
+            source = torch.arange(
+                self.config.N,
+                dtype=torch.int64,
+                device=component.device,
+            )
+            mapped = (galois_element * source) % modulus
+            destination = mapped % self.config.N
+            sign = torch.where(
+                ((mapped // self.config.N) & 1) != 0,
+                torch.tensor(-1, dtype=torch.int8, device=component.device),
+                torch.tensor(1, dtype=torch.int8, device=component.device),
+            )
+            source_indices = torch.empty(
+                self.config.N,
+                dtype=torch.int32,
+                device=component.device,
+            )
+            source_indices[destination] = source.to(torch.int32)
+            source_sign = torch.empty(
+                self.config.N,
+                dtype=torch.int8,
+                device=component.device,
+            )
+            source_sign[destination] = sign
+            tables = (source_indices, source_sign)
+            self._coefficient_galois_cache[cache_key] = tables
+        return ckks_ops.apply_coefficient_galois_automorphism(
+            component,
+            tables[0],
+            tables[1],
+            self.rns_context.twice_modulus_for_basis(level, include_p=False),
+        )
+
+    def _mixed_radix_native_args(
+        self,
+        digit_spec: RnsDigitSpec,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
+        cache_key = (digit_spec.level, digit_spec.digit_index)
+        cached = self._mixed_radix_native_arg_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        rows = self.rns_context.row_parameters(digit_spec.prime_ids)
+        normalizers = rows.mixed_radix_normalizers
+        propagation = rows.mixed_radix_propagation_coefficients
+        if normalizers is None or propagation is None:
+            raise RuntimeError("Multi-row digit lacks mixed-radix tables")
+        modulus_lo, modulus_hi, neg_inv_lo, neg_inv_hi = (
+            rows.montgomery_reduction_parameters
+        )
+        result = (
+            normalizers.contiguous(),
+            propagation.contiguous(),
+            modulus_lo.contiguous(),
+            modulus_hi.contiguous(),
+            neg_inv_lo.contiguous(),
+            neg_inv_hi.contiguous(),
+        )
+        self._mixed_radix_native_arg_cache[cache_key] = result
+        return result
+
+    def _decompose_digit_mixed_radix(
+        self,
+        component: torch.Tensor,
+        digit_spec: RnsDigitSpec,
+    ) -> torch.Tensor:
+        source_rows = digit_spec.component_row_ids
+        component_count = len(source_rows)
+        source = component[
+            ...,
+            source_rows[0] : source_rows[-1] + 1,
+            :,
+        ].clone()
+        if component_count == 1:
+            return source
+        if component_count <= 8:
+            return rns_ops.mixed_radix_decompose(
+                source,
+                *self._mixed_radix_native_args(digit_spec),
+            )
+
+        values = (
+            source[..., 0, :]
+            .unsqueeze(-2)
+            .repeat(*([1] * (source.ndim - 2)), component_count, 1)
+        )
+        rows = self.rns_context.row_parameters(digit_spec.prime_ids)
+        normalizers = rows.mixed_radix_normalizers
+        propagation = rows.mixed_radix_propagation_coefficients
+        if normalizers is None or propagation is None:
+            raise RuntimeError("Multi-row digit lacks mixed-radix tables")
+        for component_index in range(component_count - 1):
+            current_row = component_index + 1
+            update = (
+                source[..., current_row, :] - values[..., current_row, :]
+            ).unsqueeze(-2)
+            rns_ops.montgomery_mul_row_scalars_(
+                update,
+                normalizers[component_index][None],
+                self.rns_context.rns_parameters_for_prime_ids(
+                    (digit_spec.prime_ids[current_row],)
+                ),
+            )
+            values[..., current_row, :] = update.squeeze(-2)
+            first_later = current_row + 1
+            if first_later < component_count:
+                propagated = update.repeat(
+                    *([1] * (update.ndim - 2)),
+                    component_count - first_later,
+                    1,
+                )
+                rns_ops.montgomery_mul_row_scalars_(
+                    propagated,
+                    propagation[component_index, first_later:],
+                    self.rns_context.rns_parameters_for_prime_ids(
+                        digit_spec.prime_ids[first_later:]
+                    ),
+                )
+                values[..., first_later:, :] += propagated
+        return values
+
+    def _extend_digit_to_qp(
+        self,
+        mixed_radix_components: torch.Tensor,
+        digit_spec: RnsDigitSpec,
+    ) -> torch.Tensor:
+        active = self.rns_context.basis_parameters(
+            digit_spec.level,
+            include_p=True,
+        )
+        source = self.rns_context.row_parameters(digit_spec.prime_ids)
+        coefficients = source.basis_extension_coefficients
+        if coefficients is None:
+            coefficients = torch.empty(
+                0,
+                0,
+                dtype=mixed_radix_components.dtype,
+                device=mixed_radix_components.device,
+            )
+        start = active.parameter_row_start
+        stop = start + len(active.prime_ids)
+        return rns_ops.mixed_radix_basis_extend_to_montgomery(
+            mixed_radix_components,
+            coefficients[:, start:stop],
+            active.native_parameters,
+            len(active.prime_ids),
+        )
+
+    def prepare(
+        self,
+        component: torch.Tensor,
+        level: int,
+    ) -> _PreparedRotationDigits:
+        """Materialize reusable NTT/Montgomery QP digits for `component`."""
+
+        digit_specs = self.rns_context.rns_layout.digit_specs(level)
+        active_start = self.rns_context.basis_parameters(
+            level,
+            include_p=True,
+        ).parameter_row_start
+        digits: torch.Tensor | None = None
+        for digit_spec in digit_specs:
+            mixed = self._decompose_digit_mixed_radix(component, digit_spec)
+            digit_qp = self._extend_digit_to_qp(mixed, digit_spec)
+            self.ntt_context.forward_montgomery_(
+                digit_qp,
+                include_p=True,
+                parameter_row_start=active_start,
+            )
+            if digits is None:
+                digits = torch.empty(
+                    (len(digit_specs), *digit_qp.shape),
+                    dtype=digit_qp.dtype,
+                    device=digit_qp.device,
+                )
+            digits[digit_spec.digit_index].copy_(digit_qp)
+        if digits is None:
+            raise RuntimeError("Rotation hoisting requires an active RNS digit")
+        return _PreparedRotationDigits(
+            level=level,
+            ntt_digits_qp=digits,
+        )
+
+    def _bit_reverse_indices(
+        self,
+        device: torch.device,
+    ) -> torch.Tensor:
+        cache_key = (self.config.N, str(device))
+        cached = self._bit_reverse_index_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        source = torch.arange(self.config.N, dtype=torch.int64, device=device)
+        remaining = source.clone()
+        reversed_indices = torch.zeros_like(source)
+        for _ in range(self.config.N.bit_length() - 1):
+            reversed_indices = (reversed_indices << 1) | (remaining & 1)
+            remaining >>= 1
+        self._bit_reverse_index_cache[cache_key] = reversed_indices
+        return reversed_indices
+
+    def _ntt_galois_source_indices(
+        self,
+        rotation_step: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        normalized = rotation_step % self.config.N
+        cache_key = (self.config.N, normalized, str(device))
+        cached = self._ntt_galois_source_index_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        bit_reversed = self._bit_reverse_indices(device)
+        destination_exponents = 2 * bit_reversed + 1
+        exponent = -normalized if self.galois_generator == 5 else normalized
+        galois_element = pow(
+            self.galois_generator,
+            exponent % self.config.N,
+            2 * self.config.N,
+        )
+        source_bit_reversed = (
+            (destination_exponents * galois_element) % (2 * self.config.N) - 1
+        ) // 2
+        indices = bit_reversed.index_select(
+            0,
+            source_bit_reversed.to(torch.long),
+        ).to(torch.int32)
+        self._ntt_galois_source_index_cache[cache_key] = indices
+        return indices
+
+    def _moddown(
+        self,
+        accumulator0_qp: torch.Tensor,
+        accumulator1_qp: torch.Tensor,
+        level: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self.ntt_context.inverse_to_standard_(accumulator0_qp, include_p=True)
+        self.ntt_context.inverse_to_standard_(accumulator1_qp, include_p=True)
+        p_count = self.config.num_p_primes
+        inverses = self.moddown_p_drop_inverses_montgomery_by_level[level]
+        parameters = self.rns_context.basis_parameters(
+            level,
+            include_p=True,
+        ).native_parameters
+        return (
+            ckks_ops.keyswitch_moddown_qp_to_q(
+                accumulator0_qp[..., :-p_count, :],
+                accumulator0_qp[..., -p_count:, :],
+                inverses,
+                parameters,
+            ),
+            ckks_ops.keyswitch_moddown_qp_to_q(
+                accumulator1_qp[..., :-p_count, :],
+                accumulator1_qp[..., -p_count:, :],
+                inverses,
+                parameters,
+            ),
+        )
+
+    def apply(
+        self,
+        rotated_c0: torch.Tensor,
+        prepared: _PreparedRotationDigits,
+        key: RotationKey,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Consume prepared digits for one direct rotation key."""
+
+        prototype = prepared.ntt_digits_qp[0]
+        accumulator0 = torch.zeros_like(prototype)
+        accumulator1 = torch.zeros_like(prototype)
+        active = self.rns_context.basis_parameters(
+            prepared.level,
+            include_p=True,
+        )
+        source_indices = self._ntt_galois_source_indices(
+            key.rotation_step,
+            prototype.device,
+        )
+        for digit_spec, digit_qp in zip(
+            self.rns_context.rns_layout.digit_specs(prepared.level),
+            prepared.ntt_digits_qp,
+            strict=True,
+        ):
+            rotated_digit = ckks_ops.apply_ntt_galois_automorphism(
+                digit_qp,
+                source_indices,
+            )
+            ckks_ops.keyswitch_accumulate_digit_products_(
+                accumulator0,
+                accumulator1,
+                rotated_digit,
+                key.digit(digit_spec.key_digit_index),
+                active.native_parameters,
+                active.parameter_row_start,
+            )
+        correction0, correction1 = self._moddown(
+            accumulator0,
+            accumulator1,
+            prepared.level,
+        )
+        return (
+            self.rns_context.add_standard(rotated_c0, correction0),
+            correction1,
+        )
+
+
+__all__: list[str] = []

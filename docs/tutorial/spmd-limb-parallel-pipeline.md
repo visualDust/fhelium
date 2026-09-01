@@ -4,7 +4,7 @@
 
 This example partitions one logical ciphertext along its active RNS-limb axis,
 runs limb-local addition and multiplication, and reconstructs the complete
-basis for global transitions. The tutorial identifies the exact gather
+basis for global transitions. The tutorial identifies the required gather
 points in that pipeline.
 
 ## Run on two GPUs
@@ -58,7 +58,7 @@ prepared_sum = engine.coefficient_domain_to_ntt_domain(full_sum)
 
 NTT conversion preserves the level and operates independently on each modulus,
 but the example reconstructs the complete ciphertext before repartitioning so
-rank zero can derive and transmit one exact active-basis layout.
+rank zero can derive and transmit one active-basis layout.
 
 ## 4. Multiply local intervals
 
@@ -87,13 +87,13 @@ rescale then drops one leading Q prime using cross-prime information and records
 the actual output scale $\Delta^2/q_{\mathrm{drop}}$; it does not reset the
 value to `default_scale`.
 
-## Gather is not reduce
+## Gather reconstructs disjoint limb rows
 
 `gather_ciphertext_limbs` concatenates disjoint prime intervals:
 
 ```mermaid
 flowchart LR
-    rank0["rank 0: prime_ids [q0, q1, ...]"] --> concatenate["concatenate in exact active-basis order"]
+    rank0["rank 0: prime_ids [q0, q1, ...]"] --> concatenate["concatenate in active-basis order"]
     rank1["rank 1: prime_ids [qk, qk+1, ...]"] --> concatenate
 ```
 
@@ -113,14 +113,7 @@ Limb partitioning is useful when:
 It is less attractive when every operation immediately needs reconstruction;
 communication then dominates the local modular arithmetic.
 
-::: info The engine accepts validated local intervals
-Rank-local operations still use public `CkksEngine` methods. The engine
-validates context, device, ring dimension, modulus basis, and contiguous ordered
-`prime_ids`; the distributed facade does not introduce a separate sharded
-value type.
-:::
-
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/10_spmd_limb_parallel_pipeline.py
 :::
 

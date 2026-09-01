@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Inspect residency and round-trip exact values through direct files."""
+"""Inspect residency and round-trip values through direct files."""
 
 from __future__ import annotations
 
@@ -19,25 +19,26 @@ from common import (
 )
 
 import fhelium as fh
+from fhelium.eager import Engine
 from fhelium.artifacts import ArtifactStore
 
 
 def _persistence_demo(
     root: str | Path,
     *,
-    engine: fh.CkksEngine,
+    engine: Engine,
     ciphertext: fh.Ciphertext,
     message: torch.Tensor,
 ) -> None:
     factor_message = torch.full_like(message, 1.25)
-    canonical_factor = engine.encode(
+    encoded_factor = engine.encode(
         factor_message,
         level=ciphertext.level,
     )
     factor = engine.prepare_plaintext_for_multiplication(
         engine.encode(factor_message, level=ciphertext.level)
     )
-    canonical_bytes = canonical_factor.nbytes
+    encoded_bytes = encoded_factor.nbytes
 
     ciphertext_cpu = ciphertext.to("cpu")
     factor_cpu = factor.to("cpu")
@@ -60,18 +61,18 @@ def _persistence_demo(
 
     restored_ciphertext = fh.load_value(
         activation_path,
-        device=engine.device,
+        device=torch.get_default_device(),
         expected_type=fh.Ciphertext,
     )
     restored_factor = fh.load_value(
         factor_path,
-        device=engine.device,
+        device=torch.get_default_device(),
         expected_type=fh.Plaintext,
     )
 
     # ArtifactStore is a first-party repository layered on the same
     # typed value-file primitives. It adds names, references, collections,
-    # checksums, and local durability policy without changing core values.
+    # checksums, and local durability policy without changing runtime values.
     artifact_store = ArtifactStore(root / "artifact-store")
     activation_ref = artifact_store.put(
         "requests/example/activation",
@@ -85,12 +86,12 @@ def _persistence_demo(
     )
     artifact_ciphertext = artifact_store.get(
         activation_ref,
-        device=engine.device,
+        device=torch.get_default_device(),
         expected_type=fh.Ciphertext,
     )
     artifact_factor = artifact_store.get(
         factor_ref,
-        device=engine.device,
+        device=torch.get_default_device(),
         expected_type=fh.Plaintext,
     )
     torch.testing.assert_close(
@@ -107,14 +108,14 @@ def _persistence_demo(
             )
         )
     )
-    decoded = engine.decrypt_message(result)[: message.numel()]
+    decoded = engine.decrypt_message(result).cpu()[: message.numel()]
     expected = (message * 1.25).to(decoded.dtype)
     torch.testing.assert_close(decoded, expected, atol=3e-5, rtol=0)
 
     print("\nResidency and value-file roundtrip:")
     print(f"  CUDA ciphertext:       {ciphertext.device}")
     print(f"  offloaded ciphertext: {ciphertext_cpu.device}")
-    print(f"  canonical factor:     {format_bytes(canonical_bytes)}")
+    print(f"  encoded factor:       {format_bytes(encoded_bytes)}")
     print(f"  prepared factor:      {format_bytes(factor.nbytes)}")
     print(f"  activation file:      {activation_path.name}")
     print(f"  plaintext file:       {factor_path.name}")

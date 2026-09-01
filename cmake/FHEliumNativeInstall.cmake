@@ -12,13 +12,22 @@ macro(fhelium_prepare_native_install)
   install(
     CODE "
         file(GLOB _FHELIUM_STALE_OPS LIST_DIRECTORIES FALSE
-          \"${FHELIUM_INSTALL_PACKAGE_ROOT}/native/torchops/_ops*${Python3_SOABI}*.so\")
+          \"${FHELIUM_INSTALL_PACKAGE_ROOT}/native/torchops/_ops*${FHELIUM_PYTHON_EXTENSION_SUFFIX}\")
+        file(GLOB _FHELIUM_STALE_LEGACY_OPS LIST_DIRECTORIES FALSE
+          \"${FHELIUM_INSTALL_PACKAGE_ROOT}/native/torchops/_ops*.${FHELIUM_PYTHON_SOABI}${CMAKE_SHARED_MODULE_SUFFIX}\")
         file(GLOB _FHELIUM_STALE_CUDA_INFO LIST_DIRECTORIES FALSE
-          \"${FHELIUM_INSTALL_PACKAGE_ROOT}/native/cuda/cuda_info*${Python3_SOABI}*.so\")
+          \"${FHELIUM_INSTALL_PACKAGE_ROOT}/native/cuda/cuda_info*${FHELIUM_PYTHON_EXTENSION_SUFFIX}\")
+        if(WIN32)
+          # Python3_add_library previously emitted an ABI-unqualified .pyd.
+          file(GLOB _FHELIUM_STALE_LEGACY_CUDA_INFO LIST_DIRECTORIES FALSE
+            \"${FHELIUM_INSTALL_PACKAGE_ROOT}/native/cuda/cuda_info.pyd\")
+        endif()
         file(GLOB _FHELIUM_STALE_MANIFESTS LIST_DIRECTORIES FALSE
-          \"${FHELIUM_INSTALL_PACKAGE_ROOT}/native/torchops/_build_manifest*${Python3_SOABI}*.json\")
+          \"${FHELIUM_INSTALL_PACKAGE_ROOT}/native/torchops/_build_manifest*${FHELIUM_PYTHON_SOABI}*.json\")
         foreach(_FHELIUM_STALE_ARTIFACT IN LISTS _FHELIUM_STALE_OPS
+                                                _FHELIUM_STALE_LEGACY_OPS
                                                 _FHELIUM_STALE_CUDA_INFO
+                                                _FHELIUM_STALE_LEGACY_CUDA_INFO
                                                 _FHELIUM_STALE_MANIFESTS)
           file(REMOVE \${_FHELIUM_STALE_ARTIFACT})
         endforeach()

@@ -7,7 +7,7 @@ and provide a C++17-capable compiler.
 
 <InstallCommand :show-details-link="false" />
 
-Binary compatibility includes the Python ABI, exact Torch version, Torch CUDA
+Binary compatibility includes the Python ABI, pinned Torch version, Torch CUDA
 version, C++ ABI, and compiled GPU architectures. Prebuilt Linux wheels are
 complete `fhelium` wheels served by FHElium's static release store. The
 installer above selects the configuration-specific wheel index corresponding
@@ -18,7 +18,7 @@ The following command builds from the PyPI source distribution against the
 preinstalled target Torch environment:
 
 ```bash
-python -m pip install "scikit-build-core>=1.0.3" "cmake>=3.18" ninja
+python -m pip install "scikit-build-core==1.0.3" "cmake>=3.18" ninja
 CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS=CPU+CUDA" \
   python -m pip install \
     --no-binary=fhelium \
@@ -30,7 +30,8 @@ CUDA source builds require a toolkit with the same major version as the
 preinstalled Torch CUDA build; using the same minor version is preferred.
 CPU-only builds set `CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS=CPU"`.
 `CMAKE_CUDA_ARCHITECTURES` optionally overrides the generated architecture
-list.
+list. The generated list emits native images for its default targets and PTX
+for the newest target recognized by the selected toolkit.
 
 ## Verify
 

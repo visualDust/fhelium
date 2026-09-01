@@ -1,266 +1,166 @@
-# System overview
+# Architecture
 
-FHElium is a tensor-native CKKS runtime implemented as a Python semantic layer
-and a native PyTorch operator extension. Applications use typed Python values
-and `CkksEngine`; arithmetic payloads remain `torch.Tensor` objects and execute
-through PyTorch's CPU or CUDA dispatch paths.
+FHElium is a full-stack framework for research on Cheon–Kim–Kim–Song (CKKS)
+approximate-number homomorphic encryption. Its architecture connects public
+value semantics, two usage models, shared operation definitions,
+execution backends, runtime mechanisms, and native kernels. Each layer owns a
+specific class of decisions and exposes the information needed by adjacent
+layers.
 
-The core execution unit is one engine bound to one local CPU or CUDA device.
-Applications build packing schemes, operation schedules, key distribution, and
-multi-rank communication around that local unit.
-
-## Runtime stack
+## System structure
 
 ```mermaid
-graph TB
-    APP[Application<br/>packing, keys, operation schedule]
-    DIST[Optional SPMD layer<br/>torch.distributed collectives]
-    API[Python API<br/>CkksEngine and typed values]
-    PLAN[CKKS orchestration<br/>RNS rows, NTT plans, state transitions]
-    OPS[Native PyTorch operators<br/>torch.ops.fhelium_*]
-    DISP{PyTorch dispatcher}
-    CPU[CPU backend<br/>C++ / ATen / intra-op parallelism]
-    CUDA[CUDA backend<br/>C++ adapters / CUDA kernels]
-    OMP[Torch CPU runtime<br/>OpenMP when selected by Torch]
-    STREAM[PyTorch CUDA allocator<br/>and current CUDA stream]
+flowchart TB
+    APP[Application or research system]
+    VALUES[Public values and CKKS state]
+    OPS[Registered operation semantics]
 
-    APP --> API
-    APP --> DIST --> API
-    API --> PLAN --> OPS --> DISP
-    DISP -->|CPU tensor| CPU --> OMP
-    DISP -->|CUDA tensor| CUDA --> STREAM
+    subgraph USAGE[Usage models]
+        EAGER[Eager operation call]
+        PROGRAM[Compile Program]
+        PASSES[Analysis and transformation passes]
+        LINK[Implementation and resource linking]
+        EXEC[ProgramExecutable]
+        PROGRAM --> PASSES --> LINK --> EXEC
+    end
+
+    subgraph BACKEND[Backend execution]
+        DISPATCH[Implementation assignment and dispatch]
+        COMPOSED[Composed operation implementations]
+        WHOLE[Whole-operation implementations]
+        RESOURCES[Keys and arithmetic resources]
+        DISPATCH --> COMPOSED
+        DISPATCH --> WHOLE
+        RESOURCES --> COMPOSED
+        RESOURCES --> WHOLE
+    end
+
+    subgraph NATIVE[Native operator layer]
+        SCHEMAS[Typed PyTorch operator schemas and dispatcher]
+        CPU[CPU native operators]
+        GPU[GPU native operators<br/>CUDA]
+        SCHEMAS --> CPU
+        SCHEMAS --> GPU
+    end
+
+    RUNTIME[Runtime observation, buffers, and CUDA Graphs]
+    JIT[Experimental JIT region planning and live bindings]
+    SYSTEMS[Distributed execution, Residency, and persistence]
+
+    APP --> EAGER
+    APP --> PROGRAM
+    VALUES --> EAGER
+    VALUES --> EXEC
+    OPS -. defines .-> EAGER
+    OPS -. defines .-> PASSES
+    OPS -. defines .-> DISPATCH
+    EAGER --> DISPATCH
+    EXEC --> DISPATCH
+    COMPOSED --> SCHEMAS
+    WHOLE --> SCHEMAS
+    RUNTIME -. observations and mechanisms .-> APP
+    JIT -. planned region execution .-> DISPATCH
+    SYSTEMS -. application composition .-> APP
 ```
 
-| Part of the stack | Technology | Function |
-| --- | --- | --- |
-| Application interface | Python 3.12+, typed FHElium values | Express CKKS values, keys, packing, and evaluator calls |
-| Tensor runtime | PyTorch | Own tensor storage, devices, allocation, CPU intra-op execution, CUDA streams, profiling, and collectives |
-| CKKS orchestration | Python in `fhelium.engine` | Validate exact state and compose encode, encrypt, NTT, RNS, key-switch, and rescale stages |
-| Native operator ABI | PyTorch C++ operator schemas | Give CPU and CUDA one operator name, mutation model, and tensor signature |
-| CPU arithmetic | C++17, ATen, `at::parallel_for` | Execute RNS, indexed radix-2 NTT, and CKKS tensor primitives through Torch's CPU runtime |
-| GPU arithmetic | CUDA C++ and ATen CUDA integration | Execute RNS, several NTT policies, Galois, key-switch, and rescale kernels on the current stream |
-| Native build | scikit-build-core, CMake, Torch C++ API, optional CUDA Toolkit | Produce the Python/Torch-ABI-specific native extension |
+## Semantic and program layers
 
-The native extension can contain CPU implementations, CUDA implementations, or
-both. A shared operator schema does not choose a backend itself: PyTorch selects
-the registered implementation from the input tensor's dispatch key.
+A public `Ciphertext`, `Plaintext`, or key combines a Tensor payload with the
+state needed to interpret that payload. Depending on the value type, this state
+includes level, actual scale, active prime identities, polynomial domain,
+modulus basis, residue representation, component count, batch shape, key role,
+and device placement.
 
-## Values and exact state
+Registered operations define their input requirements, result types, state
+effects, and required resources. These definitions establish operation meaning
+across every execution route.
 
-A `Plaintext`, `Ciphertext`, or key combines dense tensor storage with the
-metadata required to interpret it. For an RNS ciphertext, the principal layout
-is:
+Applications enter this layer through two usage models. **Eager** applies one
+operation and its CKKS state transition immediately. **Compile** represents
+operations and values in a Program, where selected passes can analyze,
+schedule, preserve, or lower them before Backend linking creates an executable.
+Both routes retain the meaning declared by the registered operation catalog.
 
-```text
-[component, *batch, limb, coefficient_or_ntt_index]
-```
+## Backend composition layer
 
-The tensor device stores the payload location. Other fields record
-cryptographic and arithmetic state, including:
+The **Backend** registers operation implementations, owns execution-resource
+mechanisms, assigns implementations, and links Programs. Its registry supports
+two complementary implementation forms:
 
-- CKKS context identity;
-- level and ordered `prime_ids`;
-- actual per-value scale;
-- coefficient or NTT polynomial domain;
-- Q or QP modulus basis;
-- standard or Montgomery residue representation;
-- key-specific axes and identity where applicable.
+- **composed operation implementations** coordinate multiple Tensor and native
+  operations to implement a higher-level operation;
+- **whole-operation implementations** execute a registered operation through a
+  specialized direct path.
 
-These metadata are execution inputs, not descriptive labels added after the
-fact. For example, ciphertext addition requires matching level, exact scale,
-component layout, domain, basis, residue form, context, prime rows, dtype, and
-device before any modular addition runs.
+Composed implementations depend on the native operator layer for device
+arithmetic. Whole-operation implementations can use the same native layer while
+selecting a different composition or specialized kernel route. Both receive
+Tensor payloads together with bound keys, materials, and arithmetic resources.
 
-```mermaid
-graph LR
-    VALUE[Typed value]
-    META[Exact CKKS state]
-    DATA[Dense torch.Tensor]
-    VALUE --> META
-    VALUE --> DATA
-    DATA --> DEV{tensor.device}
-    DEV --> CPU[CPU storage]
-    DEV --> GPU[CUDA storage]
-```
+Eager resolves and caches one device-local call at a time. Compile resolves all
+remaining Program operations, prelinks their resources, and creates a
+`ProgramExecutable`. These are two entry paths into the same implementation
+registry and resource model.
 
-Value objects do not embed an engine, process group, placement plan, artifact
-path, or cache identity. Those objects have independent lifetimes and are
-connected by application code or the corresponding subsystem.
+## Native CPU and GPU layers
 
-## Local operation path
+Typed PyTorch operator schemas define the native execution interface. CPU and
+CUDA register separate implementations for those schemas, and PyTorch selects
+the implementation from Tensor placement. The two native backends can use
+different kernel structures, parallel execution strategies, and
+microarchitecture-specific optimizations while preserving the schema's Tensor,
+mutation, and resource contract.
 
-A public evaluator call crosses three distinct forms of validation and
-execution:
+The native layer uses PyTorch's allocator, CPU execution runtime, CUDA streams,
+device dispatch, and profiling tools. Additional execution providers can
+register Backend implementations and connect their own kernels through the
+same operation and resource interfaces.
 
-```mermaid
-sequenceDiagram
-    participant App as Application
-    participant API as CkksEngine
-    participant Run as Python CKKS/RNS runtime
-    participant Op as torch.ops.fhelium_*
-    participant Disp as PyTorch dispatcher
-    participant Native as CPU C++ or CUDA kernel
+## Runtime and system composition
 
-    App->>API: operation(typed values, keys)
-    API->>API: validate context and CKKS state
-    API->>Run: select rows, tables, and arithmetic stages
-    Run->>Op: tensors plus parameter tensors
-    Op->>Disp: schema and tensor dispatch keys
-    Disp->>Native: registered CPU or CUDA implementation
-    Native-->>Run: allocated or mutated tensor
-    Run-->>API: completed tensor stages
-    API-->>App: typed output with exact new state
-```
+The operation path composes with several system owners:
 
-Python owns the semantic operation. It decides, for example, which Q rows are
-active, whether a forward NTT is required, which key digit is consumed, and how
-level and scale change. Native operators own bounded tensor transformations and
-receive modulus parameters, twiddles, schedules, indices, and key tensors as
-arguments.
+- `fhelium.runtime` supplies hardware and memory observations, reusable
+  buffers, and CUDA Graph execution;
+- `fhelium.experimental.jit` owns live bindings, provider coverage,
+  region planning, and just-in-time (JIT) execution;
+- `fhelium.distributed` supplies process setup, typed value transport, and
+  CKKS-aware collectives for rank-local execution;
+- `fhelium.residency` owns live materializations, byte accounting, placement
+  admission, and asynchronous lifetimes;
+- serialization and artifacts preserve value state and application-visible
+  artifact identity.
 
-This division allows a high-level operation to combine several native kernels
-without introducing a second opaque execution runtime. It also allows the same
-Python arithmetic path to use CPU or CUDA when both devices implement the
-required operator schemas.
+Applications and execution owners compose these mechanisms around Eager calls
+or linked Programs. They select devices, keys, placement policies, distributed
+schedules, and persistence behavior according to the workload.
 
-For the registration and launch details, see
-[Python-to-native execution stack](../../developer/engine-native-stack.md).
+## Ownership map
 
-## CPU and CUDA execution
-
-CPU and CUDA are local execution backends, not separate public CKKS APIs.
-`CkksEngine(device="cpu")` and `CkksEngine(device="cuda:0")` expose the same
-stateful value model and evaluator methods.
-
-On CPU:
-
-- native operators are C++/ATen implementations registered under PyTorch's
-  `CPU` dispatch key;
-- coefficient work is partitioned with `at::parallel_for` where appropriate;
-- FHElium follows Torch intra-op thread controls;
-- when the selected Torch uses OpenMP, FHElium compiles for and reuses that
-  runtime instead of managing a second thread pool;
-- indexed radix-2 is the production NTT policy.
-
-On CUDA:
-
-- C++ adapters are registered under PyTorch's `CUDA` dispatch key;
-- kernels use the operand device and PyTorch's current CUDA stream;
-- output storage uses PyTorch's CUDA allocator;
-- launches remain asynchronous under normal PyTorch stream semantics;
-- indexed radix-2 and CUDA-specific compact grouped or fixed-radix NTT policies
-  are available according to the selected configuration.
-
-An evaluator operation does not move input data between CPU and CUDA. Values
-move through .to(...), buffer, collective, or Residency operations;
-a mixed-device native call fails validation.
-
-## Distributed execution
-
-FHElium uses process-local single-program, multiple-data (SPMD) control.
-Each rank creates its own local engine, local keys or key views, and local
-values. The application initializes `torch.distributed`, chooses the rank-to-
-device mapping, and calls typed FHElium collectives where value reconstruction
-or modular semantics are required.
-
-```mermaid
-graph TB
-    CTRL[Application SPMD program]
-    R0[Rank 0<br/>local engine + local tensors]
-    R1[Rank 1<br/>local engine + local tensors]
-    RN[Rank n<br/>local engine + local tensors]
-    PG[torch.distributed ProcessGroup]
-
-    CTRL --> R0
-    CTRL --> R1
-    CTRL --> RN
-    R0 <--> PG
-    R1 <--> PG
-    RN <--> PG
-```
-
-Typed collectives separate a metadata/descriptor phase from dense tensor
-transfer. Whole-value transport reconstructs exact FHElium values at the
-receiver. Limb gather/scatter performs structural RNS-row reconstruction, while
-ciphertext reduce/all-reduce uses modular ciphertext addition rather than raw
-integer `SUM`.
-
-Process groups and global parallel strategy remain outside `CkksEngine`.
-Consequently, data parallelism, additive-term parallelism, RNS-limb
-partitioning, and world-size-one execution can use the same rank-local value and
-engine semantics.
-
-## Reusable execution
-
-The `fhelium.execution` package builds reusable execution mechanisms on top of
-typed values:
-
-- `ValueTreeSignature` records exact nested input structure and value state;
-- `ReusableValueBuffer` owns stable destination storage and stream/event-aware
-  copies;
-- `CudaGraphProgram` warms up, captures, and replays a rank-local callable with
-  stable buffers.
-
-CUDA Graph capture does not replace CKKS semantics or distributed scheduling.
-The application supplies a deterministic local callable and owns when copies,
-graph replay, communication, and output consumption occur.
-
-The experimental JIT uses one xDSL program representation for captured,
-textual, or directly constructed local computations. Its passes and executable
-schemas ultimately call the same public/native execution stack rather than a
-second arithmetic backend.
-
-## Persistence and live residency
-
-Persistence and live placement are separate systems:
-
-```mermaid
-graph LR
-    FILE[Exact value file]
-    STORE[ArtifactStore<br/>logical names and generations]
-    VALUE[Live typed value]
-    RES[ResidencyManager<br/>local materializations and lifetimes]
-
-    FILE -->|load| VALUE
-    VALUE -->|save| FILE
-    STORE -->|resolve generation| FILE
-    VALUE -->|adopt/register| RES
-    RES -->|ensure/move/reconstruct| VALUE
-```
-
-- Exact serialization maps one typed value to a versioned file representation.
-- `ArtifactStore` adds durable logical naming, immutable generations, catalog
-  identity, checksums, and retirement around those files.
-- `ResidencyManager` owns process-local live materializations, locations,
-  accounting, transitions, leases, holds, reservations, and optional admission
-  decisions.
-
-A persisted artifact is not a live CUDA allocation. A Residency handle is not a
-durable artifact reference. Applications connect them by registering a source
-or loading and adopting a value.
-
-## Package map
-
-| Package | Primary implementation role |
+| Owner | Architectural responsibility |
 | --- | --- |
-| `fhelium.config` | CKKS presets, modulus chains, security checks, and NTT policies |
-| `fhelium.core` | Context metadata, typed values, keys, state vocabulary, and rotation planning |
-| `fhelium.engine` | Public CKKS semantics, RNS runtime, NTT plans/backends, encoding, encryption, key switching, and rescale |
-| `fhelium.native` | Native ABI validation/loading, generated `torch.ops` wrappers, and CUDA topology inspection |
-| `fhelium.distributed` | PyTorch distributed facade and typed HE collectives |
-| `fhelium.execution` | Exact signatures, reusable buffers, copy handles, and CUDA Graph execution |
-| `fhelium.serialization` | Exact versioned single-value files |
-| `fhelium.artifacts` | Durable local repository names and immutable generations |
-| `fhelium.residency` | Live process-local materialization ownership, accounting, and admission |
-| `fhelium.experimental` | Opt-in bootstrap, JIT, and multiparty mechanisms |
-| `fhelium.benchmarks` | Versioned benchmark specifications, runners, and report model |
+| `fhelium.values` | Public payload-bearing values, represented CKKS state, context identity, and keys |
+| `fhelium.eager` | Immediate operation transitions, key inventory, and device-local direct dispatch |
+| `fhelium.ir` | Program structure, registered operation semantics, types, and analyses |
+| `fhelium.compile` | Source capture, Compilation workspaces, passes, lowering, and code generation |
+| `fhelium.backend` | Implementations, execution resources, Program linking, and executable dispatch |
+| `fhelium.native` | Native extension loading, application binary interface (ABI) diagnostics, typed wrappers, and device inspection |
+| `fhelium.runtime` | Hardware and memory observations, reusable buffers, and CUDA Graph execution |
+| `fhelium.experimental.jit` | Live bindings, provider coverage, region planning, and JIT execution |
+| `fhelium.distributed` | Process setup, typed transport, and CKKS-aware collectives |
+| `fhelium.residency` | Live-value ownership, byte accounting, placement admission, and lifetimes |
+| `fhelium.serialization` and `fhelium.artifacts` | Durable value representation, artifact identity, and generation management |
+
+Applications compose these owners by selecting passes, implementations,
+resources, devices, keys, placement policies, and distributed schedules. This
+keeps research choices visible at the layer where they are made and allows
+their effects to be measured across the complete workload.
 
 ## Continue
 
-- [Value model and identity](../ckks/value-model-and-identity.md)
-- [Ownership and runtime responsibilities](ownership-and-responsibilities.md)
-- [Python-to-native execution stack](../../developer/engine-native-stack.md)
-- [Distributed internals](../../developer/distributed-internals.md)
-- [Execution buffers and CUDA Graphs](../../developer/execution-buffers-and-cuda-graphs.md)
-- [Serialization and artifacts](../execution/serialization-and-artifacts.md)
-- [Residency lifetimes](../execution/residency-lifetimes.md)
+- CKKS values: [Value model and identity](../ckks/value-model-and-identity.md)
+- Operation effects: [Evaluator operation transitions](../ckks/evaluator-operation-transitions.md)
+- Program representation: [Neutral IR programs](../neutral-ir-programs.md)
+- Compile lifecycle: [Open compiler stack](../open-compiler-stack.md)
+- Runtime ownership: [Ownership and responsibilities](ownership-and-responsibilities.md)
+- Native execution: [Eager, Compile, and native execution](../../developer/engine-native-stack.md)

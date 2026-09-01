@@ -1,7 +1,7 @@
 """Compress a periodic operation-ready plaintext without changing Plaintext.
 
 The example starts from a standard periodic CKKS slot message, encodes it with
-the ordinary codec, verifies the exact repeated NTT structure, and converts it
+the ordinary codec, verifies the repeated NTT structure, and converts it
 to a separate CompressedPlaintext. The evaluator kernel reads the compact
 operand directly; it does not materialize a dense plaintext during multiply.
 """
@@ -73,7 +73,7 @@ def main() -> None:
     )
     factor = unique_slots.repeat(engine.num_slots // period)
 
-    # A period-r semantic slot vector yields 2r exact encoded NTT values,
+    # A period-r semantic slot vector yields 2r encoded NTT values,
     # stored as contiguous repeated blocks for the current CKKS codec.
     dense = engine.prepare_plaintext_for_multiplication(engine.encode(factor))
     compressed = fh.CompressedPlaintext.from_plaintext(
@@ -113,7 +113,7 @@ def main() -> None:
     if not torch.equal(compressed_result.data, dense_result.data):
         raise AssertionError("Compressed and dense ciphertexts differ")
     decoded = engine.decrypt_message(
-        engine.ntt_domain_to_coefficient_domain(compressed_result)
+        engine.ntt_domain_to_coefficient_domain(compressed_result),
     ).cpu()
     max_error = torch.max(torch.abs(decoded - message * factor)).item()
     print(f"maximum cleartext error: {max_error:.3e}")
@@ -126,12 +126,12 @@ def main() -> None:
     dense_ms = _median_ms(
         lambda: engine.multiply_plaintext(ciphertext_ntt, dense),
         iterations=args.iterations,
-        device=engine.device,
+        device=torch.get_default_device(),
     )
     compressed_ms = _median_ms(
         lambda: engine.multiply_plaintext(ciphertext_ntt, compressed),
         iterations=args.iterations,
-        device=engine.device,
+        device=torch.get_default_device(),
     )
     print(f"dense evaluator median:      {dense_ms:.3f} ms")
     print(f"compressed evaluator median: {compressed_ms:.3f} ms")
@@ -142,12 +142,12 @@ def main() -> None:
     dense_add_ms = _median_ms(
         lambda: engine.add_plaintext_(dense_add_work, dense_addend),
         iterations=args.iterations,
-        device=engine.device,
+        device=torch.get_default_device(),
     )
     sparse_add_ms = _median_ms(
         lambda: engine.add_plaintext_(sparse_add_work, sparse_addend),
         iterations=args.iterations,
-        device=engine.device,
+        device=torch.get_default_device(),
     )
     print(f"dense in-place addition median:  {dense_add_ms:.3f} ms")
     print(f"sparse in-place addition median: {sparse_add_ms:.3f} ms")

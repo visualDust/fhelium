@@ -1,162 +1,237 @@
 # Source tree
 
-This map identifies the first implementation entry for common development
-tasks. It is intentionally curated; generated files and private helpers may
-change within a release series.
+This map identifies the current implementation owners for common development
+tasks. It emphasizes the Eager and Compile use models and the Backend execution
+layer they share. Generated files and private helpers may move within a release
+series.
 
-## Top-level areas
+## Repository map
 
 ```text
 fhelium/
-  config/          CKKS parameters, NTT policies, security assessment
-  core/            context identity, exact values, keys, rotation planning
-  engine/          CKKS algorithms and engine-owned RNS/NTT implementation
-    rns/            chain/layout metadata, parameters, arithmetic runtime
-    ntt/            host plans, materialized tables, CPU/CUDA backends
-  native/          extension loading, ABI diagnostics, CUDA inspection, wrappers
-  rng/             CSPRNG interface and adapter
-  serialization/   exact versioned value files
-  artifacts/       logical names, current generations, and local repository policy
-  distributed/     process state, typed transport, HE collectives
-  execution/       signatures, reusable buffers, CUDA Graphs
-  residency/       local live-value ownership, admission, plans, and lifetimes
-  experimental/    opt-in features whose APIs and behavior can change directly
-    bootstrap/      composable CKKS bootstrap mechanisms
-      presets/      measured versioned bootstrap compositions
-    mpc/            experimental multiparty CKKS arithmetic
-    jit/            unified mixed-dialect xDSL programs, passes, and execution
-  benchmarks/      public definitions/registry and built-in benchmark runners
-csrc/ops/
-  rns/             schemas plus CPU/CUDA residue arithmetic
-  ntt/             schemas plus CPU/CUDA forward/inverse NTT
-  ckks/            schemas plus CPU/CUDA CKKS tensor primitives
-  common/          shared tensor/RNS validation and parameters
-    cpu/           CPU Montgomery helpers
-    cuda/          CUDA Montgomery, repetition, and launch helpers
-csrc/runtime/      CUDA device and peer-topology inspection extension
-examples/          maintained runnable workflows
-tests/             public, state, ABI, execution, distributed tests
-packaging/         release matrix, manylinux builders, artifact/index publication
-cloudflare/        read-only Python package-index Worker
-.github/workflows/ release orchestration
+  config/          CKKS parameters, prime catalogs, NTT policy, security assessment
+  values/          public CKKS values, keys, represented state, Tensor residency
+  eager/           immediate Engine execution, key inventory, device-local dispatch
+  ir/              xDSL Program, dialects, operation semantics, and analyses
+  compile/         source capture, Compilation, workspaces, passes, and code generation
+    frontend/       PyTorch capture and input-role declarations
+    passes/         frontend, CKKS, lowering, Backend, distributed, and Program passes
+    codegen/        generated Eager and Backend Python source models
+  backend/         implementation registry, resources, linking, and Program execution
+    ckks/           codec, cryptography, CKKS resources, and whole-operation algorithms
+    rns/            modulus chains, layouts, parameters, resources, and RNS operations
+    ntt/            plans, tables, resources, and configured NTT executors
+    memory/         registered placement-transfer operations and resources
+    distributed/    registered process-group operations and resources
+  native/          extension loading, ABI diagnostics, CUDA inspection, typed wrappers
+  runtime/         topology/memory observation, buffers, signatures, and CUDA Graphs
+  distributed/     process setup, typed transport, and public value collectives
+  rng/             cryptographic random-stream interface and implementations
+  serialization/   versioned public-value serialization
+  artifacts/       logical artifact references, generations, and repository policy
+  residency/       live-value ownership, accounting, admission, plans, and lifetimes
+  experimental/    opt-in bootstrap, multiparty CKKS, and JIT
+    jit/            runtime bindings, provider assignment, region planning, executables
+  legacy/          handwritten reference implementations used for differential work
+  benchmarks/      benchmark definitions, evidence schemas, and built-in runners
+  utils/           narrowly shared algorithms such as rotation decomposition
+  _cli/            command-line entry points
+csrc/
+  ops/rns/         PyTorch schemas and CPU/CUDA residue arithmetic
+  ops/ntt/         PyTorch schemas and CPU/CUDA NTT implementations
+  ops/ckks/        PyTorch schemas and CPU/CUDA CKKS Tensor primitives
+  ops/common/      shared native validation, parameters, and arithmetic helpers
+  runtime/         CUDA device and peer-topology inspection extension
+examples/          numbered Eager, Compile, execution, distributed, and research workflows
+tests/             focused tests organized by owning package
+packaging/         wheel, release, repository, and package-index tooling
+docs/              user, concept, how-to, benchmark, developer, and API documentation
 ```
 
-## Stable value layer
+## Execution ownership at a glance
+
+```mermaid
+graph TB
+    APP[Application]
+
+    subgraph Eager
+        ENG[fhelium.eager.Engine]
+        ECALL[Immediate metadata transition<br/>and direct operation dispatch]
+        ENG --> ECALL
+    end
+
+    subgraph Compile
+        CAP[Capture, parse, or construct Program]
+        PASS[Caller-composed Compile passes]
+        LINK[Backend linking passes]
+        EXE[ProgramExecutable]
+        CAP --> PASS --> LINK --> EXE
+    end
+
+    IMPL[Registered Backend implementation]
+    PY[CKKS, RNS, and NTT Python execution]
+    NATIVE[Typed wrapper and torch.ops]
+    DEVICE[CPU C++ or CUDA kernel]
+
+    APP --> ENG
+    APP --> CAP
+    ECALL --> IMPL
+    EXE --> IMPL
+    IMPL --> PY --> NATIVE --> DEVICE
+```
+
+Eager executes a requested operation without an SSA graph. Compile owns Program
+construction and transformation, then links a complete Program before running
+it. Both paths invoke the `OperationImplementation` interface with Tensor
+payloads and concrete resources.
+
+## Public values and configuration
 
 | Goal | First file(s) |
 | --- | --- |
-| Context identity | `fhelium/core/context.py` |
-| Plaintext representations | `fhelium/core/plaintext.py` |
-| Ciphertext components/limbs | `fhelium/core/ciphertext.py` |
-| Key layouts and rotation step identity | `fhelium/core/keys.py` |
-| Representation-state vocabulary | `fhelium/core/state.py` |
-| Tensor movement and value-local byte accounting | `fhelium/core/tensor_resident.py` |
+| Ciphertext payload and represented state | `fhelium/values/ciphertext.py` |
+| Plaintext representations | `fhelium/values/plaintext.py` |
+| Compressed plaintext representation | `fhelium/values/compressed_plaintext.py` |
+| Key layouts and rotation-step identity | `fhelium/values/keys.py` |
+| CKKS state vocabulary | `fhelium/values/state.py` |
+| Tensor movement and value-local byte accounting | `fhelium/values/tensor_resident.py` |
+| CKKS configuration and packaged primes | `fhelium/config/` |
 
-Core values should not acquire engine, process-group, artifact-path, or
-application cache ownership.
+Public value classes carry value state and Tensor storage. Execution services,
+process groups, artifact names, and application cache policy remain with their
+own packages.
 
-## Engine and arithmetic layer
+## Eager execution
 
 | Goal | First file(s) |
 | --- | --- |
-| Public CKKS operations and validation | `fhelium/engine/ckks_engine.py` |
-| Encode/decode | `fhelium/engine/ckks_plaintext_codec.py`, `fhelium/engine/slot_embedding.py` |
-| Encryption/decryption | `fhelium/engine/ckks_encryptor.py`, `fhelium/engine/ckks_decryptor.py` |
-| Key creation | `fhelium/engine/key_generator.py` |
-| Rescale | `fhelium/engine/ckks_rescale.py` |
-| Hybrid decomposition | `fhelium/engine/rns/decomposition.py` |
-| Key-switch orchestration | `fhelium/engine/hybrid_keyswitch.py` |
-| RNS chain/layout/parameters | `fhelium/engine/rns/chain.py`, `fhelium/engine/rns/layout.py`, `fhelium/engine/rns/parameters.py` |
-| RNS arithmetic facade | `fhelium/engine/rns/runtime.py` |
-| Rotation/Galois mapping | `fhelium/engine/galois.py` |
-| Reusable rotation-step planning | `fhelium/core/rotation.py` |
-| NTT backend implementations | `fhelium/engine/ntt/` |
-| NTT plan/table preparation | `fhelium/engine/ntt/plans/` |
-| Host Montgomery constants | `fhelium/engine/rns/montgomery.py` |
+| Public operations, factories, and metadata transitions | `fhelium/eager/_engine.py` |
+| Device-local direct Backend dispatch | `fhelium/eager/_operation_dispatch.py` |
+| Evaluation-key inventory and placement | `fhelium/eager/_key_inventory.py` |
+| Public/Program Tensor adaptation helpers | `fhelium/eager/_program_values.py` |
+| Eager input checks | `fhelium/eager/_validation.py` |
+| Device resource construction | `fhelium/backend/ckks/materialization.py` |
+
+An `Engine` owns one CKKS configuration and creates per-device services lazily.
+Evaluator operations dispatch from operand placement. Cross-device key copying
+occurs only when the caller enables automatic key replication.
+
+## IR and Compile
+
+| Goal | First file(s) |
+| --- | --- |
+| Program ownership, parsing, printing, and interchange | `fhelium/ir/_program.py` |
+| Registered dialect operations and types | `fhelium/ir/dialects/` |
+| Operation meaning and effects | `fhelium/ir/_operation_specs.py`, `fhelium/ir/_operation_catalog.py` |
+| Program analyses | `fhelium/ir/_analysis.py` |
+| Compilation and caller-owned workspace | `fhelium/compile/_compilation.py`, `fhelium/compile/_workspace.py` |
+| Pass and Pipeline protocol | `fhelium/compile/_pipeline.py` |
+| Source capture and input roles | `fhelium/compile/frontend/` |
+| Semantic-to-logical transformation | `fhelium/compile/passes/frontend/` |
+| CKKS state and scheduling passes | `fhelium/compile/passes/ckks/` |
+| CKKS-to-RNS/NTT composition | `fhelium/compile/passes/lowering/` |
+| Implementation assignment and Backend linking passes | `fhelium/compile/passes/backend/` |
+| Eager and Backend Python emission | `fhelium/compile/codegen/`, `fhelium/compile/passes/codegen/` |
+
+A Program may retain unknown CKKS state until a selected pass requires and
+assigns it. Compile passes may preserve a CKKS operation for a whole-operation
+implementation or lower it to registered RNS and NTT operations.
+
+## Backend execution
+
+| Goal | First file(s) |
+| --- | --- |
+| Built-in implementation assembly | `fhelium/backend/assembly.py` |
+| Implementation protocol and registry | `fhelium/backend/implementation.py` |
+| OperationBackend, dispatch tables, and ProgramExecutable | `fhelium/backend/execution.py` |
+| Backend workspace | `fhelium/backend/workspace.py` |
+| Resource requirements and linked bindings | `fhelium/backend/resources.py` |
+| CKKS operation classes and whole-operation implementations | `fhelium/backend/ckks/operations.py` |
+| Codec | `fhelium/backend/ckks/codec/` |
+| Encryption, decryption, Galois mapping, and key creation | `fhelium/backend/ckks/crypto/` |
+| CKKS resource materialization | `fhelium/backend/ckks/materialization.py`, `fhelium/backend/ckks/resources.py` |
+| Rescale and key-switch arithmetic | `fhelium/backend/ckks/rescale.py`, `fhelium/backend/ckks/operations.py` |
+| Scheduled hoisted rotation execution | `fhelium/backend/ckks/rotation/` |
+| RNS chain, layout, parameters, and decomposition | `fhelium/backend/rns/` |
+| NTT context, resources, plans, tables, and executors | `fhelium/backend/ntt/` |
+| Placement-transfer operations | `fhelium/backend/memory/` |
+| Process-group operations | `fhelium/backend/distributed/` |
+
+`OperationBackend` owns an implementation registry and an immutable
+`BackendWorkspace`. Eager resolves and caches individual direct calls through
+that owner. Compile callers use Backend-stage passes to resolve a Program's
+operations, bind resources and materials, and create a `ProgramExecutable`.
 
 ## Native ABI and kernels
 
 | Layer | Location |
 | --- | --- |
-| Torch operator loading/status | `fhelium/native/runtime.py` |
-| Shared ABI identity/manifest helpers | `fhelium/native/_abi.py` |
-| Compiled Torch operator and ABI manifest | `fhelium/native/torchops/` |
-| Python wrappers | `fhelium/native/wrapper/{rns_ops,ntt_ops,ckks_ops}.py` |
-| Python CUDA inspection API | `fhelium/native/cuda/__init__.py` |
+| Torch operator loading and ABI checks | `fhelium/native/runtime.py`, `fhelium/native/_abi.py` |
+| Compiled Torch extension and build manifest | `fhelium/native/torchops/` |
+| Generated typed wrappers | `fhelium/native/wrapper/{rns_ops,ntt_ops,ckks_ops}.py` |
 | Wrapper generator | `scripts/generate_native_wrappers.py` |
-| Backend-neutral Torch schemas | `csrc/ops/<family>/*.cpp` |
+| Backend-neutral PyTorch schemas | `csrc/ops/<family>/*.cpp` |
 | CPU dispatcher registrations and implementations | `csrc/ops/<family>/cpu/` |
 | CUDA dispatcher registrations and implementations | `csrc/ops/<family>/cuda/` |
-| Shared tensor/RNS helpers | `csrc/ops/common/` |
-| CUDA runtime inspection | `csrc/runtime/cuda_info.{h,cpp}` |
+| Shared Tensor and RNS helpers | `csrc/ops/common/` |
+| CUDA topology inspection | `fhelium/native/cuda/`, `csrc/runtime/cuda_info.{h,cpp}` |
 
-Invoke wrapper generation directly with
-`python scripts/generate_native_wrappers.py`. Do not hand-edit generated
-wrapper output without changing the source schema or generator that owns it.
+Run `python scripts/generate_native_wrappers.py` after changing a native schema
+or the generator, then regenerate the wrapper output.
 
-## Distributed and execution
+## Experimental JIT, runtime, distribution, and storage
 
 | Goal | Location |
 | --- | --- |
-| Rank/device/process-group init | `fhelium/distributed/_state.py` |
-| Typed descriptors and allocation | `fhelium/distributed/_transfer.py` |
-| Collective transport/group primitives | `fhelium/distributed/_collective_common.py` |
-| Whole-value collectives | `fhelium/distributed/_value_collectives.py` |
-| Limb scatter/gather | `fhelium/distributed/_limb_collectives.py` |
-| Ciphertext reduction | `fhelium/distributed/_ciphertext_reduction.py` |
-| Private collective aggregation point | `fhelium/distributed/_typed_collectives.py` |
-| Exact execution signatures | `fhelium/execution/signature.py` |
-| Reusable buffers and copy handles | `fhelium/execution/buffer.py` |
-| CUDA Graph program | `fhelium/execution/cuda_graph.py` |
-| Composable CKKS bootstrap | `fhelium/experimental/bootstrap/` |
-| Versioned bootstrap presets | `fhelium/experimental/bootstrap/presets/` |
-| Multiparty CKKS arithmetic | `fhelium/experimental/mpc/` |
-| JIT program, capture, passes, readiness, and execution | `fhelium/experimental/jit/` |
-| Artifact refs/store | `fhelium/artifacts/` |
-| Opaque residency handles, replica rules, and recoverability rules | `fhelium/residency/model.py` |
-| Residency transitions, local accounting, and optional budgets | `fhelium/residency/manager.py` |
-| Ordered residency plan IR | `fhelium/residency/plan.py` |
-| Declarative working-set requirements | `fhelium/residency/request.py` |
-| Deterministic automatic policy and controller | `fhelium/residency/policy.py`, `fhelium/residency/controller.py` |
-| Leases, holds, and reservations | `fhelium/residency/lease.py` |
-| Tensor-free snapshots, explanations, and reports | `fhelium/residency/snapshot.py` |
+| Experimental JIT | `fhelium/experimental/jit/` |
+| CPU/CUDA topology and memory observation | `fhelium/runtime/topology.py`, `fhelium/runtime/memory.py` |
+| Reusable buffers and CUDA Graphs | `fhelium/runtime/buffer.py`, `fhelium/runtime/cuda_graph.py` |
+| Rank and process-group initialization | `fhelium/distributed/_state.py` |
+| Typed value transport and collectives | `fhelium/distributed/_transfer.py`, `fhelium/distributed/_value_collectives.py` |
+| Limb collectives and ciphertext reduction | `fhelium/distributed/_limb_collectives.py`, `fhelium/distributed/_ciphertext_reduction.py` |
+| Artifact references and repository | `fhelium/artifacts/artifact.py`, `fhelium/artifacts/store.py` |
+| Residency ownership and accounting | `fhelium/residency/manager.py`, `fhelium/residency/model.py` |
+| Residency requests, policy, plans, and controller | `fhelium/residency/request.py`, `policy.py`, `plan.py`, `controller.py` |
+| Leases and tensor-free snapshots | `fhelium/residency/lease.py`, `fhelium/residency/snapshot.py` |
+| Versioned value serialization | `fhelium/serialization/` |
+| Composable bootstrapping and presets | `fhelium/experimental/bootstrap/` |
+| Multiparty CKKS | `fhelium/experimental/mpc/` |
 
-## Test entry points
+## Focused test entry points
 
-Start with the narrowest relevant test, then broaden:
+Start with the package that owns the changed behavior:
 
 | Validation area | Representative tests |
 | --- | --- |
-| Value/state semantics | `tests/test_value_representation_invariants.py`, `tests/test_batch_value_model.py` |
-| Context identity | `tests/test_context_identity.py` |
-| CKKS arithmetic | `tests/test_ckks_operation_correctness.py`, `tests/test_scale_management.py` |
-| Composable bootstrap | `tests/test_ckks_bootstrap.py` |
-| Native schemas and mutation | `tests/test_native_operator_invariants.py` |
-| NTT policy and correctness | `tests/test_ntt_backend.py` |
-| Serialization | `tests/test_serialization.py` |
-| Artifact repository | `tests/test_artifact_store.py` |
-| Tensor-resident values | `tests/test_residency.py` |
-| Managed residency handles, transitions, plans, and lifetimes | `tests/test_resource_residency.py` |
-| Reusable buffers / graphs | `tests/test_execution_buffer.py`, `tests/test_cuda_graph_execution.py` |
-| Typed transport | `tests/test_distributed_transfer.py` |
-| Packaged prime catalog | `tests/test_prime_catalog.py` |
-| JIT | `tests/test_jit_ir.py`, `tests/test_jit_passes.py`, `tests/test_jit_execution.py`, `tests/test_jit_api.py` |
+| Public values and CKKS state | `tests/values/test_value_representation_invariants.py`, `tests/values/test_scale_management.py` |
+| Eager CKKS arithmetic | `tests/eager/test_ckks_operation_correctness.py`, `tests/eager/test_inplace_api_semantics.py` |
+| Compile and IR | `tests/compile/test_ir_stack.py`, `tests/compile/test_compile_stack.py` |
+| Backend linking and execution | `tests/backend/test_backend_public_value_boundary.py`, `tests/backend/test_structured_operation_execution.py` |
+| Native schemas and mutation | `tests/native/test_native_operator_invariants.py` |
+| RNS/NTT execution | `tests/backend/test_ntt_backend.py`, `tests/backend/test_scalar_arithmetic.py` |
+| Distributed execution | `tests/distributed/test_distributed_operation_execution.py`, `tests/distributed/test_distributed_transfer.py` |
+| Runtime buffers and CUDA Graphs | `tests/runtime/test_execution_buffer.py`, `tests/runtime/test_cuda_graph_execution.py` |
+| Residency | `tests/residency/test_resource_residency.py`, `tests/residency/test_residency_controller.py` |
+| Artifacts and serialization | `tests/artifacts/test_artifact_store.py`, `tests/values/test_serialization.py` |
 
-Use repository test discovery as the final authority because file names can
-evolve.
+Repository test discovery is the final authority because test files can evolve.
 
-## Recommended reading order
+## Recommended reading routes
 
-```mermaid
-graph LR
-    EX[README and examples]
-    CORE[core values]
-    ENGINE[CkksEngine]
-    FLOW[rescale / key switch / NTT]
-    TESTS[focused tests]
-    NATIVE[csrc and wrappers]
-    EX --> CORE --> ENGINE --> FLOW --> TESTS --> NATIVE
+For immediate execution:
+
+```text
+fhelium.values → fhelium.eager.Engine → Eager operation dispatcher
+→ Backend implementation → RNS/NTT context → native wrapper → csrc kernel
 ```
 
-Read tests before optimizing a native path: they often encode singleton-row,
-last-level, mutation, and Q/QP invariants not obvious from a benchmark.
+For Program transformation and execution:
+
+```text
+fhelium.ir.Program → fhelium.compile Pipeline → Backend linking passes
+→ ProgramExecutable → Backend implementation → native wrapper → csrc kernel
+```
+
+Read the focused tests beside each owner before changing an execution path.
+They capture value-state, mutation, resource, singleton-row, last-level, and
+Q/QP behavior that may not be visible from a benchmark.

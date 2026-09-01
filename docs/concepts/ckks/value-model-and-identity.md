@@ -1,10 +1,9 @@
 # Value model and identity
 
-The FHElium value model defines the tensor layouts, metadata, cryptographic
-relations, and placement properties that identify one local plaintext,
-ciphertext, or key. Tensor shape and device are necessary for execution, but
-they are not sufficient to prove that two values have the same mathematical
-meaning.
+The FHElium value model defines the tensor layouts, stored arithmetic state,
+cryptographic relations, and placement properties of one local plaintext,
+ciphertext, or key. Compatibility combines Tensor shape and device with CKKS
+parameters, represented state, and key relations.
 
 This page defines value identity and compatibility. Primitive conversions
 between those states are specified separately in
@@ -14,13 +13,6 @@ between those states are specified separately in
 
 ```mermaid
 classDiagram
-    class CkksContextSpec {
-      logN
-      default_scale
-      q_moduli
-      p_moduli
-      context_id
-    }
     class Plaintext {
       message or data
       representation
@@ -41,15 +33,11 @@ classDiagram
     }
     class Key {
       data
-      context_id
       prime_ids
       polynomial_domain
       modulus_basis
       residue_representation
     }
-    CkksContextSpec --> Plaintext : context_id
-    CkksContextSpec --> Ciphertext : context_id
-    CkksContextSpec --> Key : context_id
 ```
 
 ## Dimensions of value identity
@@ -57,9 +45,9 @@ classDiagram
 ```mermaid
 mindmap
   root((Value description))
-    exact value state
+    CKKS value state
       concrete type and tensor topology
-      context level scale prime IDs
+      level scale prime IDs
       plaintext representation where applicable
       polynomial domain and residue representation
       Q or QP modulus basis
@@ -72,21 +60,20 @@ mindmap
       pageable or pinned host memory
 ```
 
-These dimensions cannot substitute for each other:
+These dimensions contribute independently:
 
-- NTT domain is not the same as Montgomery form.
-- QP basis is not a later or earlier level.
-- Moving from CPU to CUDA does not change cryptographic meaning.
-- Equal shape does not imply equal context or prime IDs.
-- Two rotation keys with equal tensor shape are not interchangeable if their
-  canonical steps differ.
+- polynomial domain and residue representation are separate coordinates;
+- modulus basis and level are separate coordinates;
+- device movement preserves cryptographic meaning;
+- shape compatibility also requires compatible CKKS parameters and prime IDs;
+- rotation-key compatibility includes the normalized rotation step.
 
-## Canonical value axes
+## Value axes
 
 `*batch` means zero or more logical dimensions of independent homogeneous
 messages. It is distinct from every CKKS structural axis:
 
-| Value/form | Canonical dense layout |
+| Value/form | Dense layout |
 | --- | --- |
 | Slots plaintext | scalar repeat-to-all-slots, or `[*batch, slot]` |
 | Integer-coefficient plaintext | `[*batch, coefficient]` |
@@ -107,46 +94,43 @@ An empty `batch_shape` preserves the original unbatched layouts. `(1,)` is a
 real singleton batch and is never silently squeezed. Empty batch extents are
 invalid.
 
-All members of one value share context, level, scale, polynomial domain,
+All members of one value share level, scale, polynomial domain,
 modulus basis, dtype, component count, and RNS row identity. Their tensor
 fields also share one physical placement. Ciphertext members must have a
-compatible external encryption-key relation; `context_id` identifies
-parameters, not a particular key.
+compatible external encryption-key relation. The application retains parameter
+and key-lineage provenance.
 
-Message batch axes are not:
-
-- ciphertext components;
-- RNS limbs or hybrid-decomposition digits;
-- packed CKKS slots within one message;
-- distributed ranks or placement metadata.
+Message batch axes represent independent local messages. Ciphertext
+components, RNS limbs, hybrid-decomposition digits, packed slots, distributed
+ranks, and placement metadata retain their own structural roles.
 
 `select_batch` and `unbind_batch` return storage-sharing views.
 `stack_batch` is a named allocating copy for compatible existing values. For
 ciphertext-ciphertext arithmetic, batch shapes must match exactly. A genuinely
 unbatched RNS plaintext may broadcast over a ciphertext batch; a batched RNS
-plaintext must have the exact ciphertext batch shape.
+plaintext must have the ciphertext batch shape.
 
 ## Plaintext owns one representation
 
-A `Plaintext` contains exactly one canonical representation:
+A `Plaintext` contains exactly one active representation:
 
 | Representation | Storage | State |
 | --- | --- | --- |
 | `"slots"` | Scalar or `[*batch, slot]` semantic message | No polynomial domain, modulus basis, residue representation, or prime IDs |
-| `"integer_coefficients"` | `[*batch, coefficient]` configured integral-dtype polynomial | Exact coefficient polynomial, but no RNS modulus basis or prime IDs |
-| `"approximate_coefficients"` | `[*batch, coefficient]` finite float64 decrypt reconstruction | Decodable approximation, but not encryptable or reducible to RNS |
-| `"rns"` | `[*batch, limb, coefficient_or_ntt_index]` | Exact polynomial domain, modulus basis, residue representation, and prime IDs |
+| `"integer_coefficients"` | `[*batch, coefficient]` configured integral-dtype polynomial | Integer coefficient polynomial before RNS basis assignment |
+| `"approximate_coefficients"` | `[*batch, coefficient]` finite float64 decrypt reconstruction | Decodable approximation produced after decrypt reconstruction |
+| `"rns"` | `[*batch, limb, coefficient_or_ntt_index]` | Polynomial domain, modulus basis, residue representation, and prime IDs |
 
 The complete plaintext and ciphertext transition graphs, strict source-state
 preconditions, and operation-oriented preparation equivalences are defined in
 [State transitions and orthogonality](state-transitions-and-orthogonality.md).
-There is deliberately no implicit `RNS -> integer_coefficients` transition;
-decryption exposes its bounded tail-Q binary64 reconstruction as
-`approximate_coefficients` instead of misrepresenting it as exact CRT output.
+Decryption names its bounded tail-Q binary64 reconstruction
+`approximate_coefficients`. Exact integer-coefficient output requires an exact
+reconstruction operation with its own numerical contract.
 
 If the same semantic weight is needed in two operation states or at two levels,
-the application creates two distinct values. A `Plaintext` does not hide a
-mutable multi-level cache.
+the application creates two distinct values. Each `Plaintext` owns one active
+representation and level.
 
 ## Ciphertext dense layout
 
@@ -168,7 +152,7 @@ Direct construction rejects structurally impossible combinations, such as an
 NTT ciphertext without Montgomery representation. Public operations also
 validate their arithmetic preconditions before launch.
 
-## Key layouts are exact too
+## Key layouts carry state too
 
 Conceptual dense layouts include:
 
@@ -177,23 +161,23 @@ Conceptual dense layouts include:
 | `SecretKey` | `[limb, coefficient_or_ntt_index]` |
 | `PublicKey` | `[key_component=2, limb, coefficient_or_ntt_index]` |
 | `KeySwitchKey` | `[digit, key_component=2, limb, coefficient_or_ntt_index]` |
-| `RotationKey` | key-switch layout plus one canonical signed step |
+| `RotationKey` | key-switch layout plus one normalized signed step |
 
-Stored key state includes context, modulus basis, prime rows, arithmetic state,
+Stored key state includes modulus basis, prime rows, arithmetic state,
 and any concrete specialization such as a rotation step. Engine-generated
 keys use NTT-domain Montgomery rows, so their final axis is `ntt_index`.
-Public keys and generic key-switch keys do not store a symbolic destination or
-source-to-destination lineage identifier; the application maintains those
-cryptographic relations.
+The application records symbolic destination and source-to-destination lineage
+for public and generic key-switch keys.
 
 ## Compatibility is operation-specific
 
-The engine validates from broad structure to operation-specific requirements:
+The engine validates structural requirements needed by its public value model
+and execution ABI:
 
 ```mermaid
 graph LR
     A[type dtype tensor ndim]
-    B[context ring device]
+    B[ring extent dtype device]
     C[level prime IDs modulus basis]
     D[polynomial domain residue representation components]
     E[scale stored key state external key relation]
@@ -203,41 +187,41 @@ graph LR
 
 For example:
 
-- addition requires compatible two- or three-component layouts, context,
+- addition requires compatible two- or three-component layouts,
   level, active rows, polynomial domain, modulus basis, residue representation,
   and scale;
 - multiplication requires two two-component NTT/Montgomery ciphertexts;
 - relinearization requires three components and a compatible relinearization
   key;
-- rotation requires a two-component ciphertext and a key for the exact
-  canonical step;
+- rotation requires a two-component ciphertext and a key for the requested
+  normalized step;
 - rescale requires coefficient-domain standard residues, every expected active
   row for the Q or QP modulus basis, and another legal level; it records the
   actual scale quotient.
 
-The failure should occur before an expensive copy or native launch.
+The caller remains responsible for the mathematical relationship among the
+chosen configuration, values, and keys. These objects carry no parameter-set
+identity for FHElium to compare.
 
-## Residency is not semantic identity
+## Residency and semantic identity
 
 `TensorResident.to(...)` reconstructs the same value state around tensors on a
-new device. It does not record previous placement or create an automatic
-placement plan.
+new device. Placement history and placement plans remain with the application
+or Residency manager.
 
 This distinction underpins:
 
 - loading a value on CPU and then moving it to an engine device;
-- validating one exact signature across CPU/pinned/CUDA materializations;
+- validating one value signature across CPU/pinned/CUDA materializations;
 - staging dynamic inputs into fixed CUDA buffers;
 - transporting descriptors separately from dense payloads.
 
 ## Practical inspection
 
-When diagnosing a mismatch, inspect all of the following rather than shape
-alone:
+When diagnosing a mismatch, inspect the complete state:
 
 ```text
 type
-context_id
 level and scale
 prime_ids
 plaintext representation
@@ -247,6 +231,7 @@ residue representation
 component count
 stored key specialization / rotation step
 external ciphertext-key or source-destination relation
+caller-selected CKKS configuration and parameter provenance
 device
 ```
 
@@ -254,7 +239,7 @@ device
 
 - [State transitions and orthogonality](state-transitions-and-orthogonality.md)
 - [Scale and level lifecycle](scale-and-level-lifecycle.md)
-- [Context and modulus chain](context-and-modulus-chain.md)
+- [Configuration and modulus chain](context-and-modulus-chain.md)
 - [Evaluator operation transitions](evaluator-operation-transitions.md)
 - [Key lifecycle](key-lifecycle.md)
 - [Value memory and persistence tutorial](../../tutorial/value-memory-and-persistence.md)

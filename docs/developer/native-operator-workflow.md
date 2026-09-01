@@ -18,7 +18,7 @@ level and active prime-row mapping
 Q or QP basis
 coefficient/NTT domain
 standard/Montgomery representation
-canonical or lazy residue range
+standard `[0, q)` or lazy residue range
 functional or mutating behavior
 supported singleton/partial-layout cases
 ```
@@ -30,7 +30,7 @@ must fail before native launch.
 
 Before editing CUDA, create a minimal test/harness that:
 
-- builds an fixed preset and indexed device;
+- builds a fixed preset and indexed device;
 - reaches the target operation through public state transitions;
 - compares against a cleartext or trusted reference;
 - checks output state as well as tensor values;
@@ -64,7 +64,7 @@ state cannot be represented in the dispatcher schema.
 For CPU support, register the schema under the `CPU` dispatch key and use ATen
 tensor accessors, integral dtype dispatch, and `at::parallel_for` where the
 work size justifies intra-op parallelism. Compile against the parallel backend
-selected by the exact Torch package; do not introduce an independent FHElium
+selected by the installed Torch package; do not introduce an independent FHElium
 thread pool or link a second OpenMP runtime.
 
 For CUDA support, register the same schema under the `CUDA` dispatch key. The
@@ -74,14 +74,14 @@ copy or a device fallback to make a schema appear portable.
 
 Audit:
 
-- canonical prime row for every compact input row;
+- configured prime row for every compact input row;
 - level-specific table/parameter offsets;
 - Q/QP row order;
 - key-digit index versus active local digit index;
 - tensor strides and contiguous assumptions;
 - current CUDA stream behavior;
 - temporary ownership and lifetime;
-- lazy/canonical residue preconditions and outputs;
+- lazy/standard residue-range preconditions and outputs;
 - integer overflow and modular reduction bounds.
 
 If an operation is intentionally supported by only one backend, document that
@@ -91,24 +91,29 @@ than execute a different algorithm silently.
 
 ## 5. Build from a clean enough state
 
-The repository provides direct build/install recipes through `just`:
+Rebuild the editable native extension through the selected environment
+frontend. The uv-managed environment uses:
 
 ```bash
-just clean-build
-just build
+uv --preview-features extra-build-dependencies \
+  sync --locked --reinstall-package fhelium
 ```
 
-or an editable installation with the configured build backend:
+The pip-managed environment uses:
 
 ```bash
-just install-uv
+python -m pip install \
+  --editable . --verbose --no-build-isolation --no-cache-dir
 ```
 
-Set the intended native build when backend coverage matters:
+Set `CMAKE_ARGS=-DFHELIUM_NATIVE_BACKENDS=CPU` or `CPU+CUDA` in the current
+shell before either command when backend coverage matters. Set
+`CMAKE_BUILD_PARALLEL_LEVEL` to control build parallelism. Contributors who
+install `just` may use the corresponding optional shortcuts:
 
 ```bash
-just install NATIVE_BACKENDS=CPU
-just install NATIVE_BACKENDS=CPU+CUDA
+just NATIVE_BACKENDS=CPU build-uv
+just NATIVE_BACKENDS=CPU+CUDA build-pip
 ```
 
 Use the project environment and the selected Python/Torch/CUDA toolchain.
@@ -130,7 +135,7 @@ python scripts/generate_native_wrappers.py \
   --check
 ```
 
-The direct script is the canonical invocation; it is deliberately outside the
+The direct script is the supported invocation; it is deliberately outside the
 runtime package so generating wrappers never imports a partially initialized
 `fhelium.native.wrapper` package. Callable wrappers retain `require_native()`
 guards, resolved lazily at call time. The generated FakeTensor registration
@@ -212,9 +217,44 @@ Update:
 - benchmark profile/report if performance policy changed;
 - changelog/release notes when user-visible.
 
+Record a native operation in a reviewable form such as:
+
+```text
+Operation: mixed_radix_basis_extend_to_montgomery
+
+Math:
+    Convert mixed-radix digits for one integer polynomial into residues
+    modulo every destination prime, preserving the polynomial element.
+
+Input:
+    mixed_radix_components
+    shape [*batch, digit, coefficient]
+    signed integral dtype on one execution device
+
+Tables and row mapping:
+    basis_extension_coefficients shape [digit - 1, destination_limb]
+    row r - 1 represents mixed-radix digit r >= 1
+    columns follow destination prime_ids
+    digit zero uses rns_params[R2] rather than a table row
+
+Output:
+    shape [*batch, destination_limb, coefficient]
+    coefficient domain, Montgomery residues
+
+Mutation and aliasing:
+    functional; output does not alias an input
+```
+
+The documented axes and table orientation must match the dispatcher schema and
+implementation. During review, trace the public semantic equation to each
+native tensor axis, verify prime-row and key-digit mappings, confirm rounding
+and residue-range laws against implementation and tests, and check mutation,
+aliasing, thread, and stream behavior. Use the definitions from
+[Terminology and mathematical model](../concepts/terminology-and-mathematical-model.md).
+
 ## Related documentation
 
-- [Python-to-native execution stack](engine-native-stack.md)
+- [Eager, Compile, and native execution](engine-native-stack.md)
 - [RNS and NTT architecture](rns-and-ntt.md)
 - [Multiplication, key switching, and rescale](multiplication-keyswitch-rescale.md)
 - [Diagnose a value-state mismatch](../how-to/diagnose-value-state-mismatch.md)

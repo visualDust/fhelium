@@ -8,13 +8,12 @@ import BlogIndex from './components/BlogIndex.vue'
 import BsgsMatvecPerformance from './components/BsgsMatvecPerformance.vue'
 import DocCard from './components/DocCard.vue'
 import DocGrid from './components/DocGrid.vue'
-import HomeControlDeck from './components/HomeControlDeck.vue'
-import HomeGraphXray from './components/HomeGraphXray.vue'
+import HomeControlExplorer from './components/HomeControlExplorer.vue'
 import HomeHero from './components/HomeHero.vue'
-import HomeOpeningRail from './components/HomeOpeningRail.vue'
-import HomeStackBuilder from './components/HomeStackBuilder.vue'
+import HomeUsageTabs from './components/HomeUsageTabs.vue'
 import InstallCommand from './components/InstallCommand.vue'
 import MermaidDiagram from './components/MermaidDiagram.vue'
+import NttBackendSelectionChart from './components/NttBackendSelectionChart.vue'
 import './custom.css'
 
 function installVercelObservability(router: Router): void {
@@ -60,12 +59,11 @@ export default {
     app.component('BlogIndex', BlogIndex)
     app.component('DocCard', DocCard)
     app.component('DocGrid', DocGrid)
-    app.component('HomeControlDeck', HomeControlDeck)
-    app.component('HomeGraphXray', HomeGraphXray)
+    app.component('HomeControlExplorer', HomeControlExplorer)
     app.component('HomeHero', HomeHero)
-    app.component('HomeOpeningRail', HomeOpeningRail)
-    app.component('HomeStackBuilder', HomeStackBuilder)
+    app.component('HomeUsageTabs', HomeUsageTabs)
     app.component('InstallCommand', InstallCommand)
     app.component('MermaidDiagram', MermaidDiagram)
+    app.component('NttBackendSelectionChart', NttBackendSelectionChart)
   },
 } satisfies Theme

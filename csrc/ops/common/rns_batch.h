@@ -45,7 +45,7 @@ inline void check_rns_binary_3d(const torch::Tensor& lhs,
                                 bool allow_rhs_singleton_batch) {
   TORCH_CHECK(lhs.dim() == 3 && rhs.dim() == 3,
               operation,
-              " requires canonical [batch, limb, coefficient] operands");
+              " requires [batch, limb, coefficient] operands");
   TORCH_CHECK(lhs.size(1) == rhs.size(1),
               operation,
               " operand limb counts differ: ",
@@ -75,7 +75,7 @@ inline void check_rns_parameter_rows(const torch::Tensor& operand,
               " requires [parameter, limb] RNS parameters");
   TORCH_CHECK(operand.dim() == 3,
               operation,
-              " requires a canonical [batch, limb, coefficient] operand");
+              " requires a [batch, limb, coefficient] operand");
   TORCH_CHECK(operand.size(1) == rns_params.size(1),
               operation,
               " operand and parameter limb counts differ: ",

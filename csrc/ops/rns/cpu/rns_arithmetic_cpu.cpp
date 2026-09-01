@@ -17,7 +17,7 @@ enum class BinaryOperation : int { kMontgomeryMul, kAddLazy, kSubLazy };
 enum class UnaryOperation : int {
   kToMontgomery,
   kFromMontgomery,
-  kCanonicalize,
+  kReduceToStandard,
   kCenter,
   kShiftPositive,
 };
@@ -45,7 +45,7 @@ void check_compressed_binary(const torch::Tensor& lhs,
                              const char* operation) {
   TORCH_CHECK(lhs.dim() == 3 && rhs.dim() == 3,
               operation,
-              " requires canonical rank-three views");
+              " requires rank-three views");
   TORCH_CHECK(
       lhs.size(1) == rhs.size(1), operation, " operand limb counts differ");
   TORCH_CHECK(rhs.size(0) == lhs.size(0) || rhs.size(0) == 1,
@@ -182,9 +182,10 @@ void unary_loop(torch::Tensor residues, const torch::Tensor params) {
               value = fhelium::cpu::multiply(value, constants.r2, constants);
             } else if constexpr (operation == UnaryOperation::kFromMontgomery) {
               value = fhelium::cpu::reduce(value, constants);
-            } else if constexpr (operation == UnaryOperation::kCanonicalize) {
-              value =
-                  fhelium::cpu::canonicalize(value, constants.twice_modulus);
+            } else if constexpr (operation ==
+                                 UnaryOperation::kReduceToStandard) {
+              value = fhelium::cpu::reduce_to_standard(value,
+                                                       constants.twice_modulus);
             } else if constexpr (operation == UnaryOperation::kCenter) {
               value = fhelium::cpu::center(value, constants.twice_modulus);
             } else {
@@ -560,10 +561,8 @@ torch::Tensor mixed_radix_decompose_cpu(
             for (int64_t coefficient = coefficient_begin;
                  coefficient < coefficient_end;
                  ++coefficient) {
-              const scalar_t first_residue =
-                  fhelium::cpu::canonicalize_lazy_operand(
-                      source_rows[coefficient * source_stride2],
-                      first_constants);
+              const scalar_t first_residue = fhelium::cpu::reduce_lazy_operand(
+                  source_rows[coefficient * source_stride2], first_constants);
               std::fill(digits.begin(), digits.end(), first_residue);
               for (int64_t step = 0; step < row_count - 1; ++step) {
                 const int64_t row = step + 1;
@@ -736,8 +735,9 @@ TORCH_LIBRARY_IMPL(fhelium_rns_ops, CPU, m) {
       [](const torch::Tensor a, const torch::Tensor b, const torch::Tensor p) {
         return binary_cpu<BinaryOperation::kSubLazy>(a, b, p, "rns_sub_lazy");
       });
-  m.impl("canonicalize_residues_", [](torch::Tensor a, const torch::Tensor p) {
-    unary_cpu<UnaryOperation::kCanonicalize>(a, p, "rns_canonicalize");
+  m.impl("reduce_to_standard_", [](torch::Tensor a, const torch::Tensor p) {
+    unary_cpu<UnaryOperation::kReduceToStandard>(
+        a, p, "rns_reduce_to_standard");
   });
   m.impl("center_residues_", [](torch::Tensor a, const torch::Tensor p) {
     unary_cpu<UnaryOperation::kCenter>(a, p, "rns_center_residues");

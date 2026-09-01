@@ -4,7 +4,7 @@ Use this procedure before optimizing or distributing a new evaluator. The goal
 is a parameter plan that has enough slots, legal state transitions,
 realistic numerical range, and a reproducible correctness test.
 
-## Maintained preset baselines
+## Built-in Preset baselines
 
 `Preset` members use the form
 `slots{capacity}_scale{bits}_levels{count}_{dtype}`. The corresponding CLI value
@@ -12,21 +12,21 @@ uses hyphens, for example `slots8192-scale40-levels7-int64`. `levels` is the
 public-level count; the number of ordinary one-level transitions available
 from level zero is `levels - 1`.
 
-The dtype suffix is required. Unsuffixed Python members and CLI values are not
-accepted as aliases.
+The dtype suffix selects the packaged prime and scale family and is required in
+Python members and CLI values.
 
 The `int32` family uses a 30-bit residue buffer and 28-bit structural Q/P
 primes. The `int64` family uses a 62-bit residue buffer and 60-bit structural
 Q/P primes. Both use the built-in 128-bit classical category, Gaussian error
-standard deviation 3.19, and uniform-ternary secret sampling. The exact
+standard deviation 3.19, and uniform-ternary secret sampling. The
 installed prime values remain part of the resolved `CkksConfig` and context
-identity. Preset level counts are fixed constants rather than values
-recomputed from the current built-in budget data. Some int32 counts are limited
+identity. The catalog stores preset level counts as reviewed fixed constants.
+Some int32 counts are limited
 by the reviewed prime catalog before they reach the security-table bit budget.
 A resolved `CkksConfig` is immutable so its cached prime sequences and security
 assessment cannot diverge. Create a derived configuration with
-`CkksConfig.parse(preset, **overrides)` rather than assigning fields or editing
-modulus sequences in place.
+`CkksConfig.parse(preset, **overrides)` so every override passes configuration
+construction and validation.
 
 | Python member | dtype | `logN` | slots | scale bits | public levels | transitions | Q / P rows | QP bits / budget |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -59,17 +59,16 @@ The int32 level counts have distinct limiting reasons:
   duplicate a selected structural/P prime.
 
 The lower int32 default scale also changes numerical error. In controlled
-four-seed encryption measurements across the maintained ring sizes, the 99th
+four-seed encryption measurements across the built-in ring dimensions, the 99th
 percentile absolute error was 8.00–8.63 times
 $N/\mathtt{default\_scale}$ for both int32 and int64. This common normalized
-distribution means int32 does not change the CKKS noise mechanism, but its
-$2^{25}$ default scale yields larger absolute error than the int64 scale-40
-family at the same ring. Treat a preset as a parameter baseline, not a
-precision guarantee, and measure the workload's error distribution.
+distribution shows the same CKKS noise mechanism for int32 and int64, while
+the int32 $2^{25}$ default scale yields larger absolute error than the int64
+scale-40 family at the same ring. Treat a preset as a parameter baseline and
+measure the workload's error distribution.
 
-The scale width is a configuration input, not a certified precision result.
-Choose it from the workload's error and range requirements, then validate the
-observed error distribution. A 30-bit family provides more public transitions
+Choose the scale width from the workload's error and range requirements, then
+validate the observed error distribution. A 30-bit family provides more public transitions
 within the same security budget; a 50-bit family allocates more scale bits per
 transition and therefore provides fewer public levels.
 
@@ -154,7 +153,7 @@ Do not lower scale or bypass range checks solely to improve a benchmark.
 
 ## 5. Start with a fast smoke configuration
 
-Use the smallest maintained slot capacity and scale family appropriate for
+Use the smallest built-in slot capacity and scale family appropriate for
 quick iteration, such as `Preset.slots8192_scale40_levels7_int64`, to validate
 program structure, state transitions, and keys. Then rerun the same oracle and
 schedule on the target slot, scale, and public-level baseline.
@@ -197,7 +196,7 @@ cleartext oracle.
 ## Related documentation
 
 - [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md)
-- [Context and modulus chain](../concepts/ckks/context-and-modulus-chain.md)
+- [Configuration and modulus chain](../concepts/ckks/context-and-modulus-chain.md)
 - [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)
 - [Modulus-chain tutorial](../tutorial/modulus-chain-depth.md)
 - [Benchmark a workload](benchmark-a-workload.md)

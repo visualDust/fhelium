@@ -13,6 +13,9 @@
     "markdown-it-mathjax3": "4.3.2",
     "mermaid": "11.16.0",
     "typescript": "5.9.3",
+    "vega": "6.4.0",
+    "vega-embed": "7.1.0",
+    "vega-lite": "6.4.3",
     "vitepress": "1.6.4",
     "vue-tsc": "3.3.7"
   },

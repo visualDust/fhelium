@@ -21,6 +21,8 @@
   --fhe-c-focus: #c46d00;
   --fhe-c-code: #f0f1f5;
   --fhe-c-code-inline: #e8eaf1;
+  --fhe-c-scrollbar-thumb: #9199aa;
+  --fhe-c-scrollbar-track: #f7f7f2;
   --fhe-code-comment: #687287;
   --fhe-code-keyword: #7f3f98;
   --fhe-code-string: #2f6f50;
@@ -37,6 +39,7 @@
   --fhe-space-8: 64px;
   --fhe-space-9: 96px;
   --fhe-content: 1152px;
+  --fhe-doc-content: 800px;
   --fhe-home-intro: 110ch;
   --fhe-radius-control: 5px;
   --fhe-radius-panel: 8px;
@@ -80,6 +83,17 @@
   --vp-code-copy-code-bg: var(--fhe-c-surface);
 }
 
+.Layout .VPDoc.has-sidebar.has-aside .content-container {
+  max-width: var(--fhe-doc-content);
+}
+
+@media (min-width: 1440px) {
+  .Layout .VPDoc.has-sidebar.has-aside .content {
+    padding-right: 24px;
+    padding-left: 24px;
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   html {
     scroll-behavior: smooth;
@@ -109,6 +123,8 @@
   --fhe-c-focus: #ffc25c;
   --fhe-c-code: #0c0e14;
   --fhe-c-code-inline: #242938;
+  --fhe-c-scrollbar-thumb: #596276;
+  --fhe-c-scrollbar-track: #11131a;
   --fhe-code-comment: #8792a8;
   --fhe-code-keyword: #c792ea;
   --fhe-code-string: #addb8c;
@@ -127,6 +143,52 @@
   --vp-button-brand-hover-bg: var(--fhe-c-brand-solid-hover);
   --vp-button-brand-active-text: #ffffff;
   --vp-button-brand-active-bg: #3d57c5;
+}
+
+* {
+  scrollbar-color: color-mix(in srgb, var(--fhe-c-text-3) 50%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fhe-c-text-3) 50%, transparent);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+html,
+body {
+  scrollbar-color: var(--fhe-c-scrollbar-thumb) var(--fhe-c-scrollbar-track);
+}
+
+html::-webkit-scrollbar-track,
+html::-webkit-scrollbar-corner,
+body::-webkit-scrollbar-track,
+body::-webkit-scrollbar-corner {
+  background: var(--fhe-c-scrollbar-track);
+}
+
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb {
+  background: var(--fhe-c-scrollbar-thumb);
+  background-clip: padding-box;
 }
 
 .home-python-code .tok-comment { color: var(--fhe-code-comment); font-style: italic; }
@@ -247,7 +309,28 @@ body {
 }
 
 .vp-doc table {
+  display: table;
+  width: 100%;
+  max-width: 100%;
+  table-layout: auto;
+  overflow: visible;
   border-color: var(--fhe-c-divider);
+}
+
+.vp-doc th,
+.vp-doc td {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  vertical-align: top;
+}
+
+.vp-doc th code,
+.vp-doc td code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .vp-doc th {
@@ -256,6 +339,23 @@ body {
 
 .vp-doc tr:nth-child(2n) {
   background: color-mix(in srgb, var(--fhe-c-surface-tint) 62%, transparent);
+}
+
+/* Exception for a deliberately wide matrix whose columns must remain on one
+ * line. Raw HTML tables can opt into horizontal scrolling with this class. */
+.vp-doc table.table-scroll {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+@media (max-width: 640px) {
+  .vp-doc th,
+  .vp-doc td {
+    padding: 8px 10px;
+  }
 }
 
 /* Benchmark browse, result, and compare routes use VitePress's `page` layout
@@ -370,7 +470,7 @@ body {
   position: relative;
   width: 100%;
   height: 100%;
-  animation: fhe-hero-nucleus-precession 46s cubic-bezier(0.55, 0, 0.45, 1) infinite;
+  transform: rotate(-14deg);
   transform-origin: center;
 }
 
@@ -383,7 +483,6 @@ body {
   filter: blur(22px) saturate(1.18);
   opacity: 0.74;
   transform-origin: center;
-  will-change: transform;
 }
 
 .home-hero-field.is-proton {
@@ -405,13 +504,11 @@ body {
     rgba(49, 82, 199, 0.14) 66%,
     rgba(49, 82, 199, 0) 82%
   );
-  animation: fhe-field-upper 18s cubic-bezier(0.45, 0, 0.2, 1) infinite;
 }
 
 .home-hero-field.is-neutron {
   top: 34%;
   left: 47%;
-  animation: fhe-field-neutron 21s cubic-bezier(0.45, 0, 0.2, 1) infinite;
 }
 
 .home-hero-field.is-lower {
@@ -424,7 +521,6 @@ body {
     rgba(49, 82, 199, 0.13) 68%,
     rgba(49, 82, 199, 0) 84%
   );
-  animation: fhe-field-lower 24s cubic-bezier(0.45, 0, 0.2, 1) infinite;
 }
 
 .dark .home-hero-visual {
@@ -434,70 +530,6 @@ body {
 .dark .home-hero-field {
   filter: blur(24px) saturate(1.04);
   opacity: 0.58;
-}
-
-@keyframes fhe-hero-nucleus-precession {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0) rotate(-14deg) scale(1);
-  }
-
-  26% {
-    transform: translate3d(14px, -18px, 0) rotate(22deg) scale(1.015);
-  }
-
-  55% {
-    transform: translate3d(-12px, -4px, 0) rotate(74deg) scale(0.992);
-  }
-
-  78% {
-    transform: translate3d(9px, 15px, 0) rotate(128deg) scale(1.008);
-  }
-}
-
-@keyframes fhe-field-upper {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-
-  35% {
-    transform: translate3d(9%, -6%, 0) scale(1.12);
-  }
-
-  70% {
-    transform: translate3d(-5%, 7%, 0) scale(0.94);
-  }
-}
-
-@keyframes fhe-field-neutron {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-
-  40% {
-    transform: translate3d(-8%, 6%, 0) scale(0.92);
-  }
-
-  76% {
-    transform: translate3d(7%, -9%, 0) scale(1.1);
-  }
-}
-
-@keyframes fhe-field-lower {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-
-  31% {
-    transform: translate3d(-6%, -8%, 0) scale(1.08);
-  }
-
-  66% {
-    transform: translate3d(10%, 4%, 0) scale(0.95);
-  }
 }
 
 .home-brand-lockup {
@@ -604,27 +636,44 @@ body {
   border-radius: var(--fhe-radius-control);
   color: var(--fhe-c-text-1);
   background: var(--fhe-c-surface);
+  box-shadow: 0 2px 3px color-mix(in srgb, var(--fhe-c-text-1) 5%, transparent), 0 8px 18px color-mix(in srgb, var(--fhe-c-text-1) 8%, transparent);
   font-size: 14px;
   font-weight: 720;
   line-height: 1;
   text-decoration: none;
+  transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
 
 .vp-doc .home-hero-actions a:hover {
   border-color: var(--fhe-c-brand);
   color: var(--fhe-c-brand-hover);
+  box-shadow: 0 3px 5px color-mix(in srgb, var(--fhe-c-text-1) 6%, transparent), 0 11px 22px color-mix(in srgb, var(--fhe-c-text-1) 10%, transparent);
+  transform: translateY(-1px);
 }
 
 .vp-doc .home-hero-actions a.is-primary {
   border-color: var(--fhe-c-brand-solid);
   color: #ffffff;
   background: var(--fhe-c-brand-solid);
+  box-shadow: 0 3px 5px color-mix(in srgb, var(--fhe-c-brand-solid) 22%, transparent), 0 10px 22px color-mix(in srgb, var(--fhe-c-brand-solid) 24%, transparent);
 }
 
 .vp-doc .home-hero-actions a.is-primary:hover {
   border-color: var(--fhe-c-brand-solid-hover);
   color: #ffffff;
   background: var(--fhe-c-brand-solid-hover);
+  box-shadow: 0 4px 7px color-mix(in srgb, var(--fhe-c-brand-solid) 24%, transparent), 0 13px 26px color-mix(in srgb, var(--fhe-c-brand-solid) 28%, transparent);
+}
+
+.home-hero-actions a.is-github {
+  gap: 8px;
+}
+
+.home-hero-actions a.is-github svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  fill: currentColor;
 }
 
 .home-pronunciation-option {
@@ -639,14 +688,14 @@ body {
 
 .home-pronunciation-option b {
   color: var(--fhe-c-text-2);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 650;
 }
 
 .home-pronunciation-option small {
   color: var(--fhe-c-text-2);
   font-family: var(--vp-font-family-mono);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .home-install {
@@ -658,22 +707,17 @@ body {
   align-items: center;
   margin: 0 0 var(--fhe-space-8);
   padding: 20px 22px 22px;
-  border: 1px solid var(--fhe-c-divider);
-  border-left: 1px solid var(--fhe-c-divider);
-  border-radius: var(--fhe-radius-panel);
+  border: 1px solid color-mix(in srgb, var(--fhe-c-border) 72%, var(--fhe-c-divider));
+  border-radius: 12px;
   color: var(--fhe-c-text-1);
-  background: var(--fhe-c-surface);
-  box-shadow: var(--fhe-shadow-panel);
+  background:
+    radial-gradient(circle at 82% 0%, color-mix(in srgb, var(--fhe-c-brand) 6%, transparent), transparent 36%),
+    var(--fhe-c-surface);
+  box-shadow: 0 2px 4px color-mix(in srgb, var(--fhe-c-text-1) 4%, transparent), 0 22px 54px color-mix(in srgb, var(--fhe-c-text-1) 9%, transparent);
 }
 
 .home-install::before {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 4px;
-  background: linear-gradient(to bottom, var(--fhe-c-brand), color-mix(in srgb, var(--fhe-c-brand) 32%, transparent));
-  content: "";
+  display: none;
 }
 
 .home-install-copy {
@@ -684,7 +728,7 @@ body {
 
 .home-install-copy strong {
   color: var(--fhe-c-text-1);
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.4;
 }
 
@@ -712,13 +756,26 @@ body {
 .home-install > a {
   grid-row: 1;
   grid-column: 2;
+  display: inline-flex;
+  min-height: 32px;
+  gap: 7px;
+  align-items: center;
+  padding: 0 11px;
+  border: 1px solid color-mix(in srgb, var(--fhe-c-brand) 30%, var(--fhe-c-divider));
+  border-radius: 7px;
   color: var(--fhe-c-brand);
+  background: var(--fhe-c-surface);
   font-size: 12px;
   font-weight: 700;
   line-height: 1.45;
   white-space: nowrap;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 4px;
+  text-decoration: none;
+}
+
+.home-install > a:hover {
+  border-color: var(--fhe-c-brand);
+  color: var(--fhe-c-brand-hover);
+  background: var(--fhe-c-surface-tint);
 }
 
 .home-install-code {
@@ -726,7 +783,10 @@ body {
   overflow: hidden;
   grid-column: 1 / -1;
   min-width: 0;
-  border-radius: var(--fhe-radius-control);
+  border: 1px solid var(--fhe-c-divider);
+  border-radius: 10px;
+  background: var(--vp-code-block-bg);
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--fhe-c-text-1) 6%, transparent);
 }
 
 .vp-doc .home-install-code > pre {
@@ -736,7 +796,7 @@ body {
   overflow-x: auto;
   padding: 14px 52px 14px 16px;
   border: 0;
-  border-radius: var(--fhe-radius-control);
+  border-radius: 10px;
   color: var(--vp-code-block-color);
   background: var(--vp-code-block-bg);
   font-size: 12px;
@@ -763,7 +823,8 @@ body {
   justify-content: center;
   padding: 0;
   border: 0;
-  border-radius: 0 5px 0 5px;
+  border-left: 1px solid var(--fhe-c-divider);
+  border-radius: 0 9px 0 8px;
   color: var(--fhe-c-text-3);
   background: var(--vp-code-copy-code-bg);
   cursor: pointer;
@@ -801,9 +862,10 @@ body {
   gap: 8px;
   margin: 0;
   padding: 12px;
-  border: 1px solid var(--fhe-c-divider);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--fhe-c-canvas-alt) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fhe-c-border) 72%, var(--fhe-c-divider));
+  border-radius: 10px;
+  background: var(--fhe-c-surface-tint);
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--fhe-c-text-1) 6%, transparent);
 }
 
 .home-install-selector-row.is-os {
@@ -829,7 +891,7 @@ body {
 .home-install-selector-label {
   padding: 0;
   color: var(--fhe-c-text-3);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 750;
   line-height: 1.35;
   letter-spacing: 0.075em;
@@ -855,14 +917,15 @@ body {
   min-height: 30px;
   padding: 6px 12px;
   border: 1px solid var(--fhe-c-divider);
-  border-radius: 999px;
+  border-radius: 7px;
   color: var(--fhe-c-text-2);
   font-family: var(--vp-font-family-mono);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
   line-height: 1.3;
   text-align: center;
   background: var(--fhe-c-surface);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--fhe-c-text-1) 4%, transparent);
   cursor: pointer;
 }
 
@@ -874,8 +937,8 @@ body {
 .home-install-options > button.is-active {
   border-color: color-mix(in srgb, var(--fhe-c-brand) 34%, var(--fhe-c-divider));
   color: var(--fhe-c-brand-hover);
-  background: var(--fhe-c-brand-soft);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fhe-c-brand) 10%, transparent);
+  background: color-mix(in srgb, var(--fhe-c-brand) 7%, var(--fhe-c-surface));
+  box-shadow: 0 4px 10px color-mix(in srgb, var(--fhe-c-brand) 10%, transparent);
 }
 
 .vp-doc .home-install-development {
@@ -884,8 +947,12 @@ body {
   align-items: flex-start;
   gap: 7px;
   margin: -2px 0 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--fhe-c-danger) 24%, var(--fhe-c-divider));
+  border-radius: 8px;
   color: var(--fhe-c-danger);
-  font-size: 11px;
+  background: var(--fhe-c-danger-soft);
+  font-size: 12px;
   font-weight: 650;
   line-height: 1.5;
 }
@@ -924,88 +991,6 @@ body {
   color: var(--fhe-c-text-2);
   font-size: 16px;
   line-height: 1.75;
-}
-
-.vp-doc ol.programming-model-flow {
-  position: relative;
-  display: grid;
-  overflow: hidden;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 0;
-  margin: 28px 0 30px;
-  padding: 0;
-  align-items: stretch;
-  border: 1px solid var(--fhe-c-divider);
-  border-top: 1px solid var(--fhe-c-divider);
-  border-radius: var(--fhe-radius-panel);
-  list-style: none;
-  background: var(--fhe-c-surface);
-}
-
-.vp-doc ol.programming-model-flow::before {
-  position: absolute;
-  z-index: 3;
-  top: 0;
-  right: 0;
-  left: 0;
-  height: 4px;
-  background: linear-gradient(90deg, var(--fhe-c-brand), color-mix(in srgb, var(--fhe-c-brand) 32%, transparent));
-  content: "";
-}
-
-.vp-doc ol.programming-model-flow > li {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  height: 100%;
-  flex-direction: column;
-  margin: 0;
-  padding: 24px 18px 22px;
-  background: transparent;
-}
-
-.vp-doc ol.programming-model-flow > li + li {
-  border-left: 1px solid var(--fhe-c-divider);
-}
-
-.programming-model-flow li:not(:last-child)::after {
-  position: absolute;
-  z-index: 2;
-  top: 28px;
-  right: -7px;
-  width: 14px;
-  color: var(--fhe-c-brand);
-  background: var(--fhe-c-surface);
-  content: "→";
-  font-size: 12px;
-  line-height: 1;
-  text-align: center;
-}
-
-.programming-model-flow span {
-  display: block;
-  margin-bottom: 20px;
-  color: var(--fhe-c-brand);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.09em;
-  line-height: 1.4;
-  text-transform: uppercase;
-}
-
-.programming-model-flow strong {
-  display: block;
-  min-height: 2.8em;
-  color: var(--fhe-c-text-1);
-  font-size: 15px;
-  line-height: 1.4;
-}
-
-.programming-model-flow p {
-  margin: 10px 0 0;
-  color: var(--fhe-c-text-2);
-  font-size: 12px;
-  line-height: 1.65;
 }
 
 .doc-grid {
@@ -1108,6 +1093,65 @@ body {
   transform: translateX(3px);
 }
 
+.VPHome .home-task-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+  margin: 28px 0 52px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--fhe-c-border) 72%, var(--fhe-c-divider));
+  border-radius: 12px;
+  background: var(--fhe-c-canvas-alt);
+  box-shadow:
+    0 2px 4px color-mix(in srgb, var(--fhe-c-text-1) 4%, transparent),
+    0 22px 54px color-mix(in srgb, var(--fhe-c-text-1) 9%, transparent);
+}
+
+.VPHome .home-task-grid > .doc-card {
+  height: 180px;
+  grid-column: span 2;
+  gap: 12px;
+  padding: 24px 52px 28px 22px;
+  border-color: transparent;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.VPHome .home-task-grid > .doc-card::before {
+  top: auto;
+  right: 14px;
+  bottom: 7px;
+  left: 14px;
+  width: auto;
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--fhe-c-brand), var(--fhe-c-helium));
+}
+
+.VPHome .home-task-grid > .doc-card:is(:hover, :focus-visible) {
+  border-color: color-mix(in srgb, var(--fhe-c-brand) 30%, var(--fhe-c-divider));
+  background: var(--fhe-c-surface);
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--fhe-c-text-1) 5%, transparent),
+    0 8px 18px color-mix(in srgb, var(--fhe-c-text-1) 7%, transparent);
+}
+
+.VPHome .home-task-grid .doc-card-arrow {
+  right: 20px;
+  bottom: 27px;
+}
+
+@media (max-width: 760px) {
+  .VPHome .home-task-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .VPHome .home-task-grid > .doc-card {
+    height: auto;
+    min-height: 132px;
+    grid-column: auto;
+  }
+}
+
 .mermaid-diagram {
   position: relative;
   width: 100%;
@@ -1135,6 +1179,12 @@ body {
 .mermaid-diagram foreignObject p {
   margin: 0;
   line-height: inherit;
+}
+
+.mermaid-diagram foreignObject > div {
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .mermaid-expand-button {
@@ -1321,24 +1371,6 @@ body {
 }
 
 @media (max-width: 1099px) {
-  .vp-doc ol.programming-model-flow {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .vp-doc ol.programming-model-flow > li:nth-child(odd) {
-    border-left: 0;
-  }
-
-  .vp-doc ol.programming-model-flow > li:nth-child(n + 3) {
-    border-top: 1px solid var(--fhe-c-divider);
-  }
-
-  .programming-model-flow li::after {
-    display: none;
-  }
-}
-
-@media (max-width: 1099px) {
   .home-hero {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
@@ -1445,21 +1477,6 @@ body {
     margin-top: var(--fhe-space-8);
   }
 
-  .vp-doc ol.programming-model-flow {
-    grid-template-columns: minmax(0, 1fr);
-    border-left: 3px solid var(--fhe-c-brand);
-  }
-
-  .vp-doc ol.programming-model-flow > li + li,
-  .vp-doc ol.programming-model-flow > li:nth-child(n + 3) {
-    border-top: 1px solid var(--fhe-c-divider);
-    border-left: 0;
-  }
-
-  .programming-model-flow strong {
-    min-height: 0;
-  }
-
   .vp-doc a.doc-card {
     min-height: 0;
   }
@@ -1478,9 +1495,6 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .home-hero-visual::before,
-  .home-hero-nucleus,
-  .home-hero-field,
   .vp-doc a.doc-card,
   .doc-card-arrow {
     transition: none;
@@ -1496,7 +1510,6 @@ body {
 @media (forced-colors: active) {
   .VPNav,
   .home-install,
-  .programming-model-flow,
   .vp-doc a.doc-card,
   .mermaid-diagram,
   .vp-doc div[class*="language-"] {

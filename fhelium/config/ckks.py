@@ -8,6 +8,7 @@ from typing import Any
 
 import torch
 
+from fhelium._version import __version__
 from fhelium.config._prime_catalog import get_prime_catalog
 from fhelium.config.security import (
     SecurityAssessment,
@@ -24,7 +25,7 @@ from fhelium.errors import (
 
 
 class Preset(Enum):
-    """Maintained CKKS parameter baselines.
+    """Built-in CKKS parameter presets.
 
     Each member name records the complex slot capacity, default scale-prime
     bit width, number of public levels, and integral tensor dtype in its
@@ -158,6 +159,23 @@ _PRESET_CONFIGS: dict[Preset, dict[str, int]] = {
 }
 
 
+def _dumped_moduli(
+    value: object,
+    *,
+    name: str,
+    require_nonempty: bool,
+) -> tuple[int, ...]:
+    if not isinstance(value, (list, tuple)) or any(
+        type(modulus) is not int for modulus in value
+    ):
+        raise TypeError(
+            f"Serialized CKKS {name} must be a sequence of integers"
+        )
+    if require_nonempty and not value:
+        raise ValueError(f"Serialized CKKS {name} must be nonempty")
+    return tuple(value)
+
+
 class CkksConfig:
     r"""Immutable CKKS mathematical and security parameters.
 
@@ -186,7 +204,7 @@ class CkksConfig:
 
     ``total_modulus_bits`` covers the complete QP parameter modulus, both
     $Q_0$ and $P$, and ``maximum_modulus_bits`` is the corresponding security
-    budget. The exact built-in table supports Gaussian error standard deviation
+    budget. The built-in table supports Gaussian error standard deviation
     ``sigma=3.19`` and classical categories 128, 192, and 256. Engine
     construction checks the complete QP product before native initialization
     when ``enforce_security_budget`` is true. Disabling that check transfers
@@ -205,6 +223,7 @@ class CkksConfig:
         sigma: float = 3.19,
         security_bits: int = 128,
         enforce_security_budget: bool = True,
+        galois_generator: int = 3,
     ):
         if buffer_bit_length not in (30, 62):
             raise ValueError(
@@ -227,6 +246,8 @@ class CkksConfig:
             raise ValueError("security_bits must be positive")
         if type(enforce_security_budget) is not bool:
             raise TypeError("enforce_security_budget must be a boolean")
+        if galois_generator not in {3, 5}:
+            raise ValueError("galois_generator must be 3 or 5")
 
         self.buffer_bit_length = buffer_bit_length
         self.scale_bits = scale_bits
@@ -237,6 +258,7 @@ class CkksConfig:
         self.sigma = sigma
         self.security_bits = security_bits
         self.enforce_security_budget = enforce_security_budget
+        self.galois_generator = galois_generator
         self._initialized = True
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -254,10 +276,10 @@ class CkksConfig:
         object.__delattr__(self, name)
 
     def dumps(self) -> dict[str, object]:
-        """
-        Serialize to a dictionary for easy saving or logging.
-        """
+        """Return a versioned dictionary with the selected Q and P moduli."""
+
         return {
+            "fhelium_version": __version__,
             "buffer_bit_length": self.buffer_bit_length,
             "scale_bits": self.scale_bits,
             "base_prime_bits": self.base_prime_bits,
@@ -267,6 +289,9 @@ class CkksConfig:
             "sigma": self.sigma,
             "security_bits": self.security_bits,
             "enforce_security_budget": self.enforce_security_budget,
+            "galois_generator": self.galois_generator,
+            "q_moduli": list(self.q_moduli),
+            "p_moduli": list(self.p_moduli),
         }
 
     # ---- construction helpers ------------------------------------------------
@@ -278,13 +303,74 @@ class CkksConfig:
     ) -> "CkksConfig":
         """Resolve a parameter baseline into a CKKS configuration.
 
-        ``src`` is either a maintained :class:`Preset` or a mapping accepted
-        by :class:`CkksConfig`. Keyword overrides replace fields from that
-        baseline before configuration validation and derived-value evaluation.
+        ``src`` is either a :class:`Preset` member, an ordinary constructor
+        mapping, or a dictionary returned by :meth:`dumps`. A dumped
+        configuration requires the same installed FHElium version and the same
+        prime-catalog selection. Keyword overrides replace constructor fields
+        before the dumped modulus selection is checked.
         """
-        base = _PRESET_CONFIGS[src] if isinstance(src, Preset) else src
-        merged = {**base, **overrides}
-        return cls(**merged)
+
+        if isinstance(src, Preset):
+            base = dict(_PRESET_CONFIGS[src])
+            dumped_q_moduli: tuple[int, ...] | None = None
+            dumped_p_moduli: tuple[int, ...] | None = None
+        else:
+            base = dict(src)
+            dump_fields = {
+                name
+                for name in ("fhelium_version", "q_moduli", "p_moduli")
+                if name in base
+            }
+            if dump_fields and dump_fields != {
+                "fhelium_version",
+                "q_moduli",
+                "p_moduli",
+            }:
+                raise ValueError(
+                    "A serialized CKKS configuration requires "
+                    "fhelium_version, q_moduli, and p_moduli"
+                )
+            if dump_fields:
+                dumped_version = base.pop("fhelium_version")
+                if not isinstance(dumped_version, str):
+                    raise TypeError(
+                        "Serialized CKKS configuration version must be a string"
+                    )
+                if dumped_version != __version__:
+                    raise ValueError(
+                        "Serialized CKKS configuration requires FHElium "
+                        f"{dumped_version}; installed version is {__version__}"
+                    )
+                dumped_q_moduli = _dumped_moduli(
+                    base.pop("q_moduli"),
+                    name="q_moduli",
+                    require_nonempty=True,
+                )
+                dumped_p_moduli = _dumped_moduli(
+                    base.pop("p_moduli"),
+                    name="p_moduli",
+                    require_nonempty=False,
+                )
+            else:
+                dumped_q_moduli = None
+                dumped_p_moduli = None
+
+        config = cls(**{**base, **overrides})
+        if (
+            dumped_q_moduli is not None
+            and tuple(config.q_moduli) != dumped_q_moduli
+        ):
+            raise ValueError(
+                "Serialized CKKS Q moduli differ from the installed prime catalog"
+            )
+        if (
+            dumped_p_moduli is not None
+            and tuple(config.p_moduli) != dumped_p_moduli
+        ):
+            raise ValueError(
+                "Serialized CKKS P moduli differ from the installed prime catalog"
+            )
+        return config
 
     # ---- simple derived values ----------------------------------------------
     @cached_property
@@ -295,6 +381,12 @@ class CkksConfig:
         """
 
         return 1 << self.logN
+
+    @cached_property
+    def num_slots(self) -> int:
+        """Number of complex CKKS slots, $N/2$."""
+
+        return self.N // 2
 
     @cached_property
     def inverse_ntt_scale(self) -> tuple[int, ...]:
@@ -342,11 +434,11 @@ class CkksConfig:
     # ---- primes + security budget -------------------------------------------
     @cached_property
     def maximum_modulus_bits(self) -> int:
-        """Exact built-in budget for the complete QP modulus bit width.
+        """Built-in budget for the complete QP modulus bit width.
 
         Raises:
             SecurityParametersUnsupportedError: If this configuration does
-                not match an exact table row.
+                not match a table row.
         """
 
         maximum = _lookup_maximum_modulus_bits(
@@ -362,7 +454,7 @@ class CkksConfig:
                 secret_distribution="ternary",
                 error_stddev=self.sigma,
                 reason=(
-                    "No exact built-in budget matches this configuration; "
+                    "No built-in budget matches this configuration; "
                     "see the security guide for external "
                     "assessment requirements."
                 ),
@@ -371,7 +463,7 @@ class CkksConfig:
 
     @cached_property
     def security_assessment(self) -> SecurityAssessment:
-        """Structured exact-table assessment of the complete QP modulus."""
+        """Structured table assessment of the complete QP modulus."""
 
         return assess_config_security(self)
 
@@ -417,7 +509,7 @@ class CkksConfig:
         choice to hybrid key-switch decomposition.
 
         Returns:
-            ``[q_structural_base, *p_primes]`` in canonical catalog order,
+            ``[q_structural_base, *p_primes]`` in catalog order,
             where the first row belongs to $Q_\ell$ and the remaining rows
             multiply to $P$.
 
@@ -475,7 +567,7 @@ class CkksConfig:
             return self._num_scale_primes_requested
 
         # Greedily fill using exact integer products and bit widths.  This path
-        # is opt-in through num_scale_primes=None; maintained presets carry
+        # is opt-in through num_scale_primes=None; built-in presets carry
         # fixed counts so a future table update cannot alter their depth.
         modulus = math.prod(self._base_and_p_primes)
         radix = 1 << self.buffer_bit_length
@@ -574,13 +666,13 @@ class CkksConfig:
         return (math.prod(self.moduli) - 1).bit_length()
 
     def validate_security_budget(self) -> SecurityAssessment:
-        """Require an exact supported assessment that meets its QP budget.
+        """Require a supported assessment that meets its QP budget.
 
         Returns:
             The immutable structured assessment when the budget is met.
 
         Raises:
-            SecurityParametersUnsupportedError: If no exact built-in row
+            SecurityParametersUnsupportedError: If no built-in row
                 matches this configuration.
             SecurityBudgetExceededError: If the complete QP modulus exceeds
                 the matching table budget.
@@ -594,7 +686,7 @@ class CkksConfig:
                 secret_distribution="ternary",
                 error_stddev=self.sigma,
                 reason=assessment.reason
-                or "No exact built-in budget matches this configuration.",
+                or "No built-in budget matches this configuration.",
             )
         if assessment.status == "exceeds":
             maximum = assessment.maximum_modulus_bits
@@ -623,7 +715,8 @@ class CkksConfig:
             f"num_p_primes={self.num_p_primes}, "
             f"sigma={self.sigma!r}, "
             f"security_bits={self.security_bits}, "
-            f"enforce_security_budget={self.enforce_security_budget})"
+            f"enforce_security_budget={self.enforce_security_budget}, "
+            f"galois_generator={self.galois_generator})"
         )
 
     def __str__(self) -> str:
@@ -645,5 +738,6 @@ class CkksConfig:
             f"total_modulus_bits={self.total_modulus_bits}, "
             f"maximum_modulus_bits={maximum_modulus_bits}, "
             f"sigma={self.sigma}, security_bits={self.security_bits}, "
-            f"enforce_security_budget={self.enforce_security_budget})"
+            f"enforce_security_budget={self.enforce_security_budget}, "
+            f"galois_generator={self.galois_generator})"
         )

@@ -1,4 +1,5 @@
-#include "ckks_cuda.h"
+#include <torch/library.h>
+#include <torch/torch.h>
 
 #include "../../common/cuda/kernel_support.cuh"
 #include "../../common/cuda/montgomery.cuh"
@@ -11,11 +12,11 @@ namespace {
 // [*batch, remaining_limb, coefficient] and dropped is
 // [*batch, coefficient], both standard residues from the same input integer.
 // inverse [remaining_limb] stores the dropped Q prime inverse in Montgomery
-// form for each exact destination prime; params [parameter, remaining_limb]
+// form for each destination prime; params [parameter, remaining_limb]
 // follows the same prime_ids order. The kernel computes
 // $\operatorname{Round}(c/q_{\mathrm{drop}})\bmod q_i$: nearest increments
-// when the canonical dropped residue exceeds floor(q_drop/2), while truncate
-// omits that increment. Output is coefficient/standard canonical [0, q_i)
+// when the standard dropped residue exceeds floor(q_drop/2), while truncate
+// omits that increment. Output is coefficient/standard [0, q_i)
 // with remaining shape. Functional output does not alias input; underscore
 // variants preserve and mutate remaining storage only. Tables are read-only.
 
@@ -49,8 +50,7 @@ __global__ void ckks_rescale_drop_leading_prime_kernel(
   if constexpr (nearest) {
     quotient += dropped_value > half_drop_prime ? 1 : 0;
   }
-  out[batch][row][coefficient] =
-      canonicalize_lazy_residue(quotient, twice_modulus);
+  out[batch][row][coefficient] = reduce_lazy_residue(quotient, twice_modulus);
 }
 
 void validate_rescale_operands(const torch::Tensor& remaining,
@@ -141,8 +141,6 @@ void rescale_inplace(torch::Tensor remaining_residues,
       });
 }
 
-}  // namespace
-
 torch::Tensor ckks_rescale_drop_leading_prime_nearest_cuda(
     const torch::Tensor remaining_residues,
     const torch::Tensor drop_prime_inverse_mont,
@@ -195,4 +193,17 @@ void ckks_rescale_drop_leading_prime_truncate_inplace_cuda(
                          rns_params,
                          0,
                          "ckks_rescale_drop_leading_prime_truncate");
+}
+
+}  // namespace
+
+TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
+  m.impl("rescale_drop_leading_prime_nearest",
+         &ckks_rescale_drop_leading_prime_nearest_cuda);
+  m.impl("rescale_drop_leading_prime_nearest_",
+         &ckks_rescale_drop_leading_prime_nearest_inplace_cuda);
+  m.impl("rescale_drop_leading_prime_truncate",
+         &ckks_rescale_drop_leading_prime_truncate_cuda);
+  m.impl("rescale_drop_leading_prime_truncate_",
+         &ckks_rescale_drop_leading_prime_truncate_inplace_cuda);
 }

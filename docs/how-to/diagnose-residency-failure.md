@@ -15,13 +15,13 @@ Record `snapshot.state_version`, the manager id, every relevant handle, and the
 exception's structured fields. A snapshot is tensor-free and reports, for each
 materialization, location, charged bytes, active uses, holds, and pending CUDA
 events. Location records report current and peak charges, active reservations,
-and optional strict budgets. The bounded trace is supplementary: it may be
+and optional strict budgets. The finite-capacity trace is supplementary: it may be
 disabled or may have overwritten older transitions.
 
-Do not infer manager state from `torch.cuda.memory_reserved()` or NVML. Those
-are process/device observations rather than Residency admission evidence.
+Use the manager snapshot for Residency admission evidence.
+`torch.cuda.memory_reserved()` and NVML report broader process/device state.
 
-## 2. Verify the exact endpoint
+## 2. Verify the requested endpoint
 
 For each failed operation, record the required pair:
 
@@ -55,7 +55,7 @@ new peak        = current charged + requested or temporary charge
 admissible      = budget_bytes is None or new peak <= budget_bytes
 ```
 
-For `ResidencyBudgetError`, use its exact `location`, `budget_bytes`,
+For `ResidencyBudgetError`, use its reported `location`, `budget_bytes`,
 `used_bytes`, `reserved_bytes`, and `requested_bytes` fields. Determine whether
 the request is a new materialization, a `MemoryReservation`, or temporary
 reconstruction storage before changing the limit.
@@ -121,13 +121,13 @@ print(decision.explanation.predicted_peak_bytes)
 
 Check that every requested endpoint appears in the final simulated state and
 that each eviction names the expected released location, byte charge, and
-reason. `explored_states` measures bounded deterministic search work; it is not
-an eviction count or a performance score.
+reason. `explored_states` measures deterministic search work against
+`search_state_limit`.
 
 Distinguish two failures:
 
-- `ResidencyPlanError` means validation or an exhaustive search within the
-  configured bound found the plan/request infeasible for current state.
+- `ResidencyPlanError` means validation failed or exhaustive search proved the
+  request infeasible for the current state.
 - `ResidencySearchLimitError` means the search was inconclusive because it
   reached `state_limit`. Record `request_name`, `state_limit`,
   `explored_states`, and `detail`. Do not report this as proof that no feasible
@@ -180,7 +180,7 @@ cannot be re-entered to complete the plan.
 | `ResidencySearchLimitError` | Automatic search reached its deterministic bound; feasibility is unknown. | Record search evidence, simplify alternatives, or justify a larger bound. |
 | `ResidencyStaleStateError` | A decision's expected manager version no longer matches. | Identify the mutation and derive/review a new decision if still required. |
 | `ResidencyInUseError` | A lease, hold, or pending CUDA event blocks direct removal. | Resolve the owning lifetime or defer removal. |
-| `ResidencyUnavailableError` | A direct operation requires an absent endpoint or source. | Establish the exact endpoint or valid reconstruction path. |
+| `ResidencyUnavailableError` | A direct operation requires an absent endpoint or source. | Establish the requested endpoint or valid reconstruction path. |
 | `ResidencyPlanExecutionError` | Execution failed after preflight and may have committed a prefix. | Inspect `phase`, `partial_report`, failed object/index, cause, and current snapshot. |
 
 `ResidencySearchLimitError` and `ResidencyStaleStateError` are specialized

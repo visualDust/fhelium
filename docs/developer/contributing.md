@@ -6,17 +6,78 @@ generated API reference, examples, and documentation.
 
 ## Prepare the source tree
 
-Clone the repository, create an isolated environment with the supported Python
-version, and install the selected CPU-only or CUDA-enabled PyTorch build first.
-Then install the build tools, the project, and the development dependencies using the
-workflow defined by the repository's `pyproject.toml` and `uv.lock`.
+Choose one environment workflow for a checkout. Use separate virtual
+environments when validating both workflows because the uv environment selects
+the locked Torch build while the pip environment preserves a Torch build chosen
+by the contributor.
 
-After the editable native build, install the declared development group:
+### Locked uv environment
+
+The tracked lock defines the default developer environment:
 
 ```bash
+uv sync --locked
+source .venv/bin/activate
+pre-commit install
+```
+
+On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1`. The sync
+installs the development tools and builds FHElium as an editable package.
+
+### Environment with a selected Torch build
+
+Create and activate a virtual environment, install the intended Torch package,
+then build FHElium without build isolation:
+
+```bash
+python -m pip install --group build
+python -m pip install \
+  --editable . --verbose --no-build-isolation --no-cache-dir
 python -m pip install --group dev
 pre-commit install
 ```
+
+`--no-build-isolation` lets native configuration inspect the selected Torch
+ABI. `--no-cache-dir` prevents reuse of a wheel built for another Python,
+Torch, CUDA, or C++ ABI.
+
+### Development tools and repository metadata
+
+The development files have separate responsibilities:
+
+- `pyproject.toml` declares build and development dependency groups;
+- `uv.lock` records the locked developer resolution;
+- `packaging/release_matrix.json` declares the Python, Torch, CUDA, operating
+  system, and artifact configurations used for releases;
+- `justfile` provides optional shortcuts and does not define dependencies or
+  release support.
+
+Running `just` without a recipe lists available commands. Cleanup requires a
+named recipe such as `just clean-build`; no default command deletes build or
+environment files. `just check` runs Ruff, Pyright, and pytest.
+
+Use the build shortcut matching the active environment when native source
+changes:
+
+```bash
+just NATIVE_BACKENDS=CPU build-uv
+just NATIVE_BACKENDS=CPU+CUDA build-pip
+```
+
+The shortcuts rebuild the editable extension and refresh the ignored
+`build/compile_commands.json` used by `.clangd`. The refresh step selects the
+ABI-specific database for the active CPython interpreter and replaces uv's
+temporary isolated-build Torch include paths with the active environment's
+persistent Torch include paths. To refresh editor data after a direct build,
+run:
+
+```bash
+python scripts/refresh_compile_commands.py
+```
+
+The lock defines the reproducible default development environment.
+`packaging/release_matrix.json` defines the
+formal Python, Torch, CUDA, and operating-system artifact configurations.
 
 Native binaries are specific to the Python, PyTorch, CUDA, and C++ application
 binary interfaces (ABIs) and to the GPU architectures selected when they were
@@ -27,12 +88,12 @@ built. Do not validate a change against an unrelated cached wheel.
 1. Read the [Developer Guide](index.md) and the relevant subsystem
    page.
 2. Read the
-   [Mathematical notation and cross-layer invariants](mathematical-notation-and-invariants.md)
+   [Terminology and mathematical model](../concepts/terminology-and-mathematical-model.md)
    when the change affects CKKS state, RNS/NTT representation, tensor layout,
    scale, level, keys, or a native operation.
-3. Identify the public import path, state transition, mutation/aliasing rule,
-   numerical oracle, and smallest regression that exercises the affected
-   semantics or invariant.
+3. Identify the affected interface or owned subsystem and the smallest check
+   that exercises the proposed change. For evaluator changes, also identify
+   the state transition, mutation or aliasing rule, and numerical oracle.
 4. Keep unrelated staged and unstaged work unchanged.
 
 ## Validation order
@@ -52,7 +113,7 @@ npm --prefix docs run build
 
 Native, CUDA, distributed, packaging, or opt-in bootstrap changes require their
 corresponding targeted builds and representative workloads in addition to this
-baseline. Record exact commands, results, skipped validation, and remaining
+baseline. Record commands, results, skipped validation, and remaining
 risk in the contribution description.
 
 Do not loosen a numerical tolerance merely to make a failure pass. Reconcile
@@ -63,29 +124,28 @@ criterion.
 ## Documentation changes
 
 Every public API change must update the generated docstring source and the
-curated page that places the symbol in the API hierarchy. Every maintained
-numbered example must retain a direct tutorial source link and a concrete
+curated page that places the symbol in the API hierarchy. Every numbered example must retain a direct tutorial source link and a concrete
 opening explanation.
 
 Follow the [documentation contributor guide](documentation.md) for page roles,
 API directives, generated-reference commands, diagrams, source links, and site
 validation.
 
-## Scope and review
+## Review evidence
 
-FHElium uses direct, coherent API changes rather than indefinite compatibility
-aliases for unreleased or intentionally breaking surfaces. A contribution should
+FHElium uses direct, coherent API changes for unreleased or intentionally
+breaking surfaces. A contribution should
 state:
 
 - the problem and supported behavior after the change;
 - affected public paths and serialized formats;
-- mathematical, numerical, security, and ownership assumptions;
+- mathematical, numerical, security, and ownership assumptions when affected;
 - validation evidence and hardware/software environment;
 - migration steps when existing public behavior or requirements change.
 
-Security-sensitive changes need an documented threat model. Performance claims
-need a reproducible benchmark definition and environment; a faster isolated
-kernel is not sufficient evidence for a faster CKKS workload.
+Security-sensitive changes need a documented threat model. Performance claims
+need a reproducible benchmark definition and environment that measures the
+claimed CKKS workload.
 
 ## Useful entry points
 

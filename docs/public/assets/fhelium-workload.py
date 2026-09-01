@@ -20,7 +20,8 @@ import torch
 
 import fhelium as fh
 import fhelium.distributed as dist
-from fhelium.execution import CudaGraphProgram
+from fhelium.eager import Engine
+from fhelium.runtime import CudaGraphProgram
 
 Mode = Literal["pt-ct", "ct-ct"]
 PRESETS = {
@@ -124,7 +125,7 @@ def _required_steps(
 
 
 def _provision_rotation_keys(
-    engine: fh.CkksEngine,
+    engine: Engine,
     *,
     secret_key: fh.SecretKey | None,
     baby_step: int,
@@ -156,7 +157,7 @@ def _provision_rotation_keys(
 
 
 def _prepare_groups(
-    engine: fh.CkksEngine,
+    engine: Engine,
     *,
     mode: Mode,
     matrix: torch.Tensor,
@@ -216,7 +217,7 @@ def _prepare_groups(
 
 
 def _evaluate_local(
-    engine: fh.CkksEngine,
+    engine: Engine,
     *,
     mode: Mode,
     source: fh.Ciphertext,
@@ -306,7 +307,7 @@ def _run_case(
             raise ValueError("world size exceeds BSGS giant count")
         local_giants = tuple(range(dist.get_rank(), giant_count, world_size))
         setup_started = time.perf_counter()
-        engine = fh.CkksEngine(
+        engine = Engine(
             PRESETS[depth],
             device=dist.local_device() if device == "cuda" else "cpu",
             ntt_backend=(
@@ -314,7 +315,7 @@ def _run_case(
                 if device == "cuda"
                 else "radix2_indexed"
             ),
-            allow_sk_gen=False,
+            allow_automatic_key_generation=False,
             rng_seed=20260814,
             rng_nonce=depth + (0 if mode == "pt-ct" else 100),
         )

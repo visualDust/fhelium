@@ -1,6 +1,6 @@
 import catalogJson from './install-catalog.json'
 
-export type OsId = 'linux-x86_64' | 'macos-arm64'
+export type OsId = 'linux-x86_64' | 'windows-x86_64' | 'macos-arm64'
 export type MethodId = 'prebuilt-pip' | 'source-pip' | 'source-github'
 export type ComputeId = 'cpu' | `cuda-${number}`
 
@@ -47,6 +47,7 @@ export const installCatalog = catalogJson as InstallCatalog
 
 export const osLabels: Record<OsId, string> = {
   'linux-x86_64': 'Linux x86-64',
+  'windows-x86_64': 'Windows x86-64',
   'macos-arm64': 'macOS Apple Silicon',
 }
 

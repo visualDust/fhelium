@@ -11,7 +11,7 @@ from weakref import finalize
 
 import torch
 
-from fhelium.core import TensorResident
+from fhelium.values import TensorResident
 from fhelium.errors import ResidencyLifetimeClosedError
 from fhelium.residency.location import ResidencyLocation
 from fhelium.residency.model import ResidencyHandle
@@ -66,7 +66,7 @@ class BorrowedValues(Mapping[ResidencyHandle[Any], TensorResident]):
     """Concrete immutable materializations borrowed through one active lease.
 
     The mapping validates its lease on every lookup and iteration. Returned
-    exact values remain ordinary Python objects; callers must not mutate them or
+    values remain ordinary Python objects; callers must not mutate them or
     retain aliases beyond the lease. Managed memory accounting is strong only
     for manager-owned aliases that obey these borrowing rules.
     """

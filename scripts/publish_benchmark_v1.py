@@ -391,7 +391,7 @@ def _normalized_timestamp(value: Any, field: str) -> str:
     return parsed.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _canonical_json_bytes(value: Any) -> bytes:
+def _stable_json_bytes(value: Any) -> bytes:
     try:
         return json.dumps(
             value,
@@ -407,7 +407,7 @@ def _canonical_json_bytes(value: Any) -> bytes:
 def _json_values_equal(left: Any, right: Any) -> bool:
     """Compare JSON values without Python's bool/int equality coercion."""
 
-    return _canonical_json_bytes(left) == _canonical_json_bytes(right)
+    return _stable_json_bytes(left) == _stable_json_bytes(right)
 
 
 def _validate_json_value(value: Any, field: str) -> None:
@@ -467,10 +467,10 @@ def _load_specification(
         pattern=DIGEST,
     )
     covered = {name: specification[name] for name in MANIFEST_FIELDS}
-    actual_digest = hashlib.sha256(_canonical_json_bytes(covered)).hexdigest()
+    actual_digest = hashlib.sha256(_stable_json_bytes(covered)).hexdigest()
     if digest != actual_digest:
         raise ValidationError(
-            "specification.manifest_sha256 does not match its canonical "
+            "specification.manifest_sha256 does not match its serialized "
             "covered payload"
         )
 
@@ -979,29 +979,50 @@ def _project_platform(
     _array(platform.get("invocation"), "platform.invocation")
     cuda = _mapping(platform.get("cuda"), "platform.cuda")
     devices_value = cuda.get("devices")
-    if isinstance(devices_value, dict):
-        devices = [
-            {
-                "index": str(index),
-                **copy.deepcopy(
-                    _mapping(device, f"platform.cuda.devices.{index}")
-                ),
-            }
-            for index, device in sorted(
-                devices_value.items(),
-                key=lambda item: (
-                    int(item[0]) if str(item[0]).isdigit() else str(item[0])
-                ),
+
+    def project_device(
+        value: Any, source_index: int, field: str
+    ) -> dict[str, Any]:
+        device = copy.deepcopy(_mapping(value, field))
+        reported_index = device.get("index")
+        if reported_index is not None and str(reported_index) != str(
+            source_index
+        ):
+            raise ValidationError(
+                f"{field}.index must match process-visible index {source_index}"
             )
+        return {**device, "index": str(source_index)}
+
+    if isinstance(devices_value, dict):
+        if any(not str(index).isdigit() for index in devices_value):
+            raise ValidationError(
+                "platform.cuda.devices keys must be non-negative integer indices"
+            )
+        indexed_devices = sorted(
+            ((int(index), device) for index, device in devices_value.items()),
+            key=lambda item: item[0],
+        )
+        if [index for index, _ in indexed_devices] != list(
+            range(len(indexed_devices))
+        ):
+            raise ValidationError(
+                "platform.cuda.devices keys must be contiguous process-visible indices"
+            )
+        devices = [
+            project_device(
+                device,
+                index,
+                f"platform.cuda.devices.{index}",
+            )
+            for index, device in indexed_devices
         ]
     elif isinstance(devices_value, list):
         devices = [
-            {
-                "index": str(index),
-                **copy.deepcopy(
-                    _mapping(device, f"platform.cuda.devices[{index}]")
-                ),
-            }
+            project_device(
+                device,
+                index,
+                f"platform.cuda.devices[{index}]",
+            )
             for index, device in enumerate(devices_value)
         ]
     elif devices_value is None:
@@ -1012,6 +1033,30 @@ def _project_platform(
         )
     p2p_value = cuda.get("p2p")
     p2p = {} if p2p_value is None else _mapping(p2p_value, "platform.cuda.p2p")
+    peer_access_value = cuda.get("peer_access", p2p.get("canAccess"))
+    if peer_access_value is None:
+        peer_access: list[object] = []
+    elif isinstance(peer_access_value, list):
+        peer_access = copy.deepcopy(peer_access_value)
+        if len(peer_access) != len(devices):
+            raise ValidationError(
+                "platform.cuda.peer_access must have one row per device"
+            )
+        for source, row in enumerate(peer_access):
+            if not isinstance(row, list) or len(row) != len(devices):
+                raise ValidationError(
+                    "platform.cuda.peer_access must be a square matrix"
+                )
+            if any(type(value) is not bool for value in row):
+                raise ValidationError(
+                    "platform.cuda.peer_access entries must be bool values"
+                )
+            if not row[source]:
+                raise ValidationError(
+                    "platform.cuda.peer_access diagonal entries must be true"
+                )
+    else:
+        raise ValidationError("platform.cuda.peer_access must be an array")
     projected_platform = {
         "system": {
             name: copy.deepcopy(system[name])
@@ -1030,6 +1075,7 @@ def _project_platform(
         ),
         "cuda": {
             "devices": devices,
+            "peer_access": peer_access,
             "p2p": copy.deepcopy(p2p),
         },
         "environment": copy.deepcopy(
@@ -1167,6 +1213,17 @@ def validate_report(
         raise ValidationError(
             "CUDA execution requires published CUDA device provenance"
         )
+    if backend == "cuda":
+        assert isinstance(device, str)
+        selected_index = device.removeprefix("cuda:")
+        visible_indices = {
+            item["index"] for item in platform["cuda"]["devices"]
+        }
+        if selected_index not in visible_indices:
+            raise ValidationError(
+                "CUDA execution.device must identify one process-visible "
+                "platform.cuda device"
+            )
     raw_cases = _array(report.get("cases"), "cases")
     specification_cases = _array(
         specification.get("cases"), "specification.cases"
@@ -1280,7 +1337,7 @@ def _load_catalog(path: Path) -> dict[str, Any]:
         }
         if not _json_values_equal(run, expected):
             raise ValidationError(
-                f"catalog.runs[{index}] is not the exact projection of its raw report"
+                f"catalog.runs[{index}] does not equal the projection of its raw report"
             )
         rebuilt_runs.append(expected)
     recorded_times = [run["recorded_at"] for run in rebuilt_runs]

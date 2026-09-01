@@ -6,7 +6,7 @@
 // execution device with final
 // extent N and lazy Montgomery residues in [0, 2q_i). Native code collapses
 // only *batch; it does not broadcast or allocate. Twiddle row, rns_params
-// column, and operand limb j all refer to the same exact prime_ids[j]. Indexed
+// column, and operand limb j all refer to the same prime_ids[j]. Indexed
 // schedules are int32 [stage, N/2]; compact tables are [limb, N], and strict
 // fixed-radix tables are [limb, N-1] plus [limb, radix]. All tables are on the
 // operand device, residue tables are Montgomery, and inputs other than the
@@ -17,7 +17,7 @@
 // and normalize by $N^{-1}\bmod q_i$. Every schema mutates and preserves the
 // operand storage, changing the final axis meaning to coefficient. The
 // `montgomery` output remains Montgomery/lazy [0, 2q_i); `standard_lazy` is
-// standard/lazy [0, 2q_i); `standard` is standard/canonical [0, q_i); and
+// standard/lazy [0, 2q_i); `standard` is standard [0, q_i); and
 // `centered` is standard in the centered representative interval.
 
 TORCH_LIBRARY_FRAGMENT(fhelium_ntt_ops, m) {

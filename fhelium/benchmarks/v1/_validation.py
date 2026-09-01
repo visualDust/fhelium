@@ -68,7 +68,7 @@ def strict_name(value: Any, field: str) -> str:
 
 
 def normalize_json(value: Any, *, path: str = "value") -> Any:
-    """Copy JSON data into canonical Python containers and reject extensions.
+    """Copy JSON data into plain Python containers and reject extensions.
 
     The accepted value domain is deliberately narrower than ``json.dumps``:
     mapping keys must already be strings, sequences become lists, and every

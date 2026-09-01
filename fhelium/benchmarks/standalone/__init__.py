@@ -1,1 +1,1 @@
-"""Independent workloads outside maintained Benchmark specifications."""
+"""Independent workloads outside versioned Benchmark specifications."""

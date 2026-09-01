@@ -1,8 +1,8 @@
 # Refresh a full-slot CKKS ciphertext with composable bootstrapping
 
-**Example source:** [`examples/17_ckks_bootstrap_logn16.py`](https://github.com/VisualDust/fhelium/blob/main/examples/17_ckks_bootstrap_logn16.py)
+**Example source:** [`examples/22_ckks_bootstrap_logn16.py`](https://github.com/VisualDust/fhelium/blob/main/examples/22_ckks_bootstrap_logn16.py)
 
-This example depletes a full-slot `logN = 16` ciphertext, constructs an engine-bound
+This example depletes a full-slot `logN = 16` ciphertext, constructs a callable configured for one Engine,
 bootstrap, generates the three primitive key inputs required by that callable,
 and refreshes the ciphertext. The tutorial explains the mathematical range and
 state assumptions that the factory cannot establish from encrypted data.
@@ -12,25 +12,26 @@ state assumptions that the factory cannot establish from encrypted data.
 ```python
 import torch
 import fhelium as fh
-from fhelium.core import EvaluationKeySet
+from fhelium.values import EvaluationKeySet
+from fhelium.eager import Engine
 from fhelium.experimental.bootstrap.presets import cosine_depth_refresh_logn16_v1
 
 config = fh.CkksConfig.parse(
     fh.Preset.slots32768_scale50_levels27_int64,
     base_prime_bits=50,
-)
-engine = fh.CkksEngine(
-    config,
-    device="cuda:0",
-    allow_sk_gen=False,
     galois_generator=5,
+)
+torch.set_default_device("cuda:0")
+engine = Engine(
+    config,
+    allow_automatic_key_generation=False,
 )
 bootstrap = cosine_depth_refresh_logn16_v1(engine)
 ```
 
-The global CKKS default remains 40 bits; this measured configuration selects 50-bit scale primes and one 50-bit structural base Q prime. The factory returns a compiled
-`FullSlotBootstrap`, not a descriptive circuit awaiting another compilation
-step.
+The global CKKS default remains 40 bits; this measured configuration selects
+50-bit scale primes and one 50-bit structural base Q prime. The factory returns
+a compiled, callable `FullSlotBootstrap`.
 
 The `logn16` name documents the measured configuration. The factory itself checks
 transform slot counts, structural-base/default-scale proximity, and depth, but
@@ -87,8 +88,8 @@ evaluation_keys = EvaluationKeySet(
 ```
 
 The compact rotation inventory contains signed powers of two.
-`FullSlotBootstrap` composes them when an exact transform rotation is absent.
-Use `rotation_strategy="exact"` to trade more key memory for fewer online
+`FullSlotBootstrap` composes them when a direct transform key is absent.
+Use `rotation_strategy="direct"` to trade more key memory for fewer online
 rotation compositions.
 
 `create_rotation_keys()` derives only the inventory reported by `key_steps()`.
@@ -126,12 +127,12 @@ while ciphertext.level < engine.final_public_level:
 
 The entry ciphertext has axes
 `[component, *batch, limb, coefficient]`, two components, coefficient domain,
-standard residues, Q basis, and exact active `prime_ids`. The built-in topology
+standard residues, Q basis, and active `prime_ids`. The built-in topology
 uses all $S=N/2$ slots and currently requires final public level with actual
 scale near `default_scale` or its square.
 
 Each depletion multiplication records the actual pending scale product, and
-each public rescale divides that scale by the exact dropped Q prime. No public
+each public rescale divides that scale by the actual dropped Q prime. No public
 operation silently normalizes to `default_scale`.
 
 ## 5. Follow the refresh state transitions
@@ -168,10 +169,9 @@ executes:
 6. Apply SlotsToCoeffs with the same per-stage actual-scale recurrence.
 
 The final output is a two-component coefficient-domain standard-RNS Q
-ciphertext at `bootstrap.output_level`, with exact
-`engine.rns_layout.prime_ids(bootstrap.output_level)`. The final actual scale is
-the product of the SlotsToCoeffs recurrences; it is not assumed equal to
-`default_scale`.
+ciphertext at `bootstrap.output_level`. Its `refreshed.prime_ids` field records
+the active Q rows selected for that output level. The product of the
+SlotsToCoeffs recurrences determines the final actual scale.
 
 ## 6. Verify with the secret key
 
@@ -187,8 +187,8 @@ print("mean error:", error.mean().item())
 Only client verification uses the secret key. Online bootstrapping uses the
 ciphertext and the supplied `RotationKeySet`, `RelinearizationKey`, and
 `ConjugationKey`. Evaluate maximum error, mean error, distribution shape, and
-workload-specific downstream effects; a factory name is not a tolerance
-guarantee.
+workload-specific downstream effects. Establish a tolerance from those
+measurements for the selected workload and configuration.
 
 ## 7. Choose another built-in composition
 
@@ -248,9 +248,9 @@ level/scale transition, although their rotation count and rounding order differ.
 
 For a different full algorithm, write an ordinary function or callable class.
 Document who owns raw-to-normalized conversion, the output target, every tensor
-axis and state transition, the required key material, and the exact output
+axis and state transition, the required key material, and the output
 actual-scale recurrence.
 
-::: details Complete runnable source
-<<< @/../examples/17_ckks_bootstrap_logn16.py
+::: details Source
+<<< @/../examples/22_ckks_bootstrap_logn16.py
 :::

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from fhelium.legacy.engine import CkksEngine
+
 import gc
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -96,11 +98,11 @@ def cyclic_diagonal_slots(
 
 
 def prepare_packed_matvec(
-    engine: fh.CkksEngine,
+    engine: CkksEngine,
     matrix: torch.Tensor,
     source: fh.Ciphertext,
 ) -> tuple[tuple[fh.Plaintext, ...], dict[int, fh.RotationKey]]:
-    """Materialize operation-ready diagonals and exact rotation keys."""
+    """Materialize operation-ready diagonals and direct rotation keys."""
 
     diagonals = tuple(
         engine.prepare_plaintext_for_multiplication(
@@ -118,14 +120,14 @@ def prepare_packed_matvec(
 
 
 def evaluate_packed_matvec(
-    engine: fh.CkksEngine,
+    engine: CkksEngine,
     source: fh.Ciphertext,
     diagonals: Sequence[fh.Plaintext],
     rotation_keys: Mapping[int, fh.RotationKey],
     *,
     hoist_chunk_size: int,
 ) -> fh.Ciphertext:
-    """Evaluate a cyclic-diagonal matrix-vector product in bounded chunks.
+    """Evaluate a cyclic-diagonal matrix-vector product in configured-size chunks.
 
     Each chunk batches its rotated ciphertexts, forward NTT, plaintext
     products, and additive reduction. The chunk sum returns to coefficient
@@ -214,7 +216,7 @@ def _run_packed_matvec(
     hoist_chunk_size = int(parameters["hoist_chunk_size"])
 
     progress("Creating the engine and deterministic packed input")
-    engine = fh.CkksEngine(
+    engine = CkksEngine(
         fh.Preset(str(parameters["preset"])),
         device=str(parameters.get("device", "cuda:0")),
         ntt_backend=str(parameters["ntt_backend"]),
@@ -227,7 +229,7 @@ def _run_packed_matvec(
     packed_vector = periodic_slots(vector, engine.num_slots)
     source = engine.encrypt_message(packed_vector)
 
-    progress("Materializing exact rotation keys and operation-ready diagonals")
+    progress("Materializing direct rotation keys and operation-ready diagonals")
     diagonals, rotation_keys = prepare_packed_matvec(engine, matrix, source)
 
     def evaluate() -> fh.Ciphertext:
@@ -310,9 +312,9 @@ def _run_packed_matvec(
     }
     timed_boundary = BenchmarkTimedBoundary(
         id="packed-cyclic-diagonal-evaluation-v1",
-        description="One encrypted packed matrix-vector evaluation using bounded cyclic-diagonal chunks.",
+        description="One encrypted packed matrix-vector evaluation using cyclic-diagonal chunks limited by the configured size.",
         includes=(
-            "bounded grouped exact-key rotations",
+            "chunk-limited grouped direct-key rotations",
             "batched forward NTT and operation-ready plaintext multiplication",
             "batched ciphertext reduction and one rescale per chunk",
         ),
@@ -438,7 +440,7 @@ def _run_packed_matvec(
             ),
         },
         notes=[
-            "The cyclic-diagonal packing and deterministic matrix formula follow the maintained FHElium packed-matvec methodology without importing distributed worker internals.",
+            "The cyclic-diagonal packing and deterministic matrix formula follow the documented FHElium packed-matvec methodology without importing distributed worker internals.",
             "Correctness is enforced at atol=3e-5, the existing public packed-matvec validation limit in example 09; the benchmark does not infer or tune tolerance.",
             "Peak memory is PyTorch CUDA allocator memory on the engine device, not total device memory or external allocator usage.",
         ],
@@ -473,7 +475,7 @@ register_benchmark(
         category="single GPU workload",
         description=(
             "Evaluates a fixed dense matrix-vector product with cyclic "
-            "diagonal packing, bounded grouped rotations, a cleartext oracle, "
+            "diagonal packing, configured-size rotation groups, a cleartext oracle, "
             "raw timing samples, and device-targeted allocator peaks."
         ),
         profiles=(

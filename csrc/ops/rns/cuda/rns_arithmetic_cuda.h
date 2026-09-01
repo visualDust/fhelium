@@ -27,8 +27,8 @@ void rns_to_montgomery_inplace_cuda(torch::Tensor standard_residues,
 void rns_from_montgomery_inplace_cuda(torch::Tensor montgomery_residues,
                                       const torch::Tensor rns_params);
 
-void rns_canonicalize_residues_inplace_cuda(torch::Tensor lazy_residues,
-                                            const torch::Tensor rns_params);
+void rns_reduce_to_standard_inplace_cuda(torch::Tensor lazy_residues,
+                                         const torch::Tensor rns_params);
 
 torch::Tensor rns_add_lazy_cuda(const torch::Tensor lhs,
                                 const torch::Tensor rhs,
@@ -43,7 +43,7 @@ torch::Tensor rns_sub_lazy_cuda(const torch::Tensor lhs,
                                 const torch::Tensor rhs,
                                 const torch::Tensor rns_params);
 
-void rns_center_residues_inplace_cuda(torch::Tensor canonical_residues,
+void rns_center_residues_inplace_cuda(torch::Tensor standard_residues,
                                       const torch::Tensor rns_params);
 
 void rns_shift_residues_positive_inplace_cuda(torch::Tensor centered_residues,

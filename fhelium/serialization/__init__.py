@@ -1,4 +1,4 @@
-"""Exact typed serialization primitives for FHElium values."""
+"""Typed serialization primitives for FHElium values."""
 
 from fhelium.serialization.safetensors import (
     FILE_FORMAT,

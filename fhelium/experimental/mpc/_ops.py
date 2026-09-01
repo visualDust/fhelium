@@ -4,7 +4,7 @@ The functions form share-generation and aggregation steps for collective key
 generation, evaluation-key generation, collective decryption arithmetic, and
 public-key switching arithmetic. Their supported scope is arithmetic
 correctness for compatible FHElium values and engine tensors. The implementation
-accepts a CPU or CUDA ``CkksEngine``. The module provides no
+accepts a CPU or CUDA ``Engine``. The module provides no
 authentication, transcript binding, transport, replay protection,
 malicious-party security, secure aggregation, lineage or persistence policy,
 reviewed output-error sampler, supported smudging/useful-precision parameter
@@ -14,22 +14,27 @@ begin with
 randomness and errors.  Zero or small errors are correctness fixtures with no
 privacy property.
 
-Each call operates against one :class:`~fhelium.CkksEngine`.  Secret shares
+Each call operates against one :class:`~fhelium.eager.Engine`.  Secret shares
 and ephemeral Protocol-2 secrets are ordinary process-local
 :class:`~fhelium.SecretKey` values in the complete level-zero QP basis.
-Common randomness and protocol messages are raw integral tensors on the engine
-device.  The caller owns party membership, all-party participation, freshness,
+Common randomness and protocol messages are raw integral tensors on their
+protocol-selected device. The caller owns party membership, all-party participation, freshness,
 delivery, and pairing each aggregate key with the correct additive shares.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import Literal, cast
 
 import torch
 
-from fhelium.core import (
+from fhelium.backend.ckks.crypto._galois import (
+    apply_coefficient_galois_automorphism,
+    rotation_galois_element,
+)
+from fhelium.values import (
     Ciphertext,
     ConjugationKey,
     Plaintext,
@@ -38,11 +43,7 @@ from fhelium.core import (
     RotationKey,
     SecretKey,
 )
-from fhelium.engine import CkksEngine
-from fhelium.engine.galois import (
-    apply_coefficient_galois_automorphism,
-    rotation_galois_element,
-)
+from fhelium.eager import Engine
 
 __all__ = [
     "aggregate_ckg",
@@ -68,39 +69,35 @@ RkgMessage = tuple[torch.Tensor, torch.Tensor]
 
 
 def _require_secret_share(
-    engine: CkksEngine,
+    engine: Engine,
     secret_share: SecretKey,
     *,
     value_name: str,
 ) -> None:
     try:
-        engine._assert_engine_key(
-            secret_share,
-            expected_type=SecretKey,
-            modulus_basis="QP",
-        )
+        engine.validate_secret_key(secret_share)
+        if secret_share.modulus_basis != "QP":
+            raise ValueError("SecretKey requires basis QP")
     except (TypeError, ValueError) as error:
         raise type(error)(f"{value_name}: {error}") from error
 
 
 def _require_public_key(
-    engine: CkksEngine,
+    engine: Engine,
     public_key: PublicKey,
     *,
     value_name: str,
 ) -> None:
     try:
-        engine._assert_engine_key(
-            public_key,
-            expected_type=PublicKey,
-            modulus_basis="Q",
-        )
+        engine.validate_public_key(public_key)
+        if public_key.modulus_basis != "Q":
+            raise ValueError("PublicKey requires basis Q")
     except (TypeError, ValueError) as error:
         raise type(error)(f"{value_name}: {error}") from error
 
 
 def _require_source_ciphertext(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
 ) -> None:
     if not isinstance(ciphertext, Ciphertext):
@@ -113,22 +110,44 @@ def _require_source_ciphertext(
         residue_representation="standard",
         components=2,
     )
-    engine._assert_engine_ciphertext(ciphertext)
+    engine.validate_ciphertext(ciphertext)
 
 
 def _expected_rns_shape(
-    engine: CkksEngine,
+    engine: Engine,
     *,
     basis: Basis,
     count: int | None = None,
 ) -> tuple[int, ...]:
-    limb_count = engine.rns_layout.row_count(0, include_p=basis == "QP")
+    limb_count = engine.config.num_q_primes + (
+        engine.config.num_p_primes if basis == "QP" else 0
+    )
     tail = (limb_count, engine.config.N)
     return tail if count is None else (count, *tail)
 
 
+def _p_product_montgomery_q(
+    engine: Engine,
+    device: torch.device,
+) -> torch.Tensor:
+    r"""Return $P R \bmod q_i$ in level-zero Q-row order."""
+
+    rns_context = engine._rns_context_for(device)
+    montgomery = rns_context.montgomery_parameters
+    product_p = math.prod(montgomery.moduli[-engine.config.num_p_primes :])
+    product_with_radix = product_p * montgomery.R
+    return torch.tensor(
+        [
+            product_with_radix % montgomery.moduli[prime_id]
+            for prime_id in rns_context.rns_layout.prime_ids(0)
+        ],
+        dtype=engine.config.torch_dtype,
+        device=device,
+    )
+
+
 def _require_raw_rns(
-    engine: CkksEngine,
+    engine: Engine,
     value: torch.Tensor,
     *,
     expected_shape: tuple[int, ...],
@@ -145,11 +164,6 @@ def _require_raw_rns(
             f"{value_name} dtype differs from engine: "
             f"{value.dtype} != {engine.config.torch_dtype}"
         )
-    if value.device != engine.device:
-        raise ValueError(
-            f"{value_name} device differs from engine: "
-            f"{value.device} != {engine.device}"
-        )
     if tuple(value.shape) != expected_shape:
         raise ValueError(
             f"{value_name} shape differs from the required layout: "
@@ -160,7 +174,7 @@ def _require_raw_rns(
 
 
 def _require_common_uniform(
-    engine: CkksEngine,
+    engine: Engine,
     common_a: torch.Tensor,
     *,
     basis: Basis,
@@ -179,7 +193,7 @@ def _require_common_uniform(
 
 
 def _require_compact_coefficients(
-    engine: CkksEngine,
+    engine: Engine,
     coefficients: torch.Tensor,
     *,
     batch_shape: torch.Size | tuple[int, ...],
@@ -194,20 +208,22 @@ def _require_compact_coefficients(
 
 
 def _sample_gaussian_coefficients(
-    engine: CkksEngine,
+    engine: Engine,
     *,
     count: int,
+    device: torch.device,
 ) -> torch.Tensor:
     if type(count) is not int or count <= 0:
         raise ValueError(f"count must be a positive integer, got {count!r}")
     samples = [
-        engine.rng.discrete_gaussian(repeats=1)[0][0] for _ in range(count)
+        engine._rng_for(device).discrete_gaussian(repeats=1)[0][0]
+        for _ in range(count)
     ]
     return torch.stack(samples, dim=0).contiguous()
 
 
 def _lift_coefficients(
-    engine: CkksEngine,
+    engine: Engine,
     coefficients: torch.Tensor,
     *,
     level: int,
@@ -217,19 +233,20 @@ def _lift_coefficients(
     include_p = basis == "QP"
     contiguous = coefficients.contiguous()
     max_abs = int(torch.max(torch.abs(contiguous)).item())
-    result = engine.rns_runtime.lift_integer_coefficients_exact(
+    rns_context = engine._rns_context_for(coefficients.device)
+    result = rns_context.lift_integer_coefficients_exact(
         contiguous,
         level,
         include_p=include_p,
         max_abs=max_abs,
     )
     if to_ntt:
-        engine.rns_runtime.forward_to_montgomery_(
+        engine._ntt_context_for(coefficients.device).forward_to_montgomery_(
             result,
             include_p=include_p,
         )
     else:
-        engine.rns_runtime.canonicalize_residues_(
+        rns_context.reduce_to_standard_(
             result,
             include_p=include_p,
         )
@@ -237,14 +254,15 @@ def _lift_coefficients(
 
 
 def _sample_gaussian_rns(
-    engine: CkksEngine,
+    engine: Engine,
     *,
     count: int,
     basis: Basis,
+    device: torch.device,
 ) -> torch.Tensor:
     return _lift_coefficients(
         engine,
-        _sample_gaussian_coefficients(engine, count=count),
+        _sample_gaussian_coefficients(engine, count=count, device=device),
         level=0,
         basis=basis,
         to_ntt=True,
@@ -252,7 +270,7 @@ def _sample_gaussian_rns(
 
 
 def _sum_rns_lazy(
-    engine: CkksEngine,
+    engine: Engine,
     values: Sequence[torch.Tensor],
     *,
     expected_shape: tuple[int, ...],
@@ -269,8 +287,9 @@ def _sum_rns_lazy(
             value_name=f"{value_name}[{index}]",
         )
     result = values[0].clone()
+    rns_context = engine._rns_context_for(result.device)
     for value in values[1:]:
-        result = engine.rns_runtime.add_lazy(
+        result = rns_context.add_lazy(
             result,
             value,
             include_p=include_p,
@@ -278,8 +297,8 @@ def _sum_rns_lazy(
     return result
 
 
-def _sum_rns_canonical(
-    engine: CkksEngine,
+def _sum_rns_standard(
+    engine: Engine,
     values: Sequence[torch.Tensor],
     *,
     expected_shape: tuple[int, ...],
@@ -295,13 +314,14 @@ def _sum_rns_canonical(
             value_name=f"{value_name}[{index}]",
         )
     result = values[0].clone()
+    rns_context = engine._rns_context_for(result.device)
     for value in values[1:]:
-        result = engine.rns_runtime.add_canonical(result, value)
+        result = rns_context.add_standard(result, value)
     return result
 
 
 def _require_rkg_message(
-    engine: CkksEngine,
+    engine: Engine,
     message: RkgMessage,
     *,
     value_name: str,
@@ -311,7 +331,7 @@ def _require_rkg_message(
     expected_shape = _expected_rns_shape(
         engine,
         basis="QP",
-        count=engine.rns_layout.key_digit_count,
+        count=engine.key_digit_count,
     )
     for family_index, family in enumerate(message):
         _require_raw_rns(
@@ -323,21 +343,22 @@ def _require_rkg_message(
 
 
 def _embed_p_times_secret_by_digit(
-    engine: CkksEngine,
+    engine: Engine,
     secret_share: SecretKey,
 ) -> torch.Tensor:
-    q_rows = secret_share.data[: engine.rns_runtime.q_row_stop].clone()
-    engine.rns_runtime.montgomery_mul_row_scalars_(
+    rns_context = engine._rns_context_for(secret_share.device)
+    q_rows = secret_share.data[: rns_context.q_row_stop].clone()
+    rns_context.montgomery_mul_row_scalars_(
         q_rows,
-        engine.p_product_montgomery_q,
+        _p_product_montgomery_q(engine, secret_share.device),
     )
-    digit_count = engine.rns_layout.key_digit_count
+    digit_count = engine.key_digit_count
     embedded = torch.zeros(
         _expected_rns_shape(engine, basis="QP", count=digit_count),
         dtype=engine.config.torch_dtype,
-        device=engine.device,
+        device=secret_share.device,
     )
-    for digit_spec in engine.rns_layout.digit_specs(0):
+    for digit_spec in rns_context.rns_layout.digit_specs(0):
         rows = cast(tuple[int, ...], digit_spec.prime_ids)
         row_start = rows[0]
         row_stop = rows[-1] + 1
@@ -349,22 +370,23 @@ def _embed_p_times_secret_by_digit(
 
 
 def _automorph_secret_share(
-    engine: CkksEngine,
+    engine: Engine,
     secret_share: SecretKey,
     *,
     galois_element: int,
 ) -> SecretKey:
+    rns_context = engine._rns_context_for(secret_share.device)
+    ntt_context = engine._ntt_context_for(secret_share.device)
     transformed = secret_share.data.clone()
-    engine.rns_runtime.inverse_montgomery_(transformed, include_p=True)
+    ntt_context.inverse_montgomery_(transformed, include_p=True)
     transformed = apply_coefficient_galois_automorphism(
         transformed,
         galois_element,
-        engine.rns_runtime.moduli,
+        rns_context.moduli,
     )
-    engine.rns_runtime.forward_montgomery_(transformed, include_p=True)
+    ntt_context.forward_montgomery_(transformed, include_p=True)
     return SecretKey(
         data=transformed,
-        context_id=secret_share.context_id,
         prime_ids=secret_share.prime_ids,
         polynomial_domain="ntt",
         modulus_basis="QP",
@@ -373,14 +395,15 @@ def _automorph_secret_share(
 
 
 def _galois_key_share(
-    engine: CkksEngine,
+    engine: Engine,
     secret_share: SecretKey,
     common_a_by_digit: torch.Tensor,
     *,
     galois_element: int,
 ) -> torch.Tensor:
     _require_secret_share(engine, secret_share, value_name="secret_share")
-    digit_count = engine.rns_layout.key_digit_count
+    rns_context = engine._rns_context_for(secret_share.device)
+    digit_count = engine.key_digit_count
     _require_common_uniform(
         engine,
         common_a_by_digit,
@@ -393,7 +416,7 @@ def _galois_key_share(
         galois_element=galois_element,
     )
     embedded = _embed_p_times_secret_by_digit(engine, transformed)
-    destination_product = engine.rns_runtime.montgomery_mul(
+    destination_product = rns_context.montgomery_mul(
         common_a_by_digit,
         secret_share.data,
         include_p=True,
@@ -402,21 +425,22 @@ def _galois_key_share(
         engine,
         count=digit_count,
         basis="QP",
+        device=secret_share.device,
     )
-    share = engine.rns_runtime.sub_lazy(
+    share = rns_context.sub_lazy(
         embedded,
         destination_product,
         include_p=True,
     )
-    return engine.rns_runtime.add_lazy(share, error, include_p=True)
+    return rns_context.add_lazy(share, error, include_p=True)
 
 
 def _aggregate_galois_key_data(
-    engine: CkksEngine,
+    engine: Engine,
     shares: Sequence[torch.Tensor],
     common_a_by_digit: torch.Tensor,
 ) -> torch.Tensor:
-    digit_count = engine.rns_layout.key_digit_count
+    digit_count = engine.key_digit_count
     expected_shape = _expected_rns_shape(
         engine,
         basis="QP",
@@ -439,25 +463,26 @@ def _aggregate_galois_key_data(
 
 
 def _active_q_secret_rows(
-    engine: CkksEngine,
+    engine: Engine,
     secret_share: SecretKey,
     *,
     level: int,
 ) -> torch.Tensor:
+    rns_context = engine._rns_context_for(secret_share.device)
     return secret_share.data[
-        engine.rns_runtime.level_row_starts[
-            level
-        ] : engine.rns_runtime.q_row_stop
+        rns_context.level_row_starts[level] : rns_context.q_row_stop
     ]
 
 
 def _ciphertext_secret_product(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
     secret_share: SecretKey,
 ) -> torch.Tensor:
-    c1_ntt = engine.rns_runtime.forward_to_montgomery(ciphertext.c1)
-    product = engine.rns_runtime.montgomery_mul(
+    rns_context = engine._rns_context_for(ciphertext.device)
+    ntt_context = engine._ntt_context_for(ciphertext.device)
+    c1_ntt = ntt_context.forward_to_montgomery(ciphertext.c1)
+    product = rns_context.montgomery_mul(
         c1_ntt,
         _active_q_secret_rows(
             engine,
@@ -465,21 +490,26 @@ def _ciphertext_secret_product(
             level=ciphertext.level,
         ),
     )
-    engine.rns_runtime.inverse_to_standard_(product)
+    ntt_context.inverse_to_standard_(product)
     return product
 
 
-def sample_secret_share(engine: CkksEngine) -> SecretKey:
+def sample_secret_share(
+    engine: Engine,
+    *,
+    device: torch.device | str | None = None,
+) -> SecretKey:
     r"""Sample one additive secret share in complete level-zero QP form."""
 
-    return engine.create_secret_key(modulus_basis="QP")
+    return engine.create_secret_key(modulus_basis="QP", device=device)
 
 
 def sample_common_uniform(
-    engine: CkksEngine,
+    engine: Engine,
     *,
     basis: Basis,
     count: int | None = None,
+    device: torch.device | str | None = None,
 ) -> torch.Tensor:
     r"""Sample raw common uniform NTT/Montgomery tensors.
 
@@ -488,7 +518,7 @@ def sample_common_uniform(
     returns one unbatched ``[limb, N]`` tensor.  Every explicit positive
     ``count``, including ``count=1``, returns
     ``[count, limb, N]`` with a leading item/digit axis.  The caller must
-    distribute the exact returned values to every participant.
+    distribute the returned values to every participant.
     """
 
     if basis not in ("Q", "QP"):
@@ -497,10 +527,14 @@ def sample_common_uniform(
         raise ValueError(f"count must be a positive integer, got {count!r}")
     sample_count = 1 if count is None else count
     include_p = basis == "QP"
-    moduli = engine.rns_runtime.moduli_for_basis(0, include_p=include_p)
+    target = (
+        torch.get_default_device() if device is None else torch.device(device)
+    )
+    rns_context = engine._rns_context_for(target)
+    moduli = rns_context.moduli_for_basis(0, include_p=include_p)
     repeats = engine.config.num_p_primes if include_p else 0
     values = [
-        engine.rng.randint([moduli], repeats=repeats)[0]
+        engine._rng_for(target).randint([moduli], repeats=repeats)[0]
         for _ in range(sample_count)
     ]
     if count is None:
@@ -509,7 +543,7 @@ def sample_common_uniform(
 
 
 def ckg_share(
-    engine: CkksEngine,
+    engine: Engine,
     secret_share: SecretKey,
     common_a: torch.Tensor,
 ) -> torch.Tensor:
@@ -517,14 +551,17 @@ def ckg_share(
 
     _require_secret_share(engine, secret_share, value_name="secret_share")
     _require_common_uniform(engine, common_a, basis="Q")
-    error = _sample_gaussian_rns(engine, count=1, basis="Q")[0]
-    secret_q = secret_share.data[: engine.rns_runtime.q_row_stop]
-    product = engine.rns_runtime.montgomery_mul(common_a, secret_q)
-    return engine.rns_runtime.sub_lazy(error, product)
+    rns_context = engine._rns_context_for(common_a.device)
+    error = _sample_gaussian_rns(
+        engine, count=1, basis="Q", device=common_a.device
+    )[0]
+    secret_q = secret_share.data[: rns_context.q_row_stop]
+    product = rns_context.montgomery_mul(common_a, secret_q)
+    return rns_context.sub_lazy(error, product)
 
 
 def aggregate_ckg(
-    engine: CkksEngine,
+    engine: Engine,
     shares: Sequence[torch.Tensor],
     common_a: torch.Tensor,
 ) -> PublicKey:
@@ -540,8 +577,9 @@ def aggregate_ckg(
     )
     return PublicKey(
         data=torch.stack((component0, common_a), dim=0),
-        context_id=engine.context.context_id,
-        prime_ids=engine.rns_layout.prime_ids(0),
+        prime_ids=engine._rns_context_for(common_a.device).rns_layout.prime_ids(
+            0
+        ),
         polynomial_domain="ntt",
         modulus_basis="Q",
         residue_representation="montgomery",
@@ -549,7 +587,7 @@ def aggregate_ckg(
 
 
 def rkg_round1_share(
-    engine: CkksEngine,
+    engine: Engine,
     secret_share: SecretKey,
     ephemeral_share: SecretKey,
     common_a_by_digit: torch.Tensor,
@@ -562,7 +600,8 @@ def rkg_round1_share(
         ephemeral_share,
         value_name="ephemeral_share",
     )
-    digit_count = engine.rns_layout.key_digit_count
+    rns_context = engine._rns_context_for(secret_share.device)
+    digit_count = engine.key_digit_count
     _require_common_uniform(
         engine,
         common_a_by_digit,
@@ -573,33 +612,35 @@ def rkg_round1_share(
         engine,
         count=digit_count,
         basis="QP",
+        device=secret_share.device,
     )
     error1 = _sample_gaussian_rns(
         engine,
         count=digit_count,
         basis="QP",
+        device=secret_share.device,
     )
-    ephemeral_product = engine.rns_runtime.montgomery_mul(
+    ephemeral_product = rns_context.montgomery_mul(
         common_a_by_digit,
         ephemeral_share.data,
         include_p=True,
     )
-    family0 = engine.rns_runtime.sub_lazy(
+    family0 = rns_context.sub_lazy(
         _embed_p_times_secret_by_digit(engine, secret_share),
         ephemeral_product,
         include_p=True,
     )
-    family0 = engine.rns_runtime.add_lazy(
+    family0 = rns_context.add_lazy(
         family0,
         error0,
         include_p=True,
     )
-    family1 = engine.rns_runtime.montgomery_mul(
+    family1 = rns_context.montgomery_mul(
         common_a_by_digit,
         secret_share.data,
         include_p=True,
     )
-    family1 = engine.rns_runtime.add_lazy(
+    family1 = rns_context.add_lazy(
         family1,
         error1,
         include_p=True,
@@ -608,7 +649,7 @@ def rkg_round1_share(
 
 
 def aggregate_rkg_round1(
-    engine: CkksEngine,
+    engine: Engine,
     shares: Sequence[RkgMessage],
 ) -> RkgMessage:
     r"""Aggregate each Protocol-2 round-one message family independently."""
@@ -620,7 +661,7 @@ def aggregate_rkg_round1(
     expected_shape = _expected_rns_shape(
         engine,
         basis="QP",
-        count=engine.rns_layout.key_digit_count,
+        count=engine.key_digit_count,
     )
     family0 = _sum_rns_lazy(
         engine,
@@ -640,7 +681,7 @@ def aggregate_rkg_round1(
 
 
 def rkg_round2_share(
-    engine: CkksEngine,
+    engine: Engine,
     secret_share: SecretKey,
     ephemeral_share: SecretKey,
     aggregate_round1: RkgMessage,
@@ -658,38 +699,41 @@ def rkg_round2_share(
         aggregate_round1,
         value_name="aggregate_round1",
     )
-    digit_count = engine.rns_layout.key_digit_count
+    rns_context = engine._rns_context_for(secret_share.device)
+    digit_count = engine.key_digit_count
     error2 = _sample_gaussian_rns(
         engine,
         count=digit_count,
         basis="QP",
+        device=secret_share.device,
     )
     error3 = _sample_gaussian_rns(
         engine,
         count=digit_count,
         basis="QP",
+        device=secret_share.device,
     )
-    family0 = engine.rns_runtime.montgomery_mul(
+    family0 = rns_context.montgomery_mul(
         aggregate_round1[0],
         secret_share.data,
         include_p=True,
     )
-    family0 = engine.rns_runtime.add_lazy(
+    family0 = rns_context.add_lazy(
         family0,
         error2,
         include_p=True,
     )
-    ephemeral_minus_secret = engine.rns_runtime.sub_lazy(
+    ephemeral_minus_secret = rns_context.sub_lazy(
         ephemeral_share.data,
         secret_share.data,
         include_p=True,
     )
-    family1 = engine.rns_runtime.montgomery_mul(
+    family1 = rns_context.montgomery_mul(
         aggregate_round1[1],
         ephemeral_minus_secret,
         include_p=True,
     )
-    family1 = engine.rns_runtime.add_lazy(
+    family1 = rns_context.add_lazy(
         family1,
         error3,
         include_p=True,
@@ -698,7 +742,7 @@ def rkg_round2_share(
 
 
 def aggregate_rkg_round2(
-    engine: CkksEngine,
+    engine: Engine,
     shares: Sequence[RkgMessage],
     aggregate_round1: RkgMessage,
 ) -> RelinearizationKey:
@@ -716,7 +760,7 @@ def aggregate_rkg_round2(
     expected_shape = _expected_rns_shape(
         engine,
         basis="QP",
-        count=engine.rns_layout.key_digit_count,
+        count=engine.key_digit_count,
     )
     family0 = _sum_rns_lazy(
         engine,
@@ -732,15 +776,15 @@ def aggregate_rkg_round2(
         value_name="round2_family1",
         include_p=True,
     )
-    component0 = engine.rns_runtime.add_lazy(
+    rns_context = engine._rns_context_for(family0.device)
+    component0 = rns_context.add_lazy(
         family0,
         family1,
         include_p=True,
     )
     return RelinearizationKey(
         data=torch.stack((component0, aggregate_round1[1]), dim=1),
-        context_id=engine.context.context_id,
-        prime_ids=engine.rns_layout.prime_ids(0, include_p=True),
+        prime_ids=rns_context.rns_layout.prime_ids(0, include_p=True),
         polynomial_domain="ntt",
         modulus_basis="QP",
         residue_representation="montgomery",
@@ -748,14 +792,14 @@ def aggregate_rkg_round2(
 
 
 def rotation_key_share(
-    engine: CkksEngine,
+    engine: Engine,
     secret_share: SecretKey,
     common_a_by_digit: torch.Tensor,
     rotation_step: int,
 ) -> torch.Tensor:
     r"""Return one distributed rotation-key share for a signed slot step."""
 
-    canonical_step = RotationKey.canonical_step(
+    normalized_step = RotationKey.normalize_step(
         rotation_step,
         ring_dimension=engine.config.N,
     )
@@ -765,21 +809,21 @@ def rotation_key_share(
         common_a_by_digit,
         galois_element=rotation_galois_element(
             engine.config.N,
-            canonical_step,
+            normalized_step,
             engine.galois_generator,
         ),
     )
 
 
 def aggregate_rotation_key(
-    engine: CkksEngine,
+    engine: Engine,
     shares: Sequence[torch.Tensor],
     common_a_by_digit: torch.Tensor,
     rotation_step: int,
 ) -> RotationKey:
     r"""Aggregate distributed shares into one ordinary rotation key."""
 
-    canonical_step = RotationKey.canonical_step(
+    normalized_step = RotationKey.normalize_step(
         rotation_step,
         ring_dimension=engine.config.N,
     )
@@ -789,17 +833,18 @@ def aggregate_rotation_key(
             shares,
             common_a_by_digit,
         ),
-        context_id=engine.context.context_id,
-        prime_ids=engine.rns_layout.prime_ids(0, include_p=True),
+        prime_ids=engine._rns_context_for(
+            common_a_by_digit.device
+        ).rns_layout.prime_ids(0, include_p=True),
         polynomial_domain="ntt",
         modulus_basis="QP",
         residue_representation="montgomery",
-        rotation_step=canonical_step,
+        rotation_step=normalized_step,
     )
 
 
 def conjugation_key_share(
-    engine: CkksEngine,
+    engine: Engine,
     secret_share: SecretKey,
     common_a_by_digit: torch.Tensor,
 ) -> torch.Tensor:
@@ -814,7 +859,7 @@ def conjugation_key_share(
 
 
 def aggregate_conjugation_key(
-    engine: CkksEngine,
+    engine: Engine,
     shares: Sequence[torch.Tensor],
     common_a_by_digit: torch.Tensor,
 ) -> ConjugationKey:
@@ -826,8 +871,9 @@ def aggregate_conjugation_key(
             shares,
             common_a_by_digit,
         ),
-        context_id=engine.context.context_id,
-        prime_ids=engine.rns_layout.prime_ids(0, include_p=True),
+        prime_ids=engine._rns_context_for(
+            common_a_by_digit.device
+        ).rns_layout.prime_ids(0, include_p=True),
         polynomial_domain="ntt",
         modulus_basis="QP",
         residue_representation="montgomery",
@@ -835,7 +881,7 @@ def aggregate_conjugation_key(
 
 
 def unsafe_collective_decryption_share(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
     secret_share: SecretKey,
     *,
@@ -843,9 +889,9 @@ def unsafe_collective_decryption_share(
 ) -> torch.Tensor:
     r"""Return arithmetic-only $c_1s_i+e_i$ for collective decryption.
 
-    ``smudging_error_coefficients`` must have exact
-    ``[*ciphertext.batch_shape, N]`` contiguous engine-integral layout on
-    ``engine.device``.  Distribution selection and privacy analysis belong to
+    ``smudging_error_coefficients`` must have
+    ``[*ciphertext.batch_shape, N]`` contiguous engine-integral layout on the
+    ciphertext device. Distribution selection and privacy analysis belong to
     the caller.
     """
 
@@ -865,11 +911,13 @@ def unsafe_collective_decryption_share(
         basis="Q",
         to_ntt=False,
     )
-    return engine.rns_runtime.add_canonical(product, error)
+    return engine._rns_context_for(ciphertext.device).add_standard(
+        product, error
+    )
 
 
 def unsafe_fuse_collective_decryption(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
     shares: Sequence[torch.Tensor],
 ) -> Plaintext:
@@ -881,30 +929,28 @@ def unsafe_fuse_collective_decryption(
         ciphertext.limb_count,
         engine.config.N,
     )
-    share_sum = _sum_rns_canonical(
+    share_sum = _sum_rns_standard(
         engine,
         shares,
         expected_shape=expected_shape,
         value_name="shares",
     )
-    phase = engine.rns_runtime.add_canonical(ciphertext.c0, share_sum)
-    coefficients = engine._decryptor._reconstruct_tail_q_coefficients_float64(
-        phase,
-        ciphertext,
+    phase = engine._rns_context_for(ciphertext.device).add_standard(
+        ciphertext.c0, share_sum
     )
+    coefficients = engine.reconstruct_tail_q_coefficients(phase, ciphertext)
     return Plaintext(
         message=None,
         level=ciphertext.level,
         scale=ciphertext.scale,
         data=coefficients,
-        context_id=ciphertext.context_id,
         representation="approximate_coefficients",
         polynomial_domain="coefficient",
     )
 
 
 def unsafe_public_key_switch_share(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
     secret_share: SecretKey,
     destination_public_key: PublicKey,
@@ -915,9 +961,9 @@ def unsafe_public_key_switch_share(
 ) -> RkgMessage:
     r"""Return arithmetic-only Protocol-4 share components.
 
-    All caller-provided coefficient tensors must have exact
-    ``[*ciphertext.batch_shape, N]`` contiguous engine-integral layout on
-    ``engine.device``.  Freshness, smallness, smudging adequacy, and
+    All caller-provided coefficient tensors must have
+    ``[*ciphertext.batch_shape, N]`` contiguous engine-integral layout on the
+    ciphertext device. Freshness, smallness, smudging adequacy, and
     destination-key provenance are caller responsibilities.
     """
 
@@ -952,19 +998,21 @@ def unsafe_public_key_switch_share(
         basis="Q",
         to_ntt=True,
     )
-    start = engine.rns_runtime.level_row_starts[ciphertext.level]
+    rns_context = engine._rns_context_for(ciphertext.device)
+    ntt_context = engine._ntt_context_for(ciphertext.device)
+    start = rns_context.level_row_starts[ciphertext.level]
     destination0 = destination_public_key.k0[start:]
     destination1 = destination_public_key.k1[start:]
-    encrypted0 = engine.rns_runtime.montgomery_mul(
+    encrypted0 = rns_context.montgomery_mul(
         ephemeral_rns,
         destination0,
     )
-    encrypted1 = engine.rns_runtime.montgomery_mul(
+    encrypted1 = rns_context.montgomery_mul(
         ephemeral_rns,
         destination1,
     )
-    engine.rns_runtime.inverse_to_standard_(encrypted0)
-    engine.rns_runtime.inverse_to_standard_(encrypted1)
+    ntt_context.inverse_to_standard_(encrypted0)
+    ntt_context.inverse_to_standard_(encrypted1)
     error0 = _lift_coefficients(
         engine,
         smudging_error0_coefficients,
@@ -979,17 +1027,17 @@ def unsafe_public_key_switch_share(
         basis="Q",
         to_ntt=False,
     )
-    component0 = engine.rns_runtime.add_canonical(
+    component0 = rns_context.add_standard(
         source_product,
         encrypted0,
     )
-    component0 = engine.rns_runtime.add_canonical(component0, error0)
-    component1 = engine.rns_runtime.add_canonical(encrypted1, error1)
+    component0 = rns_context.add_standard(component0, error0)
+    component1 = rns_context.add_standard(encrypted1, error1)
     return component0, component1
 
 
 def unsafe_fuse_public_key_switch(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
     destination_public_key: PublicKey,
     shares: Sequence[RkgMessage],
@@ -1019,19 +1067,19 @@ def unsafe_fuse_public_key_switch(
                 expected_shape=expected_shape,
                 value_name=f"shares[{index}][{component_index}]",
             )
-    component0_sum = _sum_rns_canonical(
+    component0_sum = _sum_rns_standard(
         engine,
         [share[0] for share in shares],
         expected_shape=expected_shape,
         value_name="share_component0",
     )
-    component1 = _sum_rns_canonical(
+    component1 = _sum_rns_standard(
         engine,
         [share[1] for share in shares],
         expected_shape=expected_shape,
         value_name="share_component1",
     )
-    component0 = engine.rns_runtime.add_canonical(
+    component0 = engine._rns_context_for(ciphertext.device).add_standard(
         ciphertext.c0,
         component0_sum,
     )
@@ -1039,7 +1087,6 @@ def unsafe_fuse_public_key_switch(
         data=torch.stack((component0, component1), dim=0),
         level=ciphertext.level,
         scale=ciphertext.scale,
-        context_id=ciphertext.context_id,
         prime_ids=ciphertext.prime_ids,
         polynomial_domain="coefficient",
         modulus_basis="Q",

@@ -44,7 +44,7 @@ interface CompareRow {
 }
 
 function runGpuCountLabel(run: BenchmarkV1Run): string {
-  return `${runExecutionBackendLabel(run)} · ${run.execution.device}`
+  return `${runExecutionBackendLabel(run)} · selected ${run.execution.device}`
 }
 
 const CompareTable = defineComponent({

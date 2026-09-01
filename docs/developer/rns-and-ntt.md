@@ -2,12 +2,12 @@
 
 FHElium represents large CKKS moduli as dense residue rows and uses NTT-domain
 pointwise arithmetic for polynomial multiplication. Correctness depends on
-mapping every compact active row to the correct canonical modulus and transform
+mapping every compact active row to the correct configured modulus and transform
 parameters.
 
-## Canonical chain order
+## Chain order
 
-`RnsChain` uses canonical prime IDs in `[Q | P]` order:
+`RnsChain` assigns prime IDs in `[Q | P]` order:
 
 ```text
 Q prime IDs: 0 ... num_q - 1
@@ -33,7 +33,7 @@ graph TB
 ```
 
 The dense tensor is compact at the current level, while `prime_ids` and runtime
-layout map each row to canonical parameters.
+layout map each row to its parameter rows.
 
 ## Placement-independent layout
 
@@ -49,31 +49,40 @@ It intentionally contains no device assignment or communication policy. An
 SPMD workload may partition prime IDs, but that partition does not redefine the
 mathematical layout or native application binary interface (ABI).
 
-## `RnsRuntime` responsibility
+## RNS and NTT contexts
 
-The runtime binds layout to device-resident arithmetic parameters and exposes
-state-checked operations such as:
+`RnsContext` binds the residue number system (RNS) layout to device-resident
+arithmetic parameters. It provides:
 
-- canonical/lazy modular add/subtract;
+- standard/lazy modular add/subtract;
 - Montgomery multiply and conversions;
 - row selection and extension/reduction helpers;
-- forward/inverse NTT through the configured backend.
 
-A caller must provide the correct level, basis, and row mapping. A native operator
-must not infer a global prime solely from an ambiguous local row count.
+`NttContext` composes one `RnsContext` and owns the selected number theoretic
+transform (NTT) policy, device tables, executor, and forward/inverse transform
+methods. The two contexts share the native parameter tensor because the native
+NTT application binary interface reads both RNS parameters and inverse-transform
+normalization from that tensor. An NTT execution resource is separate from an
+RNS execution resource; it does not inherit or substitute for one.
+
+A caller or lowering supplies the physical basis role and any internal digit-row
+mapping. A native operator must not infer a global prime solely from an
+ambiguous local row count.
 
 ## Implementation path
 
-`CkksEngine` creates one `RnsRuntime` for its selected local device. Runtime
-construction builds the canonical Q/P chain, Montgomery constants, a dense
-`[parameter, limb]` tensor, the selected NTT plan, device-resident twiddle
-tables, and one backend object. Arithmetic calls then pass exact tensor views
+`fhelium.eager.Engine` creates its Q/P chain and immutable `RnsLayout` once.
+When a call first selects a local device, the Engine creates one `RnsContext`
+that binds this shared layout to device-resident Montgomery parameters and one
+composing `NttContext`. NTT construction selects the transform policy and
+builds its device tables and executor. Arithmetic calls then pass tensor views
 through generated wrappers to the shared PyTorch operator schemas.
 
 ```mermaid
 graph TB
-    ENG[CkksEngine]
-    RUN[RnsRuntime]
+    ENG[eager Engine]
+    RNSCTX[RnsContext]
+    NTTCTX[NttContext]
     LAYOUT[RnsChain + RnsLayout]
     PARAM[RnsParameterStore<br/>aligned parameter views]
     PLAN[NTT policy + host plan]
@@ -84,21 +93,23 @@ graph TB
     CPU[C++ CPU implementation]
     CUDA[CUDA implementation]
 
-    ENG --> RUN
-    RUN --> LAYOUT
-    RUN --> PARAM
-    RUN --> PLAN --> TABLE --> BACKEND
+    ENG --> RNSCTX
+    ENG --> NTTCTX
+    NTTCTX --> RNSCTX
+    RNSCTX --> LAYOUT
+    RNSCTX --> PARAM
+    NTTCTX --> PLAN --> TABLE --> BACKEND
     PARAM --> WRAP
     BACKEND --> WRAP --> DISP
     DISP -->|CPU| CPU
     DISP -->|CUDA| CUDA
 ```
 
-For an operand with `k` compact active limbs, `RnsRuntime` selects a zero-copy
-parameter view with exactly `k` columns in the same `prime_ids` order. NTT
-backends similarly slice twiddles and parameter rows before invoking an
-operator. The registered C++ implementation validates tensor axes and device;
-it does not receive a Python level number or look up an engine.
+For an operand with `k` compact active limbs, `RnsContext` selects a zero-copy
+parameter view with exactly `k` columns for the supplied physical basis.
+`NttContext` uses that row mapping while slicing its transform tables before
+invoking an operator. The registered C++ implementation validates tensor axes
+and device; it does not receive a Python level number or look up an engine.
 
 ## NTT backend protocol
 
@@ -117,7 +128,7 @@ graph TD
     F --> F1[radix-4 / radix-8 / radix-16]
 ```
 
-The current canonical policy names are defined in
+The current policy names are defined in
 `fhelium/config/ntt.py`; read that file or the current API/CLI
 instead of copying names from an old report.
 
@@ -135,19 +146,18 @@ The sole indexed policy, `radix2_indexed`, stores twiddle/index
 tables. It is the CPU production backend and the cross-device validation
 baseline for compact CUDA policies. CPU executes every stage for one
 batch/limb row inside one native parallel region; CUDA launches one radix-2
-stage at a time. Expanded twiddles contain only the nontrivial odd lane; the
-old all-one even lane is not allocated.
+stage at a time. Expanded twiddles store only the nontrivial odd lane.
 
 ### Compact plans
 
 Compact policies retain smaller per-prime transform data and derive indices in
-CUDA. They are CUDA backends. The maintained policies are
+CUDA. They are CUDA backends. The selectable policies are
 `radix2_compact_group4_smem8`, `radix2_compact_group8_smem8`, and
 `radix2_compact_group16_smem8`; the group-8 policy is the CUDA default. CPU engines instead select
 `radix2_indexed`. Their eight shared-memory stages are listed in
 both the policy name and native ABI.
 
-Plan objects are temporary construction values. `RnsRuntime` retains only a
+Plan objects are temporary construction values. `NttContext` retains only a
 typed `IndexedRadix2Tables`, `CompactRadix2Tables`, or
 `CompactPowerOfTwoRadixTables` device package, never an optional-field superset
 or a second host-resident copy of the plan. Indexed tables can reside on CPU or
@@ -181,9 +191,9 @@ distinct radix-16 algorithm.
 ## Genuine power-of-two radix transforms
 
 This algorithm family has one shared mathematical plan, typed table package,
-backend, and native ABI for strict fixed-radix policies. It has dedicated
-radix-4, radix-8, and radix-16 CUDA butterflies and is not an alias for the
-grouped radix-2 kernels.
+backend, and native ABI for strict fixed-radix policies. Its dedicated radix-4,
+radix-8, and radix-16 CUDA butterflies have a distinct implementation identity
+from the grouped radix-2 kernels.
 
 The strict policies are `radix4_compact`, `radix8_compact`, and
 `radix16_compact`. Every transform digit has exactly that radix. Consequently,
@@ -214,51 +224,49 @@ Radix-4 uses a dedicated four-point cyclic NTT butterfly. Radix-8 uses a
 dedicated 2x4 Cooley--Tukey butterfly: two radix-4 transforms, fixed
 $\zeta_8^u$ coupling, and one combine step. Radix-16 uses a dedicated 4x4
 Cooley--Tukey butterfly: four radix-4 column transforms, the fixed radix-16
-coupling matrix, and four radix-4 row transforms. None loops over global
-radix-2 stages or consumes radix-2 stage twiddles. Inverse DIT executes the
+coupling matrix, and four radix-4 row transforms. These dedicated butterflies
+operate independently of radix-2 stage schedules and twiddles. Inverse DIT
+executes the
 dual fixed-width digit order, applies inverse cyclic roots, and then the
 inverse outer twist; the usual single $N^{-1}$ epilogue remains unchanged.
 
-Shared-memory capacity and the production fusion depth are native CUDA
-implementation choices, not Python policy fields. The compiled maximum and
+Shared-memory capacity and the production fusion depth are recorded by the
+native CUDA implementation. The compiled maximum and
 current production default are both eight transform bits, corresponding to a
-maximum 256-coefficient physical tile. Production Torch operators do not take
-or transmit a `shared_memory_log_n` argument.
+maximum 256-coefficient physical tile. Production Torch operators use this
+compiled choice directly.
 
 For an eligible strict schedule, the forward launcher chooses the largest
 suffix of complete radix digits whose widths fit the native default; the
-inverse launcher chooses the exact dual prefix. A realized selection may cover
+inverse launcher chooses the corresponding dual prefix. A realized selection may cover
 fewer than eight bits because a digit is never split merely to fill the budget.
 The selected digits execute consecutively after one coalesced tile load and
 before one coalesced store, while preserving the digit-bit-reversed
 intermediate layout after every individual DIF digit.
 
-Eight is a measured static engineering choice rather than a mathematical
-constant. It covers the profiled low-stride bottleneck, fits two complete
+Eight is a measured static engineering choice. It covers the profiled
+low-stride bottleneck, fits two complete
 radix-16 digits or four radix-4 digits, and needs only two 256-element shared
 buffers (4 KiB for int64 residues). A smaller budget misses the complete
 two-radix16 region; a larger tile would reduce Cooperative Thread Array (CTA,
 CUDA thread-block) supply and increase shared
 memory and synchronization without demonstrated benefit.
 
-The genuine-radix public names omit an `smem8` suffix because there is no
-second public all-global policy identity: shared fusion is an internal
-locality optimization that preserves the selected strict radix.
-By contrast, the maintained compact radix-2 names expose grouping and smem8
-because those names distinguish multiple selectable execution policies; the
-`smem8` portion records the native implementation rather than a Python integer
-passed on every operation. Result provenance should still record the exact
+The genuine-radix public names identify one strict-radix policy whose native
+implementation includes shared fusion. The registered compact radix-2 names
+expose grouping and `smem8` as distinct selectable execution policies. Result
+provenance should still record the
 FHElium version in case internal tuning changes.
 
-This is a genuine-radix locality optimization, not a radix-2 fallback.
-Radix-4 assigns one worker to each four-point tuple. Radix-8 and radix-16 use
+This genuine-radix locality optimization assigns one worker to each radix-4
+four-point tuple. Radix-8 and radix-16 use
 four-worker groups to evaluate their 2x4 and 4x4 factorizations through shared
 scratch space, reducing each worker's live register vector. A separate
 `fhelium_ntt_diagnostic_ops` namespace accepts a specified
 `shared_memory_log_n` override for correctness tests and cross-GPU profiling;
 the production backend never calls that namespace.
 
-The exact supported schedules are:
+The supported schedules are:
 
 | `logN` | compatible strict genuine-radix schedules |
 |---|---|
@@ -269,9 +277,9 @@ The exact supported schedules are:
 
 The power-of-two radix kernels may choose a different representative in the
 lazy $[0,2q)$ interval than sequential radix-2 because modular additions are
-associated differently. Forward results therefore compare exactly modulo
-$q$, rather than necessarily bit-for-bit as signed integers. Canonical inverse
-outputs are exact and all domain and representation states are unchanged.
+associated differently. Forward results are therefore congruent modulo $q$,
+rather than necessarily bit-for-bit equal as signed integers. Standard-range inverse
+outputs are equal and all domain and representation states are unchanged.
 
 The default remains `radix2_compact_group8_smem8`. A new algorithm family is
 not promoted merely because it has fewer mathematical digits; radix-4/8/16 can
@@ -305,7 +313,7 @@ before calling an RNS or NTT backend, leaving
 `[*batch, limb, coefficient]`.
 
 Native CUDA helpers collapse only that homogeneous batch prefix into a
-zero-copy canonical view:
+zero-copy flattened view:
 
 ```text
 [*batch, limb, N] -> [B_flat, limb, N]
@@ -316,7 +324,7 @@ For an unbatched component, `B_flat=1`. RNS parameters retain their independent
 Component axes, hybrid-digit axes, and message-batch axes must not be flattened
 together merely because each is dense.
 
-The collapse uses `view`, not an implicit packing copy. A caller that creates a
+The collapse uses a zero-copy `view`. A caller that creates a
 non-collapsible layout must expose its repacking step.
 Native binary operators require equal `B_flat`, except for named shared-public
 operand requirements that allow a singleton batch.
@@ -329,10 +337,10 @@ Whenever row mapping, tables, or kernels change, test:
 - the final legal active row configuration;
 - one-row/singleton digit paths;
 - Q and QP bases;
-- compact current rows versus canonical parameter offsets;
+- compact current rows versus global parameter offsets;
 - multiple `logN` values;
 - indexed and compact families;
-- every maintained compact group width and indexed execution;
+- every declared compact group width and indexed execution;
 - every compatible strict radix-4, radix-8, and radix-16 schedule;
 - batched/component tensor axes;
 - partial-limb inputs only where the operation supports them.
@@ -341,7 +349,7 @@ Whenever row mapping, tables, or kernels change, test:
 
 Benchmark NTT policy at three layers:
 
-1. forward/inverse microbench for exact shapes and active rows;
+1. forward/inverse microbench for configured shapes and active rows;
 2. CKKS operators that use the transforms;
 3. complete workloads with keys, memory, and launch policy.
 
@@ -352,19 +360,19 @@ workload.
 
 - [Multiplication, key switching, and rescale](multiplication-keyswitch-rescale.md)
 - [Native operator workflow](native-operator-workflow.md)
-- [Context and modulus chain](../concepts/ckks/context-and-modulus-chain.md)
+- [Configuration and modulus chain](../concepts/ckks/context-and-modulus-chain.md)
 - [CKKS cost model](../concepts/performance/cost-model.md)
 
 ## Source map
 
 | Responsibility | Source |
 | --- | --- |
-| RNS chain, layout, and hybrid digit identity | `fhelium/engine/rns/{chain,layout,decomposition}.py` |
-| Parameter materialization and aligned views | `fhelium/engine/rns/{montgomery,parameters,runtime}.py` |
+| RNS chain, layout, and hybrid digit identity | `fhelium/backend/rns/{chain,layout,decomposition}.py` |
+| Parameter materialization and aligned views | `fhelium/backend/rns/{montgomery,parameters,runtime}.py` |
 | NTT policy definitions | `fhelium/config/ntt.py` |
-| Host plans and typed device tables | `fhelium/engine/ntt/plans/`, `fhelium/engine/ntt/tables.py` |
-| Python NTT backend adapters | `fhelium/engine/ntt/backends/` |
+| Host plans and typed device tables | `fhelium/backend/ntt/plans/`, `fhelium/backend/ntt/tables.py` |
+| Python NTT executors | `fhelium/backend/ntt/executors/` |
 | RNS schemas and CPU/CUDA implementations | `csrc/ops/rns/` |
 | NTT schemas and CPU/CUDA implementations | `csrc/ops/ntt/` |
 | Shared modular helpers | `csrc/ops/common/` |
-| Focused correctness and policy tests | `tests/test_ntt_backend.py`, `tests/test_native_operator_invariants.py` |
+| Focused correctness and policy tests | `tests/backend/test_ntt_backend.py`, `tests/native/test_native_operator_invariants.py` |

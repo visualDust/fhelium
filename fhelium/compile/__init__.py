@@ -1,0 +1,164 @@
+"""Capture or import Programs, lower CKKS operations, and run compile passes.
+
+The package carries one Program, caller-extensible `CompileWorkspace`, and
+ordered pass reports in a `Compilation`. The `passes.lowering` package maps CKKS
+operations to logical RNS/NTT composition for compile, eager, and JIT callers.
+Frontend, CKKS, and lowering passes can stop at any represented IR level;
+callers may inspect or export that Program, continue through an external
+xDSL/MLIR pipeline, or bind backend resources. Compilation does not require
+eager execution or a JIT session.
+"""
+
+from ._constants import ConstantBundle
+from ._compilation import Compilation
+from ._workspace import CompileWorkspace
+from ._pipeline import (
+    DecisionRecord,
+    Pass,
+    PassReport,
+    PassResult,
+    PassStats,
+    Pipeline,
+    TransformError,
+)
+from .codegen import (
+    BackendPythonSource,
+    EagerPythonSource,
+    GeneratedPythonSource,
+    PythonCodegenError,
+)
+from ._driver import compile
+from ._errors import (
+    CaptureError,
+    CompileError,
+    CompileInputError,
+    PlanningError,
+)
+from .frontend._capture import capture
+from .frontend._captured_callable import CapturedCallable
+from .frontend._specs import (
+    BatchMode,
+    InputSpec,
+    SlotExtent,
+    StaticValue,
+    encrypted,
+    message,
+    plaintext,
+    static,
+)
+from .passes.lowering import (
+    CkksLoweringDefinition,
+    CkksLoweringRegistry,
+    DEFAULT_CKKS_LOWERINGS,
+    LoweredCkksOperation,
+    lower_ckks_program,
+)
+from .passes import (
+    BindCkksKeysPass,
+    InitializeResourceBindingsPass,
+    AssignImplementationsPass,
+    AssignNttImplementationPass,
+    AssignCkksLevelsPass,
+    AssignCkksScalesPass,
+    EliminateDeadValuesPass,
+    EmitBackendPythonPass,
+    EmitEagerPythonPass,
+    HoistRotationsPass,
+    InsertMultiplyNttTransitionsPass,
+    InsertPlaintextPreparationPass,
+    InsertRelinearizationPass,
+    InsertRescalePass,
+    LateRelinearizationPass,
+    LateRescalePass,
+    LowerCkksToRnsNttPass,
+    LowerLogicalToCkksPass,
+    LowerMessagePlaintextPreparationPass,
+    LowerSemanticToLogicalPass,
+    LinkProgramPass,
+    MaterializeResourcesPass,
+    ResolveBackendOperationsPass,
+    ResolveRotationKeyOperandsPass,
+    SvgGraphVisualizationPass,
+    SvgGraphOutput,
+    SvgGraphDirection,
+    SvgGraphError,
+    SvgGraphField,
+    SvgGraphPresentation,
+    SvgGraphTheme,
+    SvgNodeSection,
+    SvgOperationContext,
+    default_svg_operation_color_key,
+    backend_linking_pipeline,
+)
+
+__all__ = [
+    "BindCkksKeysPass",
+    "InitializeResourceBindingsPass",
+    "AssignImplementationsPass",
+    "AssignNttImplementationPass",
+    "AssignCkksLevelsPass",
+    "AssignCkksScalesPass",
+    "BatchMode",
+    "CaptureError",
+    "CapturedCallable",
+    "Compilation",
+    "CompileWorkspace",
+    "CompileError",
+    "CompileInputError",
+    "ConstantBundle",
+    "CkksLoweringDefinition",
+    "CkksLoweringRegistry",
+    "DEFAULT_CKKS_LOWERINGS",
+    "DecisionRecord",
+    "EliminateDeadValuesPass",
+    "EmitBackendPythonPass",
+    "EmitEagerPythonPass",
+    "BackendPythonSource",
+    "EagerPythonSource",
+    "GeneratedPythonSource",
+    "HoistRotationsPass",
+    "InputSpec",
+    "InsertMultiplyNttTransitionsPass",
+    "InsertPlaintextPreparationPass",
+    "InsertRelinearizationPass",
+    "InsertRescalePass",
+    "LateRelinearizationPass",
+    "LateRescalePass",
+    "LowerCkksToRnsNttPass",
+    "LoweredCkksOperation",
+    "LowerLogicalToCkksPass",
+    "LowerMessagePlaintextPreparationPass",
+    "LowerSemanticToLogicalPass",
+    "LinkProgramPass",
+    "PlanningError",
+    "Pass",
+    "PassReport",
+    "PassResult",
+    "PassStats",
+    "Pipeline",
+    "PythonCodegenError",
+    "MaterializeResourcesPass",
+    "ResolveBackendOperationsPass",
+    "ResolveRotationKeyOperandsPass",
+    "SlotExtent",
+    "StaticValue",
+    "SvgGraphDirection",
+    "SvgGraphError",
+    "SvgGraphField",
+    "SvgGraphOutput",
+    "SvgGraphPresentation",
+    "SvgGraphTheme",
+    "SvgGraphVisualizationPass",
+    "SvgNodeSection",
+    "SvgOperationContext",
+    "TransformError",
+    "backend_linking_pipeline",
+    "capture",
+    "compile",
+    "default_svg_operation_color_key",
+    "encrypted",
+    "lower_ckks_program",
+    "message",
+    "plaintext",
+    "static",
+]

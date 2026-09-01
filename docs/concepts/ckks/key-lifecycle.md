@@ -1,6 +1,6 @@
 # Key lifecycle
 
-FHElium treats keys as exact typed values with controlled creation, placement,
+FHElium treats keys as typed values with controlled creation, placement,
 installation, persistence, and use. This separation supports production key
 custody, minimal evaluator keysets, distributed ownership, and repeatable
 benchmarks.
@@ -26,18 +26,17 @@ graph TD
 
 | Key | Main purpose | Stored state or specialization |
 | --- | --- | --- |
-| `SecretKey` | Decrypt and derive other keys | Context and exact dense state |
-| `PublicKey` | Public-key encryption | Context, Q rows, and arithmetic state |
-| `RelinearizationKey` | Switch the multiplication $s^2$ component | Context and QP key layout |
-| `RotationKey` | Automorphism-specific key switch | Context plus canonical signed step |
-| `ConjugationKey` | Complex conjugation | Context and key-switch state |
-| `KeySwitchKey` | Source-to-destination secret-key dependency switch | Context, digits, QP rows, and arithmetic state |
+| `SecretKey` | Decrypt and derive other keys | Dense arithmetic state |
+| `PublicKey` | Public-key encryption | Q rows and arithmetic state |
+| `RelinearizationKey` | Switch the multiplication $s^2$ component | QP key layout |
+| `RotationKey` | Automorphism-specific key switch | Normalized signed step and QP key layout |
+| `ConjugationKey` | Complex conjugation | Key-switch state |
+| `KeySwitchKey` | Source-to-destination secret-key dependency switch | Digits, QP rows, and arithmetic state |
 
-These objects validate their stored context, rows, representation state, and
-specialization. A public key does not store a symbolic destination-secret
-lineage, and a generic `KeySwitchKey` does not store symbolic source and
-destination identifiers. The application preserves every such cryptographic
-relation that is not represented by a concrete field.
+These objects validate their stored rows, representation state, and
+specialization. The application tracks CKKS parameter provenance and symbolic
+source/destination lineage beyond the concrete fields carried by each key
+type.
 
 ## Creation, installation, and use are different actions
 
@@ -68,19 +67,19 @@ This design allows an evaluator to load externally managed keys without ever
 creating a secret key locally. It also makes setup cost and steady-state
 execution cost separable.
 
-## Rotation keys bind exact steps
+## Rotation keys bind steps
 
-A `RotationKey` describes one canonical signed slot step. Equivalent modular
-steps canonicalize to a stable range, but a key for one canonical step cannot
+A `RotationKey` describes one normalized signed slot step. Equivalent modular
+steps reduce to the range $[-S/2,S/2)$, but a key for one normalized step cannot
 be used for another merely because tensor shapes match.
 
-A `RotationKeySet` maps canonical steps to exact keys. Generate only steps the
+A `RotationKeySet` maps normalized steps to direct keys. Generate only steps the
 packing/evaluator actually needs unless a measured decomposition strategy is
 better.
 
 ```mermaid
 flowchart LR
-    DIRECT["direct exact keys"]
+    DIRECT["direct keys"]
     DIRECT_MEMORY["more key memory"]
     DIRECT_ROTATIONS["fewer sequential rotations"]
     BASIS["small decomposition basis"]
@@ -91,31 +90,35 @@ flowchart LR
     BASIS --> BASIS_MEMORY --> BASIS_ROTATIONS
 ```
 
-This is a workload trade-off, not a universally safe automatic choice.
+The workload selects this key-memory versus online-operation trade-off.
 
 ## Lifecycle invariants
 
 - **The consumer plans the keyset.** Derive public, relinearization, rotation,
   conjugation, and generic key-switch requirements from the actual evaluator
-  schedule rather than from every operation the library supports.
+  schedule.
 - **Setup and use are distinct.** Creating, loading, moving, installing, and
-  using a key are separate actions. A worker that neither decrypts nor derives
-  key material should not receive the secret key.
+  using a key are separate actions. Distribute the secret key only to workers
+  authorized to decrypt or derive key material.
 - **Persistence is authorization.** Secret-key serialization requires an
-  explicit opt-in. Sensitivity labels do not provide encryption, a
-  key-management service (KMS), access-control lists (ACLs), audit, backup, or
-  deletion policy.
+  explicit opt-in. Sensitivity labels provide classification metadata;
+  applications supply encryption, a key-management service (KMS),
+  access-control lists (ACLs), audit, backup, and deletion policy.
 - **Placement is application-owned.** The workload decides which process owns,
   replicates, broadcasts, stages, or evicts each key. Large evaluation keys
-  make this both a security and capacity decision.
+  make this both a security and capacity decision. Eager execution rejects a
+  key on another device by default. The caller may place a copy with
+  `key.to(device)` or opt into Engine-managed lazy replicas with
+  `allow_automatic_key_replication=True`. Source-copy lifetime and device trust
+  remain application decisions.
 - **Steady-state measurements exclude setup unless stated otherwise.** Report
   key creation, load, movement, and materialization separately when the named
   result is evaluator latency.
 
 Use [Provision the minimum required keyset](../../how-to/provision-keyset.md)
 for the operational checklist, specialist key-switch example, custody checks,
-and reporting procedure. The [Engine API](../../api/fhelium/engine/ckks_engine.md) defines the
-exact construction and installation methods.
+and reporting procedure. The [Engine API](../../api/fhelium/eager.md) defines the
+construction and installation methods.
 
 ## Continue
 

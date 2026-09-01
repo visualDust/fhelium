@@ -39,7 +39,7 @@ _RESULT_FIELDS = {
 
 
 def _result_to_dict(result: BenchmarkResult) -> dict[str, Any]:
-    """Snapshot the exact Benchmark v1 leaf-result wire fields."""
+    """Snapshot the Benchmark v1 leaf-result wire fields."""
 
     payload = result.to_dict()
     require_fields(payload, required=_RESULT_FIELDS, model="BenchmarkResult")
@@ -49,7 +49,7 @@ def _result_to_dict(result: BenchmarkResult) -> dict[str, Any]:
 
 
 def _result_from_dict(payload: Any) -> BenchmarkResult:
-    """Parse the exact Benchmark v1 leaf-result wire fields without coercion."""
+    """Parse the Benchmark v1 leaf-result wire fields without coercion."""
 
     if not isinstance(payload, Mapping):
         raise TypeError("BenchmarkResult must be an object")
@@ -143,7 +143,7 @@ class BenchmarkCase:
     """One fixed leaf-benchmark invocation in Benchmark v1.
 
     ``parameters`` overrides the selected leaf profile. The v1 resolver
-    records the resulting effective parameter object in its canonical
+    records the resulting effective parameter object in its resolved
     manifest and in every case record. ``unavailable_reason`` declares a
     deterministic manifest-level absence; runners can additionally raise
     :class:`~fhelium.benchmarks.v1.BenchmarkCaseUnavailable` after preflight.

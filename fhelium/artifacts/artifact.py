@@ -16,7 +16,7 @@ SUPPORTED_ARTIFACT_SENSITIVITIES: tuple[ArtifactSensitivity, ...] = (
 
 @dataclass(frozen=True)
 class ArtifactRef(Generic[T]):
-    """A tensor-free reference to one active persisted exact value.
+    """A tensor-free reference to one active persisted value.
 
     The generic parameter ``T`` is for static type checking and is erased at
     runtime. A reference identifies one generation of a logical name in one
@@ -28,10 +28,8 @@ class ArtifactRef(Generic[T]):
         name: Stable store-relative logical name.
         artifact_id: Unique identity of the active generation. Overwriting a
             name creates a new identity and invalidates the old reference.
-        value_type: Serialized exact-value class name recorded by the catalog.
+        value_type: Serialized-value class name recorded by the catalog.
         artifact_schema_version: Artifact metadata schema version.
-        context_id: Cryptographic context identity, or ``None`` for values that
-            do not belong to a CKKS context.
         nbytes: Logical tensor payload bytes of one materialization.
         payload_sha256: SHA-256 checksum of the serialized payload file. The
             checksum detects corruption but does not authenticate an artifact.
@@ -42,7 +40,6 @@ class ArtifactRef(Generic[T]):
     artifact_id: str
     value_type: str
     artifact_schema_version: int
-    context_id: str | None
     nbytes: int
     payload_sha256: str
 
@@ -56,9 +53,9 @@ class ArtifactMetadata:
         sensitivity: Caller-declared public, confidential, or secret label.
             This label does not itself provide encryption at rest.
         created_at: UTC creation timestamp recorded by the catalog.
-        value_schema_version: Exact nested value-envelope schema version.
+        value_schema_version: Nested value-envelope schema version.
         tensor_metadata: Per-tensor serialized shape, dtype, and related data.
-        value_metadata: Non-tensor exact-value state required for reconstruction.
+        value_metadata: Non-tensor value state required for reconstruction.
     """
 
     ref: ArtifactRef[Any]
@@ -69,4 +66,4 @@ class ArtifactMetadata:
     value_metadata: dict[str, Any]
 
 
-ARTIFACT_SCHEMA_VERSION = 1
+ARTIFACT_SCHEMA_VERSION = 2

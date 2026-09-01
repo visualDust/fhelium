@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from fhelium.legacy.engine import CkksEngine
+
 import statistics
 import time
 
 import torch
 
-from fhelium import CkksEngine
 from fhelium.benchmarks.timing import synchronize
 
 NTT_OPERATIONS = ("forward_ntt", "inverse_ntt", "roundtrip")
@@ -109,7 +110,7 @@ def assert_ntt_roundtrip(
     engine: CkksEngine,
     base_data: torch.Tensor,
 ) -> None:
-    """Require exact equality modulo each active QP prime after a roundtrip."""
+    """Require residue equality modulo each active QP prime after a roundtrip."""
 
     result = base_data.clone()
     run_ntt_operation(engine, result, "roundtrip")

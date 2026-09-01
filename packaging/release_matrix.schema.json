@@ -1,18 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fhelium.550w.host/schemas/release-matrix-v1.json",
-  "title": "FHElium Linux binary release matrix",
+  "$id": "https://fhelium.550w.host/schemas/release-matrix-v2.json",
+  "title": "FHElium cross-platform binary release matrix",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
     "project",
-    "platform",
+    "requires_python",
     "python_abis",
+    "platform_targets",
     "scikit_build_core_version",
     "jsonschema_version",
-    "builder_image",
-    "builder_dockerfile_by_environment",
     "configurations",
     "artifact_base_url",
     "publication",
@@ -20,56 +19,44 @@
   ],
   "properties": {
     "schema_version": {
-      "const": 1
+      "const": 2
     },
     "project": {
       "const": "fhelium"
     },
-    "platform": {
-      "const": "manylinux_2_28_x86_64"
+    "requires_python": {
+      "const": ">=3.12,<3.14"
     },
     "python_abis": {
-      "type": "array",
       "const": [
         "cp312-cp312",
         "cp313-cp313"
       ]
     },
+    "platform_targets": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/linux_target"
+        },
+        {
+          "$ref": "#/$defs/windows_target"
+        }
+      ],
+      "items": false,
+      "minItems": 2,
+      "maxItems": 2
+    },
     "scikit_build_core_version": {
-      "type": "string",
-      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+      "$ref": "#/$defs/version"
     },
     "jsonschema_version": {
-      "type": "string",
-      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-    },
-    "builder_image": {
-      "type": "string",
-      "pattern": "^quay\\.io/pypa/manylinux_2_28_x86_64@sha256:[0-9a-f]{64}$"
-    },
-    "builder_dockerfile_by_environment": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "cpu",
-        "cuda-12.9",
-        "cuda-13.0"
-      ],
-      "properties": {
-        "cpu": {
-          "const": "packaging/manylinux_2_28.Dockerfile"
-        },
-        "cuda-12.9": {
-          "const": "packaging/manylinux_2_28_cuda12_9.Dockerfile"
-        },
-        "cuda-13.0": {
-          "const": "packaging/manylinux_2_28_cuda13.Dockerfile"
-        }
-      }
+      "$ref": "#/$defs/version"
     },
     "configurations": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 5,
+      "maxItems": 5,
       "items": {
         "$ref": "#/$defs/configuration"
       }
@@ -85,22 +72,202 @@
     }
   },
   "$defs": {
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "linux_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "operating_system",
+        "architecture",
+        "catalog_os",
+        "builder"
+      ],
+      "properties": {
+        "id": {
+          "const": "manylinux_2_28_x86_64"
+        },
+        "operating_system": {
+          "const": "linux"
+        },
+        "architecture": {
+          "const": "x86_64"
+        },
+        "catalog_os": {
+          "const": "linux-x86_64"
+        },
+        "builder": {
+          "$ref": "#/$defs/linux_builder"
+        }
+      }
+    },
+    "linux_builder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "image",
+        "dockerfile_by_environment"
+      ],
+      "properties": {
+        "kind": {
+          "const": "manylinux-container"
+        },
+        "image": {
+          "type": "string",
+          "pattern": "^quay\\.io/pypa/manylinux_2_28_x86_64@sha256:[0-9a-f]{64}$"
+        },
+        "dockerfile_by_environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cpu",
+            "cuda-12.9",
+            "cuda-13.0"
+          ],
+          "properties": {
+            "cpu": {
+              "const": "packaging/manylinux_2_28.Dockerfile"
+            },
+            "cuda-12.9": {
+              "const": "packaging/manylinux_2_28_cuda12_9.Dockerfile"
+            },
+            "cuda-13.0": {
+              "const": "packaging/manylinux_2_28_cuda13.Dockerfile"
+            }
+          }
+        }
+      }
+    },
+    "windows_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "operating_system",
+        "architecture",
+        "catalog_os",
+        "builder"
+      ],
+      "properties": {
+        "id": {
+          "const": "win_amd64"
+        },
+        "operating_system": {
+          "const": "windows"
+        },
+        "architecture": {
+          "const": "AMD64"
+        },
+        "catalog_os": {
+          "const": "windows-x86_64"
+        },
+        "builder": {
+          "$ref": "#/$defs/windows_builder"
+        }
+      }
+    },
+    "windows_builder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "pip_version",
+        "cmake_version",
+        "ninja_version",
+        "packaging_version",
+        "visual_studio_year",
+        "visual_studio_major_version",
+        "msvc_toolset_version",
+        "windows_sdk_version",
+        "host_architecture",
+        "target_architecture"
+      ],
+      "properties": {
+        "kind": {
+          "const": "windows-native"
+        },
+        "pip_version": {
+          "$ref": "#/$defs/version"
+        },
+        "cmake_version": {
+          "$ref": "#/$defs/version"
+        },
+        "ninja_version": {
+          "$ref": "#/$defs/version"
+        },
+        "packaging_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "visual_studio_year": {
+          "const": "2022"
+        },
+        "visual_studio_major_version": {
+          "const": "17"
+        },
+        "msvc_toolset_version": {
+          "type": "string",
+          "pattern": "^14\\.[0-9]+\\.[0-9]+$"
+        },
+        "windows_sdk_version": {
+          "type": "string",
+          "pattern": "^10\\.0\\.[0-9]+\\.0$"
+        },
+        "host_architecture": {
+          "const": "x64"
+        },
+        "target_architecture": {
+          "const": "x64"
+        }
+      }
+    },
+    "toolkit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "packages",
+        "runtime_library"
+      ],
+      "properties": {
+        "version": {
+          "$ref": "#/$defs/version"
+        },
+        "packages": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "runtime_library": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
     "configuration": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "id",
         "role",
+        "platform_targets",
         "torch_requirement",
         "torch_index_url",
         "torch_runtime_version",
         "torch_cuda_version",
         "torch_cxx11_abi",
         "native_backends",
-        "toolkit_version",
-        "toolkit_rpms",
+        "toolkits",
         "cuda_architectures",
-        "expected_cuda_runtime_soname"
+        "cuda_ptx_architectures"
       ],
       "properties": {
         "id": {
@@ -110,14 +277,27 @@
         "role": {
           "enum": [
             "current-cuda",
-            "previous-cuda",
+            "previous-cuda-linux",
+            "previous-cuda-windows",
             "current-cpu",
             "previous-cpu"
           ]
         },
+        "platform_targets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "manylinux_2_28_x86_64",
+              "win_amd64"
+            ]
+          }
+        },
         "torch_requirement": {
           "type": "string",
-          "pattern": "^torch==[^ ]+$"
+          "pattern": "^torch==[0-9]+\\.[0-9]+\\.[0-9]+\\+(cpu|cu[0-9]+)$"
         },
         "torch_index_url": {
           "type": "string",
@@ -125,7 +305,7 @@
         },
         "torch_runtime_version": {
           "type": "string",
-          "minLength": 1
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+\\+(cpu|cu[0-9]+)$"
         },
         "torch_cuda_version": {
           "type": [
@@ -151,31 +331,49 @@
             }
           ]
         },
-        "toolkit_version": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "toolkit_rpms": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
+        "toolkits": {
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "maxProperties": 2,
+          "properties": {
+            "manylinux_2_28_x86_64": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/toolkit"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "win_amd64": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/toolkit"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
           }
         },
         "cuda_architectures": {
           "type": "array",
+          "uniqueItems": true,
           "items": {
             "type": "string",
-            "pattern": "^[0-9]+[a-z]?$"
+            "pattern": "^[0-9]+$"
           }
         },
-        "expected_cuda_runtime_soname": {
-          "type": [
-            "string",
-            "null"
-          ]
+        "cuda_ptx_architectures": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          }
         }
       }
     }

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from fhelium.legacy.engine import CkksEngine
+
 import statistics
 import time
 from collections.abc import Mapping, Sequence
@@ -80,7 +82,7 @@ def expected_periodic_output(
 
 
 def evaluate_ptct_column(
-    engine: fh.CkksEngine,
+    engine: CkksEngine,
     source: fh.Ciphertext,
     diagonal_batch: fh.Plaintext,
     rotation_keys: Mapping[int, fh.RotationKey],
@@ -118,7 +120,7 @@ def evaluate_ptct_column(
 
 
 def evaluate_ctct_column(
-    engine: fh.CkksEngine,
+    engine: CkksEngine,
     source: fh.Ciphertext,
     diagonal_ciphertexts_ntt: Sequence[fh.Ciphertext],
     rotation_keys: Mapping[int, fh.RotationKey],
@@ -146,7 +148,7 @@ def evaluate_ctct_column(
 
 
 def _prepare(
-    engine: fh.CkksEngine, operand_mode: OperandMode
+    engine: CkksEngine, operand_mode: OperandMode
 ) -> tuple[
     Any,
     tuple[fh.Ciphertext, ...],
@@ -204,7 +206,7 @@ def _run_matrix(
     operand_mode: OperandMode,
 ) -> BenchmarkResult:
     parameters = dict(profile.parameters)
-    engine = fh.CkksEngine(
+    engine = CkksEngine(
         PRESET,
         device=execution.device,
         ntt_backend=NTT_BACKEND,

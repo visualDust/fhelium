@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from fhelium.legacy.engine import CkksEngine
+
 import gc
 from collections.abc import Sequence
 
 import torch
 
-from fhelium import CkksEngine, Preset
+from fhelium import Preset
 from fhelium.benchmarks.model import (
     BenchmarkCheck,
     BenchmarkDefinition,
@@ -70,7 +72,7 @@ def _resolve_backends(
 
 
 def _resolve_operations(configured_operations: object) -> tuple[str, ...]:
-    """Validate the exact semantic operations requested by one profile."""
+    """Validate the semantic operations requested by one profile."""
 
     if not isinstance(configured_operations, Sequence) or isinstance(
         configured_operations, str
@@ -130,9 +132,9 @@ def _run_ntt_backend_single_op(
         assert_ntt_roundtrip(engine, operation_inputs["roundtrip"])
         checks.append(
             BenchmarkCheck(
-                name=f"{backend}-exact-ntt-roundtrip",
+                name=f"{backend}-ntt-roundtrip-residue-equality",
                 passed=True,
-                oracle="Exact equality modulo every active QP prime after forward and inverse NTT.",
+                oracle="Residue equality modulo every active QP prime after forward and inverse NTT.",
                 metric="mismatched_residues",
                 observed=0,
                 comparison="==",
@@ -146,7 +148,7 @@ def _run_ntt_backend_single_op(
             progress(f"Measuring {backend}: {operation}")
             # ``measure_ntt_operation`` predates device arguments and
             # synchronizes the current device. Scope it to the operand device
-            # so a caller-selected non-current GPU remains correctly bounded.
+            # so execution remains scoped to the operand GPU's CUDA context.
             with torch.cuda.device(engine.device):
                 timing = measure_ntt_operation(
                     engine,
@@ -251,7 +253,7 @@ def _run_ntt_backend_single_op(
             "inverse_input": "NTT/Montgomery",
         },
         notes=[
-            "Default profiles enumerate only canonical backends compatible with the selected logN.",
+            "Default profiles enumerate registered backends compatible with the selected logN.",
             "Each backend is roundtrip-validated in Montgomery representation before timing.",
             "Forward inputs are coefficient/Montgomery; inverse inputs are NTT/Montgomery.",
             "Timing covers only the semantic NTT operation; resetting the input buffer is excluded.",
@@ -290,7 +292,7 @@ register_benchmark(
         category="single GPU",
         description=(
             "Compares forward NTT, inverse NTT, and NTT+INTT roundtrip latency "
-            "across every canonical FHElium NTT backend compatible with the "
+            "across every registered FHElium NTT backend compatible with the "
             "selected logN, without higher-level CKKS, key-switch, or rotation "
             "work."
         ),

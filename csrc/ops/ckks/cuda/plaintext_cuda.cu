@@ -1,4 +1,5 @@
-#include "ckks_cuda.h"
+#include <torch/library.h>
+#include <torch/torch.h>
 
 #include "../../common/cuda/kernel_support.cuh"
 #include "../../common/cuda/montgomery.cuh"
@@ -6,14 +7,16 @@
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
 
+namespace {
+
 // Prepared-plaintext addition requirements. Ciphertext components are integral
 // CUDA [*batch, limb, coefficient] standard residues. Prepared plaintexts use
-// the same exact prime rows in coefficient-domain Montgomery representation;
+// the same prime rows in coefficient-domain Montgomery representation;
 // dense shape is [*batch, limb, coefficient]. Compressed variants replace the
 // final extent with repeated power-of-two support, and strided
 // form supplies [*batch, limb] implicit values. rns_params is
 // [parameter, limb] in the same prime_ids order. The kernel computes
-// $c'_{0,i}=c_{0,i}+p_i\bmod q_i$ and returns standard canonical [0, q_i).
+// $c'_{0,i}=c_{0,i}+p_i\bmod q_i$ and returns standard residues in [0, q_i).
 // Functional output does not alias; underscore variants mutate only ciphertext
 // storage. Plaintext/tables are read-only. Only a genuinely unbatched plaintext
 // may broadcast across public batch; limb/coefficient axes never broadcast.
@@ -39,11 +42,11 @@ add_prepared_plaintext_residue(scalar_t ciphertext_value,
   value = add_lazy_residues(value, plaintext_value, twice_modulus);
   value = montgomery_reduce(
       value, modulus_lo, modulus_hi, neg_inv_modulus_lo, neg_inv_modulus_hi);
-  return canonicalize_lazy_residue(value, twice_modulus);
+  return reduce_lazy_residue(value, twice_modulus);
 }
 
 // Add one operation-ready coefficient-domain plaintext to a ciphertext
-// component. The plaintext may either match the ciphertext's exact batch or be
+// component. The plaintext may either match the ciphertext's batch or be
 // the unique allowed broadcast case: one genuinely unbatched RNS plaintext.
 template <typename scalar_t>
 __global__ void ckks_add_prepared_plaintext_component_kernel(
@@ -181,8 +184,6 @@ void ckks_add_prepared_plaintext_component_inplace_cuda(
       });
 }
 
-namespace {
-
 void validate_add_compressed_plaintext(
     const torch::Tensor& ciphertext,
     const torch::Tensor& compressed_plaintext,
@@ -263,8 +264,6 @@ void add_compressed_plaintext_component_inplace(
       });
 }
 
-}  // namespace
-
 torch::Tensor ckks_add_cyclic_compressed_plaintext_component_cuda(
     const torch::Tensor ciphertext_component,
     const torch::Tensor compressed_plaintext,
@@ -309,8 +308,6 @@ void ckks_add_contiguous_compressed_plaintext_component_inplace_cuda(
       "ckks_add_contiguous_compressed_plaintext_component_inplace");
 }
 
-namespace {
-
 void validate_add_strided_plaintext(const torch::Tensor& ciphertext,
                                     const torch::Tensor& strided_plaintext,
                                     const torch::Tensor& implicit_plaintext,
@@ -318,7 +315,7 @@ void validate_add_strided_plaintext(const torch::Tensor& ciphertext,
   check_compressed_rns_binary_3d(
       ciphertext, strided_plaintext, "ckks_add_strided_plaintext_component");
   TORCH_CHECK(implicit_plaintext.dim() == 2,
-              "ckks_add_strided_plaintext_component requires canonical "
+              "ckks_add_strided_plaintext_component requires rank-three "
               "implicit_plaintext [batch, limb] storage");
   TORCH_CHECK(implicit_plaintext.size(0) == strided_plaintext.size(0) &&
                   implicit_plaintext.size(1) == strided_plaintext.size(1),
@@ -365,8 +362,6 @@ void launch_ckks_add_strided_plaintext_component_cuda(
           support_mask,
           support_shift);
 }
-
-}  // namespace
 
 torch::Tensor ckks_add_strided_plaintext_component_cuda(
     const torch::Tensor ciphertext_component,
@@ -421,4 +416,25 @@ void ckks_add_strided_plaintext_component_inplace_cuda(
             implicit_rows,
             rns_params);
       });
+}
+
+}  // namespace
+
+TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
+  m.impl("add_prepared_plaintext_component",
+         &ckks_add_prepared_plaintext_component_cuda);
+  m.impl("add_prepared_plaintext_component_",
+         &ckks_add_prepared_plaintext_component_inplace_cuda);
+  m.impl("add_cyclic_compressed_plaintext_component",
+         &ckks_add_cyclic_compressed_plaintext_component_cuda);
+  m.impl("add_cyclic_compressed_plaintext_component_",
+         &ckks_add_cyclic_compressed_plaintext_component_inplace_cuda);
+  m.impl("add_contiguous_compressed_plaintext_component",
+         &ckks_add_contiguous_compressed_plaintext_component_cuda);
+  m.impl("add_contiguous_compressed_plaintext_component_",
+         &ckks_add_contiguous_compressed_plaintext_component_inplace_cuda);
+  m.impl("add_strided_plaintext_component",
+         &ckks_add_strided_plaintext_component_cuda);
+  m.impl("add_strided_plaintext_component_",
+         &ckks_add_strided_plaintext_component_inplace_cuda);
 }
