@@ -28,10 +28,10 @@ from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 import numpy as np
 import torch
 
-from fhelium.core import Ciphertext, Plaintext, RotationKeySet
+from fhelium.values import Ciphertext, Plaintext, RotationKeySet
 
 if TYPE_CHECKING:
-    from fhelium.engine.ckks_engine import CkksEngine
+    from fhelium.eager import Engine
 
 ArrayLike: TypeAlias = Sequence[complex] | np.ndarray | torch.Tensor
 TransformDirection = Literal['coeffs_to_slots', 'slots_to_coeffs']
@@ -175,7 +175,7 @@ class DirectDiagonalEvaluator:
 
     def evaluate(
         self,
-        engine: CkksEngine,
+        engine: Engine,
         ciphertext: Ciphertext,
         transform: Any,
         *,
@@ -305,7 +305,7 @@ class DiagonalBSGSEvaluator:
 
     def evaluate(
         self,
-        engine: CkksEngine,
+        engine: Engine,
         ciphertext: Ciphertext,
         transform: Any,
         *,

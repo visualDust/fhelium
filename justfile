@@ -1,3 +1,6 @@
+default:
+    @just --list
+
 clean-build: # .so in build directories, and build folder
     rm -rf build;
     rm -rf CMakeFiles;
@@ -26,19 +29,27 @@ NATIVE_BACKENDS := "AUTO"
 export CMAKE_BUILD_PARALLEL_LEVEL := BUILD_JOBS
 export CMAKE_ARGS := "-DFHELIUM_NATIVE_BACKENDS=" + NATIVE_BACKENDS
 
+[private]
+_refresh-compile-commands python-command:
+    {{python-command}} scripts/refresh_compile_commands.py
+
 bootstrap-uv: # create the locked developer environment and editable native build
     uv --preview-features extra-build-dependencies sync --locked
+    just _refresh-compile-commands "uv run --no-sync python"
 
 build-uv: # rebuild FHElium inside the uv-managed environment
     uv --preview-features extra-build-dependencies sync --locked --reinstall-package fhelium
+    just _refresh-compile-commands "uv run --no-sync python"
 
 bootstrap-pip: # selected Torch must already be installed in the active environment
     python -m pip install --group build
     python -m pip install --editable . --verbose --no-build-isolation --no-cache-dir
     python -m pip install --group dev
+    just _refresh-compile-commands python
 
 build-pip: # rebuild FHElium against the active environment's selected Torch
     python -m pip install --editable . --verbose --no-build-isolation --no-cache-dir
+    just _refresh-compile-commands python
 
 generate-prime-catalog:
     python scripts/generate_prime_catalog.py --force
@@ -72,7 +83,3 @@ check: lint typecheck test
 
 pre-commit:
     pre-commit run --all-files
-
-
-trace:
-    TORCH_LOGS="graph_breaks" fhelium benchmark

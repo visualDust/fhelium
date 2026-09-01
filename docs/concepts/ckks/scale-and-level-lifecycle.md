@@ -23,14 +23,14 @@ where:
 - $\Delta(v)$ is the positive finite binary64 actual scale stored as
   `value.scale`;
 - $I(v)$ is the ordered tuple `value.prime_ids` that maps each dense limb row
-  to one canonical parameter prime;
+  to one configured parameter prime;
 - $B(v)$ is the modulus basis, either $Q_\ell$ or $Q_\ell P$.
 
 `level` and `scale` are independent coordinates. Level selects the active Q
 suffix, basis independently selects Q or QP, and `prime_ids` records the
-resulting RNS rows. Complete operation compatibility also includes context,
-shape, polynomial domain, residue representation, component count, dtype, and
-device.
+resulting RNS rows. Stored operation state also includes shape, polynomial
+domain, residue representation, component count, dtype, and device. The caller
+separately ensures the operands use compatible CKKS parameters.
 
 ## Default scale and actual scale
 
@@ -88,14 +88,17 @@ Q_\ell=[q_\ell,q_{\ell+1},\ldots,q_{C-1},q_b],
 \qquad 0\le\ell<C.
 $$
 
-In the current canonical layout, a complete Q value has
+In the current parameter order, a complete Q value has
 
 ```python
-value.prime_ids == engine.rns_layout.prime_ids(value.level)
+value.prime_ids == tuple(
+    range(value.level, engine.config.num_q_primes)
+)
 ```
 
-and a QP value at the same level appends every special P prime ID. `level`
-selects the canonical Q suffix, and `prime_ids` maps each dense limb to its
+and a QP value at the same level appends the special P prime IDs from
+`range(engine.config.num_q_primes, engine.config.total_num_primes)`. `level`
+selects the active Q suffix, and `prime_ids` maps each dense limb to its
 modulus. QP is the auxiliary basis at that level.
 
 ```mermaid
@@ -157,6 +160,25 @@ $$
 operation-ready plaintext. Both multiplication primitives require and return
 NTT/Montgomery ciphertext state, preserve the active Q basis, and expose domain
 transitions separately from scale arithmetic.
+
+For real scalar multiplication, the caller-selected scalar scale $\Delta_s$
+plays the role of the plaintext scale:
+
+$$
+\Delta(\operatorname{multiply\_scalar}(c,a,\Delta_s))
+=\Delta(c)\Delta_s.
+$$
+
+The Eager default is $\Delta_s=\Delta(c)$. Rescale remains a separate
+operation;
+after a separately invoked rescale, the recorded scale is
+$\Delta(c)\Delta_s/q_{\mathrm{drop}}$. Integer scalar multiplication has no
+encoding scale and preserves $\Delta(c)$.
+
+Real scalar addition quantizes its addend at a caller-selected $\Delta_s$ but
+preserves the ciphertext scale. It therefore changes the represented message
+by approximately $a\Delta_s/\Delta(c)$. Eager selects
+$\Delta_s=\Delta(c)$ when the argument is omitted.
 
 ### Rescale changes level, scale, rows, and payload
 
@@ -234,11 +256,14 @@ $$
 \Delta(a)=\Delta(b)
 $$
 
-with binary64 equality, together with equal context, shape, component count,
-domain, basis, residue representation, and prime IDs. A scale difference
+with binary64 equality, together with equal shape, component count, domain,
+basis, residue representation, and prime IDs. A scale difference
 of one unit in the last place is a mismatch. `add`, `subtract`,
 `sum_ciphertexts`, and `add_plaintext` accept values that already satisfy this
 set of requirements.
+
+The caller must also select operands produced under compatible CKKS
+parameters; the application retains parameter provenance for runtime values.
 
 Programs align the two axes separately:
 
@@ -258,6 +283,9 @@ Programs align the two axes separately:
 | `add`, `subtract`, `sum_ciphertexts`, `add_plaintext` | Require equality; preserve | Require binary64 equality; preserve |
 | `negate`, `relinearize`, `switch_key`, rotations, conjugation | Preserve | Preserve |
 | `multiply`, `multiply_plaintext` | Require equality; preserve | Record the product of operand scales |
+| `add_scalar` | Preserve | Preserve; the scalar quantization scale is caller-selected and defaults to the ciphertext scale |
+| `multiply_scalar` | Preserve | Multiply by the selected scalar scale, which defaults to the ciphertext scale |
+| `multiply_integer_scalar` | Preserve | Preserve |
 | `rescale_to_next_level` | Advance by one | Divide by the actual dropped Q prime |
 | `mod_switch_to_next_level` | Advance by one | Preserve |
 | `mod_switch_to_level` | Set the requested reachable public level | Preserve |
@@ -295,7 +323,7 @@ equality.
 
 ## Continue
 
-- [Context and modulus chain](context-and-modulus-chain.md)
+- [Configuration and modulus chain](context-and-modulus-chain.md)
 - [Value model and identity](value-model-and-identity.md)
 - [State transitions and orthogonality](state-transitions-and-orthogonality.md)
 - [Evaluator operation transitions](evaluator-operation-transitions.md)

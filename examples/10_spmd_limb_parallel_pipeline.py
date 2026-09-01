@@ -25,6 +25,7 @@ from __future__ import annotations
 import torch
 
 import fhelium as fh
+from fhelium.eager import Engine
 import fhelium.distributed as dist
 
 
@@ -51,10 +52,10 @@ def _split_limbs(
 
 def main() -> None:
     dist.init()
-    engine = fh.CkksEngine(
+    torch.set_default_device(dist.local_device())
+    engine = Engine(
         fh.Preset.slots32768_scale40_levels34_int64,
-        device=dist.local_device(),
-        allow_sk_gen=False,
+        allow_automatic_key_generation=False,
     )
 
     message_a = torch.linspace(-0.008, 0.011, 32, dtype=torch.float64)
@@ -120,7 +121,7 @@ def main() -> None:
             result,
             secret_key=secret_key,
             is_real=True,
-        )[: message_a.numel()]
+        ).cpu()[: message_a.numel()]
         expected = (message_a + message_b).square()
         max_error = float(torch.max(torch.abs(decoded - expected)))
         torch.testing.assert_close(decoded, expected, atol=3e-6, rtol=0)

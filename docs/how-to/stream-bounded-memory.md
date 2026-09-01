@@ -192,15 +192,15 @@ Leave measured safety headroom.
 Report:
 
 - all-resident CUDA latency/memory;
-- bounded-window latency/memory;
+- window-size latency and memory;
 - H2D bytes and exposed transfer time;
 - window and tile size;
 - pinned host footprint;
 - correctness;
 - synchronization rule.
 
-The goal is often a memory cap with acceptable overhead, not the absolute
-lowest single-request latency.
+Select the window that satisfies the memory cap with acceptable transfer and
+latency overhead.
 
 ## Related documentation
 

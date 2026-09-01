@@ -9,11 +9,12 @@ large evaluation keys.
 
 ```mermaid
 graph TB
-    API[CkksEngine public operation]
-    STATE[Python state and key validation]
+    API[eager Engine public operation]
+    STATE[Python metadata transition and key selection]
     KS[HybridKeySwitcher]
     RS[CkksRescaler]
-    RNS[RnsRuntime + NTT backend]
+    RNS[RnsContext]
+    NTT[NttContext]
     WRAP[Generated ckks_ops / rns_ops / ntt_ops wrappers]
     DISP[torch.ops + PyTorch dispatcher]
     CPU[C++ CPU primitives<br/>ATen + parallel_for]
@@ -23,11 +24,14 @@ graph TB
     STATE --> KS
     STATE --> RS
     STATE --> RNS
+    STATE --> NTT
     KS --> RNS
+    KS --> NTT
     RS --> RNS
     KS --> WRAP
     RS --> WRAP
-    RNS --> WRAP --> DISP
+    RNS --> WRAP
+    NTT --> WRAP --> DISP
     DISP --> CPU
     DISP --> CUDA
 ```
@@ -187,7 +191,7 @@ flowchart LR
     IN --> DROP --> ROUND --> INV --> OUT
 ```
 
-The implementation must select constants using canonical prime identity, not
+The implementation must select constants using configured prime identity, not
 an ambiguous compact row position. Output metadata must increase level, remove
 the dropped prime ID, reduce row count, and update scale.
 
@@ -195,12 +199,12 @@ the dropped prime ID, reduce row count, and update scale.
 
 High-risk errors include:
 
-- using local row count to infer the wrong canonical modulus;
+- using local row count to infer the wrong configured modulus;
 - selecting the wrong key digit after earlier primes are dropped;
 - mixing Q and QP parameter rows;
 - applying NTT tables for another active slice/device;
 - treating singleton digits as a normal full group;
-- violating lazy/canonical residue assumptions across fused operators;
+- violating lazy/standard residue-range assumptions across fused operators;
 - copying or overwriting staged data before another stream/device is done;
 - reconstructing correct tensor values with wrong public metadata.
 
@@ -237,11 +241,11 @@ incorrect stage.
 
 | Path | Source owner |
 | --- | --- |
-| Public multiplication, relinearization, rotation, and plaintext calls | `fhelium/engine/ckks_engine.py` |
-| Hybrid decomposition, ModUp, prepared rotations, key products, ModDown | `fhelium/engine/hybrid_keyswitch.py` |
-| Direct fused key-digit consumption | `fhelium/engine/direct_keyswitch_consumer.py` |
-| Rescale state validation and quotient construction | `fhelium/engine/ckks_rescale.py` |
-| RNS/NTT arithmetic and active parameters | `fhelium/engine/rns/runtime.py`, `fhelium/engine/ntt/` |
+| Public multiplication, relinearization, rotation, and plaintext calls | `fhelium/eager/_engine.py` |
+| Hybrid decomposition, ModUp, key products, and ModDown | `fhelium/backend/rns/`, `fhelium/backend/ckks/rotation/` |
+| Whole-operation streaming implementations | `fhelium/backend/ckks/operations.py` |
+| Rescale resources and quotient construction | `fhelium/backend/ckks/resources.py`, `fhelium/backend/ckks/operations.py` |
+| RNS/NTT arithmetic and active parameters | `fhelium/backend/rns/context.py`, `fhelium/backend/ntt/` |
 | CKKS-local operator schemas | `csrc/ops/ckks/ckks.cpp` |
 | CPU CKKS tensor primitives | `csrc/ops/ckks/cpu/ckks_cpu.cpp` |
 | CUDA Galois, key-switch, plaintext, and rescale kernels | `csrc/ops/ckks/cuda/` |

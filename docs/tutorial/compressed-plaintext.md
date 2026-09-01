@@ -4,8 +4,8 @@
 
 This example converts a periodic operation-ready plaintext to losslessly reconstructible
 `CompressedPlaintext`, verifies dense-equivalent addition and multiplication,
-and measures storage and evaluator cost. The evaluator reads the compact
-operand directly rather than expanding a dense plaintext first.
+and measures storage and evaluator cost. The evaluator consumes the compact
+operand directly.
 
 Use this representation when a repeatedly used plaintext has bitwise repetition
 or lossless sparse structure **after CKKS encoding and arithmetic preparation**.
@@ -85,8 +85,8 @@ contiguous:      [a, a, a, a, b, b, b, b]
 strided_sparse:  [a, z, z, z, b, z, z, z]
 ```
 
-For `strided_sparse`, `z` is one stored `implicit_data` value per batch member
-and RNS limb. It is not assumed to be zero. The compact entries occupy indices
+For `strided_sparse`, `z` is the stored `implicit_data` fill value for one batch
+member and RNS limb. The compact entries occupy indices
 `u * repeat_count`; every other dense position uses that row's stored implicit
 value.
 
@@ -108,12 +108,12 @@ For every layout:
 - `0 < U < N`;
 - `U` must divide `N`;
 - `data` is integral and uses Montgomery residues;
-- the value records its format version, ring dimension, context, level, actual
+- the value records its format version, ring dimension, level, actual
   scale, domain, basis, residue form, and ordered `prime_ids`.
 
 ## 3. Build the dense operation-ready values first
 
-The maintained example creates one periodic complex factor:
+The example creates one periodic complex factor:
 
 ```python
 period = 256
@@ -139,8 +139,9 @@ dense_add = engine.prepare_plaintext_for_addition(
 ```
 
 The multiplication value is NTT-domain Montgomery RNS. The addition value is
-coefficient-domain Montgomery RNS. Both retain the level, actual scale,
-context, basis, and active prime rows chosen by the engine.
+coefficient-domain Montgomery RNS. Both retain the level, actual scale, basis,
+and active prime rows chosen by the engine. The application retains their CKKS
+parameter provenance.
 
 ## 4. Convert with residue-equality validation
 
@@ -236,8 +237,8 @@ nonempty batch prefix must match `ciphertext.batch_shape` exactly.
 
 ## 6. Verify equivalence against dense arithmetic
 
-Compression is a lossless storage and execution representation, not a numerical
-approximation. Compare the resulting ciphertext tensors against the same
+Compression is a lossless storage and execution representation with the same
+numerical approximation. Compare the resulting ciphertext tensors against the same
 operation with the dense prepared plaintext:
 
 ```python
@@ -285,7 +286,7 @@ The compact evaluator kernels read right-hand-side values directly, but they
 still produce every ciphertext coefficient or NTT position. Compression can
 reduce plaintext storage and right-hand-side memory traffic; it does not reduce
 the ciphertext size or guarantee a speedup. Benchmark with synchronization and
-report both storage and latency, as the maintained example does.
+report both storage and latency, as the example does.
 
 Keep lifecycle policy separate from representation. If both arithmetic states
 are reused, retain `compressed_add` and `compressed_multiply` as two
@@ -293,7 +294,7 @@ values. FHElium does not hide one state behind an engine-owned conversion cache.
 
 ## 8. Serialize and move the compressed value
 
-`CompressedPlaintext` participates in the core value interfaces. For
+`CompressedPlaintext` participates in the runtime value interfaces. For
 example:
 
 ```python
@@ -307,7 +308,7 @@ fh.save_value(
 restored = fh.load_value(
     "factor.safetensors",
     expected_type=fh.CompressedPlaintext,
-    device=engine.device,
+    device=torch.get_default_device(),
 )
 ```
 
@@ -328,11 +329,14 @@ Expect conversion or evaluation to fail in these cases:
 - the dense encoded axis is not bit-exactly representable by the requested
   layout;
 - `strided_sparse` is requested for an NTT value or used for multiplication;
-- the compressed value and ciphertext differ in context, level, basis,
+- the compressed value and ciphertext differ in level, basis,
   `prime_ids`, ring dimension, dtype, device, or required domain;
 - a batched compressed plaintext has a different nonempty batch shape;
 - addition scales are not exactly equal;
 - an incompatible compression-format version is loaded.
+
+FHElium cannot reject mismatched CKKS parameter provenance because neither
+runtime value stores a parameter identifier.
 
 A source vector can be semantically short, constant over blocks, or generated
 from a low-dimensional formula and still fail encoded-axis reconstruction validation.
@@ -341,13 +345,13 @@ application's packing and validate the resulting operation-ready value again.
 Do not weaken the equality check or choose a larger `unique_count` unless the
 new representation is still smaller than `N` and passes reconstruction validation.
 
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/16_compressed_plaintext.py
 :::
 
 ## Related API and implementation detail
 
-- [Values and state API](../api/fhelium/core/ciphertext.md)
+- [Values and state API](../api/fhelium/values/ciphertext.md)
 - [Serialization API](../api/fhelium/serialization/value.md)
 - [Value model and identity](../concepts/ckks/value-model-and-identity.md)
 - [CompressedPlaintext internals](../developer/compressed-plaintext-internals.md)

@@ -11,15 +11,19 @@ workflow.
 
 ```python
 import fhelium as fh
+from fhelium.eager import Engine
 
-engine = fh.CkksEngine(fh.Preset.slots8192_scale40_levels7_int64, device="cpu")
+engine = Engine(fh.Preset.slots8192_scale40_levels7_int64)
 ```
 
-A `CkksEngine` is process-local and owns one device. Distributed execution is
-expressed separately through `fhelium.distributed` collectives.
-Selecting `device="cuda:0"` dispatches the same engine operations and
-`torch.ops` schemas to CUDA; FHElium does not use backend-specific public
-methods or hidden transfers.
+An eager `Engine` is process-local and creates device-specific arithmetic
+resources when they are first needed. Source and material factories use
+PyTorch's default device unless the call supplies `device=`. Distributed
+execution is expressed separately through `fhelium.distributed` collectives.
+Passing `device="cuda:0"` to a boundary or factory call places that result on
+CUDA; ordinary homomorphic operations dispatch from their operands. Key
+material must already be on the operation device unless the Engine was created
+with `allow_automatic_key_replication=True`.
 
 ## 2. Encrypt messages
 
@@ -33,7 +37,7 @@ ct_x = engine.encrypt_message(x)
 ct_y = engine.encrypt_message(y)
 ```
 
-The returned [`Ciphertext`](../api/fhelium/core/ciphertext.md#ciphertext) carries its level, scale,
+The returned [`Ciphertext`](../api/fhelium/values/ciphertext.md#ciphertext) carries its level, scale,
 prime IDs, polynomial domain, modulus basis, and residue representation alongside one
 dense tensor.
 
@@ -61,14 +65,14 @@ reuse NTT-domain operands or delay relinearization. With default-scale inputs,
 the product carries scale $\Delta^2$; the post-relinearization rescale consumes
 one level and records the actual scale $\Delta^2/q_0$.
 
-## 5. Rotate with a direct key
+## 5. Rotate with a key
 
 ```python
 rotation_key = engine.rotation_key(1)
 ct_rotated = engine.rotate_with_key(ct_x, rotation_key)
 ```
 
-A rotation key is bound to one canonical signed step. Applications choose
+A rotation key carries one normalized signed step. Applications choose
 which keys exist and where they reside.
 
 ## 6. Decrypt and check approximation error
@@ -81,12 +85,11 @@ torch.testing.assert_close(sum_clear, x + y, atol=2e-5, rtol=0)
 CKKS is approximate. Validate results with a chosen numerical tolerance appropriate
 for the scale, depth, input range, and workload.
 
-## Complete runnable source
-
-The source below is included directly from the tested repository example, so
-the tutorial does not maintain a second copy of the complete program.
+::: details Source
 
 <<< @/../examples/01_basic_ckks_flow.py
+
+:::
 
 ## Related concepts and guides
 

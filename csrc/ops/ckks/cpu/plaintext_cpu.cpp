@@ -20,7 +20,7 @@ void check_compressed(const torch::Tensor& ciphertext,
                       const char* operation) {
   TORCH_CHECK(ciphertext.dim() == 3 && plaintext.dim() == 3,
               operation,
-              " requires canonical rank-three views");
+              " requires rank-three views");
   TORCH_CHECK(ciphertext.size(1) == plaintext.size(1),
               operation,
               " limb counts differ");
@@ -121,7 +121,8 @@ void plaintext_loop(torch::Tensor out,
                 value, plaintext_value, constants.twice_modulus);
             value = fhelium::cpu::reduce(value, constants);
             output_row[coefficient * out_stride2] =
-                fhelium::cpu::canonicalize(value, constants.twice_modulus);
+                fhelium::cpu::reduce_to_standard(value,
+                                                 constants.twice_modulus);
           }
           index = batch_limb * coefficient_count + coefficient_end;
         }

@@ -7,7 +7,7 @@ one versioned VitePress site.
 
 | Family | Primary question | Typical content |
 | --- | --- | --- |
-| Tutorial | How do I learn a complete workflow? | Maintained example, explanation, checkpoints |
+| Tutorial | How do I learn a complete workflow? | Numbered example, explanation, checkpoints |
 | Concept | Why does this model or design exist? | Mental model, invariant, diagram, trade-off |
 | How-to | How do I complete or diagnose one task through a supported interface? | Public-interface procedure, deployment decision, diagnosis, performance validation |
 | Developer Guide | How is the implementation assembled or changed? | Source ownership, internal data flow, application binary interface (ABI), implementation invariants, tests |
@@ -39,7 +39,7 @@ tutorial on one concept page. Cross-link the appropriate families instead.
 ## Start each tutorial from its runnable example
 
 Every numbered tutorial opens immediately after its title with a source link
-and a concrete description of the maintained example:
+and a concrete description of the corresponding example:
 
 ```markdown
 **Example source:** [`examples/01_basic_ckks_flow.py`](https://github.com/VisualDust/fhelium/blob/main/examples/01_basic_ckks_flow.py)
@@ -96,29 +96,65 @@ flowchart LR
 
 Keep diagrams focused on one question and provide equivalent meaning in nearby
 prose or tables. Use `$...$` for inline mathematics and `$$...$$` for display
-mathematics. MathJax and Mermaid versions are pinned in `docs/package.json`.
+mathematics. MathJax, Mermaid, Vega, and Vega-Lite versions are pinned in
+`docs/package.json`.
+
+## Mathematical and operation documentation
+
+Use the symbols, value-state coordinates, tensor-axis names, and term
+distinctions defined in
+[Terminology and mathematical model](../concepts/terminology-and-mathematical-model.md).
+Use ASCII code identifiers such as `default_scale`, `prime_ids`, and
+`polynomial_domain` in code spans. In Python docstrings containing LaTeX
+backslashes, use a raw docstring where needed to avoid invalid escape
+sequences.
+Write mathematical symbols in docstrings and implementation comments with
+LaTeX rather than raw UTF-8 mathematical glyphs.
+
+An arithmetic-operation docstring states:
+
+- the mathematical operation and input preconditions;
+- the output level, actual scale, component count, polynomial domain, modulus
+  basis, residue representation, and `prime_ids` effect;
+- functional or mutating behavior and storage aliasing; and
+- caller-visible approximation, rounding, range, or no-wrap requirements.
+
+For a tensor/native operation, also state the meaning and order of every axis,
+accepted shape/dtype/device, table or prime-row mapping, output state, allowed
+residue range, and mathematical operation implemented. Do not substitute a
+generic verb such as “transform,” “prepare,” or “convert” for a concrete NTT,
+Montgomery conversion, RNS restriction, basis extension, quotient rounding,
+or key switch.
+
+Generated native wrappers remain mechanical typed interfaces. Handwritten
+Python orchestration or the public API docstring owns the operation semantics;
+lower-level comments repeat only the details needed to use or maintain the
+native operator safely.
 
 ## Build architecture
 
-The site has one Node build and one dependency-free static Python generation
-step:
+The site uses one Node build and static Python API generation. Quantitative
+chart data remains JSON and is drawn in the browser only when its figure nears
+the viewport:
 
 ```mermaid
 flowchart LR
-    PY[Non-private Python source] --> AST[Static AST generator]
+    PY[Python source modules] --> AST[Static AST generator]
     AST --> JSON[Generated API fragments]
     MD[Markdown and examples] --> VP[VitePress build]
     JSON --> VP
+    DATA[Chart JSON] --> VL[Lazy Vega-Lite component]
+    VL --> VP
     THEME[Theme and components] --> VP
     VP --> HTML[Versioned static site]
 ```
 
 `scripts/generate_api_docs.py` scans Python source modules and resolves
 inherited dataclass constructors and overload groups without importing the
-package. It includes package initializers with a defined `__all__`, omits
-modules whose path contains a leading-underscore component, and emits one page
-per remaining module. A defined `__all__` selects members; otherwise the
-generator uses non-underscored definitions. The generator also derives
+package. It includes ordinary modules regardless of a leading underscore in
+their path, includes package initializers with a defined `__all__`, and emits
+one page per selected module. A defined `__all__` selects members; otherwise
+the generator uses non-underscored definitions. The generator also derives
 navigation from those paths, so VitePress contains no separate semantic API
 inventory. A generated page does not by itself make an implementation module a
 supported downstream import; package initializers and declared interface
@@ -128,7 +164,12 @@ configured module-tree exclusion.
 
 A VitePress Markdown plugin expands the generated fragments before headings,
 search records, and page outlines are built. Mermaid is rendered by a client
-component and mathematics is rendered at build time.
+component and mathematics is rendered at build time. Quantitative data lives
+under `docs/public/data/`. `VegaLiteChart.vue` fetches data near the viewport,
+loads `vega-embed`, responds to theme and container-size changes, and leaves the
+page background visible. A chart-specific definition owns its labels, checks,
+transformations, and visual encoding; it must not add subject-specific logic to
+the generic component.
 
 ## A useful concept-page structure
 

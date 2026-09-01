@@ -53,6 +53,14 @@ const otherRun = computed(() => runs.find((run) => run.id !== report.value?.id))
 const singleMetricName = ref('depth-aware-ckks-operation-latency')
 const singleLevelWindow = ref(0)
 const nttBasis = ref('Q')
+
+function gpuDeviceRole(index: string): string {
+  const run = report.value
+  if (run?.execution.backend === 'cuda' && run.execution.device === `cuda:${index}`) {
+    return 'Selected execution GPU'
+  }
+  return 'Visible CUDA device'
+}
 const nttOperation = ref('forward_ntt')
 const nttLevel = ref(0)
 
@@ -199,8 +207,8 @@ function softwareFacts(): Fact[] {
       <section class="platform-section">
         <header><p>System under test</p><h2>Execution hardware and host</h2></header>
         <div class="platform-grid">
-          <article class="cpu-card"><span>Host CPU</span><strong>{{ cpuSummary(report) }}</strong><dl><div><dt>Logical CPUs</dt><dd>{{ rawValue(report.platform.cpu.logical_count) }}</dd></div><div><dt>Architecture</dt><dd>{{ rawValue(report.platform.cpu.architecture) }}</dd></div><div><dt>System RAM</dt><dd>{{ formatBytes(jsonNumber(report.platform.memory.total_bytes)) }}</dd></div></dl></article>
-          <article v-for="device in gpuDevices(report)" :key="device.index" class="gpu-card"><span>CUDA execution GPU {{ device.index }}</span><strong>{{ device.name }}</strong><dl><div><dt>Memory</dt><dd>{{ formatBytes(device.totalGlobalMem) }}</dd></div><div><dt>Compute</dt><dd>{{ device.computeCapability }}</dd></div><div><dt>SMs</dt><dd>{{ device.multiProcessorCount ?? '—' }}</dd></div><div><dt>Memory bus</dt><dd>{{ device.memoryBusWidth ? `${device.memoryBusWidth}-bit` : '—' }}</dd></div></dl></article>
+          <article class="cpu-card"><span>Host CPU</span><strong>{{ cpuSummary(report) }}</strong><dl><div><dt>Logical CPUs</dt><dd>{{ rawValue(report.platform.cpu.logical_processor_count ?? report.platform.cpu.logical_count) }}</dd></div><div><dt>Architecture</dt><dd>{{ rawValue(report.platform.cpu.architecture) }}</dd></div><div><dt>System RAM</dt><dd>{{ formatBytes(jsonNumber(report.platform.memory.capacity_bytes) ?? jsonNumber(report.platform.memory.total_bytes)) }}</dd></div></dl></article>
+          <article v-for="device in gpuDevices(report)" :key="device.index" class="gpu-card"><span>{{ gpuDeviceRole(device.index) }} · cuda:{{ device.index }}</span><strong>{{ device.name }}</strong><dl><div><dt>Memory</dt><dd>{{ formatBytes(device.totalGlobalMem) }}</dd></div><div><dt>Compute</dt><dd>{{ device.computeCapability }}</dd></div><div><dt>SMs</dt><dd>{{ device.multiProcessorCount ?? '—' }}</dd></div><div><dt>Memory bus</dt><dd>{{ device.memoryBusWidth ? `${device.memoryBusWidth}-bit` : '—' }}</dd></div></dl></article>
         </div>
         <dl class="software-strip"><div v-for="item in softwareFacts()" :key="item.label"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div></dl>
       </section>

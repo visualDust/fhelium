@@ -1,8 +1,8 @@
 """CKKS bootstrap components and full-slot bootstrap execution.
 
 The package exposes independently replaceable polynomial, linear-transform,
-and modular-reduction mechanisms plus one engine-bound callable full-slot
-composition. Preconfigured constructors live in
+and modular-reduction mechanisms plus one full-slot callable configured for
+one Engine. Preconfigured constructors live in
 :mod:`fhelium.experimental.bootstrap.presets`.
 """
 

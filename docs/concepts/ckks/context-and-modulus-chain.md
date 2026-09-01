@@ -1,49 +1,55 @@
-# Context and modulus chain
+# Configuration and modulus chain
 
-A FHElium value belongs to one immutable CKKS context. The context fixes the
-direct representation version, ring, default scale, ordinary Q moduli, special
-P moduli, Galois generator, and a stable identity used to reject incompatible
-values.
+`CkksConfig` fixes the ring, default scale, ordinary Q moduli, special P
+moduli, Galois generator, sampler parameters, and security-budget selection
+used to construct one CKKS execution environment. The caller tracks
+configuration provenance and supplies values and keys produced with
+mathematically compatible parameters.
 
 Construction proceeds through distinct owners:
 
 | Object | Responsibility |
 | --- | --- |
 | `Preset` | Named baseline for slot capacity, default scale width, public levels, and P-prime count |
-| `CkksConfig` | Resolved mathematical/security parameters and Q/P chains |
-| `CkksContextSpec` | Immutable placement-independent compatibility metadata derived for values |
-| `CkksEngine` | One process-local device, NTT policy, tables, randomness, keys, and evaluator operations |
+| `CkksConfig` | Resolved mathematical/security parameters, Q/P chains, and Galois generator |
+| `fhelium.eager.Engine` | Eager lifecycle, lazily created per-device resources, installed keys, and evaluator operations |
 
 A benchmark profile and an experimental bootstrap factory are separate
-objects; neither is a CKKS context.
+objects; neither defines CKKS parameters.
 
-## Context identity
+## Configuration ownership
 
-`CkksContextSpec` is placement-independent metadata:
+`CkksConfig` is placement-independent:
 
 ```text
-representation = direct_per_value_scale_v1
 logN
 default_scale
 q_moduli
 p_moduli
 galois_generator
-context_id = hash(representation, logN, default_scale, Q, P, galois_generator)
+sigma
+security_bits
+enforce_security_budget
 ```
 
-It does not contain a CUDA device, rank, process group, cache, or file path.
+Device, rank, process-group, cache, and storage choices belong to their
+execution or application owners.
+`CkksConfig.dumps()` records the selected Q/P moduli, Galois generator, and
+FHElium package version; `CkksConfig.parse()` reconstructs that configuration
+only when the installed package and prime catalog reproduce those moduli.
 
-`CkksConfig()` and the default `CkksEngine()` baseline use a 40-bit default
-scale with int64 tensors. Maintained int64 presets provide 30-, 40-, and
-50-bit scale families; maintained int32 presets use a 25-bit scale family.
+`CkksConfig()` and the default `fhelium.eager.Engine()` baseline use a 40-bit default
+scale with int64 tensors. Built-in int64 Presets provide 30-, 40-, and
+50-bit scale families; built-in int32 Presets use a 25-bit scale family.
 The dtype suffix, residue buffer width, and scale width are separate
 configuration properties.
 `config.default_scale` supplies the value-creation scale when an encode or
 encryption scale is omitted. Every plaintext and ciphertext carries its own
 positive finite binary64 actual scale, and arithmetic uses that per-value
-state. `scale_bits` selects the context's scale-prime catalog and default. Two
-values with the same tensor shape are incompatible if their `context_id`
-values differ. The complete maintained preset matrix is specified in
+state. `scale_bits` selects the scale-prime catalog and default. Equal tensor
+shape compatibility must be accompanied by caller-established ring and modulus
+chain compatibility. The
+complete built-in Preset matrix is specified in
 [Choose a preset and chain depth](../../how-to/choose-preset-and-depth.md).
 
 ## Ring dimension and slots
@@ -140,7 +146,7 @@ Therefore:
 - operation compatibility requires more than comparing integer `level` values.
 
 FHElium stores prime IDs with each local tensor row because a compact local tensor row must still
-map to the correct canonical modulus and arithmetic parameters.
+map to the correct configured modulus and arithmetic parameters.
 
 ## Level and scale are independent state coordinates
 
@@ -172,8 +178,8 @@ A parameter plan must account for three interacting limits:
 
 Increasing scale can improve fractional precision while reducing headroom for
 large intermediate values. Adding more Q primes increases value/key size and
-operation cost. Parameter selection is therefore a workload decision, not a
-single "maximum precision" knob.
+operation cost. Parameter selection balances workload depth, precision, range,
+memory, and operation cost.
 
 ## Memory scales with active rows
 
@@ -185,15 +191,15 @@ $$
 
 Evaluation keys additionally include digit and key-component axes and often a
 QP basis, so they can dominate ciphertext memory. Moving to a later level
-reduces ordinary active rows, but does not automatically eliminate all key or
-temporary storage.
+reduces ordinary active rows while key and temporary storage follow their own
+layouts and lifetimes.
 
 ## Invariants to remember
 
-- Context identity includes the modulus values, not only their count.
+- The caller-selected configuration includes every modulus value and its order.
 - Level zero contains all ordinary Q rows.
 - Level increases as leading scale primes are dropped.
-- Q and QP are different bases, not different levels.
+- Q and QP identify modulus bases; level identifies the active Q suffix.
 - `prime_ids` is part of value identity.
 - Ring size, active rows, and component/digit axes all contribute to memory.
 - Precision claims must be validated at realistic amplitude and summation

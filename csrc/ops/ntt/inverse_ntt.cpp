@@ -17,7 +17,7 @@
 // and normalize by $N^{-1}\bmod q_i$. Every schema mutates and preserves the
 // operand storage, changing the final axis meaning to coefficient. The
 // `montgomery` output remains Montgomery/lazy [0, 2q_i); `standard_lazy` is
-// standard/lazy [0, 2q_i); `standard` is standard/canonical [0, q_i); and
+// standard/lazy [0, 2q_i); `standard` is standard [0, q_i); and
 // `centered` is standard in the centered representative interval.
 
 TORCH_LIBRARY_FRAGMENT(fhelium_ntt_ops, m) {

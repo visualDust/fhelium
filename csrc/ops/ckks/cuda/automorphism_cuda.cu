@@ -10,10 +10,10 @@ namespace {
 // Galois automorphism representation requirements. Input is integral CUDA
 // [*batch, limb, coefficient_or_ntt_index]; output is newly allocated with the
 // same shape, dtype/device, prime rows, domain, representation, and lazy
-// or canonical range. source_indices is int32 [N] destination-to-source order.
+// or standard range. source_indices is int32 [N] destination-to-source order.
 // The coefficient variant also consumes int8 source_sign [N] and integral
 // twice_modulus [limb] to implement $\sigma_g:X\mapsto X^g$ modulo $X^N+1$;
-// it returns canonical residues. The NTT variant is a pure gather of NTT
+// it returns standard residues. The NTT variant is a pure gather of NTT
 // evaluations. All inputs are read-only and no output aliases an input.
 template <typename scalar_t>
 __global__ void coefficient_galois_automorphism_kernel(
@@ -29,8 +29,7 @@ __global__ void coefficient_galois_automorphism_kernel(
   scalar_t value = residues[batch][row][source_indices[destination]];
   if (source_sign[destination] == static_cast<int8_t>(-1)) value = -value;
   value = shift_residue_positive(value, twice_modulus[row]);
-  out[batch][row][destination] =
-      canonicalize_lazy_residue(value, twice_modulus[row]);
+  out[batch][row][destination] = reduce_lazy_residue(value, twice_modulus[row]);
 }
 
 template <typename scalar_t>

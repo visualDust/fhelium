@@ -15,7 +15,7 @@ import BenchmarkPortalHeader from '../../.vitepress/theme/benchmarks/v1/componen
 
 <div class="benchmark-methodology-content vp-doc">
 
-FHElium Benchmark v1 is one fixed, cross-backend measurement product. The `v1` identity binds five ordered cases, their effective parameters, measurement rules, correctness criteria, report format, publication projection, comparison behavior, and portal interpretation. A formal run selects exactly one report-level execution target—`cpu` or an indexed `cuda:N` device—and executes every case on it. The selected device is provenance, not a workload parameter; therefore CPU and CUDA runs have the same manifest, case IDs, profiles, effective parameters, metrics, and validation criteria.
+FHElium Benchmark v1 is one fixed, cross-backend measurement product. The `v1` identity binds five ordered cases, their effective parameters, measurement rules, correctness criteria, report format, publication projection, comparison behavior, and portal interpretation. A formal run selects exactly one report-level execution target—`cpu` or an indexed `cuda:N` device—and executes every case on it. The report records that device as execution provenance while preserving the same manifest, case IDs, profiles, effective parameters, metrics, and validation criteria across CPU and CUDA.
 
 The website publishes only complete formal v1 reports. An isolated leaf result is never presented as a v1 run. The Explorer, detail view, and Compare use the same run representation and UI for CPU and CUDA. They distinguish the selected execution device from host and visible-hardware inventory, and they define no composite score.
 
@@ -24,12 +24,12 @@ The website publishes only complete formal v1 reports. An isolated leaf result i
 Benchmark v1 contains five cases on the common `slots8192-scale40-levels7-int64` CKKS plan with `radix2_indexed` NTT:
 
 1. **Depth-aware CKKS single operations.** Twelve public operations are measured at all seven ordinary public entry levels with one warmup and three timed samples.
-2. **Indexed radix-2 NTT operations.** Q and QP tensors are measured at levels 0 through 6 for forward, inverse, and roundtrip transforms. The backend is fixed; this case does not rank or tune backend implementations.
+2. **Indexed radix-2 NTT operations.** Q and QP tensors are measured at levels 0 through 6 for forward, inverse, and roundtrip transforms using the fixed indexed-radix-2 implementation.
 3. **Plaintext × ciphertext dense matrix multiplication.** One fixed 16 × 16 cyclic-diagonal packed product runs sequentially and unbatched on one selected device.
 4. **Ciphertext × ciphertext dense matrix multiplication.** The same 16 × 16 shape and schedule use encrypted diagonals, late relinearization, and one rescale per output column.
 5. **Polynomial methods.** One affine polynomial and one dense degree-four polynomial exercise balanced power, corrected Horner, and fixed-`k` Paterson–Stockmeyer methods where applicable.
 
-The fixed matrix and bounded-depth polynomial set are part of v1 for both backends. They are not CPU substitutions: a CUDA run executes the identical shapes, methods, sample counts, and parameters. Multi-GPU scaling and CUDA-only NTT backend studies remain independent benchmarks outside formal v1.
+The fixed matrix and fixed-depth polynomial set apply identically to both backends. A CUDA run executes the same shapes, methods, sample counts, and parameters. Multi-GPU scaling and CUDA-only NTT implementation studies use independent benchmark definitions.
 
 ## Execution identity
 
@@ -59,9 +59,9 @@ Metrics remain typed by name, unit, statistic, direction, and dimensions:
 | Throughput/rate | Declared work divided by that interval; higher is better |
 | Memory | Reported only where one equivalent cross-backend measurement exists |
 
-Absent measurements are blank, never zero. CUDA allocator counters are not used as CPU-versus-CUDA metrics because zero from the CPU path would not represent equivalent memory evidence.
+Absent measurements use blank cells. Cross-backend memory metrics require an equivalent measurement on both CPU and CUDA, which excludes CUDA allocator counters from that comparison.
 
-Every measured configuration must pass its defined correctness checks before a report can complete. The raw report retains each oracle, observed value, limit, and supporting details. Numerical limits are never widened merely to make a run pass. The retained affine and degree-four method limits require controlled cross-backend calibration before release; current implementation validation preserves rather than relaxes those criteria.
+Every measured configuration must pass its defined correctness checks before a report can complete. The raw report retains each oracle, observed value, limit, and supporting details. Numerical limits remain fixed until controlled cross-backend calibration justifies a revision.
 
 ## Platform and provenance
 
@@ -71,11 +71,11 @@ Formal reproducibility evidence requires a clean source checkout. `--allow-dirty
 
 ## Comparison identity
 
-Compare aligns the same five fixed case IDs across selected v1 runs. CPU and CUDA reports are directly comparable because the manifest, parameters, metric identities, dimensions, and criteria match. Compare does not substitute a profile, resize a workload, drop a case, compute a winner, or infer a composite score.
+Compare aligns the same five fixed case IDs, manifest, parameters, metric identities, dimensions, and criteria across selected v1 runs. It presents individual typed metrics without a composite score.
 
 ## Report and catalog formats
 
-`fhelium/benchmarks/v1/specification.json` is the canonical resolved manifest. Runtime definitions, the dependency-free publisher, and the v1 frontend pin the same SHA-256 identity and five-case order.
+`fhelium/benchmarks/v1/specification.json` is the fixed resolved manifest. Runtime definitions, the dependency-free publisher, and the v1 frontend pin the same SHA-256 identity and five-case order.
 
 Published data uses:
 
@@ -112,7 +112,9 @@ fhelium benchmark v1 run \
   --output results/fhelium-benchmark-v1-cuda.json
 ```
 
-There are no case, profile, shape, or parameter overrides in formal v1. Use an independent leaf benchmark for another research question; it is not a v1 report.
+Formal v1 fixes every case, profile, shape, and parameter. Use an independent
+leaf benchmark for another research question and publish it under its own
+benchmark identity.
 
 Publish a completed clean report with:
 

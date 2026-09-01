@@ -27,10 +27,10 @@ from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
-from fhelium.core import Ciphertext, RelinearizationKey
+from fhelium.values import Ciphertext, RelinearizationKey
 
 if TYPE_CHECKING:
-    from fhelium.engine.ckks_engine import CkksEngine
+    from fhelium.eager import Engine
 
 PolynomialBasis = Literal['power', 'chebyshev']
 
@@ -72,7 +72,7 @@ def _validate_polynomial_coefficients(
 
 
 def _validate_encrypted_evaluation(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
     polynomial: PolynomialApproximation,
     *,
@@ -95,7 +95,7 @@ def _validate_encrypted_evaluation(
         modulus_basis='Q',
         components=2,
     )
-    engine._assert_engine_ciphertext(ciphertext)
+    engine.validate_ciphertext(ciphertext)
     if not math.isclose(
         ciphertext.scale,
         engine.config.default_scale,
@@ -117,11 +117,11 @@ def _validate_encrypted_evaluation(
     if requires_relinearization:
         if relinearization_key is None:
             raise ValueError(f'{evaluator_name} requires a relinearization key')
-        engine._assert_engine_key(
-            relinearization_key,
-            expected_type=RelinearizationKey,
-            modulus_basis='QP',
-        )
+        if type(relinearization_key) is not RelinearizationKey:
+            raise TypeError("relinearization_key must be a RelinearizationKey")
+        engine.validate_key_switch_key(relinearization_key)
+        if relinearization_key.modulus_basis != 'QP':
+            raise ValueError("relinearization_key requires QP basis")
 
 
 @dataclass(frozen=True)
@@ -375,7 +375,7 @@ class BalancedPowerEvaluator:
 
     def evaluate(
         self,
-        engine: CkksEngine,
+        engine: Engine,
         ciphertext: Ciphertext,
         polynomial: PolynomialApproximation,
         *,
@@ -497,7 +497,7 @@ class HornerPowerEvaluator:
 
     def evaluate(
         self,
-        engine: CkksEngine,
+        engine: Engine,
         ciphertext: Ciphertext,
         polynomial: PolynomialApproximation,
         *,
@@ -713,7 +713,7 @@ class PatersonStockmeyerPowerEvaluator:
 
     def evaluate(
         self,
-        engine: CkksEngine,
+        engine: Engine,
         ciphertext: Ciphertext,
         polynomial: PolynomialApproximation,
         *,
@@ -966,7 +966,7 @@ class BinaryDecompositionChebyshevEvaluator:
 
     def evaluate(
         self,
-        engine: CkksEngine,
+        engine: Engine,
         ciphertext: Ciphertext,
         polynomial: PolynomialApproximation,
         *,

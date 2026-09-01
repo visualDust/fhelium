@@ -25,6 +25,7 @@ import argparse
 import torch
 
 import fhelium as fh
+from fhelium.eager import Engine
 import fhelium.distributed as dist
 
 
@@ -60,7 +61,7 @@ def _cyclic_diagonal_slots(
 
 
 def _provision_owned_rotation_keys(
-    engine: fh.CkksEngine,
+    engine: Engine,
     secret_key: fh.SecretKey | None,
     size: int,
 ) -> dict[int, fh.RotationKey]:
@@ -96,10 +97,10 @@ def main() -> None:
     args = parser.parse_args()
 
     dist.init()
-    engine = fh.CkksEngine(
+    torch.set_default_device(dist.local_device())
+    engine = Engine(
         fh.Preset.slots32768_scale40_levels34_int64,
-        device=dist.local_device(),
-        allow_sk_gen=False,
+        allow_automatic_key_generation=False,
     )
     if args.size <= 0 or args.size > engine.num_slots:
         raise ValueError(f"size must be in [1, {engine.num_slots}]")
@@ -174,7 +175,7 @@ def main() -> None:
             local_partial,
             secret_key=secret_key,
             is_real=True,
-        )[: args.size]
+        ).cpu()[: args.size]
         expected = matrix @ vector
         max_error = float(torch.max(torch.abs(decoded - expected)))
         torch.testing.assert_close(decoded, expected, atol=3e-5, rtol=0)

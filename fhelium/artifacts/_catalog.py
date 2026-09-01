@@ -26,12 +26,12 @@ CATALOG_NAME = "catalog.sqlite3"
 OBJECTS_DIRECTORY_NAME = "objects"
 TEMPORARY_DIRECTORY_NAME = "tmp"
 STORE_FORMAT = "fhelium-artifact-store"
-STORE_SCHEMA_VERSION = 1
+STORE_SCHEMA_VERSION = 2
 SUPPORTED_STORE_SCHEMA_VERSIONS = (STORE_SCHEMA_VERSION,)
 
 
 def _normalize_name(name: str) -> str:
-    """Return one canonical store-relative logical name."""
+    """Return one normalized store-relative logical name."""
 
     if not isinstance(name, str):
         raise TypeError(f"Artifact name must be str, got {type(name).__name__}")
@@ -55,14 +55,14 @@ def _validate_uuid(value: object, *, field: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"Artifact catalog {field} must be a UUID string")
     try:
-        canonical = str(UUID(value))
+        normalized = str(UUID(value))
     except ValueError as error:
         raise ValueError(
             f"Artifact catalog {field} must be a UUID string"
         ) from error
-    if value != canonical:
+    if value != normalized:
         raise ValueError(
-            f"Artifact catalog {field} must use canonical UUID text"
+            f"Artifact catalog {field} must use normalized UUID text"
         )
     return value
 
@@ -162,9 +162,6 @@ def _metadata_from_catalog_row(
         raise ValueError(
             f"Unsupported nested value schema version: {value_schema_version!r}"
         )
-    context_id = row["context_id"]
-    if context_id is not None and not isinstance(context_id, str):
-        raise ValueError("Artifact catalog context_id must be a string or null")
     nbytes = row["nbytes"]
     if type(nbytes) is not int or nbytes < 0:
         raise ValueError(
@@ -192,7 +189,6 @@ def _metadata_from_catalog_row(
         artifact_id=artifact_id,
         value_type=value_type,
         artifact_schema_version=artifact_schema_version,
-        context_id=context_id,
         nbytes=nbytes,
         payload_sha256=payload_sha256,
     )

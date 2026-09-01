@@ -26,7 +26,20 @@ DEFAULT_SIDEBAR_OUTPUT = (
     REPOSITORY_ROOT / "docs" / ".vitepress" / "api-sidebar.json"
 )
 SOURCE_ROOT = "https://github.com/VisualDust/fhelium/blob"
-EXCLUDED_API_MODULE_PREFIXES = ("fhelium.native.wrapper",)
+EXCLUDED_API_MODULE_PREFIXES = (
+    "fhelium.native.wrapper",
+    "fhelium.legacy",
+    "fhelium.benchmarks.synthetic",
+    "fhelium.benchmarks.v1.matrix",
+    "fhelium.benchmarks.v1.ntt",
+    "fhelium.benchmarks.v1.operations",
+    "fhelium.benchmarks.v1.polynomial",
+    "fhelium.benchmarks.standalone.ckks_operator_latency_and_rotation_hoisting",
+    "fhelium.benchmarks.standalone.ntt_backend_single_operation_latency",
+    "fhelium.benchmarks.standalone.ntt_kernel",
+    "fhelium.benchmarks.standalone.ntt_recommendation",
+    "fhelium.benchmarks.standalone.packed_matrix_vector",
+)
 
 DIRECTIVE_RE = re.compile(r"^:::\s+(fhelium(?:\.[A-Za-z_]\w*)*)\s*$")
 ROLE_RE = re.compile(r":(?:py:)?(?:class|func|meth|attr|mod):`~?([^`]+)`")
@@ -1021,14 +1034,12 @@ def render_reference(
     return "\n\n".join(rendered)
 
 
-def public_api_modules(
+def documented_modules(
     modules: dict[str, ModuleDefinition],
 ) -> tuple[str, ...]:
     discovered: list[str] = []
     for name, module in modules.items():
         if name.split(".")[0] != PACKAGE_ROOT.name:
-            continue
-        if any(part.startswith("_") for part in name.split(".")[1:]):
             continue
         if module.is_package and "__all__" not in module.objects:
             continue
@@ -1122,7 +1133,7 @@ def render_api_sidebar(
 
 def generate(output: Path, sidebar_output: Path) -> None:
     modules = build_module_index()
-    module_names = public_api_modules(modules)
+    module_names = documented_modules(modules)
     write_generated_module_pages(module_names)
     directives = parse_api_directives()
     rendered = {

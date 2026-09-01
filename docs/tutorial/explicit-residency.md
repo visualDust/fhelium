@@ -42,11 +42,11 @@ source = engine.encrypt_message(message)
 
 ## 2. Configure optional admission budgets
 
-Locations are immutable identities. Host locations are canonical constants;
+Locations are immutable identities. Host locations use predefined constants;
 CUDA locations require a device index.
 
 ```python
-device_location = cuda_location(engine.device)
+device_location = cuda_location(torch.get_default_device())
 residency = ResidencyManager(
     budgets={
         PINNED_HOST: pinned_capacity,
@@ -191,7 +191,7 @@ version before mutation.
 ## 6. Protect a CUDA consumer stream
 
 ```python
-compute_stream = torch.cuda.Stream(device=engine.device)
+compute_stream = torch.cuda.Stream(device=torch.get_default_device())
 scope = residency.scope(plan)
 with scope:
     with residency.acquire(
@@ -266,8 +266,8 @@ CUDA device represented by its allocator sample.
 The example prints manager accounting beside:
 
 ```python
-torch.cuda.memory_allocated(engine.device)
-torch.cuda.memory_reserved(engine.device)
+torch.cuda.memory_allocated(torch.get_default_device())
+torch.cuda.memory_reserved(torch.get_default_device())
 ```
 
 These numbers answer different questions:
@@ -297,10 +297,10 @@ residency.close()
 `discard` ends each managed value. `close` rejects active or
 pending lifetimes unless the caller explicitly chooses its force escape hatch.
 
-The evaluator output is not adopted in this example; it remains an ordinary
-application-owned ciphertext.
+The evaluator output remains an ordinary application-owned ciphertext in this
+example.
 
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/13_explicit_residency.py
 :::
 

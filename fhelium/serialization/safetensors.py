@@ -13,7 +13,7 @@ import torch
 from safetensors import safe_open
 from safetensors.torch import save_file
 
-from fhelium.core import SecretKey, TensorResident
+from fhelium.values import SecretKey, TensorResident
 from fhelium.serialization.value import (
     VALUE_SCHEMA_VERSION,
     ValueEnvelope,
@@ -22,7 +22,7 @@ from fhelium.serialization.value import (
 )
 
 FILE_FORMAT = "fhelium-value"
-FILE_SCHEMA_VERSION = 1
+FILE_SCHEMA_VERSION = 2
 _FORMAT_METADATA_KEY = "fhelium.format"
 _SCHEMA_METADATA_KEY = "fhelium.schema_version"
 _MANIFEST_METADATA_KEY = "fhelium.manifest"
@@ -37,7 +37,6 @@ class ValueFileMetadata:
     file_schema_version: int
     value_schema_version: int
     value_type: str
-    context_id: str | None
     nbytes: int
     tensor_metadata: dict[str, dict[str, Any]]
     value_metadata: dict[str, Any]
@@ -90,7 +89,6 @@ def save_value(
         "file_schema_version": FILE_SCHEMA_VERSION,
         "value_schema_version": envelope.schema_version,
         "value_type": envelope.value_type,
-        "context_id": envelope.context_id,
         "nbytes": nbytes,
         "tensor_metadata": tensor_metadata,
         "value_metadata": envelope.metadata,
@@ -152,7 +150,6 @@ def load_value(
     *,
     device: torch.device | str = "cpu",
     expected_type: type[T] | None = None,
-    expected_context_id: str | None = None,
 ) -> T:
     """Load one value from a caller-selected value-file path.
 
@@ -171,14 +168,6 @@ def load_value(
             device=str(target),
         ) as handle:
             metadata = _metadata_from_safetensors(handle.metadata())
-            if (
-                expected_context_id is not None
-                and metadata.context_id != expected_context_id
-            ):
-                raise ValueError(
-                    "Value file context mismatch: expected "
-                    f"{expected_context_id!r}, got {metadata.context_id!r}"
-                )
             if (
                 expected_type is not None
                 and metadata.value_type != expected_type.__name__
@@ -212,7 +201,6 @@ def load_value(
     envelope = ValueEnvelope(
         schema_version=metadata.value_schema_version,
         value_type=metadata.value_type,
-        context_id=metadata.context_id,
         metadata=metadata.value_metadata,
         tensors=logical,
     )
@@ -264,7 +252,6 @@ def _metadata_from_manifest(manifest: dict[str, Any]) -> ValueFileMetadata:
         "file_schema_version",
         "value_schema_version",
         "value_type",
-        "context_id",
         "nbytes",
         "tensor_metadata",
         "value_metadata",
@@ -301,9 +288,6 @@ def _metadata_from_manifest(manifest: dict[str, Any]) -> ValueFileMetadata:
         or value_type not in supported_value_types()
     ):
         raise ValueError(f"Unsupported value file type: {value_type!r}")
-    context_id = manifest["context_id"]
-    if context_id is not None and not isinstance(context_id, str):
-        raise ValueError("Value file context_id must be a string or null")
     nbytes = manifest["nbytes"]
     if type(nbytes) is not int or nbytes < 0:
         raise ValueError("Value file nbytes must be a non-negative integer")
@@ -317,7 +301,6 @@ def _metadata_from_manifest(manifest: dict[str, Any]) -> ValueFileMetadata:
     validate_value_description(
         schema_version=manifest["value_schema_version"],
         value_type=value_type,
-        context_id=context_id,
         metadata=value_metadata,
         tensor_names=set(tensor_metadata),
         tensor_metadata=tensor_metadata,
@@ -326,7 +309,6 @@ def _metadata_from_manifest(manifest: dict[str, Any]) -> ValueFileMetadata:
         file_schema_version=FILE_SCHEMA_VERSION,
         value_schema_version=VALUE_SCHEMA_VERSION,
         value_type=value_type,
-        context_id=context_id,
         nbytes=nbytes,
         tensor_metadata=tensor_metadata,
         value_metadata=value_metadata,

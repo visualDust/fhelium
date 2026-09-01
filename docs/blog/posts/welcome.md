@@ -25,6 +25,6 @@ This blog provides a separate home for:
 - benchmark or research reports whose results are tied to a particular date;
 - community updates that do not define supported library behavior.
 
-Posts may link into the maintained documentation, but the documentation remains
+Posts may link into the project documentation, but the documentation remains
 the source of truth for current API semantics, mathematical invariants,
 installation requirements, and support policies.

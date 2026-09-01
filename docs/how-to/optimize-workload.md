@@ -47,7 +47,7 @@ it.
 | Many rotations/key switches | Hoisting, direct keyset, packing/schedule changes |
 | NTT table/launch traffic | Indexed/compact and grouping ablation |
 | Python/dispatcher launches | Rank-local CUDA Graph |
-| CUDA footprint | Prepared-state audit, streaming, bounded residency |
+| CUDA footprint | Prepared-state audit, streaming, budget-constrained residency |
 | Independent requests | Data parallelism |
 | Additive rotation terms | Additive-term parallelism with typed reduction |
 | One huge value with long row-local phase | Limb parallelism, cautiously |
@@ -80,7 +80,7 @@ Hold fixed:
 
 Measure latency, memory, and error together.
 
-## 6. Tune bounded parameters
+## 6. Tune workload-control parameters
 
 Several mechanisms have a non-monotonic control:
 

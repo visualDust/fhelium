@@ -81,7 +81,7 @@ program = CudaGraphProgram.capture(
 )
 ```
 
-[`CudaGraphProgram`](../api/fhelium/execution/cuda_graph.md#cudagraphprogram) performs side-stream
+[`CudaGraphProgram`](../api/fhelium/runtime/cuda_graph.md#cudagraphprogram) performs side-stream
 warmup, allocates fixed dynamic-input storage, captures the evaluator, records
 the output storage, and derives an input signature.
 
@@ -90,7 +90,7 @@ The prototype determines structure, including:
 - value-tree shape;
 - value type;
 - tensor shape and dtype;
-- CKKS context and level;
+- CKKS level and caller-recorded parameter provenance;
 - polynomial domain, modulus basis, residue representation, scale, and prime IDs.
 
 ## 5. Replay with changing ciphertexts
@@ -148,16 +148,10 @@ program.close()
 ```
 
 Closing releases graph-owned inputs, outputs, and capture state. Do not treat
-a captured program as an unbounded global singleton when different contexts,
+a captured program as an unbounded global singleton when different parameter sets,
 models, or input signatures require independent storage.
 
-::: danger Application-owned serving policy
-A serving extension assigns models and users, admits requests, manages
-per-user keys and eviction, and composes those policies around one or more
-fixed captured programs.
-:::
-
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/11_cuda_graph_matrix_vector.py
 :::
 

@@ -15,8 +15,8 @@ namespace {
 // form for each destination prime; params [parameter, remaining_limb]
 // follows the same prime_ids order. The kernel computes
 // $\operatorname{Round}(c/q_{\mathrm{drop}})\bmod q_i$: nearest increments
-// when the canonical dropped residue exceeds floor(q_drop/2), while truncate
-// omits that increment. Output is coefficient/standard canonical [0, q_i)
+// when the standard dropped residue exceeds floor(q_drop/2), while truncate
+// omits that increment. Output is coefficient/standard [0, q_i)
 // with remaining shape. Functional output does not alias input; underscore
 // variants preserve and mutate remaining storage only. Tables are read-only.
 
@@ -50,8 +50,7 @@ __global__ void ckks_rescale_drop_leading_prime_kernel(
   if constexpr (nearest) {
     quotient += dropped_value > half_drop_prime ? 1 : 0;
   }
-  out[batch][row][coefficient] =
-      canonicalize_lazy_residue(quotient, twice_modulus);
+  out[batch][row][coefficient] = reduce_lazy_residue(quotient, twice_modulus);
 }
 
 void validate_rescale_operands(const torch::Tensor& remaining,

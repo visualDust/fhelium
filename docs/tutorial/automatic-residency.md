@@ -6,7 +6,7 @@ This example admits a CKKS working set under a strict managed CUDA budget. A
 cold replicable plaintext already occupies CUDA capacity, so deterministic
 decision-making must reclaim that cache before placing an encrypted input,
 rotation key, and operation-ready plaintext. The application reviews the resulting
-decision, enters its state-bound scope, and executes rotation,
+decision, enters its state-versioned scope, and executes rotation,
 plaintext multiplication, and rescaling through a strict CUDA lease.
 
 ## Run the example
@@ -60,7 +60,7 @@ Automatic Residency adds an inspectable policy layer above the manager:
 - `ResidencyRequest` contains required `(handle, location)` postconditions and
   named reservation headroom.
 - `ResidencyPolicy` ranks only legal candidates and names configured fallback
-  tiers; `DeterministicTieredLRU` is the maintained deterministic policy.
+tiers; `DeterministicTieredLRU` is the built-in deterministic policy.
 - `ResidencyDecision` records selected reclaim evidence, a concrete plan, dry-run
   explanation, policy identity, and expected manager state version.
 - `ResidencyPlan` is ordered low-level command intermediate representation; it
@@ -95,7 +95,7 @@ request = ResidencyRequest(
 The reservation is managed accounting headroom for outputs and evaluator
 workspace. It does not allocate a tensor.
 
-## 3. Inspect a tensor-free, state-bound decision
+## 3. Inspect a tensor-free, state-versioned decision
 
 ```python
 decision = controller.decide(request)
@@ -109,11 +109,11 @@ the only unrelated CUDA materialization is the cold cached replica; the decision
 therefore contains its deterministic `DropResident` reclaim action. The
 pageable replica remains present.
 
-`decision.expected_state_version` is a precondition, not informational
-metadata. An intervening manager mutation makes the decision stale. Entering
+`decision.expected_state_version` binds the decision to the manager snapshot
+used during planning. An intervening manager mutation makes the decision stale.
+Entering
 `controller.scope(decision, ...)` checks the version atomically before reclaim,
-reservation admission, or placement, and raises `ResidencyStaleStateError`
-rather than silently replanning.
+reservation admission, or placement, and raises `ResidencyStaleStateError`.
 
 ## 4. Bind copy and consumer lifetimes separately
 
@@ -190,7 +190,7 @@ Automation never ends a managed logical identity. The example therefore calls
 `discard` for every handle and then closes the manager after verifying CKKS
 correctness and accounting.
 
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/14_automatic_residency.py
 :::
 

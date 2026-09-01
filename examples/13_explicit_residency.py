@@ -88,14 +88,13 @@ def main() -> None:
     add_engine_args(
         parser,
         default_preset="slots8192-scale40-levels7-int64",
-        default_device="cuda:0",
     )
     args = parser.parse_args()
 
     engine = make_engine(args)
-    if engine.device.type != "cuda":
+    if torch.get_default_device().type != "cuda":
         parser.error("this residency example requires CUDA")
-    device_location = cuda_location(engine.device)
+    device_location = cuda_location(torch.get_default_device())
 
     positions = torch.arange(engine.num_slots, device="cpu")
     message = 0.01 * torch.sin(positions.to(torch.float64) * 0.017)
@@ -200,7 +199,7 @@ def main() -> None:
             f"residency plan is infeasible: {explanation.reason}"
         )
 
-    compute_stream = torch.cuda.Stream(device=engine.device)
+    compute_stream = torch.cuda.Stream(device=torch.get_default_device())
     scope = residency.scope(plan)
     with scope:
         with (
@@ -237,7 +236,7 @@ def main() -> None:
         raise RuntimeError("residency plan scope did not produce a report")
 
     expected = 0.5 * torch.roll(message, shifts=1)
-    actual = engine.decrypt_message(output, is_real=True)
+    actual = engine.decrypt_message(output, is_real=True).cpu()
     error = error_stats(actual, expected)
     final_snapshot = residency.snapshot()
 
@@ -290,8 +289,8 @@ def main() -> None:
         f"{format_bytes(ciphertext_storage_bytes)}; "
         "managed source charge: "
         f"{format_bytes(ciphertext_charge)}; "
-        f"torch allocated: {format_bytes(torch.cuda.memory_allocated(engine.device))}; "
-        f"torch reserved: {format_bytes(torch.cuda.memory_reserved(engine.device))}; "
+        f"torch allocated: {format_bytes(torch.cuda.memory_allocated(torch.get_default_device()))}; "
+        f"torch reserved: {format_bytes(torch.cuda.memory_reserved(torch.get_default_device()))}; "
         f"plan transitions: {len(scope.report.transitions)}; "
         f"max error: {error['max_abs']:.3e}"
     )

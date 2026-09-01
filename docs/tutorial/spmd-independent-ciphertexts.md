@@ -25,13 +25,15 @@ The same source supports world size one and multiple ranks.
 ## 1. Initialize process-local SPMD state
 
 ```python
+import fhelium as fh
 import fhelium.distributed as dist
+from fhelium.eager import Engine
 
 dist.init()
-engine = fh.CkksEngine(
+engine = Engine(
     fh.Preset.slots32768_scale40_levels34_int64,
     device=dist.local_device(),
-    allow_sk_gen=False,
+    allow_automatic_key_generation=False,
 )
 ```
 
@@ -56,7 +58,8 @@ else:
 
 Only rank zero encrypts and decrypts. Worker ranks execute a public
 plaintext-ciphertext affine transform and therefore need no key material.
-`allow_sk_gen=False` guards against accidental local secret generation.
+`allow_automatic_key_generation=False` guards against accidental local secret
+generation.
 
 ## 3. Scatter independent logical values
 
@@ -82,7 +85,7 @@ receiver `Ciphertext`. It does not infer application sample identity.
 weight = dist.broadcast_plaintext(root_weight, src=0)
 ```
 
-The model weight is one logical [`Plaintext`](../api/fhelium/core/plaintext.md#plaintext) replicated
+The model weight is one logical [`Plaintext`](../api/fhelium/values/plaintext.md#plaintext) replicated
 to every rank. This is different from scattering independent request
 ciphertexts.
 
@@ -111,7 +114,7 @@ Each rank owns its local activation and creates a rank-specific public bias.
 The multiplication does not rescale implicitly, so the level transition is
 visible in the source.
 
-## 6. Gather; do not reduce
+## 6. Gather independent ciphertext results
 
 ```python
 outputs = dist.gather_ciphertexts(local_output, dst=0)
@@ -140,7 +143,7 @@ For additive contributions to one output, use the
 [rotation-parallel matrix-vector pattern](spmd-rotation-parallel-matvec.md)
 instead.
 
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/08_spmd_independent_ciphertexts.py
 :::
 

@@ -1,6 +1,6 @@
 # Execution buffers and CUDA Graphs
 
-`fhelium.execution` provides device-independent value signatures, reusable
+`fhelium.runtime` provides device-independent value signatures, reusable
 fixed-address storage, CUDA-event copy handles, and CUDA Graph capture for a
 rank-local Python callable. Every path consumes ordinary FHElium values and
 calls the standard evaluator/native-operator stack.
@@ -25,7 +25,7 @@ graph TB
 ```
 
 The application decides what constitutes one program, which inputs are dynamic,
-which resources are bound statically, when payloads move, and whether an eager
+which resources are captured as static program state, when payloads move, and whether an eager
 call or graph replay is appropriate.
 
 ## Device-independent value signatures
@@ -40,9 +40,10 @@ A `TensorSignature` records:
 - `requires_grad`.
 
 A `ValueSignature` additionally records the serialization type and schema,
-context identity, normalized cryptographic metadata, and ordered tensor-leaf
+normalized stored arithmetic metadata, and ordered tensor-leaf
 signatures. That metadata includes fields such as level, scale, representation,
-domain, basis, `prime_ids`, and key identity where present.
+domain, basis, `prime_ids`, and key specialization where present. It does not
+record CKKS parameter provenance.
 
 Device is intentionally excluded. A compatible CPU source and CUDA source can
 feed the same fixed CUDA buffer because the buffer, rather than the signature,
@@ -134,7 +135,7 @@ not prove that an earlier evaluator has stopped reading the old payload.
 ## CUDA Graph capture
 
 `CudaGraphProgram.capture(function, example_inputs=...)` specializes one Python
-callable to a fixed input structure and CUDA device. Parameters bound through a
+callable to a fixed input structure and CUDA device. Parameters captured through a
 closure, `functools.partial`, or a callable object are static program state.
 `example_inputs` define dynamic positional values backed by one retained
 `ReusableValueBuffer`.
@@ -200,7 +201,7 @@ CUDA Graph capture fixes:
 - nested dynamic input structure and value metadata;
 - target tensor shape, stride, dtype, and addresses;
 - Python-resolved operation schedule;
-- statically bound keys, plaintexts, tables, and other closure resources;
+- keys, plaintexts, tables, and other resources captured in closure state;
 - output object structure and storage addresses.
 
 The application retains responsibility for:
@@ -215,10 +216,12 @@ The application retains responsibility for:
 
 | Responsibility | Source |
 | --- | --- |
-| Tensor, value, and nested-tree signatures | `fhelium/execution/signature.py` |
-| Fixed storage, payload copying, and `CopyHandle` | `fhelium/execution/buffer.py` |
-| Capture, replay, output lifetime, and statistics | `fhelium/execution/cuda_graph.py` |
-| Public package surface | `fhelium/execution/__init__.py` |
+| Tensor, value, and nested-tree signatures | `fhelium/runtime/signature.py` |
+| CPU and process-visible CUDA topology observation | `fhelium/runtime/topology.py` |
+| Host/CUDA capacity and availability snapshots | `fhelium/runtime/memory.py` |
+| Fixed storage, payload copying, and `CopyHandle` | `fhelium/runtime/buffer.py` |
+| Capture, replay, output lifetime, and statistics | `fhelium/runtime/cuda_graph.py` |
+| Public package surface | `fhelium/runtime/__init__.py` |
 
 ## Validation
 
@@ -235,8 +238,8 @@ Execution changes should cover:
 - borrowed-output overwrite and owned-output copying;
 - close behavior with pending copies or replay work.
 
-The focused suites are `tests/test_execution_buffer.py` and
-`tests/test_cuda_graph_execution.py`.
+The focused suites are `tests/runtime/test_execution_buffer.py` and
+`tests/runtime/test_cuda_graph_execution.py`.
 
 ## Continue
 

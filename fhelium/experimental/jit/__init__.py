@@ -1,173 +1,91 @@
-"""Capture, import, transform, and execute mixed-dialect xDSL programs.
+"""Transform arbitrary IR with selected-device inventory and build executables.
 
-``Program`` is the package's single source-independent graph abstraction.
-PyTorch capture, textual import, and direct xDSL construction all produce this
-same representation. Program construction and import perform structural
-verification while registered and unregistered dialect content remains
-available for interchange. ``check_readiness`` and ``run`` perform the separate
-numerical and execution checks for one selected entry.
-Pass implementations may use interim states while mutating a module, but each
-returned Program must be structurally valid: ``PassPipeline`` verifies every
-pass result, and the execution gate verifies structure again.
+The JIT accepts mixed-level Programs. Transformation may stop at any IR state;
+only an executable build asks a selected backend to cover the remaining
+operations and live bindings. Mathematical CKKS correctness remains available
+through separate analyses rather than being a construction prerequisite.
 
-Programs contain serializable IR and symbolic references. ``Workspace`` retains
-live materials, resources, handlers, cryptographic services, and pass analyses
-outside that IR. Built-in transformation passes normally inspect every direct
-operation in every top-level function block, whereas requirement analysis,
-readiness, execution, and entry-oriented utilities operate on the selected
-selected entry function.
+The default composite provider set instantiates one current Eager-backed JIT
+adapter design for CPU and CUDA, with lifecycle-neutral direct logical RNS/NTT
+compilation, and adds a neutral Triton provider. The Eager-backed adapter is
+not a generic continuation of Compile.
 """
 
-from collections.abc import MutableMapping
-from os import PathLike
-from typing import Any
-
 from ._analysis import (
-    InferredValueState,
     ProgramRequirements,
-    analyze_evaluation_key_requirements,
     analyze_requirements,
-    analyze_value_states,
 )
-from ._capture import CaptureResult, capture as trace
-from ._errors import (
-    JitError,
-    JitInputError,
-    JitPassError,
-    JitPlanningError,
-    JitTraceError,
+from ._contracts import (
+    Backend,
+    BackendRegistry,
+    BuildResult,
+    CoverageDiagnostic,
+    CoverageReport,
+    Executable,
+    ProviderDecision,
+    ProviderPolicy,
 )
-from ._execution import (
+from ._errors import JitError, JitInputError, JitInterpreterError
+from ._execution import ExecutionInputs
+from ._bindings import (
     BindingResolver,
     OperationHandler,
-    ProgramNotReadyError,
-    ReadinessDiagnostic,
-    ReadinessReport,
-    check_readiness,
+    RuntimeBindings,
 )
-from ._program import Program
-from ._specs import (
-    BatchMode,
-    InputSpec,
-    SlotExtent,
-    StaticValue,
-    encrypted,
-    message,
-    plaintext,
-    static,
+from ._session import Session
+from .backends._interpreter_runtime import (
+    InterpreterCoverage,
+    InterpreterDiagnostic,
+    InterpreterNotCoveredError,
+    check_interpreter_coverage,
 )
-from ._workspace import Workspace
-from .passes import (
-    EliminateDeadValuesPass,
-    InsertMultiplyNttTransitionsPass,
-    InsertPlaintextPreparationPass,
-    InsertRelinearizationPass,
-    InsertRescalePass,
-    LateRelinearizationPass,
-    LateRescalePass,
-    LowerLogicalToCkksPass,
-    LowerSemanticToLogicalPass,
-    Pass,
-    PassPipeline,
-    PassReport,
-    PassResult,
-    PassStats,
-    PipelineResult,
-    StateValidator,
-    SvgGraphVisualizationPass,
-    ValidateCipherStatesPass,
-    ValidateExecutableGraphPass,
-    default_pipeline,
-    validate_executable_graph,
+from .backends._interpreter import (
+    InterpreterBackend,
+    InterpreterExecutable,
 )
-
-
-def load(path: str | PathLike[str]) -> Program:
-    """Load and structurally verify one textual mixed-dialect ``Program``."""
-
-    return Program.load(path)
-
-
-def parse(text: str, *, source_name: str = "<unknown>") -> Program:
-    """Parse and structurally verify one textual mixed-dialect ``Program``."""
-
-    return Program.parse(text, source_name=source_name)
-
-
-def run(
-    program: Program,
-    *args: object,
-    workspace: MutableMapping[Any, Any] | None = None,
-    entry: str = "main",
-    **kwargs: object,
-) -> Any:
-    """Readiness-check and execute ``entry`` from the supplied ``Program``.
-
-    The result type is dynamic because textual and directly constructed
-    Programs have no associated Python callable return annotation. A captured
-    callable retains its static return type on ``CaptureResult.reference``;
-    execution reconstructs the runtime value described by Program output IR.
-    """
-
-    return program.run(
-        *args,
-        workspace=workspace,
-        entry=entry,
-        **kwargs,
-    )
-
+from .backends._triton import (
+    TritonPointwiseBackend,
+    TritonPointwiseExecutable,
+)
+from .backends._composite import CompositeBackend, CompositeExecutable
+from .planning._plan import (
+    ExecutionPlan,
+    OperationSupport,
+    PlanRegion,
+    PlanValue,
+)
 
 __all__ = [
-    "BatchMode",
+    "Backend",
+    "BackendRegistry",
     "BindingResolver",
-    "CaptureResult",
-    "EliminateDeadValuesPass",
-    "InferredValueState",
-    "InputSpec",
-    "InsertMultiplyNttTransitionsPass",
-    "InsertPlaintextPreparationPass",
-    "InsertRelinearizationPass",
-    "InsertRescalePass",
+    "BuildResult",
+    "CoverageDiagnostic",
+    "CoverageReport",
+    "CompositeBackend",
+    "CompositeExecutable",
+    "Executable",
+    "InterpreterBackend",
+    "InterpreterCoverage",
+    "InterpreterDiagnostic",
+    "InterpreterExecutable",
+    "InterpreterNotCoveredError",
+    "ExecutionPlan",
+    "ExecutionInputs",
     "JitError",
     "JitInputError",
-    "JitPassError",
-    "JitPlanningError",
-    "JitTraceError",
-    "LateRelinearizationPass",
-    "LateRescalePass",
-    "LowerLogicalToCkksPass",
-    "LowerSemanticToLogicalPass",
+    "JitInterpreterError",
+    "OperationSupport",
     "OperationHandler",
-    "Pass",
-    "PassPipeline",
-    "PassReport",
-    "PassResult",
-    "PassStats",
-    "PipelineResult",
-    "Program",
-    "ProgramNotReadyError",
     "ProgramRequirements",
-    "ReadinessDiagnostic",
-    "ReadinessReport",
-    "SlotExtent",
-    "StateValidator",
-    "StaticValue",
-    "SvgGraphVisualizationPass",
-    "ValidateCipherStatesPass",
-    "ValidateExecutableGraphPass",
-    "Workspace",
-    "analyze_evaluation_key_requirements",
+    "PlanRegion",
+    "PlanValue",
+    "ProviderDecision",
+    "ProviderPolicy",
+    "RuntimeBindings",
+    "Session",
+    "TritonPointwiseBackend",
+    "TritonPointwiseExecutable",
     "analyze_requirements",
-    "analyze_value_states",
-    "check_readiness",
-    "default_pipeline",
-    "encrypted",
-    "load",
-    "message",
-    "parse",
-    "plaintext",
-    "run",
-    "static",
-    "trace",
-    "validate_executable_graph",
+    "check_interpreter_coverage",
 ]

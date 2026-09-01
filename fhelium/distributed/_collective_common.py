@@ -7,7 +7,7 @@ from typing import TypeAlias, TypeVar, cast
 
 import torch
 
-from fhelium.core import (
+from fhelium.values import (
     Ciphertext,
     CompressedPlaintext,
     ConjugationKey,

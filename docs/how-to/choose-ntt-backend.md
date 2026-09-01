@@ -3,7 +3,7 @@
 This guide is for a deployment where the target GPU and CKKS preset are known,
 but backend measurements are close, inconsistent, or different between raw
 NTT kernels and CKKS operations. It explains how to identify the limiting
-resource before selecting a `CkksEngine(ntt_backend=...)` policy.
+resource before selecting an `Engine(ntt_backend=...)` policy.
 
 For the screening command, decision thresholds, and a complete example result,
 start with [Screen NTT backends on the target GPU](screen-ntt-backends.md).

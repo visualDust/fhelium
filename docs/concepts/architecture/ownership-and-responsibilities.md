@@ -9,18 +9,19 @@ and retention policy.
 ```mermaid
 flowchart LR
     PROCESS["one process / rank"]
-    DEVICE["one local device"]
-    ENGINE["one CkksEngine"]
-    VALUES["dense local values and keys"]
-    PROCESS --> DEVICE --> ENGINE --> VALUES
+    ENGINE["one eager Engine"]
+    DEVICES["lazy per-device resources"]
+    VALUES["placed local values and keys"]
+    PROCESS --> ENGINE --> DEVICES
+    ENGINE --> VALUES
 ```
 
-The current implementation binds that local device to CPU or CUDA. The
-ownership relation uses a common device abstraction, while tensor placement
-still participates in operation compatibility and selects the native dispatcher
-implementation.
+One Engine may use CPU and CUDA resources in the same process. Tensor placement
+selects the resource bundle and native dispatcher implementation for each
+operation. Key placement remains caller-controlled unless automatic key
+replication is enabled.
 
-Each rank owns a process-local `CkksEngine`. Placement plans and process groups
+Each rank owns a process-local `fhelium.eager.Engine`. Placement plans and process groups
 connect local `Ciphertext` values across ranks. These process-local semantics
 support world-size-one execution, data parallelism, additive-term parallelism
 (including rotation offsets), and RNS-limb pipelines.
@@ -29,7 +30,7 @@ support world-size-one execution, data parallelism, additive-term parallelism
 
 | Object or mechanism | Created by | Lifetime owner | Movement or replacement |
 | --- | --- | --- | --- |
-| `CkksEngine` | Each process | Application | Not transported between ranks |
+| `fhelium.eager.Engine` | Each process | Application | Not transported between ranks |
 | `Plaintext` / `Ciphertext` | Engine or application | Application | `.to(...)`, typed collective, or managed buffer |
 | Keys | Application through an engine or loader | Security/workload policy | Load, broadcast, buffer, or residency operation |
 | Process group | `torch.distributed` launcher/init | Application | Never embedded in a value or engine |
@@ -49,8 +50,9 @@ Key.data        -> key-specific dense axes
 ```
 
 The batch prefix represents independent homogeneous messages inside one local
-value. It is not process-rank or placement metadata, and the application still
-chooses whether to evaluate that batch or loop over unbatched members.
+value. Process rank and placement remain application/subsystem metadata, and
+the application chooses whether to evaluate the batch or loop over unbatched
+members.
 
 Engine binding, process rank and group, sharding or replication, movement
 history, persistence paths, and cache or eviction policy remain metadata owned
@@ -107,27 +109,26 @@ Examples of the mechanism/policy separation:
 | Direct value serialization | Namespace, key-management service (KMS), access-control list (ACL), and remote storage |
 | Residency handle, requested transition, hold, lease | Stage and tile residency schedule |
 
-A useful test is: **would this behavior remain correct for every model, user,
-request, and deployment?** If not, it is probably policy rather than core
-semantics.
+A useful ownership test asks whether the behavior remains correct for every
+model, user, request, and deployment. Behavior that varies across those
+contexts belongs to workload or product policy.
 
 ## Lifetime is separate from meaning
 
-A value's cryptographic meaning does not change when it moves from pageable
-CPU memory to pinned memory or a CUDA device. Conversely, two tensors on the
-same GPU are not interchangeable if their contexts, levels, scales, prime IDs,
-or key identities differ.
+A value preserves its cryptographic meaning when it moves among pageable CPU,
+pinned CPU, and CUDA storage. Interchangeability additionally requires matching
+parameter provenance, levels, scales, prime IDs, and key identities.
 
 ```mermaid
 graph LR
-    SEM[Semantic compatibility<br/>context, stored state, external key relation]
+    SEM[Semantic compatibility<br/>parameter provenance, stored state, external key relation]
     RES[Physical residency<br/>CPU, pinned, CUDA]
     LIFE[Application lifetime<br/>model, request, phase]
     SEM -. independent of .-> RES
     LIFE -->|policy controls| RES
 ```
 
-This separation enables CPU-to-GPU staging without teaching core values
+This separation enables CPU-to-GPU staging without teaching runtime values
 about model/request lifetimes.
 
 ## Responsibility checklist

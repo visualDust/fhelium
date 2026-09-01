@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import argparse
 
+import torch
+
 from common import add_engine_args, format_bytes, parse_preset, print_table
 
-from fhelium import CkksEngine
+from fhelium.eager import Engine
 from fhelium.config import CkksConfig
 
 
@@ -36,6 +38,7 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+    torch.set_default_device(args.device)
 
     preset = parse_preset(args.preset)
     depths = (
@@ -47,9 +50,8 @@ def main() -> None:
     rows = []
     for depth in depths:
         cfg = CkksConfig.parse(preset, num_scale_primes=depth)
-        engine = CkksEngine(
+        engine = Engine(
             cfg,
-            device=args.device,
             ntt_backend=args.ntt_backend,
         )
         ct0 = engine.encrypt_message([1, 2, 3, 4], level=0)

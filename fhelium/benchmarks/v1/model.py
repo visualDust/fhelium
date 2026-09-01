@@ -143,7 +143,7 @@ class BenchmarkCase:
     """One fixed leaf-benchmark invocation in Benchmark v1.
 
     ``parameters`` overrides the selected leaf profile. The v1 resolver
-    records the resulting effective parameter object in its canonical
+    records the resulting effective parameter object in its resolved
     manifest and in every case record. ``unavailable_reason`` declares a
     deterministic manifest-level absence; runners can additionally raise
     :class:`~fhelium.benchmarks.v1.BenchmarkCaseUnavailable` after preflight.

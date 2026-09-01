@@ -1,6 +1,6 @@
 # Use multiparty CKKS
 
-`fhelium.experimental.mpc` provides tensor operations for collective CKKS key generation, evaluation-key generation, collective decryption arithmetic, and public-key switching arithmetic. The functions operate on core FHElium keys and values plus raw engine tensors. The current implementation accepts a local CPU or CUDA `CkksEngine`.
+`fhelium.experimental.mpc` provides tensor operations for collective CKKS key generation, evaluation-key generation, collective decryption arithmetic, and public-key switching arithmetic. The functions operate on core FHElium keys and values plus raw engine tensors. The current implementation accepts a local CPU or CUDA `fhelium.eager.Engine`.
 
 > [!CAUTION]
 > The supported arithmetic scope is correctness for compatible values. The
@@ -10,13 +10,13 @@
 > validated security composition for
 > the secret-dependent output operations. Use synthetic data and throwaway keys.
 
-In this guide, **honest execution** means that every application actor follows the stated message order with matching context, request, and payload data. This term describes reproducible control flow; it carries no semi-honest security claim.
+In this guide, **honest execution** means that every application actor follows the stated message order with matching CKKS parameters, request, and payload data. This term describes reproducible control flow; it carries no semi-honest security claim.
 
 Collective key generation (CKG) creates the collective public key. Two-round
 relinearization-key generation (RKG) creates public evaluation material for
 three-to-two-component relinearization.
 
-The maintained local example is `examples/18_multiparty_ckks.py`. It
+The repository example is `examples/23_multiparty_ckks.py`. It
 holds two in-process party records representing two cryptographic parties,
 exercises the complete public
 API, and never constructs the aggregate secret. The local process provides no
@@ -33,7 +33,7 @@ those calls.
 | --- | --- |
 | Sample one local QP secret share | Assign the share to one cryptographic party and protect its process-local lifetime |
 | Sample common-uniform engine tensors | Deliver the byte-identical tensor for one agreed request |
-| Validate context, key/value state, tensor shape, dtype, device, and contiguity | Validate epoch, request, party, round, operation, freshness, and payload identity |
+| Validate key/value state, tensor shape, dtype, device, and contiguity | Validate CKKS parameter provenance, epoch, request, party, round, operation, freshness, and payload identity |
 | Compute one protocol share | Cache the result before delivery and invoke each randomized share function once |
 | Sum a nonempty sequence of shares | Require exactly one accepted logical contribution from every expected party |
 | Return core `PublicKey`, `RelinearizationKey`, `RotationKey`, `ConjugationKey`, `Plaintext`, or `Ciphertext` values | Associate each result with the correct collective epoch and authorize its use |
@@ -47,12 +47,12 @@ Create one application descriptor before secret sampling. At minimum, record:
 ```text
 epoch_id                 application-defined unique label
 party_ids                ordered set of cryptographic party identities
-context_id               engine.context.context_id
+ckks_config              engine.config.dumps()
 ring_dimension           engine.config.N
-q_prime_ids              engine.rns_layout.prime_ids(0)
-qp_prime_ids             engine.rns_layout.prime_ids(0, include_p=True)
+q_prime_ids              engine.level0_qp_prime_ids[:engine.config.num_q_primes]
+qp_prime_ids             engine.level0_qp_prime_ids
 engine_dtype              engine.config.torch_dtype
-key_digit_count          engine.rns_layout.key_digit_count
+key_digit_count          engine.key_digit_count
 galois_generator         engine.galois_generator
 ```
 
@@ -66,8 +66,7 @@ request_id
 party_id
 protocol
 round
-context_id
-operation_parameter       for example, one canonical rotation step
+operation_parameter       for example, one normalized rotation step
 payload_identity          application-defined byte identity or digest
 payload
 ```
@@ -80,7 +79,7 @@ This envelope is application metadata. Its presence alone supplies no authentica
 | --- | --- |
 | Party | Holds one process-local level-zero QP secret share $s_i$ and any request-local RKG ephemeral $u_i$ |
 | Aggregator | Collects exactly one accepted message per party and invokes the matching `aggregate_*` function |
-| Evaluator | Uses collective public/evaluation keys and ciphertexts with `CkksEngine` |
+| Evaluator | Uses collective public/evaluation keys and ciphertexts with `fhelium.eager.Engine` |
 | Fusion recipient | Collects Protocol-3 shares, fuses them to `Plaintext`, and obtains the decoded result |
 | Destination recipient | Generates a compatible destination key pair, publishes its Q `PublicKey`, and decrypts a public-key-switch output with its own `SecretKey` |
 
@@ -91,15 +90,15 @@ An actor may hold several roles in a local run. Independent deployments preserve
 Let:
 
 - $N$ be `engine.config.N`;
-- $L_Q$ be `engine.rns_layout.row_count(0)`;
-- $L_{QP}$ be `engine.rns_layout.row_count(0, include_p=True)`;
-- $D$ be `engine.rns_layout.key_digit_count`;
+- $L_Q$ be `engine.config.num_q_primes`;
+- $L_{QP}$ be `len(engine.level0_qp_prime_ids)`;
+- $D$ be `engine.key_digit_count`;
 - $B$ be `tuple(ciphertext.batch_shape)`; and
 - $L_\ell$ be `ciphertext.limb_count` at its current level.
 
 | Object or message | Required state and shape |
 | --- | --- |
-| Party $s_i$; RKG $u_i$ | Core `SecretKey`, complete level-zero QP, NTT/Montgomery, `[L_QP, N]`, matching context/dtype/device |
+| Party $s_i$; RKG $u_i$ | Core `SecretKey`, complete level-zero QP, NTT/Montgomery, `[L_QP, N]`, matching caller-selected parameters, dtype, and device |
 | CKG common $a$ | Contiguous engine-integral tensor `[L_Q, N]` from `sample_common_uniform(basis="Q")` |
 | CKG share | Raw Q NTT/Montgomery tensor `[L_Q, N]` |
 | Collective public key | Core Q `PublicKey` with data `[2, L_Q, N]` |
@@ -108,13 +107,16 @@ Let:
 | Relinearization key | Core QP `RelinearizationKey` with data `[D, 2, L_QP, N]` |
 | Rotation/conjugation key | Core QP key with the complete digit layout; all calls bind the same requested automorphism |
 | Protocol-3/4 source | Two-component coefficient-domain, standard-residue Q `Ciphertext`, data `[2, *B, L_ℓ, N]` |
-| Caller-provided Protocol-3/4 coefficients | Contiguous engine-integral tensor `[*B, N]` on `engine.device` |
+| Caller-provided Protocol-3/4 coefficients | Contiguous engine-integral tensor `[*B, N]` on the source ciphertext device |
 | Protocol-3 share | Coefficient/standard active-Q tensor `[*B, L_ℓ, N]` |
 | Protocol-4 share | Tuple of two coefficient/standard active-Q tensors, each `[*B, L_ℓ, N]` |
 
 `sample_common_uniform(..., count=None)` returns an unbatched `[limb, N]` tensor. Every explicit positive `count`, including `count=1`, retains the leading count axis.
 
-Shape and context validation establish arithmetic compatibility. Collective lineage remains application metadata because raw tensors carry no semantic metadata and core values carry a `context_id` rather than a multiparty epoch ID.
+FHElium validates the structural state needed by these operations, but runtime
+values do not record CKKS parameter provenance or a multiparty epoch. The
+application must establish parameter compatibility and collective lineage
+before invoking the protocol functions.
 
 ## Run the collective state machine
 
@@ -147,7 +149,7 @@ The transitions have these meanings:
 | `CLOSED` | The application rejects new material and output requests for the epoch |
 | `ABORTED` | The failed epoch produces no replacement key or request by silently reusing partial state |
 
-A party-set, context, Galois-generator, or secret-share change starts a new epoch. Loss of one $s_i$ prevents later N-out-of-N material and output requests. Already-issued public/evaluation keys may still support public evaluation according to application policy.
+A party-set, CKKS parameter profile, Galois generator, or secret-share change starts a new epoch. Loss of one $s_i$ prevents later N-out-of-N material and output requests. Already-issued public/evaluation keys may still support public evaluation according to application policy.
 
 ## Generate the collective public key
 
@@ -204,7 +206,7 @@ stateDiagram-v2
 The corresponding public calls are:
 
 ```python
-digit_count = engine.rns_layout.key_digit_count
+digit_count = engine.key_digit_count
 common_a_by_digit = mpc.sample_common_uniform(
     engine,
     basis="QP",
@@ -253,7 +255,7 @@ rotation_step = 3
 rotation_common = mpc.sample_common_uniform(
     engine,
     basis="QP",
-    count=engine.rns_layout.key_digit_count,
+    count=engine.key_digit_count,
 )
 
 rotation_share_i = mpc.rotation_key_share(
@@ -271,7 +273,7 @@ rotation_key = mpc.aggregate_rotation_key(
 )
 ```
 
-Every party and the aggregator bind the same agreed signed step. The API canonicalizes the step, while the application envelope distinguishes this request from every other rotation, conjugation, RKG, and epoch request.
+Every party and the aggregator bind the same agreed signed step. The API normalizes the step, while the application envelope distinguishes this request from every other rotation, conjugation, RKG, and epoch request.
 
 Conjugation uses the corresponding functions:
 
@@ -279,7 +281,7 @@ Conjugation uses the corresponding functions:
 conjugation_common = mpc.sample_common_uniform(
     engine,
     basis="QP",
-    count=engine.rns_layout.key_digit_count,
+    count=engine.key_digit_count,
 )
 conjugation_share_i = mpc.conjugation_key_share(
     engine,
@@ -300,7 +302,8 @@ on-demand collective key generation.
 
 ## Evaluate with core FHElium APIs
 
-The aggregate functions return core values. The evaluator uses them directly with `CkksEngine` and needs no party secret share.
+The aggregate functions return runtime values. The evaluator uses them directly
+with `fhelium.eager.Engine` and needs no party secret share.
 
 For example:
 
@@ -316,7 +319,9 @@ squared = engine.rescale_to_next_level(relinearized)
 
 Both secret-dependent output functions require a two-component coefficient-domain, standard-residue Q ciphertext. Relinearize a three-component multiplication result before opening an output request.
 
-Preserve the epoch association externally. Matching `context_id` values establish parameter compatibility and do not prove that a ciphertext and key arose from the same collective secret.
+Preserve parameter provenance and the epoch association externally. Runtime
+values do not prove that a ciphertext and key use compatible parameters or
+arose from the same collective secret.
 
 ## Open an unsafe collective-decryption request
 
@@ -395,7 +400,7 @@ The following rules support correct and reproducible executions. They provide no
 | Identical duplicate | Deduplicate by epoch, request, party, round, and payload digest |
 | Conflicting duplicate | Abort the request |
 | Missing expected party | Abort the request; never aggregate a reduced party set under the same epoch/request |
-| Wrong context, common tensor, round, rotation step, source ciphertext, destination key, or shape | Abort the request |
+| Wrong parameter profile, common tensor, round, rotation step, source ciphertext, destination key, or shape | Abort the request |
 | CKG failure | Abort the epoch and restart with a new epoch identity and new party shares |
 | RKG/Galois failure | Keep the epoch only if its invariants remain valid; retry as an all-fresh material request |
 | Protocol-3/4 failure after a share was disclosed | Record one secret-dependent exposure and require explicit authorization for a new request |
@@ -416,10 +421,10 @@ CKG, RKG, and Galois share functions sample internal errors on every invocation.
 
 ## Map the local example to independent processes
 
-Run the maintained example from the repository root:
+Run the example from the repository root:
 
 ```bash
-python examples/18_multiparty_ckks.py --preset slots8192-scale40-levels7-int64
+python examples/23_multiparty_ckks.py --preset slots8192-scale40-levels7-int64
 ```
 
 The example holds two party-local `SecretKey` objects in one Python process so it can demonstrate the complete arithmetic dataflow. It never sums them, installs an aggregate secret, or uses an aggregate secret for verification. Its fixed/canceling Protocol-3/4 coefficient tensors are named and documented as correctness fixtures.
@@ -431,7 +436,7 @@ Map the local structures to independent processes as follows:
 | Tuple of party secret shares | One process-local share in each independent party trust domain |
 | One shared compatible engine | Independently constructed engines with an identical descriptor |
 | List comprehension over parties | One application request to each immutable party identity and one accepted reply |
-| One `common_a` Python object | Same integer payload delivered to every party and reconstructed contiguously on `engine.device` |
+| One `common_a` Python object | Same integer payload delivered to every party and reconstructed contiguously on the protocol-selected device |
 | Python list order | Envelope validation against the frozen party set, followed by deterministic ordering |
 | Direct `aggregate_*` call | Aggregator call after validating request metadata and the complete logical roster |
 | Local destination key pair | Destination-owned key pair; only its Q public key enters Protocol 4 |
@@ -473,9 +478,11 @@ A destination recipient generates a compatible throwaway key pair. All collectiv
 
 Use this scenario to study Protocol-4 algebra, level/scale preservation, and destination-key interoperability. The result establishes no secure-recipient-output claim.
 
-## Recognize unsupported scenarios
+## Security and protocol coverage
 
-The current surface has no implementation or validated support for:
+The exported experimental protocols cover the synthetic-data workflows above.
+The following capabilities require additional protocol design, security
+analysis, and implementation before they can be used:
 
 - production deployment or real private data;
 - malicious or adaptive parties;
@@ -485,7 +492,7 @@ The current surface has no implementation or validated support for:
 - persistent secret-share custody or guaranteed zeroization;
 - aggregate collective-secret construction, storage, or transfer;
 - direct output from a three-component ciphertext before relinearization;
-- automatic lineage inference from `context_id`;
+- automatic parameter or lineage inference from runtime values;
 - a reviewed Protocol-3/4 error sampler or useful-precision parameter profile; or
 - collective bootstrap-key planning beyond the functions exported by `fhelium.experimental.mpc`.
 

@@ -17,18 +17,24 @@ Build the smallest reproducer with:
 
 First establish whether single-GPU eager execution is correct.
 
-## 2. Compare context and device
+## 2. Compare configuration provenance and device
 
 Check:
 
 ```text
-value.context_id == engine.context.context_id
-value.device == engine.device
+the value and keys were produced with parameters compatible with engine.config
+all operands for one ordinary operation share one device
+the installed native extension supports that device type
 ring dimension matches
 ```
 
-A loaded value may be on CPU by default. Move it with `.to(...)` rather than
-assuming a file remembers the original GPU.
+Runtime values do not carry a configuration identifier. Parameter provenance
+is application state, so a mistaken cross-configuration combination may
+produce an incorrect result instead of a FHElium mismatch exception.
+
+A loaded value may be on CPU by default. `torch.get_default_device()` controls
+factory placement, while existing values retain their own placement. Move a
+value with `.to(...)`, or pass `device` to a boundary operation after loading.
 
 ## 3. Compare structure
 
@@ -43,7 +49,7 @@ ring dimension
 prime_ids length and order
 ```
 
-Two tensors can have equal shape but different context or row identity. A
+Two tensors can have equal shape but different parameter provenance or row identity. A
 partial-limb view does not contain the complete active-row layout merely
 because its other metadata is valid.
 
@@ -74,17 +80,17 @@ Typical diagnoses:
 
 For key-requiring operations, verify:
 
-- key context;
+- caller-recorded key parameter provenance;
 - Q/QP prime layout;
 - NTT/residue representation;
 - key type;
-- rotation key's canonical signed step;
+- rotation key's normalized signed step;
 - whether the key is installed on the local engine/device.
 - whether the application supplied a key with the required ciphertext,
   source-secret, and destination-secret relation.
 
-Do not substitute a same-shaped key from another context, step, or externally
-maintained lineage.
+Do not substitute a same-shaped key from another parameter set, step, or
+externally supplied key provenance.
 
 ## 6. Inspect the operation requirements
 

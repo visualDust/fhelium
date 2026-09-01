@@ -16,7 +16,6 @@ metadata = fh.inspect_value(path)
 restored = fh.load_value(
     path,
     expected_type=type(value),
-    expected_context_id=value.context_id,
     device="cuda:0",
 )
 ```
@@ -27,9 +26,11 @@ safetensors file contains:
 
 - concrete value type and schema version;
 - non-tensor value metadata;
-- context identity;
 - named tensor payloads;
 - enough information to reconstruct the typed value.
+
+Applications preserve the `CkksConfig` association beside the file and select
+compatible parameters and keys after loading.
 
 ```mermaid
 graph LR
@@ -48,17 +49,16 @@ serialization. Most users should prefer the public file functions.
 
 ## Inspection without full materialization
 
-`inspect_value(...)` allows a caller to examine type, context, metadata, and
+`inspect_value(...)` allows a caller to examine type, stored metadata, and
 payload description before allocating all tensors on a target device. This is
 useful for:
 
 - admission and compatibility checks;
-- debugging stale or wrong-context files;
+- debugging stale files or unexpected stored state;
 - inventory tools;
 - deciding whether a value may be installed into an engine.
 
-Loading defaults and device behavior are defined by the current API; do not
-assume a saved CUDA value will silently return to its previous GPU.
+Loading follows the device argument and defaults defined by the current API.
 
 ## Deployment-managed persistence policy
 
@@ -113,8 +113,7 @@ not retain those references as loadable version history.
 Transaction ordering, the SQLite v1 schema, crash recovery, filesystem
 requirements, and contributor-facing invariants are specified separately in
 [ArtifactStore v1 internals](../../developer/artifact-store-v1.md). Those
-mechanisms implement repository durability; they are not part of a
-`Plaintext`, `Ciphertext`, or key's mathematical identity.
+mechanisms implement repository durability around the stored value format.
 
 ## Value identity versus logical identity
 
@@ -123,7 +122,7 @@ These are intentionally separate:
 ```mermaid
 flowchart LR
     VALUE_ID["value identity"]
-    VALUE_FIELDS["type, context, state, tensor payload"]
+    VALUE_FIELDS["type, stored state, tensor payload"]
     LOGICAL["logical artifact identity"]
     LOGICAL_FIELDS["store ID, name, current generation, checksum, policy metadata"]
     VALUE_ID --> VALUE_FIELDS
@@ -137,14 +136,12 @@ or key types.
 ## Supported security scope
 
 Secret-key serialization requires explicit authorization (`allow_secret=True`
-in the current file API). That flag authorizes writing; it does not encrypt the
-payload.
+in the current file API). Storage encryption remains a deployment
+responsibility.
 
-Likewise, an artifact `sensitivity="secret"` label is descriptive metadata, not
-an access-control or cryptographic mechanism. The payload SHA-256 detects
-accidental corruption; it is not an authenticated digest against a writer that
-can alter both the catalog and payload. Production deployments remain
-responsible for:
+An artifact `sensitivity="secret"` label provides descriptive classification
+metadata. The payload SHA-256 detects accidental corruption. Production
+deployments supply authenticated integrity and:
 
 - encrypted storage and transport;
 - KMS/credential lifecycle;
@@ -154,10 +151,10 @@ responsible for:
 
 ## Memory and lifetime after saving
 
-Serialization does not automatically offload or destroy the original value.
-If a CUDA value remains referenced, its allocation remains live after a file is
-written. PyTorch's allocator may also keep freed memory reserved after live
-references disappear.
+Serialization leaves the original value and its placement unchanged. If a CUDA
+value remains referenced, its allocation remains live after a file is written.
+PyTorch's allocator may also keep freed memory reserved after live references
+disappear.
 
 Distinguish:
 

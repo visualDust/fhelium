@@ -161,13 +161,13 @@ function metricLabel(
 <style scoped>
 .performance-chart {
   margin: 20px 0 30px;
-  padding: 12px;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 16px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--fhe-c-border) 72%, var(--fhe-c-divider));
+  border-radius: 12px;
   background:
-    radial-gradient(circle at 96% 4%, color-mix(in srgb, var(--vp-c-brand-1) 10%, transparent), transparent 32%),
-    color-mix(in srgb, var(--vp-c-bg-soft) 64%, var(--vp-c-bg));
-  box-shadow: 0 14px 34px color-mix(in srgb, var(--vp-c-text-1) 7%, transparent);
+    radial-gradient(circle at 84% 0%, color-mix(in srgb, var(--fhe-c-brand) 6%, transparent), transparent 36%),
+    var(--fhe-c-surface);
+  box-shadow: 0 2px 4px color-mix(in srgb, var(--fhe-c-text-1) 4%, transparent), 0 22px 54px color-mix(in srgb, var(--fhe-c-text-1) 9%, transparent);
 }
 
 .chart-scroll { overflow-x: auto; padding: 2px; border-radius: 12px; }
@@ -176,7 +176,7 @@ function metricLabel(
 .chart-grid {
   display: grid;
   grid-template-columns: 190px repeat(3, minmax(218px, 1fr));
-  gap: 8px;
+  gap: 10px;
   min-width: 900px;
 }
 
@@ -184,9 +184,10 @@ function metricLabel(
 .depth-heading,
 .platform-cell,
 .depth-cell {
-  border: 1px solid color-mix(in srgb, var(--vp-c-divider) 78%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fhe-c-border) 72%, var(--fhe-c-divider));
   border-radius: 10px;
-  background: color-mix(in srgb, var(--vp-c-bg) 90%, transparent);
+  background: var(--fhe-c-surface);
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--fhe-c-text-1) 6%, transparent);
 }
 
 .legend-cell {
@@ -208,7 +209,11 @@ function metricLabel(
 .fhelium-dot { background: var(--vp-c-brand-1); }
 :global(.dark) .reference-dot { background: #e4a273; }
 
-.depth-heading { padding: 9px 12px; text-align: center; }
+.depth-heading {
+  padding: 9px 12px;
+  background: var(--fhe-c-surface-tint);
+  text-align: center;
+}
 .depth-heading strong,
 .depth-heading small { display: block; }
 .depth-heading strong { font-size: 13px; }
@@ -221,7 +226,8 @@ function metricLabel(
   justify-content: center;
   min-height: 104px;
   padding: 12px 14px;
-  border-left: 3px solid var(--vp-c-brand-1);
+  border-color: var(--fhe-c-brand);
+  background: color-mix(in srgb, var(--fhe-c-brand) 5%, var(--fhe-c-surface));
 }
 
 .platform-cell strong { font-size: 15px; }
@@ -234,6 +240,7 @@ function metricLabel(
   gap: 9px;
   min-height: 104px;
   padding: 10px 12px;
+  background: color-mix(in srgb, var(--fhe-c-surface) 94%, var(--fhe-c-surface-tint));
 }
 
 .metric + .metric { padding-top: 8px; border-top: 1px dashed var(--vp-c-divider); }
@@ -247,8 +254,9 @@ function metricLabel(
 .latencies em {
   margin-left: 3px;
   padding: 1px 5px;
-  border-radius: 999px;
-  background: var(--vp-c-brand-soft);
+  border: 1px solid color-mix(in srgb, var(--fhe-c-brand) 22%, var(--fhe-c-divider));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--fhe-c-brand) 6%, var(--fhe-c-surface));
   color: var(--vp-c-brand-1);
   font-size: 8px;
   font-style: normal;

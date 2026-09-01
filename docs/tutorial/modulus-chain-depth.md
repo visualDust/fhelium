@@ -46,7 +46,7 @@ $$
 The final public level retains the last scale prime and the structural base.
 Bootstrap entry owns the subsequent transition into the base-only state.
 
-For the maintained int64 presets, a useful approximation is:
+For the built-in int64 Presets, a useful approximation is:
 
 $$
 \operatorname{bits}(QP)
@@ -55,9 +55,9 @@ b_sL + b_b + 60K_P,
 $$
 
 where $L$ is `num_scale_primes`, $b_s$ is `scale_bits`, $b_b$ is the
-structural-base-prime width, and $K_P$ is `num_p_primes`. The maintained
+structural-base-prime width, and $K_P$ is `num_p_primes`. The built-in
 int64 presets use $b_s\in\{30,40,50\}$ and the default 60-bit structural
-base. Maintained int32 presets use $b_s=25$ and 28-bit structural/P primes,
+base. Built-in int32 Presets use $b_s=25$ and 28-bit structural/P primes,
 giving the separate approximation
 
 $$
@@ -70,8 +70,8 @@ width; security-budget capacity alone does not establish native arithmetic
 validity.
 
 `total_modulus_bits` is the configured value
-$\lceil\log_2(Q_0P)\rceil$. It covers both the ordinary Q-chain primes $q_i$
-and the special-prime product $P$, not Q alone. The configuration requires
+$\lceil\log_2(Q_0P)\rceil$. It covers the ordinary Q-chain primes $q_i$
+and the special-prime product $P$. The configuration requires
 `total_modulus_bits <= maximum_modulus_bits` when
 `enforce_security_budget=True`.
 
@@ -83,10 +83,10 @@ that the selected chain remains within the requested security budget.
 - Q rows form the ordinary ciphertext modulus chain.
 - One leading scale prime is consumed by each rescale.
 - The base Q row remains at the end of the chain.
-- P rows support hybrid key switching and are not ordinary ciphertext rows.
+- P rows support hybrid key switching outside the ordinary ciphertext chain.
 
-The table printed by the example distinguishes `Q primes`, `P primes`, and
-`total primes` rather than reporting one ambiguous limb count.
+The table printed by the example reports `Q primes`, `P primes`, and their
+combined `total primes` count separately.
 
 ## 3. Level-zero values are largest
 
@@ -132,19 +132,13 @@ fits the security table:
 - key material can dominate serving capacity;
 - unnecessary depth makes early-level operations more expensive.
 
-::: info Level is not an abstract counter
-In FHElium, level determines an ordered `prime_ids` interval and a
-concrete dense tensor shape. Operations validate this structure rather than
-trusting level metadata alone.
-:::
-
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/04_modulus_chain_depth.py
 :::
 
 ## Related concepts and guides
 
 - [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md)
-- [Context and modulus chain](../concepts/ckks/context-and-modulus-chain.md)
+- [Configuration and modulus chain](../concepts/ckks/context-and-modulus-chain.md)
 - [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)
 - [Choose a preset and chain depth](../how-to/choose-preset-and-depth.md)

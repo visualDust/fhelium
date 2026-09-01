@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from fhelium.legacy.engine import CkksEngine
+
 import gc
 import math
 import statistics
@@ -12,7 +14,7 @@ from typing import Any, Literal
 import torch
 
 import fhelium
-from fhelium import DEFAULT_NTT_BACKEND, CkksEngine, Preset
+from fhelium import DEFAULT_NTT_BACKEND, Preset
 from fhelium.benchmarks.model import (
     BenchmarkCheck,
     BenchmarkMetric,
@@ -30,6 +32,7 @@ from fhelium.benchmarks.synthetic import ckks_message
 from fhelium.benchmarks.timing import measure
 from fhelium.config import CkksConfig
 from fhelium.config.ntt import compatible_ntt_backends
+from fhelium.runtime import CpuTopology, CudaTopology
 
 NttRecommendationSuite = Literal["kernel", "ckks-primitive"]
 _SUPPORTED_SUITES: tuple[NttRecommendationSuite, ...] = (
@@ -384,7 +387,7 @@ def _rank_measurements(
     if recommended != numerical_winner:
         confidence = "low"
         reason = (
-            f"{numerical_winner} leads by less than {_TIE_THRESHOLD * 100:.0f}%; "
+            f"{numerical_winner} leads by at most {_TIE_THRESHOLD * 100:.0f}%; "
             f"retaining stable fallback {DEFAULT_NTT_BACKEND}"
         )
     elif repetitions < 3:
@@ -520,7 +523,16 @@ def recommend_ntt_backend(
         repetitions=repetitions,
         runs=runs,
     )
-    device_properties = torch.cuda.get_device_properties(torch.device(device))
+    selected_device = torch.device(device)
+    if selected_device.type == "cuda" and selected_device.index is None:
+        selected_device = torch.device("cuda", torch.cuda.current_device())
+    cpu_topology = CpuTopology.probe()
+    cuda_device_info = None
+    if selected_device.type == "cuda":
+        topology = CudaTopology.probe()
+        if selected_device.index is None:
+            raise RuntimeError("CUDA topology is unavailable")
+        cuda_device_info = topology.devices[selected_device.index]
     recommended = str(summary["recommended_backend"])
     effective_parameters = {
         "suite": suite,
@@ -617,11 +629,16 @@ def recommend_ntt_backend(
             "preset": preset.value,
             "logN": config.logN,
             "device": device,
-            "device_name": device_properties.name,
-            "compute_capability": [
-                device_properties.major,
-                device_properties.minor,
-            ],
+            "device_name": (
+                cpu_topology.model
+                if cuda_device_info is None
+                else cuda_device_info.name
+            ),
+            "compute_capability": (
+                None
+                if cuda_device_info is None
+                else cuda_device_info.compute_capability
+            ),
             "fhelium_version": fhelium.__version__,
             "torch_version": torch.__version__,
             "torch_cuda_version": torch.version.cuda,
@@ -645,7 +662,7 @@ def recommend_ntt_backend(
         notes=[
             "Recommendation is specific to this GPU, software environment, preset, and suite.",
             "Kernel is a fast screening suite; confirm production choices with ckks-primitive or an application workload.",
-            "A less than 3% aggregate gap is treated as a near tie; the stable fallback is retained when it is near-tied.",
+            "An aggregate gap no greater than 3% is treated as a near tie; the stable fallback is retained when it is near-tied.",
             "No default backend or native shared-memory setting is changed by this command.",
         ],
         evidence=measurements,

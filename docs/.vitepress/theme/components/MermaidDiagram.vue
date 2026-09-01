@@ -86,6 +86,11 @@ function mermaidOptions(dark: boolean) {
     startOnLoad: false,
     securityLevel: 'strict' as const,
     theme: 'base' as const,
+    htmlLabels: true,
+    markdownAutoWrap: true,
+    flowchart: {
+      wrappingWidth: 200,
+    },
     fontFamily: 'var(--vp-font-family-base)',
     themeVariables: dark
       ? {
@@ -175,13 +180,14 @@ function annotateSvg(container: HTMLElement, expanded: boolean) {
   }
 }
 
-async function renderMermaid(id: string) {
+async function renderMermaid(id: string, container: HTMLElement) {
   const { default: mermaid } = await import('mermaid')
   const dark = document.documentElement.classList.contains('dark')
   mermaid.initialize(mermaidOptions(dark))
   return mermaid.render(
     id,
     decodeURIComponent(props.code),
+    container,
   )
 }
 
@@ -196,7 +202,7 @@ async function renderDiagram() {
 
   try {
     const id = `fhelium-mermaid-${componentId}-${currentRender}`
-    const { svg, bindFunctions } = await renderMermaid(id)
+    const { svg, bindFunctions } = await renderMermaid(id, target.value)
     if (currentRender !== renderSequence || !target.value) {
       return
     }
@@ -222,7 +228,10 @@ async function renderExpandedDiagram() {
 
   try {
     const id = `fhelium-mermaid-expanded-${componentId}-${currentRender}`
-    const { svg, bindFunctions } = await renderMermaid(id)
+    const { svg, bindFunctions } = await renderMermaid(
+      id,
+      expandedTarget.value,
+    )
     if (
       currentRender !== expandedRenderSequence ||
       !expandedTarget.value ||

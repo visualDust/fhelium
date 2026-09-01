@@ -1,4 +1,4 @@
-r"""Engine-bound callable full-slot CKKS bootstrap composition.
+r"""Full-slot CKKS bootstrap composition configured for one Engine.
 
 The composition accepts and returns two-component,
 coefficient-domain, standard-residue Q RNS values. Temporary
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fhelium.core import (
+from fhelium.values import (
     Ciphertext,
     EvaluationKeyRequirements,
     EvaluationKeySet,
@@ -21,7 +21,7 @@ from fhelium.core import (
     RotationKeySet,
     SecretKey,
 )
-from fhelium.engine.ckks_engine import CkksEngine
+from fhelium.eager import Engine
 from fhelium.experimental.bootstrap._modraise import (
     _modulus_raise,
     _prepare_entry,
@@ -34,7 +34,7 @@ from fhelium.experimental.bootstrap._ops import (
     _multiply_by_monomial,
     _multiply_scalar,
 )
-from fhelium.core.rotation import (
+from fhelium.utils.rotation import (
     decompose_signed_power_of_two_rotation,
 )
 
@@ -42,8 +42,8 @@ from fhelium.core.rotation import (
 class FullSlotBootstrap:
     r"""Compiled full-slot refresh callable with replaceable components.
 
-    Construction binds transform compilers/evaluators and modular reduction to
-    one engine. Calling the object executes the visible full-slot algorithm with
+    Construction configures transform compilers/evaluators and modular reduction
+    for one engine. Calling the object executes the visible full-slot algorithm with
     one validated evaluator-only key inventory.
 
     Let $\Delta_0$ be `engine.config.default_scale`, $q_b$ the one-prime
@@ -91,7 +91,7 @@ class FullSlotBootstrap:
 
     def __init__(
         self,
-        engine: CkksEngine,
+        engine: Engine,
         *,
         coeffs_to_slots_compiler: Any,
         coeffs_to_slots_evaluator: Any,
@@ -178,12 +178,12 @@ class FullSlotBootstrap:
 
     @property
     def required_rotations(self) -> tuple[int, ...]:
-        r"""Return canonical signed $\operatorname{Rot}_r$ steps for both maps."""
+        r"""Return normalized signed $\operatorname{Rot}_r$ steps for both maps."""
 
         return tuple(
             sorted(
                 {
-                    RotationKey.canonical_step(
+                    RotationKey.normalize_step(
                         step,
                         ring_dimension=self.engine.config.N,
                     )
@@ -400,7 +400,7 @@ class FullSlotBootstrap:
         The functional result does not alias the input. It is a two-component
         coefficient-domain standard-RNS Q ciphertext with unchanged batch
         axes, level `output_level`, and
-        `engine.rns_layout.prime_ids(output_level)`. The method does not enforce
+        the Engine's Q basis at `output_level`. The method does not enforce
         an application error bound or the reducer's encrypted input range.
         """
 

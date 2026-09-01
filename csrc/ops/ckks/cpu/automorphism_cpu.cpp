@@ -88,7 +88,7 @@ torch::Tensor coefficient_galois_cpu(const torch::Tensor residues,
               if (signs[coefficient * sign_stride] == -1) value = -value;
               value = fhelium::cpu::shift_positive(value, twice_modulus_value);
               result_row[coefficient * result_stride2] =
-                  fhelium::cpu::canonicalize(value, twice_modulus_value);
+                  fhelium::cpu::reduce_to_standard(value, twice_modulus_value);
             }
             index = batch_limb * coefficients + coefficient_end;
           }

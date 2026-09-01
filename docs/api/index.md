@@ -13,30 +13,29 @@ package initializers and modules that publish interfaces through ``__all__``.
 | --- | --- | --- |
 | Configure CKKS parameters | [`fhelium.config.ckks`](fhelium/config/ckks.md) and [`fhelium.config.ntt`](fhelium/config/ntt.md) | [Choose a preset and depth](../how-to/choose-preset-and-depth.md) |
 | Assess a supported security-table row | [`fhelium.config.security`](fhelium/config/security.md) | [Security scope](../tutorial/support-and-security.md) |
-| Create and use an evaluator | [`fhelium.engine.ckks_engine`](fhelium/engine/ckks_engine.md) | [Quickstart](../tutorial/tutorials.md) |
-| Control scale and level with separate operations | [`fhelium.engine.ckks_engine`](fhelium/engine/ckks_engine.md) | [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md) |
-| Inspect typed values and keys | [`fhelium.core.ciphertext`](fhelium/core/ciphertext.md), [`fhelium.core.plaintext`](fhelium/core/plaintext.md), and [`fhelium.core.keys`](fhelium/core/keys.md) | [Value model and identity](../concepts/ckks/value-model-and-identity.md) |
+| Create and use an eager engine | [`fhelium.eager`](fhelium/eager.md) | [Quickstart](../tutorial/tutorials.md) |
+| Control scale and level with separate operations | [`fhelium.eager`](fhelium/eager.md) | [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md) |
+| Inspect typed values and keys | [`fhelium.values.ciphertext`](fhelium/values/ciphertext.md), [`fhelium.values.plaintext`](fhelium/values/plaintext.md), and [`fhelium.values.keys`](fhelium/values/keys.md) | [Value model and identity](../concepts/ckks/value-model-and-identity.md) |
 | Persist a value | [`fhelium.serialization.value`](fhelium/serialization/value.md) | [Serialization and artifacts](../concepts/execution/serialization-and-artifacts.md) |
-| Capture or reuse repeated work | [`fhelium.execution.cuda_graph`](fhelium/execution/cuda_graph.md) and [`fhelium.execution.buffer`](fhelium/execution/buffer.md) | [Execution concepts](../concepts/execution/cuda-graph-model.md) |
+| Capture or reuse repeated work | [`fhelium.runtime.cuda_graph`](fhelium/runtime/cuda_graph.md) and [`fhelium.runtime.buffer`](fhelium/runtime/buffer.md) | [Execution concepts](../concepts/execution/cuda-graph-model.md) |
+| Inspect CPU/CUDA topology and current host/CUDA memory | [`fhelium.runtime.topology`](fhelium/runtime/topology.md) and [`fhelium.runtime.memory`](fhelium/runtime/memory.md) | [Inspect runtime, memory, and CUDA topology](../how-to/inspect-runtime-and-cuda.md) |
 | Manage local value placement, admission, lifetimes, plans, and deterministic automation | [`fhelium.residency.manager`](fhelium/residency/manager.md), [`model`](fhelium/residency/model.md), [`plan`](fhelium/residency/plan.md), [`request`](fhelium/residency/request.md), and [`controller`](fhelium/residency/controller.md) | [Residency lifetimes](../concepts/execution/residency-lifetimes.md) |
-| Trace, import, transform, and execute a mixed-dialect program | [`fhelium.experimental.jit`](fhelium/experimental/jit.md) and [`fhelium.experimental.jit.passes`](fhelium/experimental/jit/passes.md) | [JIT programs](../concepts/unified-jit-programs.md) |
+| Build and execute IR-based CKKS programs | [`fhelium.ir`](fhelium/ir.md), [`fhelium.compile`](fhelium/compile.md), [`compile.passes.lowering`](fhelium/compile/passes/lowering.md), and [`fhelium.backend`](fhelium/backend.md) | [Open compiler stack](../concepts/open-compiler-stack.md) |
 | Coordinate processes and collectives | [`fhelium.distributed`](fhelium/distributed.md) | [SPMD model](../concepts/distributed/spmd-model.md) |
-| Inspect native-extension availability and ABI diagnostics | [`fhelium.native`](fhelium/native.md) | [Inspect runtime and CUDA topology](../how-to/inspect-runtime-and-cuda.md) |
-| Inspect CUDA devices and peer topology programmatically | [`fhelium.native.cuda`](fhelium/native/cuda.md) | [Inspect runtime and CUDA topology](../how-to/inspect-runtime-and-cuda.md) |
-| Use experimental CKKS facilities | [`fhelium.experimental.bootstrap`](fhelium/experimental/bootstrap.md), [`fhelium.experimental.jit`](fhelium/experimental/jit.md), and [`fhelium.experimental.mpc`](fhelium/experimental/mpc.md) | [Bootstrapping semantics and range requirements](../concepts/ckks/composable-bootstrapping.md) and [multiparty supported security scope](../how-to/use-multiparty-ckks.md) |
+| Inspect native-extension availability and ABI diagnostics | [`fhelium.native`](fhelium/native.md) | [Inspect runtime, memory, and CUDA topology](../how-to/inspect-runtime-and-cuda.md) |
+| Inspect CUDA devices and peer topology programmatically | [`fhelium.native.cuda`](fhelium/native/cuda.md) | [Inspect runtime, memory, and CUDA topology](../how-to/inspect-runtime-and-cuda.md) |
+| Use experimental CKKS facilities | [`fhelium.experimental.bootstrap`](fhelium/experimental/bootstrap.md), [`fhelium.experimental.mpc`](fhelium/experimental/mpc.md), and [`fhelium.experimental.jit`](fhelium/experimental/jit.md) | [Bootstrapping semantics and range requirements](../concepts/ckks/composable-bootstrapping.md) and [multiparty supported security scope](../how-to/use-multiparty-ckks.md) |
 
 ## Generation rule
 
-`scripts/generate_api_docs.py` discovers Python source modules whose paths have
-no leading-underscore component. Package initializers with a defined
-`__all__` are included because they define supported import surfaces; other
-package initializers are omitted.
+`scripts/generate_api_docs.py` discovers Python source modules regardless of
+whether a module-path component starts with an underscore. Package initializers
+with a defined `__all__` are included; other package initializers are omitted.
 
 For each discovered module, a defined `__all__` defines the members when it
 is present. Otherwise, the generator includes non-underscored classes,
 functions, and data definitions. Module-path components and page titles are
-kept exactly as they occur in Python. Modules with a leading-underscore path
-component are implementation details and are omitted.
+kept as they occur in Python.
 
 Sidebar grouping is mechanical: modules are grouped by their first package
 segment, while every item retains its complete Python module name. Adding,

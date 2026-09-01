@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from fhelium.legacy.engine import CkksEngine
+
 import gc
 from collections.abc import Sequence
 
 import torch
 
-from fhelium import CkksEngine, Preset
+from fhelium import Preset
 from fhelium.benchmarks.model import (
     BenchmarkCheck,
     BenchmarkDefinition,
@@ -146,7 +148,7 @@ def _run_ntt_backend_single_op(
             progress(f"Measuring {backend}: {operation}")
             # ``measure_ntt_operation`` predates device arguments and
             # synchronizes the current device. Scope it to the operand device
-            # so a caller-selected non-current GPU remains correctly bounded.
+            # so execution remains scoped to the operand GPU's CUDA context.
             with torch.cuda.device(engine.device):
                 timing = measure_ntt_operation(
                     engine,
@@ -251,7 +253,7 @@ def _run_ntt_backend_single_op(
             "inverse_input": "NTT/Montgomery",
         },
         notes=[
-            "Default profiles enumerate only canonical backends compatible with the selected logN.",
+            "Default profiles enumerate registered backends compatible with the selected logN.",
             "Each backend is roundtrip-validated in Montgomery representation before timing.",
             "Forward inputs are coefficient/Montgomery; inverse inputs are NTT/Montgomery.",
             "Timing covers only the semantic NTT operation; resetting the input buffer is excluded.",
@@ -290,7 +292,7 @@ register_benchmark(
         category="single GPU",
         description=(
             "Compares forward NTT, inverse NTT, and NTT+INTT roundtrip latency "
-            "across every canonical FHElium NTT backend compatible with the "
+            "across every registered FHElium NTT backend compatible with the "
             "selected logN, without higher-level CKKS, key-switch, or rotation "
             "work."
         ),

@@ -510,20 +510,6 @@ def _fake_fhelium_ntt_ops_inverse__ntt__to__standard__power__of__two__radix__com
     pass
 
 
-@torch.library.register_fake("fhelium_rns_ops::add_canonical")
-def _fake_fhelium_rns_ops_add__canonical(
-    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
-) -> torch.Tensor:
-    return torch.empty_like(lhs)
-
-
-@torch.library.register_fake("fhelium_rns_ops::add_canonical_")
-def _fake_fhelium_rns_ops_add__canonical__(
-    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
-) -> None:
-    pass
-
-
 @torch.library.register_fake("fhelium_rns_ops::add_lazy")
 def _fake_fhelium_rns_ops_add__lazy(
     lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
@@ -538,16 +524,23 @@ def _fake_fhelium_rns_ops_add__lazy__with__twice__modulus(
     return torch.empty_like(lhs)
 
 
-@torch.library.register_fake("fhelium_rns_ops::canonicalize_residues_")
-def _fake_fhelium_rns_ops_canonicalize__residues__(
-    lazy_residues: torch.Tensor, rns_params: torch.Tensor
+@torch.library.register_fake("fhelium_rns_ops::add_standard")
+def _fake_fhelium_rns_ops_add__standard(
+    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
+) -> torch.Tensor:
+    return torch.empty_like(lhs)
+
+
+@torch.library.register_fake("fhelium_rns_ops::add_standard_")
+def _fake_fhelium_rns_ops_add__standard__(
+    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
 ) -> None:
     pass
 
 
 @torch.library.register_fake("fhelium_rns_ops::center_residues_")
 def _fake_fhelium_rns_ops_center__residues__(
-    canonical_residues: torch.Tensor, rns_params: torch.Tensor
+    standard_residues: torch.Tensor, rns_params: torch.Tensor
 ) -> None:
     pass
 
@@ -636,12 +629,19 @@ def _fake_fhelium_rns_ops_montgomery__mul__row__scalars__(
 
 
 @torch.library.register_fake(
-    "fhelium_rns_ops::montgomery_mul_row_scalars_canonical"
+    "fhelium_rns_ops::montgomery_mul_row_scalars_standard"
 )
-def _fake_fhelium_rns_ops_montgomery__mul__row__scalars__canonical(
+def _fake_fhelium_rns_ops_montgomery__mul__row__scalars__standard(
     residues: torch.Tensor, row_scalars: torch.Tensor, rns_params: torch.Tensor
 ) -> torch.Tensor:
     return torch.empty_like(residues)
+
+
+@torch.library.register_fake("fhelium_rns_ops::reduce_to_standard_")
+def _fake_fhelium_rns_ops_reduce__to__standard__(
+    lazy_residues: torch.Tensor, rns_params: torch.Tensor
+) -> None:
+    pass
 
 
 @torch.library.register_fake("fhelium_rns_ops::shift_residues_positive_")
@@ -651,25 +651,25 @@ def _fake_fhelium_rns_ops_shift__residues__positive__(
     pass
 
 
-@torch.library.register_fake("fhelium_rns_ops::sub_canonical")
-def _fake_fhelium_rns_ops_sub__canonical(
-    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
-) -> torch.Tensor:
-    return torch.empty_like(lhs)
-
-
-@torch.library.register_fake("fhelium_rns_ops::sub_canonical_")
-def _fake_fhelium_rns_ops_sub__canonical__(
-    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
-) -> None:
-    pass
-
-
 @torch.library.register_fake("fhelium_rns_ops::sub_lazy")
 def _fake_fhelium_rns_ops_sub__lazy(
     lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
 ) -> torch.Tensor:
     return torch.empty_like(lhs)
+
+
+@torch.library.register_fake("fhelium_rns_ops::sub_standard")
+def _fake_fhelium_rns_ops_sub__standard(
+    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
+) -> torch.Tensor:
+    return torch.empty_like(lhs)
+
+
+@torch.library.register_fake("fhelium_rns_ops::sub_standard_")
+def _fake_fhelium_rns_ops_sub__standard__(
+    lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
+) -> None:
+    pass
 
 
 @torch.library.register_fake("fhelium_rns_ops::to_montgomery_")

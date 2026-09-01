@@ -151,7 +151,7 @@ replicated and every rank produces local terms. Measure:
 - reduction communication;
 - load balance across step owners.
 
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/09_spmd_rotation_parallel_mxv.py
 :::
 

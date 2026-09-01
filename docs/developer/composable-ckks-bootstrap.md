@@ -1,7 +1,7 @@
 # CKKS bootstrap internals
 
 This page specifies the mathematical, value-state, and actual-scale invariants
-of the built-in full-slot composition executed through `CkksEngine`.
+of the built-in full-slot composition executed through `fhelium.eager.Engine`.
 
 ## Evaluator stack
 
@@ -10,7 +10,7 @@ flowchart TB
     FACTORY[Versioned bootstrap preset]
     COMPILE[Python compilers<br/>linear maps and polynomial approximations]
     STAGES[Full-slot Python evaluator<br/>ModRaise, CoeffsToSlots, reduction, SlotsToCoeffs]
-    ENGINE[CkksEngine operations<br/>rotate, multiply, relinearize, rescale]
+    ENGINE[eager Engine operations<br/>rotate, multiply, relinearize, rescale]
     RUNTIME[RNS and NTT runtime]
     OPS[torch.ops CPU / CUDA primitives]
 
@@ -19,7 +19,7 @@ flowchart TB
 
 `fhelium.experimental.bootstrap` compiles diagonal linear maps and polynomial
 approximations, then evaluates those stages through the ordinary
-`CkksEngine`, `Ciphertext`, NTT, and native-operator stack.
+`fhelium.eager.Engine`, `Ciphertext`, NTT, and native-operator stack.
 
 `fhelium.experimental.bootstrap.presets` constructs versioned measured
 compositions. Compiler and evaluator objects are paired by protocol: a
@@ -38,8 +38,8 @@ Let:
 - $L$ be `engine.public_level_count`, so the final public level is $L-1$;
 - $q_s$ be the leading scale prime at level $L-1$;
 - $q_b$ be the final structural Q prime;
-- $Q_\ell$ be the ordered Q basis named by
-  `engine.rns_layout.prime_ids(level=ell)`;
+- $Q_\ell$ be the ordered Q basis recorded by a ciphertext's `prime_ids` at
+  level $\ell$;
 - $C$ and $T$ be the unscaled CoeffsToSlots and SlotsToCoeffs maps;
 - $B$ be `modular_reduction.input_bound`;
 - $D$ be `modular_reduction.fused_input_divisor`, either $1$ or $B$ for the
@@ -366,8 +366,8 @@ modulus-dependent arithmetic tables. `clear_cache()` releases all three. None is
 part of ciphertext identity or serialized arithmetic state.
 
 The versioned `logn16` factories document a measured configuration derived
-from `Preset.slots32768_scale50_levels27_int64` with `base_prime_bits=50` and bound
-to an engine using `galois_generator=5`. Construction enforces only:
+from `Preset.slots32768_scale50_levels27_int64` with `base_prime_bits=50` for
+a `CkksConfig` configured with `galois_generator=5`. Construction enforces only:
 
 - a valid target level;
 - $q_b/\Delta_0\in[0.5,2]$;

@@ -8,21 +8,23 @@ CUDA allocations. The tutorial explains source lifetime, transfer ordering,
 and the resulting memory bound; the evaluator remains eager CKKS
 code.
 
-## Start with a small configuration
+## Start with a small resource allocation
 
-The default `Preset.slots32768_scale40_levels34_int64` configuration intentionally
-models a large serving workload. For a quick functional run, use:
+The example fixes its CKKS configuration to
+`Preset.slots32768_scale40_levels34_int64` at level `20`, which is the
+configuration covered by the example's numerical evidence. For a practical
+functional run, reduce only the resource-scaling knobs:
 
 ```bash
 python examples/12_reusable_value_buffer.py \
-  --preset slots8192-scale40-levels7-int64 \
-  --level 2 \
   --num-tiles 4 \
   --plaintexts-per-tile 4 \
   --message-size 32
 ```
 
-This example is CUDA-specific and selects `cuda:0` internally.
+This example is CUDA-specific and selects `cuda:0` internally. It deliberately
+does not expose preset or level options: changing either would create a new
+numerical validation target rather than a smaller residency experiment.
 
 Run the documented large point only on a GPU with sufficient memory:
 
@@ -76,12 +78,12 @@ many values form a tile or in which order they are consumed.
 
 ```python
 buffers = [
-    ReusableValueBuffer.like(host_tiles[0], device=engine.device)
+    ReusableValueBuffer.like(host_tiles[0], device=torch.get_default_device())
     for _ in range(2)
 ]
 ```
 
-[`ReusableValueBuffer`](../api/fhelium/execution/buffer.md#reusablevaluebuffer) recursively
+[`ReusableValueBuffer`](../api/fhelium/runtime/buffer.md#reusablevaluebuffer) recursively
 allocates a value/tensor tree on the target device. Later copies reuse
 the same allocations.
 
@@ -99,7 +101,7 @@ copy_handle = buffer.copy_from(
 )
 ```
 
-[`CopyHandle`](../api/fhelium/execution/buffer.md#copyhandle) represents the enqueued copy. It
+[`CopyHandle`](../api/fhelium/runtime/buffer.md#copyhandle) represents the enqueued copy. It
 retains the source tree so Python cannot free pinned memory while CUDA is still
 reading it.
 
@@ -139,9 +141,8 @@ B_{\mathrm{double}}
 $$
 
 Peak allocator measurements additionally include the shared ciphertext,
-outputs, evaluator temporaries, CUDA context state, and allocator reserve.
-That is why the measured peak is not exactly the theoretical weight-only
-value.
+outputs, evaluator temporaries, CUDA context state, and allocator reserve, so
+they exceed the theoretical weight-only value.
 
 The example reports both:
 
@@ -150,11 +151,20 @@ The example reports both:
 
 ## 7. Keep the benchmark semantics clear
 
-Each tile contains operation-ready scalar plaintexts whose sum is
-`--weight-sum`. Tiles are evaluated sequentially to exercise residency, and
-the final tile output is checked against the same expected scalar product.
-The example is a transfer/residency comparison, not a claim that all tile
-outputs form one accumulated neural-network layer.
+Each tile contains operation-ready scalar plaintexts whose sum is the fixed
+workload constant `0.125`. The preset, input level, and weight sum are fixed;
+`--num-tiles`, `--plaintexts-per-tile`, and `--message-size` scale the residency
+experiment without selecting a different CKKS parameter set. Tiles are
+evaluated sequentially, and the final tile output is checked against the same
+expected scalar product. The fixed `atol=1e-5, rtol=0` check is supported by
+evidence for this CKKS configuration, level, and weight sum only.
+Expected slot values approach and cross zero, so the check uses an absolute
+criterion rather than a relative allowance that shrinks with the reference
+value.
+
+The example measures transfer and Residency behavior for each tile
+independently. A complete neural-network layer would add an explicit output
+accumulation step.
 
 ## 8. Close reusable buffers
 
@@ -166,12 +176,7 @@ for buffer in buffers:
 Closing the buffer makes ownership clear and releases target storage after all
 stream consumers complete.
 
-::: info Fixed addresses are useful beyond CUDA Graphs
-Reusable buffers can support eager evaluators, custom scheduling, or later
-graph capture. The execution mechanism does not impose one consumer.
-:::
-
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/12_reusable_value_buffer.py
 :::
 

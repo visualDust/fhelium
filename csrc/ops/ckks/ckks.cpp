@@ -14,16 +14,16 @@
 //
 // Plaintext addition consumes coefficient/standard ciphertext residues and
 // coefficient/Montgomery plaintext residues, computes
-// $c'_{0,i}=c_{0,i}+p_i\bmod q_i$, and returns coefficient/standard canonical
+// $c'_{0,i}=c_{0,i}+p_i\bmod q_i$, and returns coefficient/standard
 // output. Rescale consumes standard coefficient rows split as remaining Q(P)
 // plus the dropped leading Q residue and computes the selected rounded quotient
 // modulo every remaining prime. Galois operations apply $\sigma_g:X\mapsto
 // X^g$ by a read-only gather, preserving basis/representation/domain.
 // Key-switch multiply-accumulate consumes NTT/Montgomery QP digits and keys and
 // mutates two NTT/Montgomery QP accumulators. ModDown consumes separate
-// canonical coefficient/standard Q and P rows in each row prime's [0, q_i) or
+// coefficient/standard Q and P rows in each row prime's [0, q_i) or
 // [0, p_j) interval, sequentially divides and rounds by every P prime, and
-// returns newly allocated canonical coefficient/standard Q rows; its inverse
+// returns newly allocated coefficient/standard Q rows; its inverse
 // table is specifically `moddown_p_drop_inverses_montgomery`.
 // Two-component multiplication consumes equal
 // [2, *batch, limb, ntt_index] NTT/Montgomery lazy payloads, performs

@@ -45,11 +45,11 @@ A ciphertext owns one tensor with shape
 so its `*batch` prefix is empty. As the level increases, active Q rows are
 removed and the dense tensor becomes smaller.
 
-An unprepared or canonical plaintext can be much smaller than an
+An unprepared plaintext can be much smaller than an
 operation-ready RNS plaintext. Compare:
 
 ```python
-canonical = engine.encode(factor_message, level=ciphertext.level)
+encoded = engine.encode(factor_message, level=ciphertext.level)
 prepared = engine.prepare_plaintext_for_multiplication(
     engine.encode(factor_message, level=ciphertext.level)
 )
@@ -99,7 +99,7 @@ Restore to the target device and require the expected type:
 restored = fh.load_value(
     "activation.safetensors",
     expected_type=fh.Ciphertext,
-    device=engine.device,
+    device=torch.get_default_device(),
 )
 ```
 
@@ -123,7 +123,7 @@ store = ArtifactStore(root / "artifact-store")
 prepared = store.get(
     "model/example/prepared-factor",
     expected_type=fh.Plaintext,
-    device=engine.device,
+    device=torch.get_default_device(),
 )
 if prepared is None:
     prepared = engine.prepare_plaintext_for_multiplication(
@@ -137,8 +137,8 @@ result_ntt = engine.multiply_plaintext(
 ```
 
 `get(name)` returns `None` only when that logical name has no current
-generation. Corrupt payloads, checksum failures, context mismatches, and type
-mismatches remain errors; they are not treated as cache misses.
+generation. Corrupt payloads, checksum failures, and type mismatches remain
+errors; they are not treated as cache misses.
 
 ### Persist a live value
 
@@ -157,10 +157,13 @@ activation_ref = store.put(
   the input value.
 - `activation_ref` is a tensor-free `ArtifactRef[Ciphertext]`; it contains no
   ciphertext tensor payload. It records the store identity, logical name,
-  identified generation, value type, context identity, logical tensor bytes, and
+  identified generation, value type, logical tensor bytes, and
   payload checksum.
 - The store now owns an independent durable payload and binds
   `"requests/example/activation"` to that generation.
+
+The application separately records which CKKS parameters and keys are valid
+for the stored generation.
 
 Materialize that generation by passing the reference back to the store:
 
@@ -168,7 +171,7 @@ Materialize that generation by passing the reference back to the store:
 restored_activation = store.get(
     activation_ref,
     expected_type=fh.Ciphertext,
-    device=engine.device,
+    device=torch.get_default_device(),
 )
 ```
 
@@ -217,7 +220,7 @@ types and their persisted state are:
 | `CompressedPlaintext` | `data` and optional `implicit_data` | Context ID, ring dimension, compression layout/version, level, scale, domain/basis/residue state, and prime IDs |
 | `Ciphertext` | `data` | Context ID, level, actual scale, polynomial domain, modulus basis, residue representation, and prime IDs |
 | `PublicKey`, `KeySwitchKey`, `RelinearizationKey`, `ConjugationKey` | `data` | Concrete key type, context ID, prime IDs, and domain/basis/residue state |
-| `RotationKey` | `data` | The common key state plus canonical `rotation_step` |
+| `RotationKey` | `data` | The common key state plus normalized `rotation_step` |
 | `SecretKey` | `data` | The common key state; persistence requires `allow_secret=True` and remains unencrypted |
 
 Each tensor is snapshotted as a dense contiguous CPU payload. Logical shape,
@@ -244,7 +247,7 @@ replacement_ref = store.put(
 artifact_ciphertext = store.get(
     replacement_ref,
     expected_type=fh.Ciphertext,
-    device=engine.device,
+    device=torch.get_default_device(),
 )
 ```
 
@@ -295,7 +298,7 @@ flowchart LR
 None of these operations implicitly destroys another live value. Residency,
 durability, and application cache policy remain separate decisions.
 
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/03_plaintext_ciphertext_memory.py
 :::
 

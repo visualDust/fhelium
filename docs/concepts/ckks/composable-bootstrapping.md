@@ -1,7 +1,7 @@
 # Composable CKKS bootstrapping
 
 FHElium composes bootstrapping from replaceable mathematical components
-executed through the ordinary `CkksEngine`, `Ciphertext`, NTT, and native
+executed through the ordinary `fhelium.eager.Engine`, `Ciphertext`, NTT, and native
 operator stack. The built-in `FullSlotBootstrap` makes its
 linear maps, periodic reduction, level budget, primitive-key requirements, and
 private scale policy visible.
@@ -50,9 +50,8 @@ T\left(\rho(r_{\rm R})+i\rho(r_{\rm I})\right).
 $$
 
 The polynomial fit, CKKS rounding, key switching, and internal scale
-reinterpretations perturb this idealized expression. `input_bound` is therefore
-a mathematical input precondition, not a range measured from ciphertext data.
-Applications must establish
+reinterpretations perturb this idealized expression. `input_bound` states the
+mathematical precondition that applications must establish:
 $|r_{\rm R}|,|r_{\rm I}|\le B$ and validate the resulting error distribution.
 
 ## Full-slot state flow
@@ -97,9 +96,9 @@ $$
 $$
 
 The bootstrap's scalar and ciphertext-multiplication helpers reinterpret their
-rescale results at $\Delta_0$; ordinary linear stages do not. Consequently the
-final SlotsToCoeffs stages leave a per-value output
-scale rather than silently resetting it to `default_scale`.
+rescale results at $\Delta_0$. Ordinary linear stages follow the recurrence
+above, so the final SlotsToCoeffs stages retain the resulting per-value output
+scale.
 
 ## Raw and normalized reducer coordinates
 
@@ -171,12 +170,11 @@ signed-power-of-two inventory. Built-in periodic reductions require the
 relinearization key for ciphertext products. Full branch handling requires the
 conjugation key; the exponential reduction also uses it for sine extraction.
 
-The versioned experimental `logn16` factories identify measured component
-configurations; they are not numerical certificates. The documented
-end-to-end configuration is derived from
-`Preset.slots32768_scale50_levels27_int64` with `base_prime_bits=50` and is bound to
-an engine using `galois_generator=5`. Construction checks transform slot counts,
-structural-base/default-scale proximity, and modulus-chain depth. It does not
-enforce the deployment identity, inspect the encrypted branch range, or
-guarantee an application tolerance. Other configurations require independent
-range, depth, precision, and performance validation.
+The versioned experimental `logn16` factories identify component configurations
+used in controlled measurements. The documented end-to-end configuration is derived from
+`Preset.slots32768_scale50_levels27_int64` with `base_prime_bits=50` for
+a `CkksConfig` configured with `galois_generator=5`. Construction checks
+transform slot counts, structural-base/default-scale proximity, and
+modulus-chain depth. Applications establish the encrypted branch range,
+numerical tolerance, deployment identity, and performance evidence for their
+configuration.

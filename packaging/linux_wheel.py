@@ -164,9 +164,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--smoke",
+        "--verify-install",
         action="store_true",
-        help="install the repaired wheel and run an isolated CPU smoke test",
+        help="install the repaired wheel and execute its native CPU backend",
     )
     return parser.parse_args()
 
@@ -284,7 +284,7 @@ def main() -> None:
         toolkit_root = "/usr/local/cuda-" + configuration.torch_cuda_version
         check_command.extend(("--cuobjdump", f"{toolkit_root}/bin/cuobjdump"))
     run(*check_command)
-    if args.smoke:
+    if args.verify_install:
         run(
             str(python),
             "-m",
@@ -302,7 +302,7 @@ def main() -> None:
             "--no-deps",
             str(repaired_wheels[0]),
         )
-        smoke = """
+        verification_code = """
 import importlib
 import torch
 import fhelium
@@ -316,7 +316,7 @@ if 'cuda' in expected_backends:
 lhs = torch.tensor([[[1, 2, 3, 4]]], dtype=torch.int64)
 parameters = torch.zeros((8, 1), dtype=torch.int64)
 parameters[0, 0] = 34
-actual = torch.ops.fhelium_rns_ops.add_canonical(lhs, lhs, parameters)
+actual = torch.ops.fhelium_rns_ops.add_standard(lhs, lhs, parameters)
 expected = torch.tensor([[[2, 4, 6, 8]]], dtype=torch.int64)
 assert torch.equal(actual, expected)
 print(fhelium.__file__, status)
@@ -329,7 +329,7 @@ print(fhelium.__file__, status)
             "-I",
             "-c",
             f"expected_backends = {list(configuration.native_backends)!r}\n"
-            + smoke,
+            + verification_code,
             env=smoke_environment,
         )
     print(repaired_wheels[0])

@@ -30,8 +30,6 @@ class ArtifactRef(Generic[T]):
             name creates a new identity and invalidates the old reference.
         value_type: Serialized-value class name recorded by the catalog.
         artifact_schema_version: Artifact metadata schema version.
-        context_id: Cryptographic context identity, or ``None`` for values that
-            do not belong to a CKKS context.
         nbytes: Logical tensor payload bytes of one materialization.
         payload_sha256: SHA-256 checksum of the serialized payload file. The
             checksum detects corruption but does not authenticate an artifact.
@@ -42,7 +40,6 @@ class ArtifactRef(Generic[T]):
     artifact_id: str
     value_type: str
     artifact_schema_version: int
-    context_id: str | None
     nbytes: int
     payload_sha256: str
 
@@ -69,4 +66,4 @@ class ArtifactMetadata:
     value_metadata: dict[str, Any]
 
 
-ARTIFACT_SCHEMA_VERSION = 1
+ARTIFACT_SCHEMA_VERSION = 2

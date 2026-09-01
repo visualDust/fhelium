@@ -11,7 +11,7 @@ from weakref import finalize
 
 import torch
 
-from fhelium.core import TensorResident
+from fhelium.values import TensorResident
 from fhelium.errors import ResidencyLifetimeClosedError
 from fhelium.residency.location import ResidencyLocation
 from fhelium.residency.model import ResidencyHandle

@@ -1,6 +1,6 @@
 # Multiparty CKKS
 
-**Example source:** [`examples/18_multiparty_ckks.py`](https://github.com/VisualDust/fhelium/blob/main/examples/18_multiparty_ckks.py)
+**Example source:** [`examples/23_multiparty_ckks.py`](https://github.com/VisualDust/fhelium/blob/main/examples/23_multiparty_ckks.py)
 
 This example holds two in-process party records representing two cryptographic
 parties, constructs collective public and evaluation keys, runs CKKS evaluation, and executes
@@ -42,25 +42,10 @@ raw tensors with requests, and decides when the complete expected party set has
 contributed. The `fhelium.experimental.mpc` namespace creates no party,
 transport, coordinator, or persistent protocol object.
 
-::: info Current execution constraint
-The current implementation accepts a local CPU or CUDA `CkksEngine`. The
-example defaults to `Preset.slots8192_scale40_levels7_int64` for a small local run.
-:::
-
-::: danger Security scope
-The supported arithmetic scope is correctness for compatible values under
-honest ordered invocation. The current API provides no authentication,
-transcript binding, secure transport, malicious-party security, output-query
-control, reviewed output-error sampler, supported smudging/useful-precision
-parameter profile, privacy guarantee, or validated security composition for the collective-decryption and
-public-key-switch output operations. Use synthetic inputs, throwaway keys, and
-labeled correctness fixtures only.
-:::
-
 Run the example from the repository root:
 
 ```bash
-python examples/18_multiparty_ckks.py --preset slots8192-scale40-levels7-int64
+python examples/23_multiparty_ckks.py --preset slots8192-scale40-levels7-int64
 ```
 
 ## Follow the application-owned states
@@ -79,8 +64,8 @@ stateDiagram-v2
     CLOSED --> [*]
 ```
 
-The labels are application control state. A context, roster, or local
-share change begins another epoch. The detailed envelope, retry, duplicate,
+The labels are application control state. A CKKS parameter profile, roster, or
+local share change begins another epoch. The detailed envelope, retry, duplicate,
 abort, and independent-process rules are intentionally left to
 [Use multiparty CKKS](../how-to/use-multiparty-ckks.md).
 
@@ -94,8 +79,8 @@ party_secret_shares = tuple(
 )
 ```
 
-Both values have the same context, rows, dtype, and device, but remain distinct
-party-owned secrets. Nothing adds them or turns them into a collective
+Both values were created with the same engine parameters, rows, dtype, and
+device, but remain distinct party-owned secrets. Nothing adds them or turns them into a collective
 `SecretKey`, including correctness checks.
 
 ## 2. Generate the collective public key
@@ -140,7 +125,7 @@ The application creates one QP common tensor with a leading digit axis and one
 request-local ephemeral per party:
 
 ```python
-digit_count = engine.rns_layout.key_digit_count
+digit_count = engine.key_digit_count
 rkg_common_a = mpc.sample_common_uniform(
     engine, basis="QP", count=digit_count
 )
@@ -217,7 +202,7 @@ key:
 source = engine.encrypt_message(message, collective_public_key)
 ```
 
-Public evaluation then uses `CkksEngine` methods:
+Public evaluation then uses `fhelium.eager.Engine` methods:
 
 ```python
 rotated = engine.rotate_with_key(source, rotation_key)
@@ -235,8 +220,8 @@ squared = engine.rescale_to_next_level(
 
 `transformed` is the two-component source for collective fusion. `squared`
 demonstrates consumption of the RKG result and becomes the public-key-switch
-source. The application retains the epoch association; a matching `context_id`
-alone does not establish collective lineage.
+source. The application retains both the parameter provenance and collective
+epoch association; runtime values do not encode either relation.
 
 ## 6. Fuse an unsafe collective-decryption output
 
@@ -309,8 +294,8 @@ Closing rejects later requests in the application workflow; it does not erase
 key tensors, and best-effort Python deletion does not guarantee device-memory
 zeroization.
 
-::: details Complete runnable source
-<<< @/../examples/18_multiparty_ckks.py
+::: details Source
+<<< @/../examples/23_multiparty_ckks.py
 :::
 
 ## Continue with the complete operational guide

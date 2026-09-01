@@ -8,8 +8,9 @@ decrypts the results.
 ```python
 import torch
 import fhelium as fh
+from fhelium.eager import Engine
 
-engine = fh.CkksEngine(fh.Preset.slots8192_scale40_levels7_int64, device="cpu")
+engine = Engine(fh.Preset.slots8192_scale40_levels7_int64)
 
 x = torch.linspace(-0.05, 0.05, 32, dtype=torch.float64)
 y = torch.linspace(0.02, -0.02, 32, dtype=torch.float64)
@@ -49,7 +50,7 @@ See [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md)
 for the level/scale laws,
 [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)
 for the broader state machine, and
-[`CkksEngine`](../api/fhelium/engine/ckks_engine.md#ckksengine) for the generated
+[`fhelium.eager.Engine`](../api/fhelium/eager.md) for the generated
 method reference. The same program runs with `device="cuda:0"` when the native
 build includes CUDA; see
 [Choose and switch a local execution device](../how-to/switch-cpu-cuda.md).
@@ -59,7 +60,7 @@ implementations compatible with the target device and preset.
 
 ## Choose a tutorial
 
-Each tutorial follows one maintained numbered file under
+Each tutorial follows one numbered file under
 [`examples/`](https://github.com/VisualDust/fhelium/tree/main/examples). Choose
 a track by goal; the numbers preserve the source mapping and do not impose one
 mandatory reading order.
@@ -96,28 +97,28 @@ mandatory reading order.
 | [11](https://github.com/VisualDust/fhelium/blob/main/examples/11_cuda_graph_matrix_vector.py) | [CUDA Graph matrix-vector](cuda-graph-matvec.md) | How are static keys and weights separated from changing request ciphertexts? |
 | [12](https://github.com/VisualDust/fhelium/blob/main/examples/12_reusable_value_buffer.py) | [Reusable value buffers](reusable-value-buffer.md) | How can pinned-host tiles stream through two fixed CUDA allocations? |
 | [13](https://github.com/VisualDust/fhelium/blob/main/examples/13_explicit_residency.py) | [Explicit residency plans and CUDA leases](explicit-residency.md) | How do opaque handles, lazy local locations, optional budgets, scoped reservations, and event-backed CUDA leases compose? |
-| [14](https://github.com/VisualDust/fhelium/blob/main/examples/14_automatic_residency.py) | [Automatic residency admission](automatic-residency.md) | How does a working-set request become a deterministic, inspectable, state-bound admission decision under managed pressure? |
+| [14](https://github.com/VisualDust/fhelium/blob/main/examples/14_automatic_residency.py) | [Automatic residency admission](automatic-residency.md) | How does a working-set request become a deterministic, inspectable, state-versioned admission decision under managed pressure? |
 | [15](https://github.com/VisualDust/fhelium/blob/main/examples/15_homogeneous_batching.py) | [Homogeneous batching](homogeneous-batching.md) | How does a leading message batch compare with an explicit loop? |
 | [16](https://github.com/VisualDust/fhelium/blob/main/examples/16_compressed_plaintext.py) | [Compressed plaintexts](compressed-plaintext.md) | When can an operation-ready plaintext use the versioned compressed encoded-axis layout? |
 
-## Features
+## Compile, IR, and experimental features
 
-Read the [bootstrapping composition and range requirements](../concepts/ckks/composable-bootstrapping.md)
-or the [multiparty supported security scope](../how-to/use-multiparty-ckks.md) before the
-corresponding workflow.
+Examples 17 and 19 execute compiled Programs, Example 18 focuses on textual IR,
+and Example 20 emits editable Python from two selected Program stages. Example
+21 focuses on rank-local collective IR. Read the
+[bootstrapping composition and range requirements](../concepts/ckks/composable-bootstrapping.md)
+or the [multiparty supported security scope](../how-to/use-multiparty-ckks.md)
+before running Examples 22 and 23.
 
 | Example | Tutorial | Main question |
 | --- | --- | --- |
-| [17](https://github.com/VisualDust/fhelium/blob/main/examples/17_ckks_bootstrap_logn16.py) | [Refresh with composable CKKS bootstrapping](composable-ckks-bootstrap.md) | How are approximation, polynomial evaluation, transforms, periodic reduction, keys, and range evidence composed? |
-| [18](https://github.com/VisualDust/fhelium/blob/main/examples/18_multiparty_ckks.py) | [Multiparty CKKS](multiparty-ckks.md) | How do stateless collective-key and unsafe output arithmetic phases fit together under application-owned protocol state? |
-| [19](https://github.com/VisualDust/fhelium/blob/main/examples/19_unified_jit.py) | [JIT programs](unified-jit.md) | How do PyTorch tracing, a mixed-dialect `Program`, selected passes, a retained workspace, readiness, and encrypted execution compose? |
-| [20](https://github.com/VisualDust/fhelium/blob/main/examples/20_jit_textual_ir.py) | [Import and execute JIT textual IR](jit-textual-ir.md) | How can versioned textual IR preserve an application operation and execute it through a bound handler? |
-| [21](https://github.com/VisualDust/fhelium/blob/main/examples/21_jit_custom_pipeline.py) | [Compose a custom JIT pipeline](jit-custom-pipeline.md) | How does a custom pass publish retained workspace analysis inside an inspectable pipeline? |
-
-::: info Static documentation build
-The site build does not run native workloads. CPU and CUDA validation exercise
-applicable examples separately from VitePress generation.
-:::
+| [17](https://github.com/VisualDust/fhelium/blob/main/examples/17_compose_and_execute.py) | [Compose and execute built-in Compile passes](compose-and-execute-compile-pipeline.md) | How do capture, built-in passes, concrete CKKS state, Backend linking, and encrypted execution form one caller-selected workflow? |
+| [18](https://github.com/VisualDust/fhelium/blob/main/examples/18_ir_textual_program.py) | [Import and transform textual Program IR](ir-textual-program.md) | How can textual mixed-level IR round-trip and participate in a pipeline containing a caller-defined analysis pass? |
+| [19](https://github.com/VisualDust/fhelium/blob/main/examples/19_customize_compile_pass.py) | [Customize a Compile pass and pipeline](customize-compile-pass-and-pipeline.md) | How does a caller define a BSGS rewrite, compose transition and lowering passes, link resources, and execute the resulting Program? |
+| [20](https://github.com/VisualDust/fhelium/blob/main/examples/20_generate_python.py) | [Generate editable Python](generate-python.md) | How can one caller emit Eager-style source from CKKS IR and direct implementation calls from a lower Backend Program? |
+| [21](https://github.com/VisualDust/fhelium/blob/main/examples/21_rank_local_collective_ir.py) | [Transform rank-local collective IR](rank-local-collective-ir.md) | How can a specialized ciphertext-add reduction be preserved or lowered to generic all-reduce with a visible combine region? |
+| [22](https://github.com/VisualDust/fhelium/blob/main/examples/22_ckks_bootstrap_logn16.py) | [Refresh with composable CKKS bootstrapping](composable-ckks-bootstrap.md) | How are approximation, polynomial evaluation, transforms, periodic reduction, keys, and range evidence composed? |
+| [23](https://github.com/VisualDust/fhelium/blob/main/examples/23_multiparty_ckks.py) | [Multiparty CKKS](multiparty-ckks.md) | How do stateless collective-key and unsafe output arithmetic phases fit together under application-owned protocol state? |
 
 Use [Concepts](../concepts/index.md) for the underlying invariants,
 [How-to guides](../how-to/index.md) for focused tasks, and the

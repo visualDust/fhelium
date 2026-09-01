@@ -5,14 +5,15 @@ reconstructed without loss from repeated values. Its implementation defines
 value metadata, reconstruction rules, dispatcher boundaries, and native
 arithmetic paths.
 
-`Plaintext` remains the standard CKKS representation. `CompressedPlaintext` uses a separate representation and arithmetic path rather than changing standard plaintext encoding.
+`Plaintext` owns standard CKKS encoding. `CompressedPlaintext` owns a separate
+storage representation and arithmetic path.
 
 ## Execution path
 
 ```mermaid
 graph TB
     VALUE[CompressedPlaintext<br/>metadata + compact tensor]
-    ENGINE[CkksEngine add_plaintext<br/>or multiply_plaintext]
+    ENGINE[eager Engine add_plaintext<br/>or multiply_plaintext]
     SELECT[Python layout and state validation]
     WRAP[Generated ckks_ops / rns_ops wrapper]
     DISP[torch.ops + PyTorch dispatcher]
@@ -25,7 +26,7 @@ graph TB
     DISP -->|CUDA tensor| CUDA --> OUT
 ```
 
-Compression layout is value metadata. `CkksEngine` validates that
+Compression layout is value metadata. `fhelium.eager.Engine` validates that
 metadata and selects one named native operator before dispatch. Cyclic,
 contiguous, and strided-sparse layouts do not travel through one runtime mode
 argument: they use distinct schemas or dedicated Python paths. PyTorch then
@@ -52,8 +53,8 @@ output positions but loads each right-hand-side value directly from either the
 compact support tensor or the per-row implicit tensor; it never materializes a
 dense plaintext. This preserves the encoded behavior for arbitrary implicit values
 and does not assume that ciphertext residues outside the support are already
-canonical. The compact value carries a frozen compression-format version,
-`N`, the compression layout, level, scale, context, polynomial domain, modulus basis,
+reduced to $[0,q_i)$. The compact value carries a frozen compression-format version,
+`N`, the compression layout, level, scale, polynomial domain, modulus basis,
 residue representation, and ordered prime IDs. It is therefore serializable,
 transferable, residency-managed, execution-signatured, and
 CUDA-Graph-compatible when resident on CUDA, without an engine reference.
@@ -116,10 +117,10 @@ uses the independently materialized NTT compressed value. As with standard
 
 | Responsibility | Source |
 | --- | --- |
-| Compressed value, layouts, checks, and expansion | `fhelium/core/compressed_plaintext.py` |
-| Evaluator selection and ciphertext reconstruction | `fhelium/engine/ckks_engine.py` |
+| Compressed value, layouts, checks, and expansion | `fhelium/values/compressed_plaintext.py` |
+| Eager selection and ciphertext reconstruction | `fhelium/eager/_engine.py` |
 | Generated plaintext and Montgomery wrappers | `fhelium/native/wrapper/{ckks_ops,rns_ops}.py` |
 | Backend-neutral compressed operator schemas | `csrc/ops/ckks/ckks.cpp`, `csrc/ops/rns/rns_arithmetic.cpp` |
 | CPU plaintext and RNS implementations | `csrc/ops/ckks/cpu/`, `csrc/ops/rns/cpu/` |
 | CUDA plaintext and RNS implementations | `csrc/ops/ckks/cuda/`, `csrc/ops/rns/cuda/` |
-| Conversion and arithmetic tests | `tests/test_compressed_plaintext.py` |
+| Conversion and arithmetic tests | `tests/values/test_compressed_plaintext.py` |

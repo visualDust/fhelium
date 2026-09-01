@@ -13,7 +13,7 @@ from typing import Generic, TypeVar
 
 import torch
 
-from fhelium.core import TensorResident
+from fhelium.values import TensorResident
 from fhelium.residency.location import ResidencyLocation
 from fhelium.residency.model import (
     ResidencyHandle,

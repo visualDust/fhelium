@@ -4,31 +4,20 @@ layout: home
 
 <HomeHero />
 
-<HomeOpeningRail />
+<InstallCommand />
 
 ## Choose your level of control
 
-FHElium provides one hierarchical CKKS programming model with four entry levels: direct evaluator calls, tuned key and arithmetic schedules, mixed-dialect JIT `Program` objects, and GPU-rank partitioning. Every level reaches the same `CkksEngine`, core `Ciphertext` values, and CKKS state invariants.
+Build through the full FHE stack while choosing the level of control that fits each workload. Eager execution and Compile Programs use the same Backend, arithmetic resources, and native CPU/CUDA implementations.
 
-<HomeControlDeck />
+<HomeControlExplorer />
 
-Move between these levels as the workload matures: prototype semantic tensor code, inspect the mixed-dialect program, tune the evaluator schedule, and compose rank-local values with typed collectives; all levels share the same encrypted value model. Continue to the [Quickstart](tutorial/tutorials.md) for direct CKKS evaluation, the [JIT tutorial](tutorial/unified-jit.md) for capture, passes, and readiness, or the [SPMD model](concepts/distributed/spmd-model.md) for rank-local multi-GPU ownership and collective semantics.
+## Usage models
 
-## Build through the stack
+Choose a Program workflow, immediate execution with runtime mechanisms, or a
+rank-local distributed program.
 
-Start with ordinary Python or typed PyTorch semantics, expose the encrypted graph and its CKKS mechanics, then carry the same evaluator into repeated and distributed execution. FHElium exposes the joints between layers: graph policy, ciphertext state, evaluator keys, resident artifacts, CUDA Graph capture, and rank-local placement remain independently inspectable and selectable.
-
-<HomeStackBuilder />
-
-Use the route builder to compare which decisions belong to authoring, graph policy, execution, and application-owned placement.
-
-## JIT, with the graph in your hands
-
-Write the evaluator beside ordinary Python, trace or import one mixed-dialect xDSL program, transform it with selected local passes, and execute only after an independent readiness check. The `Program` remains inspectable while its live materials, engines, keys, handlers, and caches remain in a retained workspace.
-
-<HomeGraphXray />
-
-The resulting `Program` can be printed as textual IR, passed through another selected pipeline, or executed eagerly with bound runtime capabilities. PyTorch capture, textual import, custom passes, and backend handlers all use the same program class.
+<HomeUsageTabs />
 
 ## Measured performance
 
@@ -40,30 +29,30 @@ ciphertext-vector (**CT×CT**) evaluation. <a href="/assets/fhelium-workload.py"
 
 ## Continue by task
 
-<DocGrid>
+<DocGrid class="home-task-grid">
   <DocCard
     title="Run a first computation"
-    description="Install against a selected PyTorch stack and execute the complete CPU or CUDA quickstart."
+    description="Install FHElium and execute an encrypted computation on CPU or CUDA."
     href="/tutorial/"
   />
   <DocCard
-    title="Build a correct evaluator"
-    description="Plan levels, scales, domains, key material, and CKKS state transitions."
+    title="Understand the architecture"
+    description="Follow values, CKKS state, Programs, Backend implementations, runtime mechanisms, and native execution."
     href="/concepts/"
   />
   <DocCard
-    title="Diagnose or optimize a workload"
-    description="Apply focused procedures for correctness, memory, execution, distribution, and performance."
+    title="Solve a workload problem"
+    description="Use focused procedures for parameters, compilation, placement, memory, distribution, and performance."
     href="/how-to/"
   />
   <DocCard
-    title="Work on FHElium internals"
-    description="Follow calls across the Python engine, dispatcher schemas, C++, and native CUDA operators."
+    title="Develop FHElium"
+    description="Trace Eager and Compile through Backend resources, PyTorch schemas, and native CPU/CUDA operators."
     href="/developer/"
   />
   <DocCard
-    title="Look up an API"
-    description="Browse signatures and API documentation generated directly from the current Python source."
+    title="Browse the API"
+    description="Look up current public modules, classes, functions, and signatures generated from source."
     href="/api/"
   />
 </DocGrid>

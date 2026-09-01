@@ -13,13 +13,13 @@ from typing import Any, cast
 
 import torch
 
-from fhelium.core import TensorResident
+from fhelium.values import TensorResident
 from fhelium.serialization.value import (
     ValueEnvelope,
     validate_value_description,
 )
 
-TRANSFER_PROTOCOL_VERSION = 4
+TRANSFER_PROTOCOL_VERSION = 5
 
 TransferDescriptor = dict[str, Any]
 
@@ -58,7 +58,6 @@ def allocate_value(
     envelope = ValueEnvelope(
         schema_version=descriptor["value_schema_version"],
         value_type=descriptor["value_type"],
-        context_id=descriptor["context_id"],
         metadata=descriptor["metadata"],
         tensors={
             name: _allocate_tensor(tensor_descriptor, local_device)
@@ -117,7 +116,6 @@ def _describe_envelope(envelope: ValueEnvelope) -> TransferDescriptor:
         "kind": "fhelium_value",
         "value_schema_version": envelope.schema_version,
         "value_type": envelope.value_type,
-        "context_id": envelope.context_id,
         "metadata": envelope.metadata,
         "tensors": {
             name: _describe_tensor(tensor)
@@ -199,7 +197,6 @@ def _check_descriptor(descriptor: TransferDescriptor) -> None:
         "kind",
         "value_schema_version",
         "value_type",
-        "context_id",
         "metadata",
         "tensors",
     }
@@ -217,7 +214,6 @@ def _check_descriptor(descriptor: TransferDescriptor) -> None:
     validate_value_description(
         schema_version=descriptor["value_schema_version"],
         value_type=descriptor["value_type"],
-        context_id=descriptor["context_id"],
         metadata=descriptor["metadata"],
         tensor_names=cast(set[str], set(tensors)),
     )
@@ -254,7 +250,7 @@ def _validate_tensor_descriptor(descriptor: object) -> None:
 
 
 def _key_types() -> dict[str, type[TensorResident]]:
-    from fhelium.core import (
+    from fhelium.values import (
         ConjugationKey,
         KeySwitchKey,
         PublicKey,

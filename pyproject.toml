@@ -1,6 +1,6 @@
 [project]
 name = "fhelium"
-version = "0.10.0"
+version = "0.20.0"
 description = "A tensor-native CKKS framework for fully homomorphic encryption on CPU and NVIDIA CUDA with Python and PyTorch."
 authors = [
     { name = "Gavin Gong", email = "gavin@gong.host" },
@@ -126,6 +126,7 @@ dev = [
     "pyright==1.1.411",
     "pytest==9.1.1",
     "ruff==0.15.22",
+    "rust-just==1.58.0",
 ]
 
 [tool.uv.extra-build-dependencies]

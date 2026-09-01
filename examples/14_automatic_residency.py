@@ -3,7 +3,7 @@
 """Run deterministic automatic Residency admission under managed CUDA pressure.
 
 The example keeps one cold replicable plaintext cached on CUDA, decides a
-state-bound placement for a different CKKS working set, and lets a deterministic
+state-versioned placement for a different CKKS working set, and lets a deterministic
 controller reclaim the cold replica before admitting CUDA workspace and input
 materializations. It then executes a real rotate/multiply/rescale stage through
 strict manager leases and verifies that requested endpoints remain cached.
@@ -99,16 +99,15 @@ def main() -> None:
     add_engine_args(
         parser,
         default_preset="slots8192-scale40-levels7-int64",
-        default_device="cuda:0",
     )
     args = parser.parse_args()
 
     engine = make_engine(args)
-    if engine.device.type != "cuda":
+    if torch.get_default_device().type != "cuda":
         parser.error("this automatic residency example requires CUDA")
-    cuda = cuda_location(engine.device)
-    transfer_stream = torch.cuda.Stream(device=engine.device)
-    compute_stream = torch.cuda.Stream(device=engine.device)
+    cuda = cuda_location(torch.get_default_device())
+    transfer_stream = torch.cuda.Stream(device=torch.get_default_device())
+    compute_stream = torch.cuda.Stream(device=torch.get_default_device())
 
     positions = torch.arange(engine.num_slots, dtype=torch.float64)
     message = 0.01 * torch.sin(positions * 0.017)
@@ -239,7 +238,7 @@ def main() -> None:
         raise RuntimeError("automatic residency scope did not produce a report")
 
     expected = 0.5 * torch.roll(message, shifts=1)
-    actual = engine.decrypt_message(output, is_real=True)
+    actual = engine.decrypt_message(output, is_real=True).cpu()
     error = error_stats(actual, expected)
     final_snapshot = residency.snapshot()
 

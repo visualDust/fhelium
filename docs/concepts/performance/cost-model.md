@@ -1,9 +1,9 @@
 # CKKS workload cost model
 
-Performance work should begin with a real evaluator and a decomposition of its
-cost—not with the name of a kernel or the largest available NTT grouping.
+Performance work begins with a real evaluator and a decomposition of its
+measured cost.
 
-## Packed linear workloads are not GEMM kernels
+## Cost structure of packed linear workloads
 
 A common diagonal formulation is:
 
@@ -63,7 +63,7 @@ Higher layers often change total work more dramatically:
 - Backend policy determines transform tables and stage grouping.
 - Kernel work determines occupancy, memory traffic, and local arithmetic.
 
-Do not move to a lower layer until measurement shows it controls the target
+Move to a lower layer when measurements show that it controls the target
 workload.
 
 ## Main optimization mechanisms
@@ -77,11 +77,12 @@ workload.
 | NTT grouping/compact tables | Launches and table/global-memory traffic | Registers, occupancy, index arithmetic |
 | Rotation hoisting | Repeated decomposition/ModUp/NTT prefix | Hoist temporaries and output memory |
 | CUDA Graph | Repeated host/dispatcher submission | Fixed signatures, retained graph memory |
-| Bounded residency | All-resident CUDA footprint | Host-to-device (H2D) traffic and event coordination |
+| Budget-constrained residency | All-resident CUDA footprint | Host-to-device (H2D) traffic and event coordination |
 | Multi-GPU partition | Rank-local dominant work | Communication, imbalance, key placement |
 | Minimal keyset | Key memory and movement | Possible extra operations with decomposition |
 
-No mechanism dominates every shape, level, GPU, and request pattern.
+Each mechanism has a shape-, level-, platform-, and workload-dependent
+crossover.
 
 ## Hoisting has a memory curve
 
@@ -104,7 +105,7 @@ Chunk size is a workload policy. Measure latency and peak memory together.
 ## Homogeneous batching has a working-set crossover
 
 A homogeneous batch adds independent-message dimensions while keeping one
-context, level, scale, polynomial domain, modulus basis, device, dtype, and component count. The
+level, scale, polynomial domain, modulus basis, device, dtype, and component count. The
 public ciphertext layout keeps its structural component axis first, followed
 by `*batch`, limb, and polynomial-index axes. Message batch axes are distinct
 from RNS limbs, ciphertext components, hybrid-decomposition digits, and
@@ -112,7 +113,7 @@ distributed ranks.
 
 Batching can reduce launches and expose parallel work, but it also multiplies
 the tensors active inside NTT, automorphism, ModUp, key accumulation, ModDown,
-and result assembly. For one extended key-switch digit, a useful lower-bound
+and result assembly. For one extended key-switch digit, a useful lower bound
 proxy is:
 
 $$
@@ -142,7 +143,7 @@ cache capacity, while B2 was not. The same GPU placed one level-zero digit for
 `Preset.slots32768_scale40_levels34_int64` at 19.5 MiB, so even B1 was already a
 streaming workload. The former showed a clear batching loss; the latter
 retained modest gains with a strict radix-16 backend. The digit size is
-explanatory evidence, not a complete cache-fit test.
+one source of explanatory evidence within the complete cache-fit measurement.
 
 ```mermaid
 graph LR
@@ -161,8 +162,8 @@ graph LR
 ```
 
 This is why B1 compatibility, operator speedup, workload speedup, and peak
-memory are separate measurements. FHElium preserves homogeneous batch semantics
-but does not hide an automatic batch-versus-loop policy in the engine. See the
+memory are separate measurements. The application selects batching or looping
+from those measurements while FHElium preserves either value layout. See the
 [homogeneous batching tutorial](../../tutorial/homogeneous-batching.md) and
 [batch-size selection guide](../../how-to/choose-homogeneous-batch-size.md).
 
@@ -174,7 +175,7 @@ execution can therefore become a loop win when both paths are captured. The
 valid comparison is batch graph versus loop graph, with graph capture and
 retained memory reported separately from replay latency.
 
-## NTT grouping is not monotonic
+## NTT grouping has workload-dependent optima
 
 Combining multiple radix-2 stages can reduce launches and global-memory
 round-trips, but wider grouping can increase register pressure, reduce
@@ -189,9 +190,9 @@ The best backend depends on:
 - table footprint and traffic;
 - surrounding workload and graph capture.
 
-A name such as `group16` describes an execution strategy; it is not proof of
-superiority and should not be confused with an unrelated direct-radix
-algorithm.
+A name such as `group16` identifies one execution strategy. Controlled
+measurements determine its ranking, and direct-radix algorithms retain separate
+implementation identities.
 
 ## Multi-GPU time model
 
@@ -232,7 +233,7 @@ graph LR
     Q --> M
 ```
 
-A faster configuration is not acceptable if it silently changes level
+Accept a faster configuration only when it preserves level
 semantics, wraps realistic inputs, or exceeds the error bound. Every
 performance result should include correctness.
 
@@ -286,7 +287,7 @@ flowchart TD
     Q2 -->|no| Q3
     Q3 -->|yes| G[rank-local CUDA Graph]
     Q3 -->|no| Q4
-    Q4 -->|yes| R[prepared-state audit and bounded residency]
+    Q4 -->|yes| R[prepared-state audit and budget-constrained residency]
     Q4 -->|no| Q5
     Q5 -->|yes| M[choose a multi-GPU partition strategy]
     Q5 -->|no| A[revisit packing or kernel design]

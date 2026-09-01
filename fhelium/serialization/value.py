@@ -8,7 +8,7 @@ from typing import Any, Self, cast
 
 import torch
 
-from fhelium.core import (
+from fhelium.values import (
     COMPRESSED_PLAINTEXT_FORMAT_VERSION,
     Ciphertext,
     CompressedPlaintext,
@@ -21,7 +21,7 @@ from fhelium.core import (
     SecretKey,
     TensorResident,
 )
-from fhelium.core.state import (
+from fhelium.values.state import (
     CompressedPlaintextLayout,
     ModulusBasis,
     PlaintextRepresentation,
@@ -29,7 +29,7 @@ from fhelium.core.state import (
     ResidueRepresentation,
 )
 
-VALUE_SCHEMA_VERSION = 2
+VALUE_SCHEMA_VERSION = 3
 
 _KEY_TYPES: dict[str, type] = {
     key_type.__name__: key_type
@@ -55,7 +55,6 @@ class ValueEnvelope:
 
     schema_version: int
     value_type: str
-    context_id: str | None
     metadata: dict[str, Any]
     tensors: dict[str, torch.Tensor]
 
@@ -93,7 +92,6 @@ def _envelope_from_value(
         return envelope_type(
             schema_version=VALUE_SCHEMA_VERSION,
             value_type="Plaintext",
-            context_id=value.context_id,
             metadata={
                 "level": value.level,
                 "scale": value.scale,
@@ -112,7 +110,6 @@ def _envelope_from_value(
         return envelope_type(
             schema_version=VALUE_SCHEMA_VERSION,
             value_type="CompressedPlaintext",
-            context_id=value.context_id,
             metadata={
                 "ring_dimension": value.ring_dimension,
                 "compression_layout": value.compression_layout,
@@ -141,7 +138,6 @@ def _envelope_from_value(
         return envelope_type(
             schema_version=VALUE_SCHEMA_VERSION,
             value_type="Ciphertext",
-            context_id=value.context_id,
             metadata={
                 "level": value.level,
                 "scale": value.scale,
@@ -162,7 +158,6 @@ def _envelope_from_value(
         return envelope_type(
             schema_version=VALUE_SCHEMA_VERSION,
             value_type=key_type.__name__,
-            context_id=key_value.context_id,
             metadata={
                 "prime_ids": list(key_value.prime_ids),
                 "polynomial_domain": key_value.polynomial_domain,
@@ -200,14 +195,12 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
     validate_value_description(
         schema_version=envelope.schema_version,
         value_type=envelope.value_type,
-        context_id=envelope.context_id,
         metadata=envelope.metadata,
         tensor_names=set(envelope.tensors),
     )
     value_type = envelope.value_type
     metadata = envelope.metadata
     tensors = envelope.tensors
-    context_id = envelope.context_id
 
     if value_type == "Plaintext":
         _require_metadata_fields(
@@ -273,7 +266,6 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
             level=_metadata_integer(metadata, "level", value_type),
             scale=_metadata_scale(metadata, value_type),
             data=data,
-            context_id=context_id,
             representation=cast(PlaintextRepresentation, representation),
             polynomial_domain=cast(PolynomialDomain | None, polynomial_domain),
             modulus_basis=cast(ModulusBasis | None, modulus_basis),
@@ -301,7 +293,6 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
             data=_required_tensor(tensors, "data", value_type),
             level=_metadata_integer(metadata, "level", value_type),
             scale=_metadata_scale(metadata, value_type),
-            context_id=_required_context(context_id, value_type),
             prime_ids=_metadata_prime_ids(metadata, value_type),
             polynomial_domain=cast(
                 PolynomialDomain,
@@ -362,7 +353,6 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
             ),
             level=_metadata_integer(metadata, "level", value_type),
             scale=_metadata_scale(metadata, value_type),
-            context_id=_required_context(context_id, value_type),
             polynomial_domain=cast(
                 PolynomialDomain,
                 _metadata_string(metadata, "polynomial_domain", value_type),
@@ -405,7 +395,6 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
     _require_tensor_names(tensors, value_type, {"data"})
     key_arguments: dict[str, Any] = dict(
         data=_required_tensor(tensors, "data", value_type),
-        context_id=_required_context(context_id, value_type),
         prime_ids=_metadata_prime_ids(metadata, value_type),
         polynomial_domain=_metadata_string(
             metadata, "polynomial_domain", value_type
@@ -430,7 +419,6 @@ def validate_value_description(
     *,
     schema_version: object,
     value_type: object,
-    context_id: object,
     metadata: object,
     tensor_names: set[str],
     tensor_metadata: dict[str, Any] | None = None,
@@ -521,14 +509,7 @@ def validate_value_description(
                 or prime_ids
             ):
                 raise ValueError("Slots Plaintext cannot declare RNS metadata")
-            if context_id is not None and (
-                not isinstance(context_id, str) or not context_id
-            ):
-                raise ValueError(
-                    "Plaintext context_id must be a non-empty string or null"
-                )
         else:
-            _required_context(cast(str | None, context_id), value_type)
             if polynomial_domain != "coefficient" and representation != "rns":
                 raise ValueError(
                     "Coefficient Plaintext requires coefficient domain"
@@ -568,7 +549,6 @@ def validate_value_description(
             raise ValueError(
                 "Coefficient-domain Ciphertext requires standard residues"
             )
-        _required_context(cast(str | None, context_id), value_type)
         _require_tensor_names_by_name(tensor_names, value_type, {"data"})
         return
 
@@ -623,7 +603,6 @@ def validate_value_description(
         _validate_required_rns_metadata(typed_metadata, value_type)
         if typed_metadata["residue_representation"] != "montgomery":
             raise ValueError("CompressedPlaintext requires Montgomery residues")
-        _required_context(cast(str | None, context_id), value_type)
         if tensor_metadata is not None:
             _validate_compressed_tensor_metadata(
                 tensor_metadata,
@@ -650,7 +629,6 @@ def validate_value_description(
     if key_type is RotationKey:
         _metadata_integer(typed_metadata, "rotation_step", value_type)
     _validate_required_rns_metadata(typed_metadata, value_type)
-    _required_context(cast(str | None, context_id), value_type)
     _require_tensor_names_by_name(tensor_names, value_type, {"data"})
 
 
@@ -756,14 +734,6 @@ def _required_tensor(
         raise ValueError(
             f"{value_type} envelope is missing tensor payload {name!r}"
         ) from error
-
-
-def _required_context(context_id: str | None, value_type: str) -> str:
-    if not isinstance(context_id, str) or not context_id:
-        raise ValueError(
-            f"{value_type} envelope requires a non-empty context_id"
-        )
-    return context_id
 
 
 def _require_metadata_fields(

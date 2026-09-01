@@ -2,7 +2,7 @@
 
 """Inspect and optionally persist dense process-local CKKS key layouts.
 
-Each ``RotationKey`` records its canonical signed ``rotation_step``;
+Each ``RotationKey`` records its normalized signed ``rotation_step``;
 ``RotationKeySet`` validates the same identity when constructing or updating the mapping.
 """
 
@@ -79,9 +79,9 @@ def main() -> None:
             ]
         )
     print_table(["material", "axes", "local shape", "local bytes"], rows)
-    print(f"RotationKeySet canonical steps: {list(engine.rotation_keys)}")
+    print(f"RotationKeySet normalized steps: {list(engine.rotation_keys)}")
     print(
-        "RotationKey tensor canonical step: "
+        "RotationKey tensor normalized step: "
         f"{engine.rotation_keys[rotation_steps[0]].rotation_step}"
     )
 
@@ -106,7 +106,9 @@ def main() -> None:
                 overwrite=True,
             )
 
-        restored = store.get(relinearization_ref, device=engine.device)
+        restored = store.get(
+            relinearization_ref, device=torch.get_default_device()
+        )
         assert type(restored) is fh.RelinearizationKey
         torch.testing.assert_close(restored.data, relinearization_key.data)
         print(

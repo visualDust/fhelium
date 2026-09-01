@@ -10,7 +10,7 @@ control required by the workload.
 | Move one application-owned value | `TensorResident.to(...)` | Own both values and all Python/CUDA lifetimes. | Perform one functional tensor movement. |
 | Manage values by opaque handle while choosing every transition | `ResidencyManager` primitives | Choose `ensure`, `move`, `drop`, `discard`, and strict lease lifetimes. | Own materializations, enforce replica/lifetime rules, and account bytes. |
 | Repeat a fixed stage with reviewed action order and headroom | Manual `ResidencyPlan` + manager scope | Specify reclaim, reservations, entry, exit, and the stage body. | Preflight and execute the ordered plan under manager authority. |
-| State a working set but inspect policy choices before admission | `ResidencyController.decide` → inspect → `scope` | Define request endpoints, policy tiers, and acceptance of the decision. | Derive a state-bound plan; the manager validates and executes it. |
+| State a working set but inspect policy choices before admission | `ResidencyController.decide` → inspect → `scope` | Define request endpoints, policy tiers, and acceptance of the decision. | Derive a state-versioned plan; the manager validates and executes it. |
 | Admit and borrow a working set in one context | `ResidencyController.use` | Define the request and supply all stream identities. | Decide, version-check, enter the scope, and acquire strict leases. |
 
 Apply the following decision tree:
@@ -137,6 +137,6 @@ their own documented requirements.
 - [Manual Example 13 source](https://github.com/VisualDust/fhelium/blob/main/examples/13_explicit_residency.py)
 - [Automatic Example 14 source](https://github.com/VisualDust/fhelium/blob/main/examples/14_automatic_residency.py)
 - [Stream resources with bounded memory](./stream-bounded-memory.md)
-- [`TensorResident` API](../api/fhelium/core/tensor_resident.md#tensorresident)
+- [`TensorResident` API](../api/fhelium/values/tensor_resident.md#tensorresident)
 - [`ResidencyManager` API](../api/fhelium/residency/manager.md#residencymanager)
 - [`ResidencyController` API](../api/fhelium/residency/controller.md#residencycontroller)

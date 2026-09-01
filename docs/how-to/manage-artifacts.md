@@ -72,8 +72,8 @@ except FileExistsError:
 ```
 
 The returned reference records the store ID, normalized logical name, artifact
-ID, value type, context ID, logical bytes, and payload checksum. It contains no
-tensor payload.
+ID, value type, logical bytes, and payload checksum. It contains no tensor
+payload or CKKS parameter identity.
 
 ## 3. Load the current value or one stored version
 
@@ -83,15 +83,14 @@ Use a string name when the application wants whichever generation is current:
 current = store.get(
     "requests/example/activation",
     expected_type=fh.Ciphertext,
-    expected_context_id=engine.context.context_id,
-    device=engine.device,
+    device=torch.get_default_device(),
 )
 if current is None:
     ...  # no current generation for this name
 ```
 
 A string lookup returns `None` only for a missing name. Corruption, checksum,
-type, context, and schema failures remain errors.
+type and schema failures remain errors.
 
 Use an `ArtifactRef` when the caller requires a checked generation:
 
@@ -99,7 +98,6 @@ Use an `ArtifactRef` when the caller requires a checked generation:
 restored = store.get(
     activation_ref,
     expected_type=fh.Ciphertext,
-    expected_context_id=engine.context.context_id,
     device="cpu",
 )
 ```
@@ -124,11 +122,9 @@ replacement_ref = store.put(
 ```
 
 Replacement writes a new artifact ID and makes every older reference for the
-name stale. The store retains one active generation per logical name; it is not
-a version-history repository.
+name stale. The store retains one active generation per logical name.
 
-Use the reference when deleting must be compare-and-delete rather than
-name-based deletion:
+Use reference-based compare-and-delete when deleting a known generation:
 
 ```python
 store.delete(replacement_ref)
@@ -208,8 +204,7 @@ and one real consumer operation:
 
 1. Save under a temporary logical name and retain the returned reference.
 2. Assert `store.inspect(ref).ref == ref`.
-3. Reconstruct with `expected_type`, `expected_context_id`, and target
-   `device`.
+3. Reconstruct with `expected_type` and target `device`.
 4. Use the reconstructed value in a representative FHElium operation and check
    its mathematical result.
 5. Save a replacement with `overwrite=True` and assert the old reference
@@ -218,14 +213,15 @@ and one real consumer operation:
 7. Reopen the store from the same root and verify the remaining inventory.
 
 A tensor byte comparison alone does not prove that level, scale, prime IDs,
-polynomial domain, modulus basis, residue representation, key relation, or
-context identity was reconstructed correctly.
+polynomial domain, modulus basis, residue representation, or key relation was
+reconstructed correctly. The store does not record CKKS parameter provenance;
+verify it through application-owned artifact metadata before use.
 
 ## Related documentation
 
 - [Serialization and artifacts](../concepts/execution/serialization-and-artifacts.md)
 - [Values, memory, and persistence](../tutorial/value-memory-and-persistence.md)
-- [ArtifactStore v1 internals](../developer/artifact-store-v1.md)
+- [ArtifactStore internals](../developer/artifact-store-v1.md)
 - [Artifact store API](../api/fhelium/artifacts/store.md)
 - [Artifact reference API](../api/fhelium/artifacts/artifact.md)
 - [Serialization API](../api/fhelium/serialization/value.md)

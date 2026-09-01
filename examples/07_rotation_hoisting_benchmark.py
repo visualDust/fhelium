@@ -94,7 +94,7 @@ def main() -> None:
         0.01 * torch.sin(idx * 0.001) + 0.005 * torch.cos(idx * 0.003)
     ).to(torch.complex128)
     ct = engine.encrypt_message(message, level=args.level)
-    sync_if_cuda(engine.device)
+    sync_if_cuda(torch.get_default_device())
 
     rows = []
     for count in args.counts:
@@ -114,7 +114,7 @@ def main() -> None:
             hoisted,
             warmup=args.warmup,
             runs=args.runs,
-            device=engine.device,
+            device=torch.get_default_device(),
         )
         speedup = independent_stats["mean_ms"] / hoisted_stats["mean_ms"]
         savings = (

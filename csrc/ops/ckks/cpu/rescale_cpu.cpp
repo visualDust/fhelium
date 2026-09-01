@@ -80,7 +80,8 @@ void rescale_loop(torch::Tensor out,
                   quotient + (dropped_value > half_drop_prime ? 1 : 0));
             }
             output_row[coefficient * out_stride2] =
-                fhelium::cpu::canonicalize(quotient, constants.twice_modulus);
+                fhelium::cpu::reduce_to_standard(quotient,
+                                                 constants.twice_modulus);
           }
           index = batch_limb * coefficients + coefficient_end;
         }

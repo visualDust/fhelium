@@ -202,7 +202,7 @@ register_benchmark(
         description=(
             "Runs a packed dense matrix-vector product by partitioning cyclic "
             "diagonals and direct rotation keys across local ranks. Profiles use "
-            "every CUDA device visible to the launcher by default. Bounded "
+            "every CUDA device visible to the launcher by default. Configured-size "
             "grouped rotations, homogeneous diagonal-term batching, and "
             "optional rank-local CUDA Graph execution are declared profile "
             "parameters; "

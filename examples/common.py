@@ -16,14 +16,12 @@ from typing import Any
 import torch
 
 from fhelium import (
-    DEFAULT_CPU_NTT_BACKEND,
-    DEFAULT_NTT_BACKEND,
     SUPPORTED_NTT_BACKENDS,
-    CkksEngine,
     Preset,
     compatible_ntt_backends,
 )
 from fhelium.config import CkksConfig
+from fhelium.eager import Engine
 
 
 def preset_names() -> list[str]:
@@ -43,7 +41,7 @@ def add_engine_args(
     parser: argparse.ArgumentParser,
     *,
     default_preset: str = Preset.slots32768_scale40_levels34_int64.value,
-    default_device: str = "cpu",
+    initial_device: str = "cpu",
     include_num_scale_primes: bool = False,
 ) -> None:
     parser.add_argument(
@@ -54,10 +52,10 @@ def add_engine_args(
     )
     parser.add_argument(
         "--device",
-        default=default_device,
+        default=initial_device,
         help=(
             "PyTorch execution device used by the example. "
-            f"Default: {default_device}."
+            f"Default: {initial_device}."
         ),
     )
     parser.add_argument(
@@ -79,7 +77,9 @@ def add_engine_args(
         )
 
 
-def make_engine(args: argparse.Namespace) -> CkksEngine:
+def _execution_configuration(
+    args: argparse.Namespace,
+) -> tuple[CkksConfig, torch.device, str | None]:
     preset = parse_preset(args.preset)
     if getattr(args, "num_scale_primes", None) is not None:
         cfg = CkksConfig.parse(
@@ -89,9 +89,7 @@ def make_engine(args: argparse.Namespace) -> CkksEngine:
     else:
         cfg = CkksConfig.parse(preset)
     device = torch.device(args.device)
-    ntt_backend = args.ntt_backend or (
-        DEFAULT_CPU_NTT_BACKEND if device.type == "cpu" else DEFAULT_NTT_BACKEND
-    )
+    ntt_backend = args.ntt_backend
     if args.ntt_backend is not None:
         compatible = compatible_ntt_backends(cfg.logN)
         if args.ntt_backend not in compatible:
@@ -99,11 +97,13 @@ def make_engine(args: argparse.Namespace) -> CkksEngine:
                 f"NTT backend {args.ntt_backend!r} is incompatible with "
                 f"logN={cfg.logN}; compatible backends: {compatible!r}"
             )
-    return CkksEngine(
-        cfg,
-        device=device,
-        ntt_backend=ntt_backend,
-    )
+    return cfg, device, ntt_backend
+
+
+def make_engine(args: argparse.Namespace) -> Engine:
+    cfg, device, ntt_backend = _execution_configuration(args)
+    torch.set_default_device(device)
+    return Engine(cfg, ntt_backend=ntt_backend)
 
 
 def sync_if_cuda(device: torch.device | str | None = None) -> None:
@@ -227,6 +227,6 @@ def small_complex_vector(
 ) -> torch.Tensor:
     generator = torch.Generator(device="cpu")
     generator.manual_seed(seed)
-    real = torch.randn(slots, generator=generator) * scale
-    imag = torch.randn(slots, generator=generator) * scale
+    real = torch.randn(slots, generator=generator, device="cpu") * scale
+    imag = torch.randn(slots, generator=generator, device="cpu") * scale
     return real + 1j * imag

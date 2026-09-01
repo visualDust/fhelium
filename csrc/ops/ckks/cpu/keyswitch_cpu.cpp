@@ -134,7 +134,8 @@ torch::Tensor keyswitch_moddown_cpu(const torch::Tensor q_residues,
                 value = fhelium::cpu::reduce(value, constants);
                 result_rows[row * result_stride1 +
                             coefficient * result_stride2] =
-                    fhelium::cpu::canonicalize(value, constants.twice_modulus);
+                    fhelium::cpu::reduce_to_standard(value,
+                                                     constants.twice_modulus);
               }
             }
             index = batch * coefficients + coefficient_end;

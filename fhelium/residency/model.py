@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Generic, Protocol, TypeVar
 
-from fhelium.core import TensorResident
+from fhelium.values import TensorResident
 
 ValueT_co = TypeVar("ValueT_co", bound=TensorResident, covariant=True)
 

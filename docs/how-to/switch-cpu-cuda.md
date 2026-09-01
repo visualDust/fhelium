@@ -1,12 +1,13 @@
 # Choose and switch a local execution device
 
-Select a CPU or CUDA device when constructing `CkksEngine`. The same public
-CKKS methods and backend-neutral native schemas are used on both devices;
-PyTorch dispatch selects an implementation from the tensor device.
+`fhelium.eager.Engine` constructs execution resources lazily for each concrete
+CPU or CUDA device used by an operation. It does not own a default device. The
+same public CKKS methods and registered Tensor implementations serve both
+backends.
 
 ## Check the installed native backends
 
-Inspect the immutable native status before selecting a device dynamically:
+Inspect native status before choosing a device:
 
 ```python
 from fhelium.native import native_backend_available, native_status
@@ -24,101 +25,147 @@ else:
 
 Backend inclusion is a source-build choice. A visible GPU does not add CUDA to
 a CPU-only `_ops` library. Rebuild according to the
-[installation guide](../tutorial/installation.md#select-native-backends)
-when the required backend is absent.
+[installation guide](../tutorial/installation.md#select-native-backends) when
+the required backend is absent.
 
-## Construct an engine on one device
+## Select placement for created values
 
 ```python
 import fhelium as fh
+import torch
+from fhelium.eager import Engine
 
 config = fh.CkksConfig.parse(fh.Preset.slots8192_scale40_levels7_int64)
+engine = Engine(config)
 
-cpu_engine = fh.CkksEngine(config, device="cpu")
-cuda_engine = fh.CkksEngine(config, device="cuda:0")
+torch.set_default_device("cuda:0")
+plaintext = engine.encode(message)
+secret_key = engine.create_secret_key()
 ```
 
-An unindexed CPU device is canonicalized to `cpu`. An unindexed `cuda` device
-uses `torch.cuda.current_device()`. Supplying `device=None` selects the current
-CUDA device only when CUDA is visible and the installed extension includes the
-CUDA backend; otherwise it selects CPU when the extension includes CPU. Prefer
-an indexed device in reproducible programs and experiment records.
+Source and material factories use `torch.get_default_device()` when `device`
+is omitted. A caller may instead select placement on each call:
 
-Engine construction creates device-owned RNS/NTT parameter tensors, prepared
-constants, and a CSPRNG for that device. An engine therefore does not have an
-in-place `to()` operation.
+```python
+plaintext = engine.encode(message, device="cuda:0")
+secret_key = engine.create_secret_key(device="cuda:0")
+public_key = engine.create_public_key(secret_key)
+ciphertext = engine.encrypt(plaintext, public_key)
+```
 
-## Move a stored value
+The first operation on a device constructs and caches that device's RNS/NTT
+tables, random stream, operation bindings, and direct-dispatch state. Later calls
+reuse them. Random streams on different devices use separate nonce domains.
 
-Tensor-backed core values expose direct value movement:
+## Dispatch ordinary operations from values
+
+Homomorphic operations dispatch from Tensor operand placement:
+
+```python
+cuda_sum = engine.add(cuda_left, cuda_right)
+```
+
+They do not consult PyTorch's default device and do not move operands. Invalid
+mixed-device calls fail in Torch or native execution rather than triggering an
+Engine copy:
+
+```python
+engine.add(cpu_ciphertext, cuda_ciphertext)
+```
+
+## Request a boundary transfer
+
+Tensor-backed values expose direct movement:
 
 ```python
 cuda_ciphertext = ciphertext.to("cuda:0")
 cpu_ciphertext = cuda_ciphertext.to("cpu")
 ```
 
-Movement changes tensor placement but does not change the value's context,
-level, scale, active prime IDs, polynomial domain, modulus basis, residue
-representation, or component count. It also does not move or recreate the
-engine, key mappings, prepared plaintexts, resources, Residency handles, JIT
-workspace objects, or CUDA Graph state.
-
-Use the moved value only with an engine and required keys on the same device:
+A boundary operation may also receive `device`. Supplying it authorizes the
+public adapter to move its plaintext or ciphertext before executing on the
+target:
 
 ```python
-cuda_engine = fh.CkksEngine(config, device="cuda:0")
-cuda_secret_key = secret_key.to("cuda:0")
-cuda_ciphertext = ciphertext.to("cuda:0")
-
-decoded = cuda_engine.decrypt_message(
-    cuda_ciphertext,
-    secret_key=cuda_secret_key,
-    is_real=True,
+cpu_slots = engine.decode(
+    engine.decrypt(cuda_ciphertext, cpu_secret_key, device="cpu"),
+    device="cpu",
 )
 ```
 
-Operations reject mixed-device operands rather than performing a hidden
-transfer.
+Without `device`, encrypt, decrypt, and decode inherit placement from their
+materialized plaintext or ciphertext. Movement preserves level, scale, prime
+IDs, polynomial domain, modulus basis, residue representation,
+and component count.
 
-## Recreate device-owned evaluator state
+Key placement is governed separately. By default, Engine does not copy key
+material between devices. A key required by an operation must already be on
+the operation device:
 
-For a complete application transition between CPU and CUDA:
+```python
+cuda_secret_key = cpu_secret_key.to("cuda:0")
+plaintext_cuda = engine.decrypt(cuda_ciphertext, cuda_secret_key)
+```
 
-1. synchronize unfinished CUDA work before consuming its result on CPU;
-2. create a new engine with the same `CkksConfig` and context parameters on the
-   destination device;
-3. move or regenerate the required key values;
-4. move input `Plaintext` and `Ciphertext` values;
-5. recreate prepared plaintexts, evaluation-key sets, JIT workspaces, and other
-   device-owned runtime objects for the destination engine;
-6. rebuild CUDA-only resources such as CUDA Graph programs rather than moving
-   them.
+To opt into cached, lazy replicas of installed keys, construct the Engine with
+`allow_automatic_key_replication=True`. Enabling this setting permits secret,
+public, and evaluation-key tensors to be copied to devices selected by
+operands. The original key remains on its source device; this setting does not
+provide secure memory erasure or a device trust policy.
 
-Context identity, value state, dtype, device, and complete RNS layout are
-validated after movement. A destination engine created from the same
-configuration can consume a moved core value when the operation's required keys
-and operands have also been moved or regenerated. Engine-owned caches,
-installed defaults, resources, buffers, Residency handles, JIT workspaces, and
-CUDA Graph state are not part of that value movement.
+## Preserve one key relation across devices
+
+Generating a new secret key independently on another device creates a different
+cryptographic relation. To use the same relation elsewhere, move that key or
+pass a destination device to a derived-key factory:
+
+```python
+cuda_secret_key = cpu_secret_key.to("cuda:0")
+cuda_public_key = engine.create_public_key(cuda_secret_key)
+
+# Equivalent explicit placement request; the input relation is copied first.
+cuda_rotation_key = engine.create_rotation_key(
+    1,
+    cpu_secret_key,
+    device="cuda:0",
+)
+```
+
+The Engine does not silently resample a destination secret key. Unless
+automatic key replication is enabled, it also does not silently copy key
+material for an operation.
+
+## Compile and Experimental JIT placement
+
+A transformed `Program` does not allocate device resources. Backend linking or
+JIT specialization selects resources before execution and can
+reuse them across `run()` calls.
+The caller selects a Backend pipeline and execution device. Its resource pass
+materializes Program-wide arithmetic resources once, while the caller supplies
+keys, process groups, and other externally owned resources. Assignment then
+builds the executable used across compatible inputs. Compile and Backend own
+the stable Program execution interface; Eager owns automatic key-replication
+policy.
+
+A creation operation may define its own static or dynamic device parameter when
+it allocates a new Tensor without a placed Tensor operand. Operations over
+existing Tensor values dispatch from operand placement. A pass that changes
+placement must insert a real transfer operation before or after the numerical
+operation, rather than attaching a generic device attribute to every operation.
+`fhelium_memory.transfer` represents an actual placement change; mixed-device
+arithmetic regions still require callers to insert and schedule those transfers.
 
 ## Account for backend-specific capabilities
 
-The local CPU and CUDA engines share CKKS arithmetic methods, but not every
-optimization exists on both devices:
+CPU and CUDA share public CKKS methods, but not every optimization exists on
+both devices:
 
 - CPU uses the indexed radix-2 NTT backend and Torch intra-op parallelism;
-- CUDA supports indexed and production compact/fixed-radix NTT policies;
-- CUDA Graph capture, CUDA streams/events, multi-GPU collectives, and CUDA
-  topology inspection are CUDA-specific;
-- local JIT and experimental multiparty arithmetic can execute on CPU or CUDA
-  when their selected operation path uses supported engine primitives.
+- CUDA may provide indexed radix-2 and configuration-selected compact NTT
+  implementations;
+- CUDA Graph capture, CUDA streams, and device-resident graph buffers remain
+  CUDA-specific execution mechanisms.
 
-A CPU-only PyTorch distribution may also omit its pinned-host allocator. Use
-ordinary pageable CPU values for local CPU evaluation; pinned-host staging is
-an accelerator transfer mechanism rather than a requirement for CPU CKKS.
-
-Do not select an unsupported CUDA-tuned NTT policy for a CPU engine. When
-switching devices for performance evaluation, preserve the mathematical
-configuration, input values, operation schedule, correctness oracle, and
-numerical thresholds; then report backend-specific NTT policy and timing
-separately.
+Callers that depend on one implementation should check the installed backend
+and requested implementation rather than infer capability from the public
+method name.

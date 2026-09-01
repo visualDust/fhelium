@@ -47,9 +47,11 @@ The commands under [`packaging/`](https://github.com/VisualDust/fhelium/tree/mai
 follow the release lifecycle:
 
 - `matrix.py` validates declarations and generates install-selector data;
-- `build_wheel.py` selects the Linux or Windows wheel builder;
-- `linux_wheel.py`, `linux_wheel_check.py`, and `linux_cuda_smoke.py` own Linux
-  construction, archive inspection, and real-GPU execution;
+- `build_wheel.py` selects the Linux or Windows wheel builder and orchestrates
+  installed-wheel verification, including target-host GPU execution for Linux
+  CUDA cells;
+- `linux_wheel.py` and `linux_wheel_check.py` own Linux construction and archive
+  inspection;
 - `windows_wheel.py` owns Windows construction and PE/CUDA-image inspection;
 - `prepare_release.py`, `merge_repository.py`, `repository_check.py`, and
   `publish_release.py` own the static repository lifecycle;
@@ -73,14 +75,16 @@ checks:
 - expected CUDA runtime linkage;
 - declared SASS and PTX architectures.
 
-CUDA wheels are then installed in a clean host environment and execute one
-FHElium native CUDA operator on a real GPU.
+CUDA wheels are then installed beneath the caller-owned `--work-root` on the
+target host and execute one FHElium native CUDA operator on a real GPU.
 
 ## Windows wheels
 
 Windows cells build on the Windows x64 self-hosted runner with the matrix-selected
 CPython, Torch, Visual Studio 2022 toolset, Windows SDK, and CUDA Toolkit. Each
-cell uses a clean short build directory below `~/.fhelium-build`.
+cell uses a clean directory below the caller-owned `--work-root`. The release
+workflow supplies a root below the runner's temporary directory; standalone
+validation can supply a dedicated task root without writing into a user profile.
 
 The builder checks:
 
@@ -111,7 +115,8 @@ only when their bytes match the candidate.
 [`.github/workflows/release.yml`](https://github.com/VisualDust/fhelium/blob/main/.github/workflows/release.yml)
 is manual only. Its default `build-only` mode:
 
-1. validates the tagged source and release matrix;
+1. checks out the branch, commit SHA, or tag selected by `source_ref` and
+   validates the release matrix;
 2. runs the project source checks;
 3. builds eight Linux wheels and eight Windows wheels on separate runners;
 4. runs minimal artifact and native-operator checks;
@@ -119,11 +124,12 @@ is manual only. Its default `build-only` mode:
 6. preserves the candidate as a workflow artifact.
 
 Protected `publish` mode is a separate operator choice. It publishes immutable
-R2 objects, verifies the PyPI source distribution, updates cumulative indexes,
-checks public Linux and Windows installs, and finally creates the GitHub Release.
-FHElium 0.10.0 remains immutable; Windows wheels belong to a later release.
+R2 objects only from an existing release tag matching the project version,
+verifies the PyPI source distribution, updates cumulative indexes, checks public
+Linux and Windows installs, and finally creates the GitHub Release. FHElium
+0.10.0 remains immutable; Windows wheels begin with FHElium 0.20.0.
 
-## Scope of validation
+## Packaging validation
 
 After modifying packaging code, run static checks for the changed scripts first.
 Run actual wheel builds only when build logic, native linkage, matrix identities,

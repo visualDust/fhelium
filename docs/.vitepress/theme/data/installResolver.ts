@@ -21,7 +21,11 @@ export type ResolvedInstall = {
 }
 
 const axisOrder: readonly InstallAxis[] = ['os', 'method', 'torch', 'compute']
-const osOrder: readonly OsId[] = ['linux-x86_64', 'macos-arm64']
+const osOrder: readonly OsId[] = [
+  'linux-x86_64',
+  'windows-x86_64',
+  'macos-arm64',
+]
 const methodOrder: readonly MethodId[] = ['prebuilt-pip', 'source-pip', 'source-github']
 const torchOrder = ['2.13', '2.12'] as const
 const computeOrder: readonly ComputeId[] = ['cuda-130', 'cuda-129', 'cpu']
@@ -133,6 +137,54 @@ function torchCommand(distribution: TorchDistribution): string {
   return `python -m pip install --index-url ${distribution.index_url} "${distribution.requirement}"`
 }
 
+function binaryCommand(
+  selection: InstallSelection,
+  binary: BinaryRecipe,
+): string {
+  if (selection.os === 'windows-x86_64') {
+    return `python -m pip install --only-binary=fhelium \`
+  --extra-index-url ${binary.simple_index_url} \`
+  "fhelium==${binary.fhelium_version}"`
+  }
+  return `python -m pip install --only-binary=fhelium \
+  --extra-index-url ${binary.simple_index_url} \
+  "fhelium==${binary.fhelium_version}"`
+}
+
+function sourcePipCommand(
+  selection: InstallSelection,
+  backend: 'CPU' | 'CPU+CUDA',
+  version: string,
+): string {
+  if (selection.os === 'windows-x86_64') {
+    return `$env:CMAKE_ARGS = "-DFHELIUM_NATIVE_BACKENDS=${backend}"
+python -m pip install --no-binary=fhelium \`
+  --no-build-isolation --no-cache-dir --verbose \`
+  "fhelium==${version}"`
+  }
+  return `CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS=${backend}" \
+  python -m pip install --no-binary=fhelium \
+    --no-build-isolation --no-cache-dir --verbose "fhelium==${version}"`
+}
+
+function sourceGitHubCommand(
+  selection: InstallSelection,
+  backend: 'CPU' | 'CPU+CUDA',
+  version: string,
+): string {
+  if (selection.os === 'windows-x86_64') {
+    return `git clone --branch "v${version}" --depth 1 https://github.com/VisualDust/fhelium.git
+Set-Location fhelium
+$env:CMAKE_ARGS = "-DFHELIUM_NATIVE_BACKENDS=${backend}"
+python -m pip install . \`
+  --no-build-isolation --no-cache-dir --verbose`
+  }
+  return `git clone --branch "v${version}" --depth 1 https://github.com/VisualDust/fhelium.git
+cd fhelium
+CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS=${backend}" \
+  python -m pip install . --no-build-isolation --no-cache-dir --verbose`
+}
+
 export function resolveInstall(
   selection: InstallSelection,
   catalog: InstallCatalog = installCatalog,
@@ -152,9 +204,7 @@ export function resolveInstall(
       binary,
       commands: [
         torchCommand(torch),
-        `python -m pip install --only-binary=fhelium \
-  --extra-index-url ${binary.simple_index_url} \
-  "fhelium==${binary.fhelium_version}"`,
+        binaryCommand(selection, binary),
       ],
     }
   }
@@ -176,13 +226,8 @@ export function resolveInstall(
       torchCommand(torch),
       `python -m pip install "scikit-build-core>=1.0.3" "cmake>=3.18" ninja`,
       selection.method === 'source-pip'
-        ? `CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS=${backend}" \
-  python -m pip install --no-binary=fhelium \
-    --no-build-isolation --no-cache-dir --verbose "fhelium==${catalog.fhelium_version}"`
-        : `git clone --branch "v${catalog.fhelium_version}" --depth 1 https://github.com/VisualDust/fhelium.git
-cd fhelium
-CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS=${backend}" \
-  python -m pip install . --no-build-isolation --no-cache-dir --verbose`,
+        ? sourcePipCommand(selection, backend, catalog.fhelium_version)
+        : sourceGitHubCommand(selection, backend, catalog.fhelium_version),
     ],
   }
 }

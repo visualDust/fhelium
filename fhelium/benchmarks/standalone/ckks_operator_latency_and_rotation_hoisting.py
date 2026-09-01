@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from fhelium.legacy.engine import CkksEngine
+
 import gc
 from typing import Any
 
 import torch
 
-from fhelium import DEFAULT_NTT_BACKEND, CkksEngine, Preset
+from fhelium import DEFAULT_NTT_BACKEND, Preset
 from fhelium.benchmarks.model import (
     BenchmarkCheck,
     BenchmarkDefinition,

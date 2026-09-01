@@ -17,8 +17,8 @@ from weakref import finalize
 
 import torch
 
-from fhelium.core import TensorResident
-from fhelium.core.tensor_resident import (
+from fhelium.values import TensorResident
+from fhelium.values.tensor_resident import (
     _cpu_pinning_is_uniform,
     _storage_keys,
 )

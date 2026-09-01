@@ -142,7 +142,7 @@ include the resulting level cost in the component's declared level budget.
 ## Change the complete topology
 
 A complete custom algorithm is a Python callable. It can invoke
-`CkksEngine`, component `evaluate()` methods, and application-specific code in
+`fhelium.eager.Engine`, component `evaluate()` methods, and application-specific code in
 any order:
 
 ```python
@@ -187,13 +187,13 @@ class MyBootstrap:
 
 Document the custom callable's tensor axes, level/scale/domain/basis
 transitions, raw range, normalization owner, and output target. Ordinary
-dictionaries or tensors can hold caches; core value serialization and artifact
+dictionaries or tensors can hold caches; runtime value serialization and artifact
 facilities remain available for persistence.
 
 ## Generate or supply keys
 
 ```python
-from fhelium.core import EvaluationKeySet
+from fhelium.values import EvaluationKeySet
 
 rotation_keys = bootstrap.create_rotation_keys(
     secret_key,
@@ -225,11 +225,14 @@ configurations rather than runtime validators. Their measured end-to-end setup
 is:
 
 ```python
+from fhelium.eager import Engine
+
 config = fh.CkksConfig.parse(
     fh.Preset.slots32768_scale50_levels27_int64,
     base_prime_bits=50,
+    galois_generator=5,
 )
-engine = fh.CkksEngine(config, galois_generator=5, device="cuda:0")
+engine = Engine(config)
 ```
 
 Factories do not enforce this preset and do not prove the raw branch range

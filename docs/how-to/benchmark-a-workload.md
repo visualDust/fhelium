@@ -2,11 +2,11 @@
 
 A trustworthy FHElium benchmark defines the mathematical workload, CKKS
 state, timed work, synchronization, memory accounting, and correctness
-criterion. Latency without those fields is not reproducible.
+criterion. Together, these fields make the latency result reproducible.
 
 ## Run FHElium Benchmark v1
 
-The maintained Benchmark v1 product runs one fixed five-case specification on a selected CPU or indexed CUDA device. Device selection does not resize a workload or alter its CKKS parameters.
+Benchmark v1 runs one fixed five-case specification on a selected CPU or indexed CUDA device. Device selection does not resize a workload or alter its CKKS parameters.
 
 ```bash
 fhelium benchmark v1 run --device cpu \
@@ -17,7 +17,7 @@ Use `--device cuda:0` to run the identical case IDs, parameters, sample counts, 
 
 Benchmark v1 does not accept case, profile, or parameter overrides. Its all-level operation sweep, fixed indexed NTT, matrix shape, polynomial methods, sampling policy, report format, and portal interpretation form one specification. `execution` records only which backend/device ran it.
 
-Run an independent leaf benchmark when investigating a different question or validating a local harness. It does not produce a publishable Benchmark v1 report. Any maintained specification change belongs to a separate Benchmark version.
+Run an independent leaf benchmark when investigating a different question or validating a local harness. It does not produce a publishable Benchmark v1 report. Any change to the Benchmark specification belongs to a separate Benchmark version.
 
 ## 1. Define the question
 
@@ -84,7 +84,7 @@ CUDA launches are asynchronous. Use either:
 For distributed measurements, define whether the reported latency is:
 
 - maximum rank-local elapsed time;
-- a barrier-bounded end-to-end interval;
+- a barrier-to-barrier end-to-end interval;
 - root completion time;
 - local compute excluding/including typed reduction.
 
@@ -141,7 +141,7 @@ indexed vs compact NTT with all else fixed
 hoist chunk 4 vs 8 vs 16
 CUDA Graph on vs off with same input staging
 one rank vs two ranks with same packing/key strategy
-all-resident vs bounded window with same evaluator
+all-resident vs fixed-size streaming window with same evaluator
 ```
 
 If multiple mechanisms change together, describe the result as a workload-level
@@ -163,7 +163,7 @@ cache/bandwidth crossover. Follow
 [Choose a homogeneous batch size](choose-homogeneous-batch-size.md) for the
 full procedure and a worked hardware measurement.
 
-### Maintained packed-matvec reference
+### Documented packed-matvec reference
 
 The README and documentation-home comparison uses the level-0 packed
 `128 x 128` matrix-vector profile. The six FHElium cases were independently
@@ -182,7 +182,7 @@ policies and synchronized ten-run medians are:
 Every result passed the cleartext oracle with maximum absolute error below
 `3.88e-8`. The `logN = 14` and `logN = 15` profile defaults encode their
 selected policies. The `logN = 16` profile uses the robust two-rank/default
-hoist bound of 64;
+hoist group limit of 64;
 the one-rank reference overrides it to 127. This is a workload-level
 configuration result: it must not be attributed to batching, hoisting, the NTT
 backend, or graph replay alone.
@@ -221,7 +221,8 @@ The measured 64 x 64 run retained 23.99 GiB of rotation keys and reached
 47.40 GiB physical memory. The two-rank 128 x 128 case fit at 25.67 GiB per
 rank.
 
-This is a hardware-portability result rather than a direct GPU speed ratio.
+This comparison measures hardware portability across the two controlled
+platforms.
 Profile values are reproducible starting points; confirm backend, hoist,
 diagonal batching, graph replay, and memory capacity on the deployment GPU.
 
@@ -268,7 +269,7 @@ fhelium benchmark recommend ntt --suite ckks-primitive --preset slots32768-scale
 
 The command reports a recommendation and confidence but never changes the
 library default or caches a hidden device choice. Preserve the JSON evidence
-and pass the selected name to `CkksEngine(ntt_backend=...)`. See the
+and pass the selected name to `fhelium.eager.Engine(ntt_backend=...)`. See the
 focused [NTT backend screening guide](screen-ntt-backends.md)
 for the first-use workflow and example output. Use
 [Analyze and choose an NTT backend](choose-ntt-backend.md) when kernel and
@@ -277,7 +278,7 @@ explanation.
 
 ## Built-in NTT backend comparison
 
-Run every canonical backend compatible with one ring dimension using:
+Run every registered backend compatible with one ring dimension using:
 
 ```bash
 fhelium benchmark run ntt-backend-single-op \
@@ -291,8 +292,8 @@ short 8,192-slot smoke run. A profile with `backends=null` resolves
 `compatible_ntt_backends(logN)` at execution time. Incompatible strict
 fixed-radix policies are intentionally omitted. No supported preset is
 compatible with all strict radix-4, radix-8, and radix-16 policies, so one run
-is an all-compatible comparison at a fixed `N`, not a sweep of every
-registered name across different `N` values.
+compares all compatible backends at one fixed `N`. Covering every registered
+name requires separate runs at different `N` values.
 
 The benchmark uses all level-zero QP rows. Forward input is
 coefficient/Montgomery, inverse input is NTT/Montgomery, and input reset copies

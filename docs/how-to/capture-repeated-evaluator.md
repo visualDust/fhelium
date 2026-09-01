@@ -58,7 +58,7 @@ Encrypt dynamic request data before replay and decrypt results afterward.
 ## 4. Capture from representative inputs
 
 ```python
-from fhelium.execution import CudaGraphProgram
+from fhelium.runtime import CudaGraphProgram
 
 program = CudaGraphProgram.capture(
     schedule,
@@ -92,7 +92,7 @@ flowchart LR
     COPY --> HANDLE --> REPLAY
 ```
 
-Follow the current [Execution API reference](../api/fhelium/execution/cuda_graph.md) for
+Follow the current [Execution API reference](../api/fhelium/runtime/cuda_graph.md) for
 arguments.
 
 ## 6. Handle borrowed output correctly

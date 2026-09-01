@@ -11,18 +11,18 @@ It compares two ways to execute the same sequence of plaintext-weight tiles:
 
 ``double-buffer``
     Retain every tile in pinned CPU memory, own only two fixed-address CUDA
-    :class:`fhelium.execution.ReusableValueBuffer` objects, and copy tile
+    :class:`fhelium.runtime.ReusableValueBuffer` objects, and copy tile
     ``i+1`` while the current CUDA stream evaluates tile ``i``.
 
 The application chooses the number of tiles and Plaintexts per tile. Execution
 utilities only validate value structure, reuse storage, enqueue copies,
-and expose future-like :class:`fhelium.execution.CopyHandle` objects.
+and expose future-like :class:`fhelium.runtime.CopyHandle` objects.
 
-The default `slots32768-scale40-levels34-int64` workload at level 20 materializes 16
-tiles with 64 Plaintexts per tile. One multiply-ready Plaintext is 7.5 MiB, so
-all-resident weight
-storage is 7.5 GiB while two reusable buffers own 0.9375 GiB. Peak measurements
-also include the shared ciphertext and eager evaluator temporaries.
+The fixed `slots32768-scale40-levels34-int64` workload at level 20
+materializes 16 tiles with 64 Plaintexts per tile. One multiply-ready Plaintext
+is 7.5 MiB, so all-resident weight storage is 7.5 GiB while two reusable
+buffers own 0.9375 GiB. Peak measurements also include the shared ciphertext
+and eager evaluator temporaries.
 """
 
 from __future__ import annotations
@@ -33,10 +33,18 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import torch
-from common import parse_preset, preset_names
 
 import fhelium as fh
-from fhelium.execution import CopyHandle, ReusableValueBuffer
+from fhelium.eager import Engine
+from fhelium.runtime import CopyHandle, ReusableValueBuffer
+
+# The 1e-5 absolute error check below was established for this fixed CKKS
+# parameter set, input level, and tile-weight sum. Expected slots cross zero,
+# where a relative criterion would collapse with the reference value.
+_WORKLOAD_PRESET = fh.Preset.slots32768_scale40_levels34_int64
+_WORKLOAD_LEVEL = 20
+_WORKLOAD_WEIGHT_SUM = 0.125
+_VALIDATION_ATOL = 1e-5
 
 
 @dataclass(frozen=True)
@@ -63,16 +71,9 @@ class ModeResult:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--preset",
-        choices=preset_names(),
-        default=fh.Preset.slots32768_scale40_levels34_int64.value,
-    )
-    parser.add_argument("--level", type=int, default=20)
     parser.add_argument("--num-tiles", type=int, default=16)
     parser.add_argument("--plaintexts-per-tile", type=int, default=64)
     parser.add_argument("--message-size", type=int, default=256)
-    parser.add_argument("--weight-sum", type=float, default=0.125)
     parser.add_argument(
         "--skip-all-resident",
         action="store_true",
@@ -101,7 +102,6 @@ def _pinned_plaintext_copy(prototype: fh.Plaintext) -> fh.Plaintext:
         level=prototype.level,
         scale=prototype.scale,
         data=data,
-        context_id=prototype.context_id,
         representation=prototype.representation,
         polynomial_domain=prototype.polynomial_domain,
         modulus_basis=prototype.modulus_basis,
@@ -128,7 +128,7 @@ def evaluate_weight_tile(
     source: fh.Ciphertext,
     weights: Sequence[fh.Plaintext],
     *,
-    engine: fh.CkksEngine,
+    engine: Engine,
 ) -> fh.Ciphertext:
     """Eagerly multiply one ciphertext by a tile and stream the sum.
 
@@ -157,22 +157,22 @@ def evaluate_weight_tile(
 
 def _measure_all_resident(
     *,
-    engine: fh.CkksEngine,
+    engine: Engine,
     source: fh.Ciphertext,
     host_tiles: Sequence[Sequence[fh.Plaintext]],
     expected: torch.Tensor,
     secret_key: fh.SecretKey,
 ) -> ModeResult:
     torch.cuda.empty_cache()
-    torch.cuda.synchronize(engine.device)
-    baseline = torch.cuda.memory_allocated(engine.device)
-    torch.cuda.reset_peak_memory_stats(engine.device)
+    torch.cuda.synchronize(torch.get_default_device())
+    baseline = torch.cuda.memory_allocated(torch.get_default_device())
+    torch.cuda.reset_peak_memory_stats(torch.get_default_device())
 
     setup_start = time.perf_counter()
     cuda_tiles = [
         [
             weight.to(
-                engine.device,
+                torch.get_default_device(),
                 non_blocking=True,
                 copy=True,
             )
@@ -180,30 +180,37 @@ def _measure_all_resident(
         ]
         for tile in host_tiles
     ]
-    torch.cuda.synchronize(engine.device)
+    torch.cuda.synchronize(torch.get_default_device())
     setup_seconds = time.perf_counter() - setup_start
-    resident_after_setup = torch.cuda.memory_allocated(engine.device)
+    resident_after_setup = torch.cuda.memory_allocated(
+        torch.get_default_device()
+    )
 
     evaluation_start = time.perf_counter()
     output = None
     for tile in cuda_tiles:
         output = evaluate_weight_tile(source, tile, engine=engine)
-    torch.cuda.synchronize(engine.device)
+    torch.cuda.synchronize(torch.get_default_device())
     evaluation_seconds = time.perf_counter() - evaluation_start
-    peak_allocated = torch.cuda.max_memory_allocated(engine.device)
-    peak_reserved = torch.cuda.max_memory_reserved(engine.device)
+    peak_allocated = torch.cuda.max_memory_allocated(torch.get_default_device())
+    peak_reserved = torch.cuda.max_memory_reserved(torch.get_default_device())
 
     assert output is not None
     actual = engine.decrypt_message(
         output,
         secret_key,
         is_real=True,
-    )[: expected.numel()]
+    ).cpu()[: expected.numel()]
     max_error = float((actual - expected).abs().max().item())
-    torch.testing.assert_close(actual, expected, atol=1e-8, rtol=5e-5)
+    torch.testing.assert_close(
+        actual,
+        expected,
+        atol=_VALIDATION_ATOL,
+        rtol=0.0,
+    )
 
     del output, cuda_tiles
-    torch.cuda.synchronize(engine.device)
+    torch.cuda.synchronize(torch.get_default_device())
     torch.cuda.empty_cache()
     return ModeResult(
         name="all-resident",
@@ -219,28 +226,30 @@ def _measure_all_resident(
 
 def _measure_double_buffer(
     *,
-    engine: fh.CkksEngine,
+    engine: Engine,
     source: fh.Ciphertext,
     host_tiles: Sequence[Sequence[fh.Plaintext]],
     expected: torch.Tensor,
     secret_key: fh.SecretKey,
 ) -> ModeResult:
     torch.cuda.empty_cache()
-    torch.cuda.synchronize(engine.device)
-    baseline = torch.cuda.memory_allocated(engine.device)
-    torch.cuda.reset_peak_memory_stats(engine.device)
+    torch.cuda.synchronize(torch.get_default_device())
+    baseline = torch.cuda.memory_allocated(torch.get_default_device())
+    torch.cuda.reset_peak_memory_stats(torch.get_default_device())
 
     setup_start = time.perf_counter()
     buffers = [
         ReusableValueBuffer.like(
             host_tiles[0],
-            device=engine.device,
+            device=torch.get_default_device(),
         )
         for _ in range(2)
     ]
-    torch.cuda.synchronize(engine.device)
+    torch.cuda.synchronize(torch.get_default_device())
     setup_seconds = time.perf_counter() - setup_start
-    resident_after_setup = torch.cuda.memory_allocated(engine.device)
+    resident_after_setup = torch.cuda.memory_allocated(
+        torch.get_default_device()
+    )
     initial_pointers = [
         tuple(
             weight.data.data_ptr()
@@ -250,8 +259,8 @@ def _measure_double_buffer(
         for buffer in buffers
     ]
 
-    transfer_stream = torch.cuda.Stream(device=engine.device)
-    compute_stream = torch.cuda.current_stream(engine.device)
+    transfer_stream = torch.cuda.Stream(device=torch.get_default_device())
+    compute_stream = torch.cuda.current_stream(torch.get_default_device())
     buffer_read_done_events: list[torch.cuda.Event | None] = [None, None]
     current_copy_handle: CopyHandle | None = None
     output = None
@@ -286,8 +295,8 @@ def _measure_double_buffer(
 
     compute_stream.synchronize()
     evaluation_seconds = time.perf_counter() - evaluation_start
-    peak_allocated = torch.cuda.max_memory_allocated(engine.device)
-    peak_reserved = torch.cuda.max_memory_reserved(engine.device)
+    peak_allocated = torch.cuda.max_memory_allocated(torch.get_default_device())
+    peak_reserved = torch.cuda.max_memory_reserved(torch.get_default_device())
     final_pointers = [
         tuple(
             weight.data.data_ptr()
@@ -306,14 +315,19 @@ def _measure_double_buffer(
         output,
         secret_key,
         is_real=True,
-    )[: expected.numel()]
+    ).cpu()[: expected.numel()]
     max_error = float((actual - expected).abs().max().item())
-    torch.testing.assert_close(actual, expected, atol=1e-8, rtol=5e-5)
+    torch.testing.assert_close(
+        actual,
+        expected,
+        atol=_VALIDATION_ATOL,
+        rtol=0.0,
+    )
 
     del output
     for buffer in buffers:
         buffer.close()
-    torch.cuda.synchronize(engine.device)
+    torch.cuda.synchronize(torch.get_default_device())
     torch.cuda.empty_cache()
     return ModeResult(
         name="double-buffer",
@@ -379,16 +393,15 @@ def run(args: argparse.Namespace) -> None:
     if args.message_size < 1:
         raise ValueError("--message-size must be positive")
 
-    preset = parse_preset(args.preset)
-    engine = fh.CkksEngine(
-        preset,
-        device="cuda:0",
-        allow_sk_gen=False,
+    torch.set_default_device(args.device)
+    engine = Engine(
+        _WORKLOAD_PRESET,
+        allow_automatic_key_generation=False,
     )
-    if not 0 <= args.level < engine.final_public_level:
-        raise ValueError(
-            "--level must leave one rescale available: "
-            f"level={args.level}, "
+    if not 0 <= _WORKLOAD_LEVEL < engine.final_public_level:
+        raise RuntimeError(
+            "The fixed workload level must leave one rescale available: "
+            f"level={_WORKLOAD_LEVEL}, "
             f"final_public_level={engine.final_public_level}"
         )
     if args.message_size > engine.num_slots:
@@ -407,11 +420,11 @@ def run(args: argparse.Namespace) -> None:
     source = engine.encrypt_message(
         message,
         public_key,
-        level=args.level,
+        level=_WORKLOAD_LEVEL,
     )
-    scalar = args.weight_sum / args.plaintexts_per_tile
+    scalar = _WORKLOAD_WEIGHT_SUM / args.plaintexts_per_tile
     prototype_weight = engine.prepare_plaintext_for_multiplication(
-        engine.encode(scalar, level=args.level)
+        engine.encode(scalar, level=_WORKLOAD_LEVEL)
     ).cpu()
 
     host_prepare_start = time.perf_counter()
@@ -423,10 +436,10 @@ def run(args: argparse.Namespace) -> None:
     host_prepare_seconds = time.perf_counter() - host_prepare_start
     tile_bytes = sum(weight.nbytes for weight in host_tiles[0])
     host_weight_bytes = tile_bytes * len(host_tiles)
-    expected = message * args.weight_sum
+    expected = message * _WORKLOAD_WEIGHT_SUM
 
     print(
-        f"preset={args.preset} level={args.level} "
+        f"preset={_WORKLOAD_PRESET.value} level={_WORKLOAD_LEVEL} "
         f"tiles={args.num_tiles} "
         f"plaintexts_per_tile={args.plaintexts_per_tile}"
     )
@@ -437,11 +450,11 @@ def run(args: argparse.Namespace) -> None:
 
     # Warm kernels and allocator caches before either measured residency mode.
     warm_tile = [
-        weight.to(engine.device, non_blocking=True, copy=True)
+        weight.to(torch.get_default_device(), non_blocking=True, copy=True)
         for weight in host_tiles[0]
     ]
     warm_output = evaluate_weight_tile(source, warm_tile, engine=engine)
-    torch.cuda.synchronize(engine.device)
+    torch.cuda.synchronize(torch.get_default_device())
     del warm_output, warm_tile
     torch.cuda.empty_cache()
 

@@ -4,7 +4,7 @@
 
 This example creates the major CKKS key types, reports their dense layouts and
 sizes, and optionally persists selected material. The tutorial distinguishes
-stored key state and specialization from application-maintained cryptographic
+stored key state and specialization from application-owned cryptographic
 relations, ownership, and restoration.
 
 ## What you will learn
@@ -13,7 +13,7 @@ relations, ownership, and restoration.
   rotation;
 - how key shapes expose components, decomposition digits, RNS limbs, and
   coefficients;
-- why a [`RotationKey`](../api/fhelium/core/keys.md#rotationkey) is bound to one canonical signed
+- why a [`RotationKey`](../api/fhelium/values/keys.md#rotationkey) carries one normalized signed
   step;
 - how
   [`ArtifactStore`](../api/fhelium/artifacts/store.md#artifactstore) differs from
@@ -55,14 +55,34 @@ The roles are distinct:
 
 | Key | Primary use | Typical dense axes |
 | --- | --- | --- |
-| [`SecretKey`](../api/fhelium/core/keys.md#secretkey) | decryption and generation of derived keys | `[limb, coefficient]` |
-| [`PublicKey`](../api/fhelium/core/keys.md#publickey) | public-key encryption | `[key component, limb, coefficient]` |
-| [`RelinearizationKey`](../api/fhelium/core/keys.md#relinearizationkey) | three-component to two-component conversion | `[digit, key component, limb, coefficient]` |
-| [`RotationKey`](../api/fhelium/core/keys.md#rotationkey) | one slot automorphism/key switch | `[digit, key component, limb, coefficient]` |
+| [`SecretKey`](../api/fhelium/values/keys.md#secretkey) | decryption and generation of derived keys | `[limb, coefficient]` |
+| [`PublicKey`](../api/fhelium/values/keys.md#publickey) | public-key encryption | `[key component, limb, coefficient]` |
+| [`RelinearizationKey`](../api/fhelium/values/keys.md#relinearizationkey) | three-component to two-component conversion | `[digit, key component, limb, coefficient]` |
+| [`RotationKey`](../api/fhelium/values/keys.md#rotationkey) | one slot automorphism/key switch | `[digit, key component, limb, coefficient]` |
 
 Calling the engine properties may lazily create missing key material. Code
 that must forbid secret-key creation can construct the engine with
-`allow_sk_gen=False` and install only the keys it owns.
+`allow_automatic_key_generation=False` and install only the keys it owns.
+
+Factory methods select placement directly:
+
+```python
+secret_key = engine.create_secret_key(device="cuda:0")
+public_key = engine.create_public_key(secret_key)
+rotation_key = engine.create_rotation_key(1, secret_key)
+```
+
+Derived-key factories infer placement from their secret-key input. Supplying a
+different `device` authorizes a copy of that same secret relation; the Engine
+does not generate an unrelated secret key on the destination.
+
+Operation use does not imply permission to copy a key. By default, a public,
+secret, or evaluation key must already be on the Tensor operation's device.
+Create a copy with `key.to(device)` and pass or install it when placement is
+caller-managed. `Engine(..., allow_automatic_key_replication=True)` instead
+permits the Engine to create and cache device replicas when an installed key is
+first needed there. The source copy remains allocated, and releasing Python
+references does not guarantee device-memory erasure.
 
 ## 2. Treat rotation step as stored specialization
 
@@ -71,13 +91,14 @@ key = engine.rotation_keys[rotation_step]
 assert key.rotation_step == rotation_step
 ```
 
-`RotationKeySet` validates canonical signed steps when constructing or updating the mapping. A
+`RotationKeySet` validates normalized signed steps when constructing or updating the mapping. A
 key for step `+1` must not be silently reused as a key for another step, even
 if both tensors happen to have the same shape.
 
 This distinction matters in distributed and multi-user systems: the tensor
 layout alone is not sufficient stored key state, and neither the layout nor
-`context_id` proves an external ciphertext/key relation.
+the runtime key object proves an external ciphertext/key relation. Preserve
+that relation in the application that provisions the key.
 
 ## 3. Inspect key memory
 
@@ -134,22 +155,17 @@ against an actor who can modify both the catalog and payload.
 ## 6. Restore the key type
 
 ```python
-restored = store.get(relinearization_ref, device=engine.device)
+restored = store.get(relinearization_ref, device=torch.get_default_device())
 assert type(restored) is fh.RelinearizationKey
 torch.testing.assert_close(restored.data, relinearization_key.data)
 ```
 
-The serialized metadata reconstructs the key type, context, modulus basis, polynomial domain,
-prime IDs, and other key state. A successful tensor load is not enough if
-that metadata does not match the current engine or intended operation.
+The serialized metadata reconstructs the key type, modulus basis, polynomial
+domain, prime IDs, and other stored key state. A successful tensor load does
+not establish compatibility with the current configuration, ciphertext, or
+intended operation; the application retains those relations.
 
-::: warning Do not make every key globally resident
-A serving layer should provision user/model keysets, enforce a memory
-budget, and lease only the keys required by the current operation. The core
-engine intentionally does not infer that policy.
-:::
-
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/02_key_materials.py
 :::
 

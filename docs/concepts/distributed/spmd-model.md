@@ -9,20 +9,19 @@ workload's mathematics requires it.
 ```mermaid
 graph LR
     subgraph R0[rank 0 / process 0]
-      E0[CkksEngine cuda:0]
+      E0[eager Engine cuda:0]
       V0[dense local values]
       E0 <--> V0
     end
     subgraph R1[rank 1 / process 1]
-      E1[CkksEngine cuda:1]
+      E1[eager Engine cuda:1]
       V1[dense local values]
       E1 <--> V1
     end
     R0 <-->|torch.distributed / NCCL| R1
 ```
 
-There is no public placement object that automatically redistributes a
-ciphertext. The application or compiler-written worker decides ownership,
+The application or compiler-written worker assigns ciphertext ownership,
 collective order, and complete-row reconstruction points.
 
 ## Initialization belongs to PyTorch
@@ -32,7 +31,7 @@ collective order, and complete-row reconstruction points.
 PyTorch process group. CUDA execution normally uses NCCL and CPU execution uses
 Gloo. World size one still follows the same process-group model.
 
-The returned state is not embedded into a `CkksEngine` or value. This keeps:
+The application retains the returned process-group state. This keeps:
 
 - rank lifecycle with the launcher/application;
 - local CKKS semantics independent of world size;
@@ -44,7 +43,7 @@ The returned state is not embedded into a `CkksEngine` or value. This keeps:
 | --- | --- |
 | Global rank, world size, and local device | Launcher and process-group init |
 | Which rank owns a sample, rotation, key, or limb range | Workload/application |
-| Local CKKS arithmetic | Rank-local `CkksEngine` |
+| Local CKKS arithmetic | Rank-local `fhelium.eager.Engine` |
 | Ordinary tensor collective semantics | `torch.distributed` |
 | Receiver allocation for typed HE values | `fhelium.distributed` |
 | Modular ciphertext reduction | Typed HE collective plus local engine add |
@@ -69,8 +68,7 @@ A specialized API is required when:
 
 1. a receiver needs typed metadata before it can allocate a `Ciphertext`,
    `Plaintext`, or key; or
-2. the collective operation must use CKKS/RNS arithmetic rather than machine
-   integer arithmetic.
+2. the collective operation requires CKKS/RNS modular arithmetic.
 
 Current typed families include:
 
@@ -92,8 +90,8 @@ sequenceDiagram
     participant Dst as Destination rank
     participant Data as Dense payload transport
 
-    Src->>Ctrl: type, shape, context, level, state
-    Ctrl->>Dst: bounded descriptor
+    Src->>Ctrl: type, shape, level, stored state
+    Ctrl->>Dst: fixed-size descriptor
     Dst->>Dst: validate and allocate receiver
     Src->>Data: tensor payload
     Data->>Dst: fill allocated storage
@@ -101,14 +99,13 @@ sequenceDiagram
 ```
 
 The control-plane exchange allows all ranks to discover layout errors before a
-large payload transfer. Collective implementations also aggregate validation
-outcomes so one rank does not fail early while peers block indefinitely in a
-different collective phase.
+large payload transfer. Collective implementations aggregate validation
+outcomes before ranks enter the payload phase.
 
 ## Keys remain workload-owned
 
-A process does not receive every key automatically. The workload decides which
-rank needs which rotation or evaluation key and whether to:
+The workload provisions each rank with the rotation and evaluation keys needed
+by its local schedule. It may:
 
 - create it locally;
 - load it from a store;

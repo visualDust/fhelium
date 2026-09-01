@@ -22,25 +22,29 @@ JIT, Residency, or application workloads.
 python -I packaging/matrix.py validate
 python -I packaging/matrix.py cells
 python -I packaging/matrix.py show torch213-cu130
+python -m pytest packaging/test_release_repository.py
 ```
 
 ## Wheel construction
 
-- `build_wheel.py` is the workflow entry point for one declared cell.
+- `build_wheel.py` is the workflow entry point for one declared cell. It
+  orchestrates the platform builder and installed-wheel verification, including
+  target-host CUDA execution for Linux CUDA cells.
 - `linux_wheel.py` builds one manylinux wheel inside its selected container.
 - `linux_wheel_check.py` checks Linux wheel metadata, ELF dependencies, native
   manifest, RPATH, and CUDA image declarations.
-- `linux_cuda_smoke.py` installs a Linux CUDA wheel and executes one native CUDA
-  operator on a real GPU.
 - `windows_wheel.py` selects the declared MSVC/SDK/CUDA environment, builds one
   Windows wheel, and checks its metadata, PE dependencies, native manifest,
   local-path absence, and CUDA images.
 
-The Windows builder uses a short, stable directory below `~/.fhelium-build` so
-MSVC and CUDA host compilation do not embed machine-specific source paths.
-FHElium's CMake configuration supplies deterministic MSVC and CUDA host-link
-options. Windows wheels import Torch's `libiomp5md.dll`; they must not import
-VCOMP.
+Installed-wheel verification uses a caller-owned `--work-root`; Windows builds
+require the same root for their build environment. The release workflow places
+these roots under the runner's temporary directory, while standalone operators
+can select one dedicated task root. Each Windows matrix cell receives separate
+build-environment, native-build, archive-inspection, and installed-wheel
+verification directories below that root. FHElium's CMake configuration
+supplies deterministic MSVC and CUDA host-link options. Windows wheels import
+Torch's `libiomp5md.dll`; they must not import VCOMP.
 
 ## Repository preparation and publication
 
@@ -59,7 +63,7 @@ after every wheel and release manifest is available.
 ## Remote identity probes
 
 - `release_identity.py` checks project version and local/remote tag identity.
-- `repository_probe.py` checks canonical Simple Repository routing and content
+- `repository_probe.py` checks declared Simple Repository routing and content
   negotiation.
 - `artifact_probe.py` compares public wheel and manifest bytes with the local
   release manifest.
@@ -70,7 +74,9 @@ functional tests.
 
 ## Workflow
 
-`.github/workflows/release.yml` is manual only. Its default `build-only` mode:
+`.github/workflows/release.yml` is the single manually dispatched artifact
+workflow. Its default `build-only` mode accepts a branch, commit SHA, or tag as
+`source_ref`, then:
 
 1. validates the source and matrix;
 2. builds eight Linux wheels and eight Windows wheels on separate runners;
@@ -78,6 +84,7 @@ functional tests.
 4. prepares and validates one combined repository candidate;
 5. preserves the candidate as a workflow artifact.
 
-Protected `publish` mode performs publication only after both platform builds
-and candidate preparation succeed. The Windows runner receives no PyPI or R2
-publication credentials.
+Protected `publish` mode requires an existing release `tag` matching the project
+version and performs publication only after both platform builds and candidate
+preparation succeed. The Windows runner receives no PyPI or R2 publication
+credentials.

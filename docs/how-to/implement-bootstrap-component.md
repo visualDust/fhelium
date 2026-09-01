@@ -37,8 +37,9 @@ $$
 x=\frac{2t-(a+b)}{b-a}\in[-1,1].
 $$
 
-`PolynomialApproximation.evaluate_plaintext()` receives $x$, not $t$, and does
-not normalize automatically. Its input may have any NumPy-broadcastable axes;
+`PolynomialApproximation.evaluate_plaintext()` receives the normalized
+coordinate $x$. The caller performs the transformation from $t$. Its input may
+have any NumPy-broadcastable axes;
 its output preserves those axes.
 
 ## Polynomial evaluation
@@ -119,8 +120,7 @@ $$
 T(C(a))=Sa.
 $$
 
-The compiler's `scale` argument multiplies numerical matrix values. It is not a
-CKKS metadata scale.
+The compiler's `scale` argument multiplies numerical matrix values.
 
 ## Linear-transform evaluation
 
@@ -172,7 +172,7 @@ $$
 L(x)=\sum_kd_k\mathbin{\odot}\operatorname{Rot}_k(x),
 $$
 
-direct and BSGS evaluation are alternative schedules, not alternative maps. A
+direct and BSGS evaluation are two schedules for the same linear map. A
 BSGS implementation should test the identity
 
 $$
@@ -277,7 +277,7 @@ $$
 \ell_{\rm out}=\ell_{\rm raise}+m_C+1+m_\rho+m_T.
 $$
 
-Its final scale is the actual SlotsToCoeffs recurrence, not necessarily
+Its final scale follows the actual SlotsToCoeffs recurrence and may differ from
 `default_scale`. A component must not hide a level, scale reinterpretation,
 basis extension, NTT transition, or range normalization from its declared
 state-transition specification.

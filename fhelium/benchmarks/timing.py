@@ -10,6 +10,8 @@ from typing import Any, TypeAlias
 
 import torch
 
+from fhelium.runtime import MemorySnapshot
+
 DeviceLike: TypeAlias = torch.device | str | int | None
 
 
@@ -209,10 +211,18 @@ def reset_peak_memory(device: DeviceLike = None) -> CudaMemoryBaseline:
     if cuda_device is None:
         return CudaMemoryBaseline(None, 0, 0)
     synchronize(cuda_device)
-    allocated = int(torch.cuda.memory_allocated(cuda_device))
-    reserved = int(torch.cuda.memory_reserved(cuda_device))
+    snapshot = MemorySnapshot.read(cuda_device)
+    if (
+        snapshot.torch_allocated_bytes is None
+        or snapshot.torch_reserved_bytes is None
+    ):
+        raise RuntimeError("CUDA memory snapshot omitted allocator counters")
     torch.cuda.reset_peak_memory_stats(cuda_device)
-    return CudaMemoryBaseline(cuda_device, allocated, reserved)
+    return CudaMemoryBaseline(
+        cuda_device,
+        snapshot.torch_allocated_bytes,
+        snapshot.torch_reserved_bytes,
+    )
 
 
 def read_peak_memory(baseline: CudaMemoryBaseline) -> dict[str, int]:

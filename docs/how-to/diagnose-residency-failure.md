@@ -15,11 +15,11 @@ Record `snapshot.state_version`, the manager id, every relevant handle, and the
 exception's structured fields. A snapshot is tensor-free and reports, for each
 materialization, location, charged bytes, active uses, holds, and pending CUDA
 events. Location records report current and peak charges, active reservations,
-and optional strict budgets. The bounded trace is supplementary: it may be
+and optional strict budgets. The finite-capacity trace is supplementary: it may be
 disabled or may have overwritten older transitions.
 
-Do not infer manager state from `torch.cuda.memory_reserved()` or NVML. Those
-are process/device observations rather than Residency admission evidence.
+Use the manager snapshot for Residency admission evidence.
+`torch.cuda.memory_reserved()` and NVML report broader process/device state.
 
 ## 2. Verify the requested endpoint
 
@@ -121,13 +121,13 @@ print(decision.explanation.predicted_peak_bytes)
 
 Check that every requested endpoint appears in the final simulated state and
 that each eviction names the expected released location, byte charge, and
-reason. `explored_states` measures bounded deterministic search work; it is not
-an eviction count or a performance score.
+reason. `explored_states` measures deterministic search work against
+`search_state_limit`.
 
 Distinguish two failures:
 
-- `ResidencyPlanError` means validation or an exhaustive search within the
-  configured bound found the plan/request infeasible for current state.
+- `ResidencyPlanError` means validation failed or exhaustive search proved the
+  request infeasible for the current state.
 - `ResidencySearchLimitError` means the search was inconclusive because it
   reached `state_limit`. Record `request_name`, `state_limit`,
   `explored_states`, and `detail`. Do not report this as proof that no feasible

@@ -4,19 +4,27 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/fhelium)](https://pypi.org/project/fhelium/) [![Python versions](https://img.shields.io/pypi/pyversions/fhelium)](https://pypi.org/project/fhelium/) [![PyPI downloads](https://img.shields.io/pypi/dw/fhelium)](https://pypi.org/project/fhelium/) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-**Website:** [fhelium.550w.host](https://fhelium.550w.host)
+**Documentation:** [fhelium.550w.host](https://fhelium.550w.host)
 
-FHElium is a CPU- and CUDA-accelerated homomorphic-encryption library for Python and PyTorch. It integrates encrypted arithmetic with PyTorch's tensor programming and execution infrastructure. Its tensor-first design represents CKKS values, state, and operations through familiar tensor-oriented APIs.
-
-> FHElium is under active development. The API may change between releases.
+FHElium is a full-stack CKKS framework for Python and PyTorch. It provides
+native CPU and NVIDIA CUDA execution, tensor-backed encrypted values, immediate
+Eager evaluation, inspectable Compile Programs, runtime resource management,
+and rank-local distributed execution.
 
 ## Install
 
-FHElium currently supports Linux x86-64, Windows x86-64, and macOS Apple Silicon with Python 3.12 or 3.13, PyTorch `>=2.10,<2.14`, and a C++17 host compiler. The default build follows the target Torch package: CPU-only Torch produces a CPU-only extension, while CUDA-enabled Torch produces one extension with CPU and CUDA implementations. CUDA builds on Linux or Windows additionally require a matching CUDA toolkit and CUDA C++17 compiler. macOS execution uses the native CPU backend, not PyTorch MPS.
+FHElium supports CPython 3.12 and 3.13 on Linux x86-64, Windows x86-64, and
+macOS Apple Silicon. It builds against the PyTorch installation selected by the
+user. CUDA builds require a compatible CUDA toolkit and C++17 compiler; macOS
+uses the CPU implementation rather than PyTorch MPS.
 
-Use the [installation selector](https://fhelium.550w.host/#install-fhelium) for a compatible prebuilt Linux wheel or a source-build command for the selected Torch environment. Prebuilt wheels are complete `fhelium` wheels served from FHElium's static release store; PyPI provides the source distribution.
+Use the [installation selector](https://fhelium.550w.host/#install-fhelium) to
+choose the operating system, Python version, PyTorch version, and CPU or CUDA
+configuration. The selector provides a prebuilt-wheel command when that exact
+combination is published and a source-build command otherwise.
 
-For a source build, install the intended PyTorch build first, following the [official PyTorch instructions](https://pytorch.org/get-started/locally/). Then build FHElium in the same Python environment:
+For a source installation, install the intended PyTorch package first, then
+build FHElium in the same environment:
 
 ```bash
 python -m pip install "scikit-build-core==1.0.3" "cmake>=3.18" ninja
@@ -26,24 +34,38 @@ python -m pip install \
   fhelium
 ```
 
-The build uses the installed Torch stack. `--no-build-isolation` keeps that stack available while compiling the native code, and `--no-cache-dir` prevents reuse of a locally compiled wheel in another Torch environment.
+`--no-build-isolation` keeps the selected Torch build available to CMake, and
+`--no-cache-dir` prevents reuse of a wheel compiled for another Torch or CUDA
+environment. Set `CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS=CPU"` for a CPU-only
+build, `CUDA` for CUDA-only, or `CPU+CUDA` for both implementations.
 
-Set `CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS=CPU"` for a CPU-only build even
-with CUDA-enabled Torch, `CUDA` for CUDA-only, or `CPU+CUDA` for an explicit
-combined build.
+See the [installation guide](https://fhelium.550w.host/tutorial/installation)
+for compiler requirements, CUDA architecture selection, and troubleshooting.
 
-The [installation guide](https://fhelium.550w.host/tutorial/installation) covers CUDA architecture selection and build troubleshooting.
+## Programming models
 
-## Quick start
+FHElium provides two first-class ways to execute CKKS computations:
+
+- `fhelium.eager.Engine` executes each requested operation immediately;
+- `fhelium.compile` constructs and transforms source-independent
+  `fhelium.ir.Program` objects.
+
+Both use the same `fhelium.backend` operation implementations and arithmetic
+resources. Eager follows the public state transition of each called operation
+and dispatches from operand placement. Compile callers select the passes that
+assign CKKS state, preserve or lower operations, bind materials and keys, and
+construct a `ProgramExecutable`.
+
+### Eager execution
 
 ```python
 import torch
 import fhelium as fh
+from fhelium.eager import Engine
 
-engine = fh.CkksEngine(
-    fh.Preset.slots8192_scale40_levels7_int64,
-    device="cpu",  # use "cuda:0" to dispatch the same API to CUDA
-)
+# Change this to "cuda:0" to create inputs and keys on CUDA.
+torch.set_default_device("cpu")
+engine = Engine(fh.Preset.slots8192_scale40_levels7_int64)
 
 x = torch.linspace(-0.05, 0.05, 32, dtype=torch.float64)
 y = torch.linspace(0.02, -0.02, 32, dtype=torch.float64)
@@ -55,168 +77,188 @@ ct_sum = engine.add(ct_x, ct_y)
 
 x_ntt = engine.coefficient_domain_to_ntt_domain(ct_x)
 y_ntt = engine.coefficient_domain_to_ntt_domain(ct_y)
-triplet = engine.multiply(x_ntt, y_ntt)
-product = engine.rescale_to_next_level(engine.relinearize(triplet))
+product_triplet = engine.multiply(x_ntt, y_ntt)
+ct_product = engine.rescale_to_next_level(
+    engine.relinearize(product_triplet)
+)
 
-rotated = engine.rotate_by_step(ct_x, 1)
+rotation_key = engine.rotation_key(1)
+ct_rotated = engine.rotate_with_key(ct_x, rotation_key)
 
 sum_clear = engine.decrypt_message(ct_sum, is_real=True)[: x.numel()]
-product_clear = engine.decrypt_message(product, is_real=True)[: x.numel()]
+product_clear = engine.decrypt_message(ct_product, is_real=True)[: x.numel()]
 
-assert rotated.level == ct_x.level
 torch.testing.assert_close(sum_clear, x + y, atol=2e-5, rtol=0)
 torch.testing.assert_close(product_clear, x * y, atol=2e-5, rtol=0)
 ```
 
-`Preset` member names record complex slot capacity, default scale bits,
-public-level count, and integral tensor dtype. Maintained int32 and int64
-families are listed in the
-[preset and chain-depth guide](https://fhelium.550w.host/how-to/choose-preset-and-depth).
+Each encrypted value records its CKKS level, actual scale, active primes,
+polynomial domain, modulus basis, residue representation, and component count.
+Multiplication does not implicitly relinearize or rescale, and operations do
+not silently move Tensor payloads between devices.
 
-Each value records its CKKS level, actual scale, active primes, polynomial domain, modulus basis, and residue representation. The program chooses when to change those states: multiplication does not silently relinearize or rescale, and addition requires matching scales. Methods ending in `_` mutate their first value, following the PyTorch naming convention.
+### Compile Programs
 
-## Across GPUs
-
-FHElium uses a single-program, multiple-data (SPMD) model. Each process owns one `CkksEngine` and one local device; `fhelium.distributed` handles communication for tensor-backed encrypted values:
+Compile captures or imports a source-independent Program and applies the pass
+sequence selected by the caller:
 
 ```python
+from fhelium import compile as fh_compile
+
+
+def workload(secret, public):
+    return secret + public
+
+
+captured = fh_compile.capture(
+    workload,
+    inputs={
+        "secret": fh_compile.encrypted(),
+        "public": fh_compile.message(),
+    },
+)
+
+pipeline = fh_compile.Pipeline(
+    (
+        fh_compile.EliminateDeadValuesPass(),
+        fh_compile.LowerSemanticToLogicalPass(),
+    )
+)
+compiled = pipeline.run(captured)
+
+print(compiled.program.to_text())
+print(compiled.reports)
+```
+
+A caller can continue from the same `Compilation` with CKKS state assignment,
+transition placement, CKKS-to-RNS/NTT lowering, key analysis, Backend linking,
+or custom passes. See
+[`examples/17_compose_and_execute.py`](./examples/17_compose_and_execute.py)
+for an encrypted end-to-end execution and
+[`examples/19_customize_compile_pass.py`](./examples/19_customize_compile_pass.py)
+for a caller-defined BSGS transformation.
+
+## Runtime and distributed execution
+
+`fhelium.runtime` provides device observations, reusable value buffers, and
+CUDA Graph execution. `fhelium.residency` manages live value placement and
+lifetime accounting. `fhelium.distributed` provides rank-local value transport
+and CKKS-aware collectives. Bootstrapping, multiparty CKKS, and JIT interfaces
+are available under `fhelium.experimental`.
+
+The runtime components can be used independently around an evaluator:
+
+```python
+from fhelium.runtime import (
+    CpuTopology,
+    CudaGraphProgram,
+    MemorySnapshot,
+    ReusableValueBuffer,
+)
+from fhelium.residency import PAGEABLE_HOST, ResidencyManager
+
+cpu = CpuTopology.probe()
+memory = MemorySnapshot.read("cuda:0")
+buffer = ReusableValueBuffer.like(prototype, device="cuda:0")
+program = CudaGraphProgram.capture(evaluator, example_inputs=(prototype,))
+result = program.replay(next_input, synchronize=True)
+
+residency = ResidencyManager()
+weight_handle = residency.adopt(weight, at=PAGEABLE_HOST)
+snapshot = residency.snapshot()
+```
+
+FHElium uses a single-program, multiple-data (SPMD) model. Each process owns a
+local device and an Eager Engine; the application chooses its data partition,
+keys, process groups, and communication schedule.
+
+```python
+import torch
 import fhelium as fh
 import fhelium.distributed as dist
+from fhelium.eager import Engine
 
-dist.init()
-engine = fh.CkksEngine(
-    fh.Preset.slots32768_scale40_levels34_int64,
-    device=dist.local_device(),
-    allow_sk_gen=False,
-)
+
+def main():
+    dist.init()
+    torch.set_default_device(dist.local_device())
+    engine = Engine(fh.Preset.slots32768_scale40_levels34_int64)
+
+    weight = (
+        engine.encode(torch.ones(16, dtype=torch.float64))
+        if dist.get_rank() == 0
+        else None
+    )
+    weight = dist.broadcast_plaintext(weight, src=0)
+    print(
+        f"rank={dist.get_rank()} device={weight.device} level={weight.level}"
+    )
+    dist.shutdown()
+
+
+if __name__ == "__main__":
+    main()
 ```
 
-The distributed API separates three different relationships between ranks:
+Save the program as `distributed_example.py` and launch one process per local
+GPU:
 
-- independent plaintexts or ciphertexts moved with scatter, gather, or broadcast;
-- additive ciphertext partials combined with CKKS modular addition;
-- residue-number-system limbs partitioned from one ciphertext and reconstructed later.
-
-Data partitioning, key movement, and communication schedules remain part of the application. The [distributed examples](./examples/README.md) show one- and two-GPU programs using the same API.
-
-## JIT programs
-
-`fhelium.experimental.jit` traces typed PyTorch callables or imports textual xDSL into one mixed-dialect `Program`. Selected pass pipelines transform the program, while live materials, engines, keys, handlers, resources, and caches remain in a retained workspace. Execution begins with an independent readiness check:
-
-```python
-from fhelium.experimental import jit
-
-captured = jit.trace(
-    lambda secret, public: secret + public,
-    inputs={"secret": jit.encrypted(), "public": jit.message()},
-)
-lowered = jit.default_pipeline().run(
-    captured.program,
-    captured.workspace,
-)
-print(lowered.program.to_text())
+```bash
+torchrun --standalone --nproc-per-node=2 distributed_example.py
 ```
 
-See the [JIT tutorial](https://fhelium.550w.host/tutorial/unified-jit) for runtime provisioning and encrypted execution.
+The distributed API supports transport of independent values, modular
+reduction of additive ciphertext partials, and partitioning/reconstruction of
+residue-number-system limbs.
 
-FHElium is also moving toward a multi-backend kernel architecture, including an additional TileLang backend.
+## Command-line tools
 
-## Learn more
+The `fhelium` command reports the installed version, inspects CUDA devices and
+peer topology, runs benchmarks, and evaluates NTT backend candidates:
+
+```bash
+fhelium version
+fhelium cuda info
+fhelium cuda topo --bandwidth
+fhelium benchmark list
+fhelium benchmark v1 run --device cpu --output results/benchmark-v1.json
+fhelium benchmark recommend ntt --suite kernel --device cuda:0
+```
+
+Running `fhelium benchmark` without a subcommand opens the interactive
+benchmark interface. See [Inspect runtime and CUDA](https://fhelium.550w.host/how-to/inspect-runtime-and-cuda)
+and [Benchmark a workload](https://fhelium.550w.host/how-to/benchmark-a-workload)
+for the complete command options and output schemas.
+
+## Documentation and examples
 
 - [Tutorials](https://fhelium.550w.host/tutorial/)
-- [Programming model](https://fhelium.550w.host/concepts/programming-model)
-- [CKKS concepts](https://fhelium.550w.host/concepts/ckks/context-and-modulus-chain)
+- [Concepts](https://fhelium.550w.host/concepts/)
 - [How-to guides](https://fhelium.550w.host/how-to/)
+- [Architecture](https://fhelium.550w.host/concepts/architecture/system-overview)
 - [API reference](https://fhelium.550w.host/api/)
 - [Developer guide](https://fhelium.550w.host/developer/)
 
-Start with [`examples/01_basic_ckks_flow.py`](./examples/01_basic_ckks_flow.py) or browse [`examples/README.md`](./examples/README.md) for key management, scale and state transitions, bootstrapping, rotation hoisting, distributed execution, CUDA Graphs, serialization, residency, batching, compressed plaintexts, and JIT workflows.
+Start with [`examples/01_basic_ckks_flow.py`](./examples/01_basic_ckks_flow.py)
+or browse [`examples/README.md`](./examples/README.md) for Eager, Compile,
+CUDA Graph, distributed, persistence, Residency, batching, Bootstrap, and
+multiparty examples.
 
 ## Development
 
-Development uses an editable checkout. Clone the repository, then choose one
-of two environment paths:
+Create the locked development environment and run the project checks:
 
 ```bash
 git clone https://github.com/VisualDust/fhelium.git
 cd fhelium
+uv sync --locked
+source .venv/bin/activate
+just check
 ```
 
-- Use **uv** for the maintained default environment. uv resolves the tracked
-  lock, creates `.venv`, installs the development dependencies, and builds
-  FHElium as an editable package.
-- Use **pip** when the environment must retain a selected Torch build, such as
-  a different CUDA variant. Install that Torch build first; pip then builds
-  FHElium against the active environment without replacing its Torch choice.
-
-These paths are alternatives for one environment. Use separate virtual
-environments when testing both: `uv sync --locked` restores the default locked
-Torch line, while the pip path preserves the Torch package already selected.
-
-The repository files have separate responsibilities:
-
-- `pyproject.toml` is the package-manager interface for dependency metadata. It
-  declares the build and development groups and identifies the provider for
-  dynamic runtime dependencies.
-- `uv.lock` records one tested resolution of those declarations for the
-  default developer environment, currently using Torch 2.13.
-- `packaging/release_matrix.json` declares the Python, Torch, CUDA, and
-  operating-system configurations for published artifacts. The developer lock
-  does not replace this matrix.
-- `justfile` provides optional shortcuts over the commands below. It does not
-  define dependencies or supported release configurations.
-
-### Default environment with uv
-
-```bash
-uv --preview-features extra-build-dependencies sync --locked
-```
-
-Activate the resulting environment with `source .venv/bin/activate` on Linux
-or macOS, or `.venv\Scripts\Activate.ps1` in Windows PowerShell. The repository
-requires a validated minimum uv version because uv 0.9 labels package-specific
-build dependencies as a preview feature.
-
-### Environment with a selected Torch build
-
-After installing the intended Torch package in the active environment:
-
-```bash
-python -m pip install --group build
-python -m pip install \
-  --editable . --no-build-isolation --no-cache-dir --verbose
-python -m pip install --group dev
-```
-
-`--no-build-isolation` makes the selected Torch ABI visible to the native
-build. `--no-cache-dir` prevents reuse of a wheel compiled for another Torch
-environment.
-
-### Validate a change
-
-Install the repository hooks once from either environment:
-
-```bash
-pre-commit install
-```
-
-Then run the project checks:
-
-```bash
-python -m pytest -q
-ruff check .
-ruff format --check .
-pyright
-```
-
-If `just` is installed, `just check` runs the Ruff, Pyright, and pytest commands
-above. Use `just NATIVE_BACKENDS=CPU build-uv` in the uv environment or
-`just NATIVE_BACKENDS=CPU build-pip` in the pip environment to rebuild through
-the corresponding path. Select `CPU+CUDA` only when that environment contains
-a CUDA-enabled Torch package and matching toolkit. uv and `just` remain
-optional: pip is the public installation and release-validation path.
-
-The [developer guide](https://fhelium.550w.host/developer/) follows calls across the Python API, PyTorch dispatcher, C++, and CUDA kernels.
+The [contributor guide](https://fhelium.550w.host/developer/contributing)
+documents custom Torch environments, native builds, editor configuration, and
+the validation workflow.
 
 ## Citation
 
@@ -227,12 +269,12 @@ If you use FHElium in research or software, cite the project as:
   author  = {Zhaoting Gong and Jiaming Liang and Ran Ran and Wujie Wen},
   title   = {FHElium: A Cross-Stack CKKS Research Framework for CPU and CUDA},
   year    = {2026},
-  version = {0.10.0},
+  version = {0.20.0},
   url     = {https://github.com/VisualDust/fhelium}
 }
 ```
 
-The same software citation metadata is available in [`CITATION.cff`](./CITATION.cff).
+The same metadata is available in [`CITATION.cff`](./CITATION.cff).
 
 ## License
 

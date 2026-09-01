@@ -12,13 +12,14 @@ to decide whether a value tree may be copied into reusable fixed storage.
 - Python container structure and dictionary keys;
 - tensor shape, stride, dtype, layout, and `requires_grad`;
 - concrete FHElium value type and schema version;
-- context, level, scale, prime IDs, polynomial domain, modulus basis, and residue representation;
+- level, scale, prime IDs, polynomial domain, modulus basis, and residue representation;
 - key specialization such as a rotation step.
 
 Device is deliberately excluded. A CPU value and a CUDA value can share an
 value signature while the target buffer owns the residency decision. An
 external ciphertext/key relation is also excluded when no concrete value field
 stores it; the application must validate that relation separately.
+CKKS parameter provenance is likewise excluded.
 
 ```mermaid
 flowchart LR

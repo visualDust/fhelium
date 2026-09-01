@@ -114,9 +114,11 @@ The ciphertext residues remain unchanged. The decoded message is multiplied by
 `old_scale / Delta`, and the configured bound limits the accepted scale-ratio
 bias.
 
-## Complete runnable source
+::: details Source
 
 <<< @/../examples/05_explicit_scale_management.py
+
+:::
 
 ## Next step
 
@@ -125,4 +127,4 @@ to combine scale transitions with three-component products and
 representation reuse. The complete transition laws are defined in
 [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md), and
 the parameter invariants are described in
-[Context and modulus chain](../concepts/ckks/context-and-modulus-chain.md).
+[Configuration and modulus chain](../concepts/ckks/context-and-modulus-chain.md).

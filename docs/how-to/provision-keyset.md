@@ -45,8 +45,8 @@ flowchart LR
     DECOMP --> SMALL --> MORE
 ```
 
-Measure both latency and peak/transient memory. Key decomposition is not free,
-and direct keys may dominate CUDA memory.
+Measure both latency and peak/transient memory. Key decomposition adds
+rotations and key switches, while direct keys may dominate CUDA memory.
 
 ## 4. Assign keys to ranks
 
@@ -110,8 +110,9 @@ switched = engine.switch_key(source, source_to_destination)
 decoded = engine.decrypt_message(switched, destination_secret)
 ```
 
-Reversing the two secrets creates a different key. A matching `context_id` and
-tensor layout establish parameter compatibility, not direction or lineage.
+Reversing the two secrets creates a different key. Tensor layout establishes
+neither parameter compatibility nor direction or lineage; the application
+must retain those relations.
 
 Conjugation uses a key specialized for the conjugation automorphism:
 
@@ -129,7 +130,7 @@ Frequently reused common keys may remain on CUDA. Large per-user or phase-
 specific keys may instead use:
 
 - request-lifetime pageable host holds;
-- bounded pinned/CUDA windows;
+- fixed-capacity pinned-host and CUDA windows;
 - short active leases;
 - prefetch before the operation that needs them.
 
@@ -146,9 +147,10 @@ Before writing secret material, confirm:
 - encryption at rest and access-control lists (ACLs) are external and operational;
 - evaluator workers do not receive secret keys unnecessarily;
 - logs and benchmark metadata do not expose payloads;
-- stale artifact references and context mismatches fail safely.
+- stale artifact references fail safely and the application checks parameter provenance before use.
 
-A sensitivity label is not encryption.
+A sensitivity label classifies stored material. Encryption and access control
+must be supplied by the storage system.
 
 ## 9. Report key cost
 

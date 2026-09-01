@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from fhelium.legacy.engine import CkksEngine
+
 import statistics
 import time
 
 import torch
 
-from fhelium import CkksEngine
 from fhelium.benchmarks.timing import synchronize
 
 NTT_OPERATIONS = ("forward_ntt", "inverse_ntt", "roundtrip")

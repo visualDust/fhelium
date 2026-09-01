@@ -107,11 +107,6 @@ const learningSidebar = [
         text: '06 - Late relinearization and NTT reuse',
         link: '/tutorial/late-relinearization-and-ntt-reuse',
       },
-    ],
-  },
-  {
-    text: 'Performance',
-    items: [
       {
         text: '07 - Rotation hoisting',
         link: '/tutorial/rotation-hoisting',
@@ -171,28 +166,42 @@ const learningSidebar = [
     ],
   },
   {
-    text: 'Features',
+    text: 'Compile and IR examples',
     collapsed: false,
     items: [
       {
-        text: '17 - Refresh with composable bootstrapping',
+        text: '17 - Compose and execute Compile passes',
+        link: '/tutorial/compose-and-execute-compile-pipeline',
+      },
+      {
+        text: '18 - Textual mixed-level IR',
+        link: '/tutorial/ir-textual-program',
+      },
+      {
+        text: '19 - Customize a Compile pass',
+        link: '/tutorial/customize-compile-pass-and-pipeline',
+      },
+      {
+        text: '20 - Generate editable Python',
+        link: '/tutorial/generate-python',
+      },
+      {
+        text: '21 - Rank-local collective IR',
+        link: '/tutorial/rank-local-collective-ir',
+      },
+    ],
+  },
+  {
+    text: 'Experimental features',
+    collapsed: false,
+    items: [
+      {
+        text: '22 - Refresh with composable bootstrapping',
         link: '/tutorial/composable-ckks-bootstrap',
       },
       {
-        text: '18 - Synthetic multiparty CKKS',
+        text: '23 - Multiparty CKKS',
         link: '/tutorial/multiparty-ckks',
-      },
-      {
-        text: '19 - JIT programs',
-        link: '/tutorial/unified-jit',
-      },
-      {
-        text: '20 - JIT textual IR',
-        link: '/tutorial/jit-textual-ir',
-      },
-      {
-        text: '21 - JIT custom pipelines',
-        link: '/tutorial/jit-custom-pipeline',
       },
     ],
   },
@@ -248,11 +257,23 @@ const developerSidebar = [
     ],
   },
   {
-    text: 'Just In Time',
+    text: 'Compiler stack',
     items: [
       {
-        text: 'JIT internals',
-        link: '/developer/unified-jit-internals',
+        text: 'Compiler stack internals',
+        link: '/developer/compiler-stack-internals',
+      },
+      {
+        text: 'Compiler state and eager execution',
+        link: '/developer/compiler-state-and-eager-execution',
+      },
+      {
+        text: 'Operation declaration and implementation selection',
+        link: '/developer/operation-registration-and-selection',
+      },
+      {
+        text: 'IR operation and implementation index',
+        link: '/developer/ir-operation-implementation-index',
       },
     ],
   },
@@ -277,10 +298,6 @@ const developerSidebar = [
     text: 'Contributing',
     items: [
       { text: 'Contributor guide', link: '/developer/contributing' },
-      {
-        text: 'Mathematical and state invariants',
-        link: '/developer/mathematical-notation-and-invariants',
-      },
       {
         text: 'Native operator workflow',
         link: '/developer/native-operator-workflow',
@@ -441,12 +458,12 @@ export default defineConfig({
       '/tutorial/': learningSidebar,
       '/concepts/': [
         {
-          text: 'Concepts',
+          text: 'Foundations',
           items: [
             { text: 'Overview', link: '/concepts/' },
             {
-              text: 'Programming model at a glance',
-              link: '/concepts/programming-model',
+              text: 'Terminology and mathematical model',
+              link: '/concepts/terminology-and-mathematical-model',
             },
           ],
         },
@@ -454,12 +471,25 @@ export default defineConfig({
           text: 'Architecture',
           items: [
             {
-              text: 'System overview',
+              text: 'Architecture',
               link: '/concepts/architecture/system-overview',
             },
             {
               text: 'Ownership and responsibilities',
               link: '/concepts/architecture/ownership-and-responsibilities',
+            },
+          ],
+        },
+        {
+          text: 'Programs and compilation',
+          items: [
+            {
+              text: 'Neutral IR programs',
+              link: '/concepts/neutral-ir-programs',
+            },
+            {
+              text: 'Open compiler stack',
+              link: '/concepts/open-compiler-stack',
             },
           ],
         },
@@ -509,10 +539,6 @@ export default defineConfig({
           text: 'Execution and lifecycle',
           items: [
             {
-              text: 'Choose and switch CPU or CUDA',
-              link: '/how-to/switch-cpu-cuda',
-            },
-            {
               text: 'Value signatures and buffers',
               link: '/concepts/execution/signatures-and-buffers',
             },
@@ -531,26 +557,21 @@ export default defineConfig({
           ],
         },
         {
-          text: 'Features',
+          text: 'Advanced CKKS mechanisms',
           items: [
             {
               text: 'Composable CKKS bootstrapping',
               link: '/concepts/ckks/composable-bootstrapping',
             },
-            {
-              text: 'JIT programs',
-              link: '/concepts/unified-jit-programs',
-            },
           ],
         },
         {
-          text: 'Performance and terms',
+          text: 'Performance',
           items: [
             {
               text: 'CKKS workload cost model',
               link: '/concepts/performance/cost-model',
             },
-            { text: 'Glossary', link: '/concepts/glossary' },
           ],
         },
       ],
@@ -590,7 +611,16 @@ export default defineConfig({
           ],
         },
         {
-          text: 'Experimental public interfaces',
+          text: 'Compiler and IR',
+          items: [
+            {
+              text: 'Visualize mixed-level IR',
+              link: '/how-to/visualize-mixed-level-ir',
+            },
+          ],
+        },
+        {
+          text: 'Experimental features',
           items: [
             {
               text: 'Compose a bootstrap callable',
@@ -603,10 +633,6 @@ export default defineConfig({
             {
               text: 'Use multiparty CKKS',
               link: '/how-to/use-multiparty-ckks',
-            },
-            {
-              text: 'Visualize and inspect a JIT Program',
-              link: '/how-to/visualize-jit-program',
             },
           ],
         },
@@ -698,7 +724,7 @@ export default defineConfig({
     darkModeSwitchLabel: 'Appearance',
     footer: {
       message: 'Towards full-stack encrypted execution infrastructures',
-      copyright: 'Released under the MIT License. Copyright VisualDust and FHElium contributors',
+      copyright: 'Released under the MIT License. Copyright <a href="https://github.com/VisualDust" target="_blank" rel="noopener noreferrer">VisualDust</a> and <a href="https://github.com/VisualDust/fhelium/graphs/contributors" target="_blank" rel="noopener noreferrer">FHElium contributors</a>',
     },
   },
 })

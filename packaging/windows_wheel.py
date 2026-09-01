@@ -21,7 +21,13 @@ from zipfile import ZipFile
 
 from matrix import WINDOWS, Configuration, load_matrix
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(os.path.abspath(Path(__file__).parent.parent))
+
+
+def absolute_path(path: Path) -> Path:
+    """Make a path absolute without dereferencing a caller-selected alias."""
+
+    return Path(os.path.abspath(path))
 
 
 def run(
@@ -103,7 +109,9 @@ print(json.dumps({
         raise RuntimeError(f"Python does not match {abi}/win_amd64: {value!r}")
 
 
-def vs_environment(builder: dict[str, Any]) -> dict[str, str]:
+def vs_environment(
+    builder: dict[str, Any], *, temporary_root: Path
+) -> dict[str, str]:
     program_files = Path(
         os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")
     )
@@ -127,7 +135,9 @@ def vs_environment(builder: dict[str, Any]) -> dict[str, str]:
     )
     visual_studio = Path(result.stdout.strip())
     command = visual_studio / "Common7" / "Tools" / "VsDevCmd.bat"
-    with tempfile.TemporaryDirectory(prefix="fhelium-vs-") as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix="fhelium-vs-", dir=temporary_root
+    ) as temporary:
         script = Path(temporary) / "environment.cmd"
         script.write_text(
             "@echo off\n"
@@ -212,7 +222,7 @@ def cuda_compiler_root(root: Path) -> Path:
 def build(args: argparse.Namespace) -> Path:
     if os.name != "nt" or platform.machine().upper() != "AMD64":
         raise RuntimeError("Windows wheel builds require Windows AMD64")
-    source = args.source.resolve()
+    source = absolute_path(args.source)
     matrix_path = source / "packaging" / "release_matrix.json"
     matrix = load_matrix(matrix_path, validate_schema=False)
     configuration = matrix.configuration(args.configuration)
@@ -221,24 +231,26 @@ def build(args: argparse.Namespace) -> Path:
         or args.python_abi not in matrix.python_abis
     ):
         raise RuntimeError("cell is not declared by the release matrix")
-    base_python = args.python.resolve()
+    base_python = absolute_path(args.python)
     python_identity(base_python, args.python_abi, cwd=source)
 
-    work = (
-        Path.home() / ".fhelium-build" / f"{configuration.id}-{args.python_abi}"
-    )
+    work_root = absolute_path(args.work_root)
+    work_root.mkdir(parents=True, exist_ok=True)
+    work = work_root / f"{configuration.id}-{args.python_abi}"
     shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    build_environment = work / "environment"
     run(
         str(base_python),
         "-I",
         "-m",
         "venv",
         "--copies",
-        str(work),
+        str(build_environment),
         cwd=source,
         env=clean_environment(),
     )
-    python = work / "Scripts" / "python.exe"
+    python = build_environment / "Scripts" / "python.exe"
     builder = matrix.platform(WINDOWS).builder
     pins = (
         f"pip=={builder['pip_version']}",
@@ -282,7 +294,7 @@ def build(args: argparse.Namespace) -> Path:
         cwd=source,
         env=clean_environment(),
     )
-    environment = vs_environment(builder)
+    environment = vs_environment(builder, temporary_root=work)
     environment["PATH"] = str(python.parent) + os.pathsep + environment["PATH"]
     root = toolkit_root(configuration, args.cuda_toolkit_root)
     compiler_root = None if root is None else cuda_compiler_root(root)
@@ -325,7 +337,7 @@ def build(args: argparse.Namespace) -> Path:
         ),
         FHELIUM_RELEASE_TORCH_REQUIREMENT=configuration.torch_requirement,
     )
-    output = args.output.resolve()
+    output = absolute_path(args.output)
     wheelhouse = output / configuration.id / args.python_abi / "wheelhouse"
     wheelhouse.mkdir(parents=True, exist_ok=True)
     for previous in wheelhouse.glob("fhelium-*-win_amd64.whl"):
@@ -360,14 +372,17 @@ def build(args: argparse.Namespace) -> Path:
         source=source,
         dumpbin=Path(dumpbin),
         toolkit=root,
+        work_root=work,
     )
-    if args.smoke:
-        smoke_wheel(
+    if args.verify_install:
+        verify_installed_wheel(
             wheels[0],
             base_python=base_python,
             configuration=configuration,
             source=source,
+            work_root=work,
         )
+    shutil.rmtree(work)
     print(wheels[0])
     return wheels[0]
 
@@ -391,6 +406,7 @@ def check_wheel(
     source: Path,
     dumpbin: Path,
     toolkit: Path | None,
+    work_root: Path,
 ) -> None:
     version = tomllib.loads(
         (source / "pyproject.toml").read_text(encoding="utf-8")
@@ -456,7 +472,9 @@ def check_wheel(
                 raise RuntimeError(
                     f"native manifest {key} differs: {manifest.get(key)!r}"
                 )
-        with tempfile.TemporaryDirectory(prefix="fhelium-wheel-") as temporary:
+        with tempfile.TemporaryDirectory(
+            prefix="fhelium-wheel-", dir=work_root
+        ) as temporary:
             binary = Path(temporary) / Path(ops_binaries[0]).name
             binary.write_bytes(archive.read(ops_binaries[0]))
             text = run(
@@ -471,7 +489,11 @@ def check_wheel(
                     "wheel must use Torch's OpenMP runtime without VCOMP"
                 )
             raw = binary.read_bytes()
-            forbidden = [source, Path.home() / ".fhelium-build"]
+            forbidden = list(
+                dict.fromkeys(
+                    (source, source.resolve(), work_root, work_root.resolve())
+                )
+            )
             if toolkit is not None:
                 forbidden.extend((toolkit, cuda_compiler_root(toolkit)))
             for path in forbidden:
@@ -517,16 +539,17 @@ def check_wheel(
                     )
 
 
-def smoke_wheel(
+def verify_installed_wheel(
     wheel: Path,
     *,
     base_python: Path,
     configuration: Configuration,
     source: Path,
+    work_root: Path,
 ) -> None:
     """Install one wheel in a clean environment and run native operators."""
 
-    root = Path.home() / ".fhelium-build" / f"smoke-{configuration.id}"
+    root = work_root / "installed-wheel-verification"
     shutil.rmtree(root, ignore_errors=True)
     environment = clean_environment()
     run(
@@ -570,21 +593,27 @@ def smoke_wheel(
         cwd=root,
         env=environment,
     )
+    project_version = tomllib.loads(
+        (source / "pyproject.toml").read_text(encoding="utf-8")
+    )["project"]["version"]
     code = f"""
+import fhelium
 import torch
 from fhelium.native import native_status
+assert fhelium.__version__ == {project_version!r}
 status = native_status()
 assert status.available and set(status.backends) == {set(configuration.native_backends)!r}
 x = torch.tensor([[[1, 2]]], dtype=torch.int64)
 p = torch.zeros((8, 1), dtype=torch.int64)
 p[0, 0] = 34
-assert torch.equal(torch.ops.fhelium_rns_ops.add_canonical(x, x, p), x + x)
+assert torch.equal(torch.ops.fhelium_rns_ops.add_standard(x, x, p), x + x)
 if {configuration.has_cuda!r}:
     x = x.cuda()
     p = p.cuda()
-    assert torch.equal(torch.ops.fhelium_rns_ops.add_canonical(x, x, p).cpu(), x.cpu() + x.cpu())
+    assert torch.equal(torch.ops.fhelium_rns_ops.add_standard(x, x, p).cpu(), x.cpu() + x.cpu())
 """
     run(str(python), "-I", "-c", code, cwd=root, env=environment)
+    shutil.rmtree(root)
 
 
 def args() -> argparse.Namespace:
@@ -596,8 +625,9 @@ def args() -> argparse.Namespace:
     parser.add_argument("--python", type=Path, required=True)
     parser.add_argument("--source", type=Path, default=ROOT)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--work-root", type=Path, required=True)
     parser.add_argument("--cuda-toolkit-root", type=Path)
-    parser.add_argument("--smoke", action="store_true")
+    parser.add_argument("--verify-install", action="store_true")
     return parser.parse_args()
 
 

@@ -37,7 +37,17 @@ How-to guides provide procedures for application, deployment, diagnosis, and per
   />
 </DocGrid>
 
-## Experimental public interfaces
+## Compiler and IR
+
+<DocGrid>
+  <DocCard
+    title="Visualize mixed-level IR"
+    description="Render selected SSA, type, attribute, and user evidence for pattern analysis and pass comparison."
+    href="/how-to/visualize-mixed-level-ir"
+  />
+</DocGrid>
+
+## Experimental features
 
 <DocGrid>
   <DocCard
@@ -54,11 +64,6 @@ How-to guides provide procedures for application, deployment, diagnosis, and per
     title="Use multiparty CKKS"
     description="Run the application-owned state machine for collective key material and synthetic secret-dependent output operations."
     href="/how-to/use-multiparty-ckks"
-  />
-  <DocCard
-    title="Visualize and inspect a JIT Program"
-    description="Render selected SSA, type, attribute, obligation, and user evidence for pattern analysis and pass comparison."
-    href="/how-to/visualize-jit-program"
   />
 </DocGrid>
 
@@ -101,8 +106,8 @@ How-to guides provide procedures for application, deployment, diagnosis, and per
 
 <DocGrid>
   <DocCard
-    title="Inspect runtime and CUDA topology"
-    description="Record the package/runtime environment and inspect devices and peer access before multi-GPU work."
+    title="Inspect runtime, memory, and CUDA topology"
+    description="Record the environment and current memory availability, then inspect devices and peer access before multi-GPU work."
     href="/how-to/inspect-runtime-and-cuda"
   />
   <DocCard

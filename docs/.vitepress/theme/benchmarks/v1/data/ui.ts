@@ -201,8 +201,14 @@ export function gpuDevices(run: BenchmarkV1Run): BenchmarkGpuDevice[] {
   return rows.flatMap(([index, value]) => {
     const device = jsonObject(value)
     if (!device) return []
+    const capability = device.compute_capability
+    const capabilityText = Array.isArray(capability)
+      && capability.length === 2
+      && capability.every((part) => typeof part === 'number')
+      ? `${capability[0]}.${capability[1]}`
+      : null
     return [{
-      computeCapability: jsonString(device.computeCapability) ?? (
+      computeCapability: capabilityText ?? jsonString(device.computeCapability) ?? (
         [jsonNumber(device.major), jsonNumber(device.minor)].every(
           (part) => part !== null,
         )
@@ -210,10 +216,10 @@ export function gpuDevices(run: BenchmarkV1Run): BenchmarkGpuDevice[] {
           : 'Not reported'
       ),
       index,
-      memoryBusWidth: jsonNumber(device.memoryBusWidth),
-      multiProcessorCount: jsonNumber(device.multiProcessorCount),
+      memoryBusWidth: jsonNumber(device.memory_bus_width_bits) ?? jsonNumber(device.memoryBusWidth),
+      multiProcessorCount: jsonNumber(device.multiprocessor_count) ?? jsonNumber(device.multiProcessorCount),
       name: jsonString(device.name) ?? jsonString(device.device_name) ?? `CUDA device ${index}`,
-      totalGlobalMem: jsonNumber(device.totalGlobalMem),
+      totalGlobalMem: jsonNumber(device.total_memory_bytes) ?? jsonNumber(device.totalGlobalMem),
     }]
   })
 }
@@ -253,7 +259,10 @@ export function runExecutionHardwareSummary(run: BenchmarkV1Run): string {
 }
 
 export function ramSummary(run: BenchmarkV1Run): string {
-  return formatBytes(jsonNumber(run.platform.memory.total_bytes))
+  return formatBytes(
+    jsonNumber(run.platform.memory.capacity_bytes)
+      ?? jsonNumber(run.platform.memory.total_bytes),
+  )
 }
 
 export function caseSummary(run: BenchmarkV1Run): string {

@@ -1,9 +1,9 @@
 # CUDA Graph execution model
 
-`CudaGraphProgram` adapts an ordinary deterministic rank-local `CkksEngine`
+`CudaGraphProgram` adapts an ordinary deterministic rank-local `fhelium.eager.Engine`
 callable for fixed-address capture and replay while preserving its CKKS
 semantics. Capture covers that callable's fixed schedule, buffers, and
-statically bound resources.
+resources captured as static program state.
 
 ## Static and dynamic state
 
@@ -29,7 +29,7 @@ A good capture candidate has:
 
 - fixed operation sequence and control flow;
 - fixed tensor shapes and CKKS states;
-- keys and operation-ready weights bound as static state;
+- keys and operation-ready weights captured as static state;
 - deterministic rank-local arithmetic;
 - a small, well-defined set of dynamic inputs.
 
@@ -79,7 +79,7 @@ schedules may split them:
 - `copy_inputs_from(...)` prepares stable inputs and returns a copy handle;
 - `replay_prepared(...)` consumes that prepared handle and launches replay.
 
-Use the [Execution API reference](../../api/fhelium/execution/cuda_graph.md) for stream,
+Use the [Execution API reference](../../api/fhelium/runtime/cuda_graph.md) for stream,
 event, and output-copy options.
 
 ## Borrowed outputs

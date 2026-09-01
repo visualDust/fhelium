@@ -31,7 +31,7 @@ ordinary FHElium `TensorResident` objects backed by PyTorch storage. The manager
 uses one reentrant lock to protect handle records, charges, locations,
 reservations, and protection tokens; CUDA events extend storage lifetime after
 a Python lease closes. The optional controller reads tensor-free snapshots and
-returns a manager-bound plan without moving a tensor during `decide()`.
+returns a plan issued for that manager snapshot without moving a tensor during `decide()`.
 
 ## State model
 
@@ -53,7 +53,7 @@ graph LR
 `model.py` defines tensor-free public state. `manager.py` owns the mutable
 records and tensor-bearing materializations. `location.py` defines immutable
 local location keys. Snapshots copy public state into frozen tensor-free
-records rather than exposing manager dictionaries or concrete values.
+records for observation outside the manager lock.
 
 ## Handle identity
 
@@ -68,8 +68,8 @@ registrations within that manager, and `value_type` preserves typed lease
 lookup without retaining tensor storage. Public callers treat the complete
 object as an opaque token.
 
-Device location and materialization count are state associated with the
-handle, not part of the token. Moving, copying, or dropping a materialization
+Device location and materialization count live in the manager record associated
+with the handle. Moving, copying, or dropping a materialization
 preserves the same handle. Registering another value always creates another
 handle, including when its contents match an existing registration.
 
@@ -91,12 +91,12 @@ still checks the concrete value against the specification.
 
 `TensorResident.storage_nbytes` deduplicates direct tensor fields that share one
 backing storage. The residency specification nevertheless requires
-`storage_nbytes >= logical_nbytes`; overlapping views are charged
-conservatively rather than relying on global alias analysis. `adopt` uses
+`storage_nbytes >= logical_nbytes`; overlapping views receive a conservative
+charge. `adopt` uses
 `max(value.nbytes, value.storage_nbytes)`.
 
-That value is a fixed per-replica managed charge and materialization ceiling,
-not an equality requirement for every later allocation. Functional movement
+That value is a fixed per-replica managed charge and materialization ceiling.
+Functional movement
 can preserve logical tensor shape and stride while compacting a view's backing
 span. The manager accepts an actual materialization at or below the registered
 ceiling, reports its actual unique storage separately, and continues charging
@@ -110,8 +110,8 @@ process-wide CUDA allocation.
 
 `ResidencyLocation` contains only a storage class and normalized device:
 
-- `PAGEABLE_HOST` uses canonical unindexed CPU storage;
-- `PINNED_HOST` uses canonical unindexed, uniformly pinned CPU storage;
+- `PAGEABLE_HOST` uses the predefined unindexed CPU location;
+- `PINNED_HOST` uses the predefined unindexed, uniformly pinned CPU location;
 - `cuda_location(...)` requires an indexed CUDA device.
 
 A manager records location state when a location is first budgeted or used.
@@ -136,13 +136,13 @@ locations.
 `ReplicaMode.EXCLUSIVE` permits one steady materialization. `ensure` rejects an
 attempt to add a replica when one already exists; `move` is the placement
 primitive. A move can temporarily hold source and destination storage while a
-copy completes, then removes the source before returning. This bounded transfer
-state is not exposed as two independently usable replicas.
+copy completes, then removes the source before returning. The manager exposes
+only the completed post-move placement as steady state.
 
 The manager also indexes backing-storage pointers. A newly installed
 materialization must own storage independent of every other managed
-materialization. Cross-handle or cross-location storage aliases are rejected
-rather than charged ambiguously.
+materialization. Rejecting cross-handle or cross-location storage aliases keeps
+each allocation under one accounting charge.
 
 ## Trust-based alias ownership
 
@@ -170,9 +170,9 @@ removal protection, and asynchronous lifetime safety apply only while callers
 honor both the adoption and lease rules.
 
 These rules are trust-based because both APIs expose direct Python
-objects. Adoption installs the supplied object without a defensive copy, and
-the borrowed mapping returns the concrete managed object rather than a
-revocable proxy. The mapping rejects lookup and iteration after lease release,
+objects. Adoption installs the supplied object directly, and the borrowed
+mapping returns the concrete managed object. The mapping rejects lookup and
+iteration after lease release,
 but Python cannot revoke an object extracted while the lease was active.
 
 ## Reconstruction sources
@@ -233,7 +233,7 @@ planning.
 A `ResidencyRequest` contains required `(handle, location)` postconditions and
 `MemoryReservation` declarations. A pure `ResidencyPolicy` orders
 invariant-filtered candidates and exposes only configured fallback
-tiers. The resulting `ResidencyDecision` contains the concrete manager-bound
+tiers. The resulting `ResidencyDecision` contains the concrete manager-issued
 plan, policy evidence, and the manager `state_version` against which it was
 prepared. The manager remains responsible for validating and executing every
 action.
@@ -256,13 +256,11 @@ changes when ownership, placement, reservations, leases, holds, pending-event
 state, or observed locations change. A prepared decision carries the version
 from its tensor-free snapshot; scope entry reaps completed events and checks the
 expected version under the same lock before any reclaim or reservation
-mutation. Mismatch raises `ResidencyStaleStateError` instead of silently
-replanning.
+mutation. A mismatch raises `ResidencyStaleStateError`.
 
 A manager-wide source-callback access guard is checked before public operations
-acquire or observe mutable state, so waiting and newly arriving threads reject
-access rather than blocking
-behind a callback that may be waiting for them. Snapshots are assembled while
+acquire or observe mutable state, so waiting and newly arriving threads fail
+fast while a callback is active. Snapshots are assembled while
 holding the same state lock and contain no tensors. A handle remains immutable
 and hashable across all transitions.
 
@@ -274,12 +272,12 @@ tokens after a Python lease closes.
 
 | Responsibility | First file |
 | --- | --- |
-| Tensor-resident movement and local byte measures | `fhelium/core/tensor_resident.py` |
+| Tensor-resident movement and local byte measures | `fhelium/values/tensor_resident.py` |
 | Handle, specification, replica mode, recoverability, source protocol | `fhelium/residency/model.py` |
-| Canonical local locations | `fhelium/residency/location.py` |
+| Predefined local locations | `fhelium/residency/location.py` |
 | Owned value records and invariant enforcement | `fhelium/residency/manager.py` |
 | Declarative requests and deterministic policy inputs | `fhelium/residency/request.py`, `fhelium/residency/policy.py` |
-| State-bound automatic decisions and convenience use | `fhelium/residency/controller.py` |
+| State-versioned automatic decisions and convenience use | `fhelium/residency/controller.py` |
 | Tensor-free public observations | `fhelium/residency/snapshot.py` |
 
 ## Continue

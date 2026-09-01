@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Generate the versioned CKKS prime resources shipped with FHElium.
 
-This offline development/release tool enumerates the maintained scale widths,
-message-prime widths, and power-of-two ring dimensions. It searches the
+This offline development/release tool enumerates the scale widths represented
+by the versioned catalog, message-prime widths, and power-of-two ring
+dimensions. It searches the
 required residue class ``q = 1 mod 2N``, applies deterministic 64-bit
 Miller--Rabin primality testing, preserves the historical alternating
 scale-prime ordering, and validates every completed sequence.
@@ -10,7 +11,7 @@ scale-prime ordering, and validates every completed sequence.
 The output is ``scale_primes_v1.safetensors`` for public Q scale rows and
 ``message_primes_v1.safetensors`` for the structural Q base and key-switch P
 rows. Resource keys have the schema ``sb=<bits>;N=<ring_dimension>``. Writes
-use canonical safetensors headers and atomic replacement so equal logical
+use deterministic safetensors headers and atomic replacement so equal logical
 catalogs have equal file hashes and readers never observe a partial resource.
 
 Run this script only when reviewing a catalog revision. Existing
@@ -244,7 +245,7 @@ def validate_catalog(catalog: PrimeTable) -> None:
 
 
 def encode_catalog(catalog: PrimeTable) -> dict[str, torch.Tensor]:
-    """Encode a prime table as canonical safetensors names and int64 vectors."""
+    """Encode a prime table as schema-defined names and int64 vectors."""
 
     return {
         f"sb={bits};N={degree}": torch.tensor(primes, dtype=torch.int64)
@@ -252,7 +253,7 @@ def encode_catalog(catalog: PrimeTable) -> dict[str, torch.Tensor]:
     }
 
 
-def canonicalize_safetensors_header(path: Path) -> None:
+def normalize_safetensors_header(path: Path) -> None:
     """Normalize JSON map ordering so equal catalogs have equal file hashes."""
 
     payload = path.read_bytes()
@@ -263,12 +264,12 @@ def canonicalize_safetensors_header(path: Path) -> None:
     header = json.loads(payload[8:header_end].decode("utf-8"))
 
     metadata = header.pop("__metadata__", {})
-    canonical = {
+    normalized_header = {
         "__metadata__": dict(sorted(metadata.items())),
         **{key: header[key] for key in sorted(header)},
     }
     encoded = json.dumps(
-        canonical,
+        normalized_header,
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -300,7 +301,7 @@ def atomic_save(
             temporary,
             metadata={"format": format_name, "version": _CATALOG_VERSION},
         )
-        canonicalize_safetensors_header(temporary)
+        normalize_safetensors_header(temporary)
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)

@@ -18,6 +18,7 @@ DEPENDENCIES = [
     "mpmath>=1.3.0,<1.4",
     "numpy>=2.5.1",
     "pydot>=4.0.1,<5",
+    "psutil>=6.1,<8",
     "rich>=15.0.0",
     "safetensors>=0.8.0",
     "textual>=8.2.8",

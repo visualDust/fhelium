@@ -3,7 +3,7 @@
 // Public indexed radix-2 inverse NTT standard-output entry points.
 
 // ----------------------------------------------------------------------
-// Inverse NTT with canonical standard output
+// Inverse NTT with standard output in [0, q_i)
 // -------------------------------------------------------------------
 
 template <typename scalar_t>

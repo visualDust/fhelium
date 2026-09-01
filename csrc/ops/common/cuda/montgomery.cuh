@@ -60,23 +60,23 @@ montgomery_mul(const scalar_t a,
 
 template <typename scalar_t>
 __device__ __forceinline__ scalar_t
-canonicalize_montgomery_operand(const scalar_t value,
-                                const scalar_t modulus_lo,
-                                const scalar_t modulus_hi) {
+reduce_montgomery_operand(const scalar_t value,
+                          const scalar_t modulus_lo,
+                          const scalar_t modulus_hi) {
   constexpr scalar_t half_nbits = sizeof(scalar_t) * 4 - 1;
   const scalar_t modulus = modulus_lo + (modulus_hi << half_nbits);
-  scalar_t canonical = value % modulus;
+  scalar_t reduced = value % modulus;
   if constexpr (std::is_signed_v<scalar_t>) {
-    if (canonical < 0) canonical += modulus;
+    if (reduced < 0) reduced += modulus;
   }
-  return canonical;
+  return reduced;
 }
 
 template <typename scalar_t>
 __device__ __forceinline__ scalar_t
-canonicalize_lazy_montgomery_operand(const scalar_t value,
-                                     const scalar_t modulus_lo,
-                                     const scalar_t modulus_hi) {
+reduce_lazy_montgomery_operand(const scalar_t value,
+                               const scalar_t modulus_lo,
+                               const scalar_t modulus_hi) {
   constexpr scalar_t half_nbits = sizeof(scalar_t) * 4 - 1;
   const scalar_t modulus = modulus_lo + (modulus_hi << half_nbits);
   return value < modulus ? value : value - modulus;
@@ -90,21 +90,20 @@ montgomery_mul_split(const scalar_t a,
                      const scalar_t modulus_hi,
                      const scalar_t neg_inv_modulus_lo,
                      const scalar_t neg_inv_modulus_hi) {
-  return montgomery_mul(
-      canonicalize_montgomery_operand(a, modulus_lo, modulus_hi),
-      canonicalize_montgomery_operand(b, modulus_lo, modulus_hi),
-      modulus_lo,
-      modulus_hi,
-      neg_inv_modulus_lo,
-      neg_inv_modulus_hi);
+  return montgomery_mul(reduce_montgomery_operand(a, modulus_lo, modulus_hi),
+                        reduce_montgomery_operand(b, modulus_lo, modulus_hi),
+                        modulus_lo,
+                        modulus_hi,
+                        neg_inv_modulus_lo,
+                        neg_inv_modulus_hi);
 }
 
 template <typename scalar_t>
 __device__ __forceinline__ scalar_t
-canonicalize_lazy_residue(const scalar_t x, const scalar_t twice_modulus) {
+reduce_lazy_residue(const scalar_t x, const scalar_t twice_modulus) {
   constexpr scalar_t one = 1;
   const scalar_t q = twice_modulus >> one;
-  // Reduce the lazy interval [0, 2q) to the canonical interval [0, q).
+  // Reduce the lazy interval [0, 2q) to the standard interval [0, q).
   return (x < q) ? x : x - q;
 }
 
@@ -113,7 +112,7 @@ __device__ __forceinline__ scalar_t add_lazy_residues(
     const scalar_t a, const scalar_t b, const scalar_t twice_modulus) {
   // Add.
   const scalar_t aplusb = a + b;
-  // Reduce the lazy interval [0, 2q) to the canonical interval [0, q).
+  // Reduce the sum to the lazy interval [0, 2q).
   return (aplusb < twice_modulus) ? aplusb : aplusb - twice_modulus;
 }
 

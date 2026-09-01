@@ -29,7 +29,7 @@ python examples/15_homogeneous_batching.py \
   --preset slots32768-scale40-levels34-int64 --level 30 --batch-sizes 1,4,8
 ```
 
-The second command is not redundant. Level changes the active RNS row count,
+The second command measures the smaller active RNS row count at level 30,
 which changes both arithmetic work and the size of each NTT/key-switch working
 set.
 
@@ -56,14 +56,13 @@ For an RNS plaintext it is:
 [*batch, limb, coefficient_or_ntt_index]
 ```
 
-The leading dimensions are semantic message dimensions. They are not RNS
-limbs, polynomial components, distributed ranks, or hybrid-decomposition
-digits. All members of one homogeneous value share its context, level, scale,
+The leading dimensions index independent messages in the batch. All members of
+one homogeneous value share its level, scale,
 polynomial domain, modulus basis, device, dtype, and component count.
 
-They must also have the same effective encryption-key lineage. A context id
-describes parameters, not a particular secret key, so the engine cannot infer
-that independently produced ciphertexts are safe to stack. This example
+They must also have the same CKKS parameter provenance and effective
+encryption-key lineage. Runtime values encode neither relation, so the engine
+cannot infer that independently produced ciphertexts are safe to stack. This example
 encrypts the complete message batch with one engine/key. When assembling
 existing ciphertexts, key-switch them when necessary before calling
 `Ciphertext.stack_batch`.
@@ -137,7 +136,7 @@ torch.testing.assert_close(
 )
 ```
 
-`stack_batch` allocates and copies; it is not a hidden performance shortcut.
+`stack_batch` allocates and copies the loop results into one batched value.
 
 Batch-versus-loop selection is a programmer or workload-scheduler decision
 based on deployment measurements, latency requirements, and memory budget.
@@ -201,13 +200,13 @@ The worked RTX PRO 6000 measurements and the working-set explanation are in
 The stable mechanism is summarized in the
 [CKKS workload cost model](../concepts/performance/cost-model.md#homogeneous-batching-has-a-working-set-crossover).
 
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/15_homogeneous_batching.py
 :::
 
 ## Related concepts and guides
 
-- [Values and state](../api/fhelium/core/ciphertext.md)
+- [Values and state](../api/fhelium/values/ciphertext.md)
 - [CKKS workload cost model](../concepts/performance/cost-model.md)
 - [Choose a homogeneous batch size](../how-to/choose-homogeneous-batch-size.md)
 - [Benchmark a workload correctly](../how-to/benchmark-a-workload.md)

@@ -44,7 +44,7 @@ def main() -> None:
     )
 
     ct_rotated = engine.rotate_with_key(ct_x, engine.rotation_key(1))
-    sync_if_cuda(engine.device)
+    sync_if_cuda(torch.get_default_device())
 
     rows = []
     for name, ct, reference in [
@@ -56,7 +56,7 @@ def main() -> None:
         ),
         ("rotate(+1)", ct_rotated, torch.roll(x, shifts=1, dims=0)),
     ]:
-        error = error_stats(engine.decrypt_message(ct), reference, slots)
+        error = error_stats(engine.decrypt_message(ct).cpu(), reference, slots)
         rows.append(
             [name, ct.level, f"{error['max_abs']:.3e}", f"{error['rms']:.3e}"]
         )

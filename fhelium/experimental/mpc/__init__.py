@@ -4,7 +4,7 @@ The package exposes share-generation and aggregation functions for collective
 key generation, evaluation-key generation, collective decryption arithmetic,
 and public-key switching arithmetic.  Its supported scope is arithmetic
 correctness for compatible FHElium values and engine tensors. The implementation
-accepts a local CPU or CUDA ``CkksEngine``. The package provides no
+accepts a local CPU or CUDA ``Engine``. The package provides no
 authentication, transcript binding, malicious-party security, reviewed
 output-error sampler, supported smudging/useful-precision parameter profile,
 or privacy guarantee.  Functions whose names begin with

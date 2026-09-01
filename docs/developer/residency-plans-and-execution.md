@@ -59,7 +59,7 @@ state before propagating the failure.
 
 ## Managed accounting and optional admission budgets
 
-Each budgeted or observed location maintains:
+Each budgeted or observed location records:
 
 - `budget_bytes`, an optional strict admission limit;
 - `remaining_budget_bytes`, the unused strict budget or `None` when
@@ -104,7 +104,8 @@ budgeted or observed device. Transition reports sample allocator values around
 affected CUDA actions and name the sampled device. A cross-device action reports the
 destination device; inspect per-location snapshots for the complete multi-GPU
 state. These process-wide metrics complement manager-local budget and charge
-measurements; they remain observations rather than implicit budget inputs.
+measurements. A caller converts selected observations into explicit budget
+inputs.
 
 ## Lease execution lifetime
 
@@ -158,7 +159,7 @@ An abandoned CUDA lease finalizer emits a `ResourceWarning` and synchronizes
 all registered consumer streams before releasing protection. If safe release
 itself fails, a process-global strong root retains the manager and its storage
 rather than allowing allocator reuse while a kernel may still read it. This is
-a safety fallback, not a cleanup strategy; applications must close leases.
+a safety fallback. Applications close leases deterministically.
 
 ## Hold and reservation lifetimes
 
@@ -190,7 +191,7 @@ remains in force and a warning identifies the plan.
 
 Input sequences are normalized to tuples, preventing later caller mutation.
 The actions remain direct transition requests with manager-issued
-handles and destinations. A plan is manager-bound low-level command IR; it is
+handles and destinations. A plan is low-level command IR containing handles issued by one manager; it is
 not a portable deployment plan or an automatic policy.
 
 `execute_actions(actions, name=..., transfer_streams=...,
@@ -211,7 +212,7 @@ flowchart LR
 
 A scope can be nested as ordinary Python application structure. Reclaim permits
 a deterministic plan to free managed capacity before workspace headroom is
-admitted. Reservations are accounting tokens rather than allocations.
+admitted. Reservations are accounting tokens that protect budget headroom.
 
 Preflight simulates current-state constraints that are predictable before
 execution, including handle validity, source availability and reconstruction
@@ -272,13 +273,13 @@ silently replan.
 `search_state_limit` bounds deterministic planner work. Exhaustive failure
 within that bound raises `ResidencyPlanError` as infeasible; reaching the bound
 raises `ResidencySearchLimitError` as an inconclusive search instead. The
-error's `state_limit` and `explored_states` fields expose the bounded-search
+error's `state_limit` and `explored_states` fields expose the search-limit
 evidence when the search is inconclusive.
 
 `decide(request)` returns a tensor-free `ResidencyDecision` containing the
 concrete plan, selected evictions and reasons, policy identity, explanation,
-`explored_states`, and `expected_state_version`. The decision is process-local
-and manager-bound. Decision-making does not execute a transition, admit a
+`explored_states`, and `expected_state_version`. The decision is process-local, contains handles issued by one manager,
+and records that manager's expected state version. Decision-making does not execute a transition, admit a
 reservation, acquire a lease, or invoke a reconstruction source.
 `controller.scope(decision, ...)` checks the version atomically at context entry
 before any transition. A mismatch raises `ResidencyStaleStateError`.
@@ -304,8 +305,8 @@ effects without executing a plan or loading a source. Its
 - predicted charged peak for every location represented in the simulation;
 - aggregate feasibility and first reason for failure.
 
-Explanation is a point-in-time decision aid, not an admission lock. Every
-manager ownership, placement, reservation, or protection mutation advances a
+Explanation is a point-in-time decision aid. Each mutation to manager
+ownership, placement, reservations, or protection advances a
 monotonic `state_version`; completed CUDA-event reaping does as well. A caller
 may pass the snapshot version to `explain`, `execute_actions`, or `scope`.
 Scope entry repeats preflight under the manager lock and rejects stale expected
@@ -325,8 +326,7 @@ reserved bytes attributable.
 
 Completed primitive transitions produce `ResidencyTransitionReport` records
 with the requested action, resolved endpoints, no-op/reason state, logical/storage
-charge, timestamps, and optional allocator metrics plus sampled CUDA device. A
-bounded in-memory trace is configured by `trace_capacity`; `trace()` returns
+charge, timestamps, and optional allocator metrics plus sampled CUDA device. An in-memory trace limited by `trace_capacity` is configured; `trace()` returns
 completion order and `clear_trace()` changes no residency state.
 
 `ResidencyPlanReport` records completed transition reports and plan timing.
@@ -335,7 +335,7 @@ report. A runtime-failed `execute_actions`, scope entry, or scope exit raises
 `ResidencyPlanExecutionError`; its `partial_report` contains every committed
 transition. `phase` identifies the failed execution segment; action and
 reservation failures expose their corresponding object and phase-local index.
-The original runtime failure remains available as `__cause__`. The manager's bounded trace is an independent rolling observation
+The original runtime failure remains available as `__cause__`. The manager's finite-capacity trace is an independent rolling observation
 and may be disabled. Optional allocator samples are best-effort telemetry;
 sampling failure records unavailable metrics and cannot fail or reverse a
 residency transition.
@@ -391,7 +391,7 @@ not-yet-entered scope construction do not acquire manager state.
 | Closed manager reused | `ResidencyClosedError` |
 
 Constructor and argument schema errors use ordinary `TypeError` or
-`ValueError`; they are not runtime residency-state failures.
+`ValueError`, while runtime residency-state failures use the errors above.
 `ResidencyPlanError` and `ResidencyPlanExecutionError` are sibling
 `ResidencyError` subclasses: catching the former retains the failure-atomic
 preflight guarantee, while the latter requires inspection of committed partial
@@ -417,7 +417,7 @@ callers must ensure that no direct borrowed alias remains in CPU or CUDA use.
 | Borrowed values, leases, holds, reservations | `fhelium/residency/lease.py` |
 | Snapshots, explanations, transition/plan reports | `fhelium/residency/snapshot.py` |
 | Public exception hierarchy | `fhelium/errors.py` |
-| Residency and CUDA lifetime tests | `tests/test_resource_residency.py` |
+| Residency and CUDA lifetime tests | `tests/residency/test_resource_residency.py` |
 
 ## Continue
 

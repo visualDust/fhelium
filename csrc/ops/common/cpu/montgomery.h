@@ -166,19 +166,19 @@ multiply(const scalar_t lhs,
   return static_cast<scalar_t>(result < q ? result : result - q);
 }
 
-// Canonicalize signed or lazy operands before split-word Montgomery
+// Reduce signed or lazy operands before split-word Montgomery
 // multiplication so CPU and CUDA implement the same residue map.
 template <typename scalar_t>
-C10_ALWAYS_INLINE scalar_t canonicalize_operand(
+C10_ALWAYS_INLINE scalar_t reduce_operand_mod_q(
     const scalar_t value, const MontgomeryConstants<scalar_t>& constants) {
   const int64_t q = static_cast<int64_t>(modulus(constants));
-  int64_t canonical = static_cast<int64_t>(value) % q;
-  if (canonical < 0) canonical += q;
-  return static_cast<scalar_t>(canonical);
+  int64_t reduced = static_cast<int64_t>(value) % q;
+  if (reduced < 0) reduced += q;
+  return static_cast<scalar_t>(reduced);
 }
 
 template <typename scalar_t>
-C10_ALWAYS_INLINE scalar_t canonicalize_lazy_operand(
+C10_ALWAYS_INLINE scalar_t reduce_lazy_operand(
     const scalar_t value, const MontgomeryConstants<scalar_t>& constants) {
   const scalar_t q = static_cast<scalar_t>(modulus(constants));
   return value < q ? value : value - q;
@@ -189,8 +189,8 @@ C10_ALWAYS_INLINE scalar_t
 multiply_split(const scalar_t a,
                const scalar_t b,
                const MontgomeryConstants<scalar_t>& constants) {
-  return multiply(canonicalize_operand(a, constants),
-                  canonicalize_operand(b, constants),
+  return multiply(reduce_operand_mod_q(a, constants),
+                  reduce_operand_mod_q(b, constants),
                   constants);
 }
 
@@ -218,8 +218,8 @@ C10_ALWAYS_INLINE scalar_t subtract_lazy(const scalar_t lhs,
 }
 
 template <typename scalar_t>
-C10_ALWAYS_INLINE scalar_t canonicalize(const scalar_t value,
-                                        const scalar_t twice_modulus) {
+C10_ALWAYS_INLINE scalar_t reduce_to_standard(const scalar_t value,
+                                              const scalar_t twice_modulus) {
   const scalar_t q = twice_modulus >> 1;
   return value < q ? value : value - q;
 }

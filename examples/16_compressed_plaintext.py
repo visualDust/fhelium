@@ -113,7 +113,7 @@ def main() -> None:
     if not torch.equal(compressed_result.data, dense_result.data):
         raise AssertionError("Compressed and dense ciphertexts differ")
     decoded = engine.decrypt_message(
-        engine.ntt_domain_to_coefficient_domain(compressed_result)
+        engine.ntt_domain_to_coefficient_domain(compressed_result),
     ).cpu()
     max_error = torch.max(torch.abs(decoded - message * factor)).item()
     print(f"maximum cleartext error: {max_error:.3e}")
@@ -126,12 +126,12 @@ def main() -> None:
     dense_ms = _median_ms(
         lambda: engine.multiply_plaintext(ciphertext_ntt, dense),
         iterations=args.iterations,
-        device=engine.device,
+        device=torch.get_default_device(),
     )
     compressed_ms = _median_ms(
         lambda: engine.multiply_plaintext(ciphertext_ntt, compressed),
         iterations=args.iterations,
-        device=engine.device,
+        device=torch.get_default_device(),
     )
     print(f"dense evaluator median:      {dense_ms:.3f} ms")
     print(f"compressed evaluator median: {compressed_ms:.3f} ms")
@@ -142,12 +142,12 @@ def main() -> None:
     dense_add_ms = _median_ms(
         lambda: engine.add_plaintext_(dense_add_work, dense_addend),
         iterations=args.iterations,
-        device=engine.device,
+        device=torch.get_default_device(),
     )
     sparse_add_ms = _median_ms(
         lambda: engine.add_plaintext_(sparse_add_work, sparse_addend),
         iterations=args.iterations,
-        device=engine.device,
+        device=torch.get_default_device(),
     )
     print(f"dense in-place addition median:  {dense_add_ms:.3f} ms")
     print(f"sparse in-place addition median: {sparse_add_ms:.3f} ms")

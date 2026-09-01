@@ -48,7 +48,7 @@ from fhelium.artifacts.artifact import (
     ArtifactRef,
     ArtifactSensitivity,
 )
-from fhelium.core import SecretKey, TensorResident
+from fhelium.values import SecretKey, TensorResident
 from fhelium.errors import ArtifactError, UnsupportedArtifactStoreVersionError
 from fhelium.serialization import (
     ValueFileMetadata,
@@ -69,7 +69,6 @@ _ARTIFACT_COLUMNS = """
     artifact_schema_version,
     value_type,
     value_schema_version,
-    context_id,
     nbytes,
     payload_sha256,
     payload_relpath,
@@ -91,7 +90,6 @@ CREATE TABLE artifacts (
     artifact_schema_version INTEGER NOT NULL,
     value_type TEXT NOT NULL,
     value_schema_version INTEGER NOT NULL,
-    context_id TEXT,
     nbytes INTEGER NOT NULL CHECK (nbytes >= 0),
     payload_sha256 TEXT NOT NULL,
     payload_relpath TEXT NOT NULL UNIQUE,
@@ -103,7 +101,7 @@ CREATE TABLE artifacts (
 """
 
 
-def _canonical_schema_sql(statement: str) -> str:
+def _normalize_schema_sql(statement: str) -> str:
     return " ".join(statement.rstrip(";").split()).casefold()
 
 
@@ -113,7 +111,7 @@ _SCHEMA_STATEMENTS = tuple(
     if statement.strip()
 )
 _EXPECTED_TABLE_SQL = {
-    statement.split()[2]: _canonical_schema_sql(statement)
+    statement.split()[2]: _normalize_schema_sql(statement)
     for statement in _SCHEMA_STATEMENTS
 }
 
@@ -125,7 +123,6 @@ _EXPECTED_TABLE_COLUMNS = {
         "artifact_schema_version",
         "value_type",
         "value_schema_version",
-        "context_id",
         "nbytes",
         "payload_sha256",
         "payload_relpath",
@@ -448,7 +445,7 @@ class ArtifactStore:
                     f"{unexpected_schema_objects!r}"
                 )
             actual_table_sql = {
-                str(row[0]): _canonical_schema_sql(str(row[1]))
+                str(row[0]): _normalize_schema_sql(str(row[1]))
                 for row in connection.execute(
                     "SELECT name, sql FROM sqlite_schema "
                     "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
@@ -716,7 +713,6 @@ class ArtifactStore:
         *,
         device: torch.device | str = "cpu",
         expected_type: type[U],
-        expected_context_id: str | None = None,
         verify_checksum: bool = True,
     ) -> U: ...
 
@@ -727,7 +723,6 @@ class ArtifactStore:
         *,
         device: torch.device | str = "cpu",
         expected_type: None = None,
-        expected_context_id: str | None = None,
         verify_checksum: bool = True,
     ) -> T: ...
 
@@ -738,7 +733,6 @@ class ArtifactStore:
         *,
         device: torch.device | str = "cpu",
         expected_type: type[U],
-        expected_context_id: str | None = None,
         verify_checksum: bool = True,
     ) -> U | None: ...
 
@@ -749,7 +743,6 @@ class ArtifactStore:
         *,
         device: torch.device | str = "cpu",
         expected_type: None = None,
-        expected_context_id: str | None = None,
         verify_checksum: bool = True,
     ) -> TensorResident | None: ...
 
@@ -759,7 +752,6 @@ class ArtifactStore:
         *,
         device: torch.device | str = "cpu",
         expected_type: type[TensorResident] | None = None,
-        expected_context_id: str | None = None,
         verify_checksum: bool = True,
     ) -> TensorResident | None:
         """Get a repository value while holding a catalog read snapshot.
@@ -768,7 +760,7 @@ class ArtifactStore:
         :class:`ArtifactRef` is generation-specific, so a missing, replaced,
         deleted, or cross-store reference raises
         :class:`~fhelium.errors.StaleArtifactReferenceError` instead. Catalog,
-        checksum, type, context, and payload failures are never converted to
+        checksum, type, and payload failures are never converted to
         ``None``.
 
         This is a repository lookup, not a file-codec operation.
@@ -783,8 +775,6 @@ class ArtifactStore:
                 to CPU and is not inherited from the saved value.
             expected_type: Optional concrete value type required both in the
                 file metadata and after reconstruction.
-            expected_context_id: Optional context identity required before
-                payload materialization.
             verify_checksum: Whether to verify the repository payload digest
                 before reconstruction.
 
@@ -806,15 +796,6 @@ class ArtifactStore:
             metadata, payload_relpath = current
             if requested_ref is not None:
                 _validate_reference(requested_ref, metadata.ref)
-            if (
-                expected_context_id is not None
-                and metadata.ref.context_id != expected_context_id
-            ):
-                raise ValueError(
-                    "Artifact context mismatch: expected "
-                    f"{expected_context_id!r}, got "
-                    f"{metadata.ref.context_id!r}"
-                )
             payload_path = self._require_payload(
                 payload_relpath, artifact_name=name
             )
@@ -833,7 +814,6 @@ class ArtifactStore:
                 payload_path,
                 device=device,
                 expected_type=expected_type,
-                expected_context_id=metadata.ref.context_id,
             )
             if type(value).__name__ != metadata.ref.value_type:
                 raise TypeError(
@@ -1010,7 +990,6 @@ class ArtifactStore:
                 artifact_id=artifact_id,
                 value_type=value_file.value_type,
                 artifact_schema_version=ARTIFACT_SCHEMA_VERSION,
-                context_id=value_file.context_id,
                 nbytes=value_file.nbytes,
                 payload_sha256=payload_sha256,
             ),
@@ -1036,7 +1015,6 @@ class ArtifactStore:
                 artifact_schema_version,
                 value_type,
                 value_schema_version,
-                context_id,
                 nbytes,
                 payload_sha256,
                 payload_relpath,
@@ -1044,13 +1022,12 @@ class ArtifactStore:
                 created_at,
                 tensor_metadata_json,
                 value_metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET
                 artifact_id=excluded.artifact_id,
                 artifact_schema_version=excluded.artifact_schema_version,
                 value_type=excluded.value_type,
                 value_schema_version=excluded.value_schema_version,
-                context_id=excluded.context_id,
                 nbytes=excluded.nbytes,
                 payload_sha256=excluded.payload_sha256,
                 payload_relpath=excluded.payload_relpath,
@@ -1065,7 +1042,6 @@ class ArtifactStore:
                 metadata.ref.artifact_schema_version,
                 metadata.ref.value_type,
                 metadata.value_schema_version,
-                metadata.ref.context_id,
                 metadata.ref.nbytes,
                 metadata.ref.payload_sha256,
                 payload_relpath,
@@ -1139,7 +1115,6 @@ class ArtifactStore:
                 value_file.value_schema_version,
             ),
             "value_type": (artifact.ref.value_type, value_file.value_type),
-            "context_id": (artifact.ref.context_id, value_file.context_id),
             "nbytes": (artifact.ref.nbytes, value_file.nbytes),
             "tensor_metadata": (
                 artifact.tensor_metadata,
@@ -1179,7 +1154,6 @@ class ArtifactCollection:
         *,
         device: torch.device | str = "cpu",
         expected_type: type[U],
-        expected_context_id: str | None = None,
         verify_checksum: bool = True,
     ) -> U: ...
 
@@ -1190,7 +1164,6 @@ class ArtifactCollection:
         *,
         device: torch.device | str = "cpu",
         expected_type: None = None,
-        expected_context_id: str | None = None,
         verify_checksum: bool = True,
     ) -> T: ...
 
@@ -1201,7 +1174,6 @@ class ArtifactCollection:
         *,
         device: torch.device | str = "cpu",
         expected_type: type[U],
-        expected_context_id: str | None = None,
         verify_checksum: bool = True,
     ) -> U | None: ...
 
@@ -1212,7 +1184,6 @@ class ArtifactCollection:
         *,
         device: torch.device | str = "cpu",
         expected_type: None = None,
-        expected_context_id: str | None = None,
         verify_checksum: bool = True,
     ) -> TensorResident | None: ...
 
@@ -1222,7 +1193,6 @@ class ArtifactCollection:
         *,
         device: torch.device | str = "cpu",
         expected_type: type[TensorResident] | None = None,
-        expected_context_id: str | None = None,
         verify_checksum: bool = True,
     ) -> TensorResident | None:
         """Get a checked ref or optional collection-relative current value.
@@ -1237,14 +1207,12 @@ class ArtifactCollection:
                 ref_or_name,
                 device=device,
                 expected_type=expected_type,
-                expected_context_id=expected_context_id,
                 verify_checksum=verify_checksum,
             )
         return self.store.get(
             self._name(ref_or_name),
             device=device,
             expected_type=expected_type,
-            expected_context_id=expected_context_id,
             verify_checksum=verify_checksum,
         )
 

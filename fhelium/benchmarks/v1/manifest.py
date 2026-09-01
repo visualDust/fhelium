@@ -28,7 +28,7 @@ class DefinitionRegistry(Protocol):
 
 @dataclass(frozen=True)
 class ResolvedCase:
-    """A Benchmark v1 case bound to its definition and parameters."""
+    """A Benchmark v1 case resolved with its definition and profile."""
 
     case: BenchmarkCase
     definition: BenchmarkDefinition
@@ -58,7 +58,7 @@ class ResolvedCase:
 
 @dataclass(frozen=True)
 class ResolvedManifest:
-    """Canonical Benchmark v1 description and its SHA-256 identity."""
+    """Resolved Benchmark v1 description and its SHA-256 identity."""
 
     specification: BenchmarkSpecification
     cases: tuple[ResolvedCase, ...]
@@ -79,13 +79,13 @@ class ResolvedManifest:
         payload["manifest_sha256"] = self.sha256
         return payload
 
-    def canonical_bytes(self) -> bytes:
-        """Serialize the covered manifest in canonical UTF-8 JSON."""
+    def identity_bytes(self) -> bytes:
+        """Serialize the covered manifest as deterministic UTF-8 JSON."""
 
-        return _canonical_bytes(self.manifest_dict())
+        return _identity_bytes(self.manifest_dict())
 
 
-def _canonical_bytes(payload: Mapping[str, Any]) -> bytes:
+def _identity_bytes(payload: Mapping[str, Any]) -> bytes:
     normalized = normalize_json(payload, path="manifest")
     return json.dumps(
         normalized,
@@ -155,7 +155,7 @@ def resolve_benchmark(
         "description": specification.description,
         "cases": [case.to_manifest_dict() for case in case_tuple],
     }
-    digest = hashlib.sha256(_canonical_bytes(body)).hexdigest()
+    digest = hashlib.sha256(_identity_bytes(body)).hexdigest()
     return ResolvedManifest(
         specification=specification,
         cases=case_tuple,

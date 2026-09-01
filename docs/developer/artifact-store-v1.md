@@ -63,22 +63,22 @@ ownership of value encoding and reconstruction.
 
 ## Catalog identity and schema
 
-Format v1 requires SQLite 3.37 or later, `STRICT` tables,
+The current format requires SQLite 3.37 or later, `STRICT` tables,
 rollback-journal `DELETE` mode, and `synchronous=FULL`. The store metadata table
 contains exactly:
 
 - `format = "fhelium-artifact-store"`;
-- one canonical UUID `store_id`.
+- one normalized UUID `store_id`.
 
 The artifact table has one row per normalized logical name. A row records the
 current artifact UUID, value and artifact schema versions, concrete value type,
-context identity, logical tensor bytes, payload SHA-256, immutable object path,
+logical tensor bytes, payload SHA-256, immutable object path,
 sensitivity label, creation time, and the tensor/value metadata copied from the
 value-file header.
 
 Opening a store validates the schema version, required table definitions,
-unexpected schema objects, catalog identity, canonical UUIDs, row structure,
-and referenced object presence. Unsupported versions fail closed; v1 provides
+unexpected schema objects, catalog identity, normalized UUIDs, row structure,
+and referenced object presence. Unsupported versions fail closed; the store provides
 no migration API.
 
 The catalog path and bootstrap lock must each be regular files with exactly one
@@ -122,7 +122,7 @@ Device movement and memory release remain ordinary value/residency operations.
 the current row. The transaction remains open through:
 
 - optional `ArtifactRef` generation validation;
-- context and expected-type checks;
+- expected-type checks;
 - payload presence and optional SHA-256 verification;
 - catalog/file-header cross-validation;
 - value reconstruction through `load_value`.
@@ -135,8 +135,11 @@ retired during materialization.
 A string name with no current row is an ordinary repository miss and returns
 `None`. A generation-specific reference that is missing, replaced, deleted, or
 belongs to another store raises `StaleArtifactReferenceError`. Missing payloads,
-checksum failures, malformed metadata, and type/context mismatches remain
+checksum failures, malformed metadata, and type mismatches remain
 errors rather than cache misses.
+
+The store does not record which `CkksConfig` produced a value. Applications
+must associate each logical artifact with compatible parameters and keys.
 
 ## Recovery
 

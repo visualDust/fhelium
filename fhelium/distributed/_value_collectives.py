@@ -7,7 +7,7 @@ from typing import cast
 
 import torch
 
-from fhelium.core import Ciphertext, CompressedPlaintext, Plaintext
+from fhelium.values import Ciphertext, CompressedPlaintext, Plaintext
 from fhelium.distributed._collective_common import (
     _all_gather_descriptors,
     _all_gather_tensor,
@@ -643,7 +643,6 @@ def all_gather_plaintexts(
             level=value.level,
             scale=value.scale,
             data=None if data_parts is None else data_parts[rank],
-            context_id=value.context_id,
             representation=value.representation,
             polynomial_domain=value.polynomial_domain,
             modulus_basis=value.modulus_basis,

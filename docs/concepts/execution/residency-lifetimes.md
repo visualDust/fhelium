@@ -15,7 +15,7 @@ The abstraction layers have distinct responsibilities:
 | `ResidencyPlan` | Concrete ordered reclaim, entry, and exit commands plus scoped headroom. |
 | `ResidencyRequest` | Declarative `(handle, location)` postconditions and headroom requirements. |
 | `ResidencyPolicy` | Pure deterministic ordering and configured fallback-tier choices. |
-| `ResidencyDecision` | Manager-bound, state-versioned plan and policy evidence. |
+| `ResidencyDecision` | Manager-issued, state-versioned plan and policy evidence. |
 | `ResidencyController.use(...)` | Convenience decision, version-checked scope entry, and strict lease acquisition. |
 
 In short: a request says **what** must be true; a policy ranks legal choices; a
@@ -41,13 +41,12 @@ graph TB
 - **Residency** tracks which manager-issued local handle has a materialization
   in which local memory location.
 
-Residency and execution buffers remain separate ownership domains. This
-feature does not treat a mutable fixed-address buffer or captured program as a
-managed logical-value materialization; a dedicated cross-feature integration
-interface is deferred.
+Residency and execution buffers retain separate ownership domains. Residency
+manages logical-value materializations; reusable buffers and captured Programs
+own their fixed execution storage.
 
-Moving a value between pageable host, pinned host, or CUDA does not change its
-CKKS context, level, scale, prime IDs, polynomial domain, or key relation.
+Moving a value among pageable host, pinned host, and CUDA preserves its level,
+scale, prime IDs, polynomial domain, and key relation.
 Pinned host storage can support asynchronous host-to-device (H2D) transfer when
 the copy preconditions and source-lifetime requirements are satisfied.
 
@@ -67,18 +66,18 @@ Two independent constraints describe a managed value:
 | Constraint | Meaning |
 | --- | --- |
 | `ReplicaMode.REPLICABLE` | Multiple simultaneous materializations are permitted. Use `ensure` to create another. |
-| `ReplicaMode.EXCLUSIVE` | Exactly one steady materialization is permitted. Use `move`, not `ensure`, to change its location. |
+| `ReplicaMode.EXCLUSIVE` | Exactly one steady materialization is permitted. Use `move` to change its location. |
 | `Recoverability.RECONSTRUCTIBLE` | A registered `ResidencySource` can reconstruct the managed value after its final materialization is dropped. |
 | `Recoverability.MUST_PRESERVE` | At least one materialization remains until the application discards the managed value. `adopt` establishes this preservation requirement. |
 
 `ResidencySource.load()` synchronously reconstructs the registered value and
-transfers sole logical ownership of independent tensor storage to the manager.
-The source must not retain or mutate the returned concrete value after the
-callback returns. While `load()` is active, every concurrent public access to
+transfers sole logical ownership of independent Tensor storage to the manager.
+The source releases its alias when the callback returns. While `load()` is active, every concurrent public access to
 the same manager's mutable or observational state is rejected in every thread
 with `ResidencyReentrancyError`. This manager-wide exclusion includes unrelated
 observer and transition calls. Reading immutable `manager_id` and constructing
-a not-yet-entered scope do not access manager state and remain available.
+a scope before entry remain available because these actions access no mutable
+manager state.
 
 ## Adoption and leases rely on caller-enforced aliasing rules
 
@@ -109,10 +108,9 @@ is also unsupported. The manager's storage accounting, immutable-value
 assumptions, removal protection, and asynchronous lifetime safety apply only
 while callers follow these rules.
 
-The adoption and lease APIs deliberately pass direct Python objects. Adoption does not
-make a defensive copy, and lease lookup does not replace a concrete value with
-a revocable proxy; the manager therefore relies on caller compliance rather
-than mechanical alias revocation.
+The adoption and lease APIs deliberately pass direct Python objects. The
+manager transfers and borrows those objects in place and relies on callers to
+follow the alias rules above.
 
 ## Lazy local locations and optional budgets
 
@@ -210,7 +208,7 @@ $0, \ldots, i-1$ remain committed and are not rolled back. A runtime-failed
 `execute_actions`, scope entry, or scope exit raises
 `ResidencyPlanExecutionError`.
 The error identifies the failed phase and action and carries a structured
-`partial_report` containing every completed transition. The manager's bounded
+`partial_report` containing every completed transition. The manager's finite-capacity
 trace remains an independent rolling observation and may be disabled. A scope
 publishes its complete report only after its exit actions complete
 successfully. Failed scope entry consumes and closes that single-use scope;
@@ -283,7 +281,7 @@ thread, waits for protected values, retries a failed transition, rolls back a
 committed prefix, or automatically emits `DiscardValue`.
 
 `decide()` reads a tensor-free manager snapshot and returns a
-`ResidencyDecision` bound to its `state_version`. Scope entry checks that
+`ResidencyDecision` records its source `state_version`. Scope entry checks that
 version under the manager lock before reclaim or reservation mutation. A stale
 decision raises `ResidencyStaleStateError`; it is never silently replanned.
 Successful automatic uses keep their materializations cached. A later

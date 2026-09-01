@@ -1,4 +1,4 @@
-"""Canonical memory-tier locations for managed value residency.
+"""Memory-tier locations for managed value residency.
 
 A residency location identifies one storage class and, for CUDA storage, one
 physical device index. This immutable pair is the location key used by plans,
@@ -23,7 +23,7 @@ def _normalize_cuda_device(device: torch.device | str) -> torch.device:
         if match is None:
             raise ValueError(
                 "CUDA residency location requires an indexed "
-                "canonical device such as cuda:0"
+                "indexed device such as cuda:0"
             )
         index = int(match.group(1))
         if index > _MAX_CUDA_DEVICE_INDEX:
@@ -46,9 +46,9 @@ def _normalize_cuda_device(device: torch.device | str) -> torch.device:
 
 @dataclass(frozen=True, slots=True)
 class ResidencyLocation:
-    """Canonical identity of one managed memory tier.
+    """Immutable identity of one managed memory tier.
 
-    Host locations always store the canonical unindexed ``cpu`` device.  An
+    Host locations always store the unindexed ``cpu`` device. An
     indexed CPU spelling such as ``cpu:0`` is accepted but normalized, which
     prevents two identities for the same host tier.  CUDA locations require an
     device index because an ambient current device is not a stable
@@ -92,7 +92,7 @@ PINNED_HOST = ResidencyLocation("pinned-host", torch.device("cpu"))
 
 
 def cuda_location(device: torch.device | str) -> ResidencyLocation:
-    """Return the canonical location for one indexed CUDA device.
+    """Return the location for one indexed CUDA device.
 
     Args:
         device: CUDA device such as ``"cuda:0"``.  Unindexed ``"cuda"`` is

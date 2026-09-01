@@ -21,12 +21,13 @@ multiplicand_ntt = engine.coefficient_domain_to_ntt_domain(engine.encrypt_messag
 multiplier_ntt = engine.coefficient_domain_to_ntt_domain(engine.encrypt_message(multiplier))
 ```
 
-[`CkksEngine.multiply`](../api/fhelium/engine/ckks_engine.md#multiply) has these
+[`fhelium.eager.Engine.multiply`](../api/fhelium/eager.md) has these
 fixed preconditions:
 
 - both inputs have two components;
 - both inputs are in the same NTT/Montgomery representation;
-- level, scale, basis, context, and active prime IDs are compatible;
+- level, scale, basis, and active prime IDs are compatible;
+- the caller established compatible CKKS parameter provenance;
 - the result is a three-component NTT ciphertext;
 - no implicit relinearization or rescale occurs.
 
@@ -112,13 +113,12 @@ component count, polynomial domain, residue representation, and scale
 Use those fields when debugging a schedule. A tensor with the expected shape
 but the wrong domain or Montgomery representation is not a compatible operand.
 
-::: danger Late does not mean automatic
-FHElium does not keep a hidden pending-relinearization flag and later
-materialize it implicitly. The three-component value is a normal `Ciphertext`,
-and the caller chooses the relinearization point.
-:::
+For represented programs, the Compile stack can insert relinearization
+automatically. [Compose and execute a pipeline from built-in Compile
+passes](compose-and-execute-compile-pipeline.md) shows
+`InsertRelinearizationPass` placing the operation in a transformed Program.
 
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/06_explicit_state_late_relinearization_ntt.py
 :::
 

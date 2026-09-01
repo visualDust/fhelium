@@ -16,7 +16,7 @@ namespace {
 // final extent with repeated power-of-two support, and strided
 // form supplies [*batch, limb] implicit values. rns_params is
 // [parameter, limb] in the same prime_ids order. The kernel computes
-// $c'_{0,i}=c_{0,i}+p_i\bmod q_i$ and returns standard canonical [0, q_i).
+// $c'_{0,i}=c_{0,i}+p_i\bmod q_i$ and returns standard residues in [0, q_i).
 // Functional output does not alias; underscore variants mutate only ciphertext
 // storage. Plaintext/tables are read-only. Only a genuinely unbatched plaintext
 // may broadcast across public batch; limb/coefficient axes never broadcast.
@@ -42,7 +42,7 @@ add_prepared_plaintext_residue(scalar_t ciphertext_value,
   value = add_lazy_residues(value, plaintext_value, twice_modulus);
   value = montgomery_reduce(
       value, modulus_lo, modulus_hi, neg_inv_modulus_lo, neg_inv_modulus_hi);
-  return canonicalize_lazy_residue(value, twice_modulus);
+  return reduce_lazy_residue(value, twice_modulus);
 }
 
 // Add one operation-ready coefficient-domain plaintext to a ciphertext
@@ -315,7 +315,7 @@ void validate_add_strided_plaintext(const torch::Tensor& ciphertext,
   check_compressed_rns_binary_3d(
       ciphertext, strided_plaintext, "ckks_add_strided_plaintext_component");
   TORCH_CHECK(implicit_plaintext.dim() == 2,
-              "ckks_add_strided_plaintext_component requires canonical "
+              "ckks_add_strided_plaintext_component requires rank-three "
               "implicit_plaintext [batch, limb] storage");
   TORCH_CHECK(implicit_plaintext.size(0) == strided_plaintext.size(0) &&
                   implicit_plaintext.size(1) == strided_plaintext.size(1),

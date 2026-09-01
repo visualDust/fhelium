@@ -24,9 +24,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tree", type=Path)
     parser.add_argument(
-        "--allow-missing-repository",
-        action="store_true",
-        help="accept HTTP 404 indexes when creating the repository",
+        "--allow-missing-configuration",
+        action="append",
+        default=[],
+        metavar="CONFIGURATION",
+        help=(
+            "accept an HTTP 404 only for this newly introduced configuration; "
+            "repeat for multiple roots"
+        ),
     )
     return parser.parse_args()
 
@@ -47,9 +52,7 @@ def load_matrix_module() -> ModuleType:
     return module
 
 
-def fetch_json(
-    url: str, *, allow_missing_repository: bool
-) -> dict[str, object] | None:
+def fetch_json(url: str, *, allow_missing: bool) -> dict[str, object] | None:
     error: Exception | None = None
     for attempt in range(6):
         try:
@@ -67,7 +70,7 @@ def fetch_json(
             return value
         except HTTPError as current:
             if current.code == 404:
-                if allow_missing_repository:
+                if allow_missing:
                     return None
                 raise RuntimeError(
                     f"published index does not exist: {url}"
@@ -142,10 +145,40 @@ def html_page(files: list[dict[str, object]]) -> str:
     )
 
 
+def merge_file_entries(
+    published: list[dict[str, object]],
+    prepared: list[dict[str, object]],
+    *,
+    configuration: str,
+) -> list[dict[str, object]]:
+    """Merge one published subset with prepared entries without replacement."""
+
+    by_filename: dict[str, dict[str, object]] = {}
+    for value in (*published, *prepared):
+        filename = str(value["filename"])
+        existing = by_filename.get(filename)
+        if existing is not None and existing != value:
+            raise RuntimeError(
+                f"published wheel identity differs for {configuration}/{filename}"
+            )
+        by_filename[filename] = value
+    return [by_filename[name] for name in sorted(by_filename)]
+
+
 def main() -> None:
     args = parse_args()
     tree = args.tree.resolve()
     matrix = load_matrix_module().load_matrix()
+    configuration_ids = {
+        configuration.id for configuration in matrix.configurations
+    }
+    allowed_missing = set(args.allow_missing_configuration)
+    unknown = allowed_missing - configuration_ids
+    if unknown:
+        raise RuntimeError(
+            "unknown missing repository configurations: "
+            + ", ".join(sorted(unknown))
+        )
     for configuration in matrix.configurations:
         project_dir = tree / configuration.id / "simple" / PROJECT
         local_path = project_dir / "index.json"
@@ -160,9 +193,9 @@ def main() -> None:
         )
         remote = fetch_json(
             remote_url,
-            allow_missing_repository=args.allow_missing_repository,
+            allow_missing=configuration.id in allowed_missing,
         )
-        values = []
+        published_values: list[dict[str, object]] = []
         if remote is not None:
             if remote.get("meta") != {"api-version": "1.4"}:
                 raise RuntimeError(f"unsupported published index: {remote_url}")
@@ -171,7 +204,7 @@ def main() -> None:
                 raise RuntimeError(
                     f"published index has no files: {remote_url}"
                 )
-            values.extend(
+            published_values.extend(
                 validate_file(
                     value,
                     source=remote_url,
@@ -180,7 +213,7 @@ def main() -> None:
                 )
                 for value in remote_files
             )
-        values.extend(
+        prepared_values = [
             validate_file(
                 value,
                 source=str(local_path),
@@ -188,18 +221,13 @@ def main() -> None:
                 configuration=configuration.id,
             )
             for value in local["files"]
-        )
+        ]
 
-        by_filename: dict[str, dict[str, object]] = {}
-        for value in values:
-            filename = str(value["filename"])
-            existing = by_filename.get(filename)
-            if existing is not None and existing != value:
-                raise RuntimeError(
-                    f"published wheel identity differs for {configuration.id}/{filename}"
-                )
-            by_filename[filename] = value
-        merged = [by_filename[name] for name in sorted(by_filename)]
+        merged = merge_file_entries(
+            published_values,
+            prepared_values,
+            configuration=configuration.id,
+        )
         local_path.write_text(
             json.dumps(
                 {

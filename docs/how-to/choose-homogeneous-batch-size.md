@@ -27,8 +27,8 @@ Keep fixed:
 - warmup, timed region, and synchronization rule.
 
 All ciphertext members must have one effective encryption-key lineage.
-Matching `context_id` values establish parameter compatibility but do not
-prove key compatibility.
+Runtime values do not prove parameter or key compatibility; retain both
+relations in the benchmark setup.
 
 Validate batched ciphertext data exactly against a stacked loop result when
 the paths begin from the same ciphertext members, then decrypt both against a
@@ -56,10 +56,10 @@ $$
 W_{digit}=B\cdot |QP_{active}|\cdot N\cdot 8\ \text{bytes}.
 $$
 
-This is not the full peak. NTT read/write traffic, key rows, two key-switch
-accumulators, automorphism temporaries, ciphertext outputs, and allocator
-behavior add to it. It does explain why the same B can be favorable at a later
-level and unfavorable at level zero.
+The full peak additionally includes NTT read/write traffic, key rows, two
+key-switch accumulators, automorphism temporaries, ciphertext outputs, and
+allocator behavior. The proxy still explains why the same B can be favorable
+at a later level and unfavorable at level zero.
 
 ```mermaid
 flowchart LR
@@ -75,8 +75,8 @@ flowchart LR
     C -->|working set crosses threshold| S
 ```
 
-The relevant comparison is the complete active set, not only
-`W_digit < L2 size`. Multiple live tensors can cross the effective capacity threshold
+Compare the complete active set with effective cache capacity. Multiple live
+tensors can cross the effective capacity threshold
 even when one digit alone is smaller than L2.
 
 ## 4. Sweep the levels used by the evaluator
@@ -118,7 +118,7 @@ capture can remove much of the host-launch disadvantage of the loop.
 
 ## Reference measurement: RTX PRO 6000 Blackwell
 
-The following data is a worked example, not a portable dispatch table.
+The following data is a worked example for the measured platform and workload.
 
 | Field | Reference value |
 | --- | --- |
@@ -214,9 +214,9 @@ fit-to-spill transition:
 | 16 / L25 | 14 | 7.000 MiB | B8 MxV-8 was 1.07x with `radix16_compact`. |
 | 16 / L30 | 9 | 4.500 MiB | B8 MxV-8 was 1.09x with `radix16_compact`. |
 
-The full active set remains larger than the digit proxy. The useful distinction
-is whether B changes the cache-residency regime, not whether this one tensor is
-smaller than the nominal L2 capacity.
+The full active set remains larger than the digit proxy. Ask whether B changes
+the cache-residency regime, which can happen even when a single digit tensor is
+smaller than nominal L2 capacity.
 
 CUDA Graph also changed the policy because it removed most of the explicit
 loop's host-submission disadvantage. Values remain `loop / batch`:
@@ -233,9 +233,8 @@ On this A6000, `logN = 15` exposed the clearest fit-to-spill loss: one
 level-zero message was close to the 6 MiB L2 capacity, while even B2 was not.
 At `logN = 16`, L0 B1 was already larger than L2, so increasing B did not
 introduce the same new cache transition. The genuine radix-16 backend reduced enough transform
-work to retain small batch gains. This contrast shows why L2 size alone is not
-a dispatch rule; backend structure and graph policy remain part of the
-measured region.
+work to retain small batch gains. A dispatch rule therefore needs measured
+backend structure and graph policy in addition to L2 size.
 
 ## 6. Put the choice in application code
 

@@ -1,23 +1,18 @@
-"""Errors raised by JIT capture, passes, planning, and execution."""
+"""Errors raised by runtime-oriented JIT transformation and interpretation."""
 
 from fhelium.errors import FHEliumError
 
 
 class JitError(FHEliumError):
-    """Base error for JIT capture, transformation, and execution."""
-
-
-class JitTraceError(JitError, RuntimeError):
-    """A Python or PyTorch construct cannot be captured safely."""
+    """Base error for JIT transformation, build, and execution."""
 
 
 class JitInputError(JitError, ValueError):
-    """An input role, shape, or runtime value violates its declared requirements."""
+    """A runtime input cannot be bound to the represented entry interface."""
 
 
-class JitPlanningError(JitError, RuntimeError):
-    """A valid captured graph cannot satisfy the requested CKKS state plan."""
+class JitInterpreterError(JitError, RuntimeError):
+    """The IR interpreter cannot represent or execute a request."""
 
 
-class JitPassError(JitError, RuntimeError):
-    """A graph pass, pipeline, or explicit validation gate failed."""
+__all__ = ["JitError", "JitInputError", "JitInterpreterError"]

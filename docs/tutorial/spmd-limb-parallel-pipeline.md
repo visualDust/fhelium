@@ -87,7 +87,7 @@ rescale then drops one leading Q prime using cross-prime information and records
 the actual output scale $\Delta^2/q_{\mathrm{drop}}$; it does not reset the
 value to `default_scale`.
 
-## Gather is not reduce
+## Gather reconstructs disjoint limb rows
 
 `gather_ciphertext_limbs` concatenates disjoint prime intervals:
 
@@ -113,14 +113,7 @@ Limb partitioning is useful when:
 It is less attractive when every operation immediately needs reconstruction;
 communication then dominates the local modular arithmetic.
 
-::: info The engine accepts validated local intervals
-Rank-local operations still use public `CkksEngine` methods. The engine
-validates context, device, ring dimension, modulus basis, and contiguous ordered
-`prime_ids`; the distributed facade does not introduce a separate sharded
-value type.
-:::
-
-::: details Complete runnable source
+::: details Source
 <<< @/../examples/10_spmd_limb_parallel_pipeline.py
 :::
 

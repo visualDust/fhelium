@@ -23,12 +23,12 @@ enum class CpuInverseOutput : int {
 
 using fhelium::cpu::adaptive_grain;
 using fhelium::cpu::add_lazy;
-using fhelium::cpu::canonicalize;
 using fhelium::cpu::center;
 using fhelium::cpu::load_constants;
 using fhelium::cpu::MontgomeryConstants;
 using fhelium::cpu::multiply;
 using fhelium::cpu::reduce;
+using fhelium::cpu::reduce_to_standard;
 using fhelium::cpu::subtract_lazy;
 
 template <typename scalar_t, CpuForwardInput input>
@@ -299,10 +299,11 @@ void inverse_indexed_rows(torch::Tensor residues,
             if constexpr (output != CpuInverseOutput::kMontgomery) {
               value = reduce(value, constants);
               if constexpr (output == CpuInverseOutput::kStandard) {
-                value = canonicalize(value, constants.twice_modulus);
+                value = reduce_to_standard(value, constants.twice_modulus);
               } else if constexpr (output == CpuInverseOutput::kCentered) {
-                value = center(canonicalize(value, constants.twice_modulus),
-                               constants.twice_modulus);
+                value =
+                    center(reduce_to_standard(value, constants.twice_modulus),
+                           constants.twice_modulus);
               }
             }
             row_values[coefficient * value_stride2] = value;

@@ -11,6 +11,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from matrix import load_matrix
+
 
 INDEX_SUFFIXES = (
     "/simple/index.html",
@@ -18,6 +20,17 @@ INDEX_SUFFIXES = (
     "/simple/fhelium/index.html",
     "/simple/fhelium/index.json",
 )
+
+
+def expected_index_paths() -> frozenset[Path]:
+    """Return every matrix-declared static index path."""
+
+    matrix = load_matrix()
+    return frozenset(
+        Path(configuration.id) / suffix.removeprefix("/")
+        for configuration in matrix.configurations
+        for suffix in INDEX_SUFFIXES
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -174,21 +187,28 @@ def main() -> None:
         print(f"Published {len(immutable) + 1} immutable release objects")
         return
 
-    indexes = [
-        path
+    indexes = {
+        path.relative_to(tree): path
         for path in files
         if path.relative_to(tree).as_posix().endswith(INDEX_SUFFIXES)
-    ]
-    if len(indexes) != 16:
+    }
+    expected_indexes = expected_index_paths()
+    actual_indexes = frozenset(indexes)
+    if actual_indexes != expected_indexes:
+        missing = sorted(expected_indexes - actual_indexes)
+        extra = sorted(actual_indexes - expected_indexes)
         raise RuntimeError(
-            f"expected 16 static index files, found {len(indexes)}"
+            "prepared static indexes do not match the release matrix; "
+            f"missing={[path.as_posix() for path in missing]}, "
+            f"extra={[path.as_posix() for path in extra]}"
         )
-    for path in indexes:
+    for relative in sorted(indexes):
+        path = indexes[relative]
         upload(
             base,
             bucket,
             path,
-            path.relative_to(tree).as_posix(),
+            relative.as_posix(),
             cache_control="public, max-age=60, must-revalidate",
         )
     print(f"Published {len(indexes)} index pages")

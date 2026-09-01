@@ -19,7 +19,6 @@ body:
         - CPU native backend
         - CUDA native backend
         - Distributed execution
-        - JIT
         - Residency
         - Serialization or ArtifactStore
         - Build, installation, or packaging

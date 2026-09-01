@@ -23,6 +23,7 @@ from __future__ import annotations
 import torch
 
 import fhelium as fh
+from fhelium.eager import Engine
 import fhelium.distributed as dist
 
 
@@ -33,10 +34,10 @@ def _message_for_rank(rank: int) -> torch.Tensor:
 
 def main() -> None:
     dist.init()
-    engine = fh.CkksEngine(
+    torch.set_default_device(dist.local_device())
+    engine = Engine(
         fh.Preset.slots32768_scale40_levels34_int64,
-        device=dist.local_device(),
-        allow_sk_gen=False,
+        allow_automatic_key_generation=False,
     )
 
     # Only the data owner needs encryption/decryption keys. The worker ranks
@@ -107,7 +108,7 @@ def main() -> None:
                 output,
                 secret_key=secret_key,
                 is_real=True,
-            )[: message.numel()]
+            ).cpu()[: message.numel()]
             expected = 1.25 * message + (-0.003 + 0.001 * rank)
             torch.testing.assert_close(decoded, expected, atol=3e-5, rtol=0)
             errors.append(float(torch.max(torch.abs(decoded - expected))))

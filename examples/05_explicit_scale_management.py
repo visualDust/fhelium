@@ -21,10 +21,11 @@ from common import (
 )
 
 import fhelium as fh
+from fhelium.eager import Engine
 
 
 def multiply_twice_then_rescale_to_next_level(
-    engine: fh.CkksEngine,
+    engine: Engine,
     source: fh.Ciphertext,
     first_message: torch.Tensor,
     second_message: torch.Tensor,
@@ -90,14 +91,14 @@ def scale_row(label: str, value: fh.Ciphertext) -> list[object]:
 
 def error_row(
     label: str,
-    engine: fh.CkksEngine,
+    engine: Engine,
     value: fh.Ciphertext,
     expected: torch.Tensor,
 ) -> list[object]:
     """Decrypt one result and return compact approximation-error statistics."""
 
     error = error_stats(
-        engine.decrypt_message(value),
+        engine.decrypt_message(value).cpu(),
         expected,
         engine.num_slots,
     )
@@ -187,7 +188,7 @@ def main() -> None:
         max_relative_change=args.reinterpret_bound,
     )
     reinterpreted_sum = engine.add(reinterpreted, level_aligned_source)
-    sync_if_cuda(engine.device)
+    sync_if_cuda(torch.get_default_device())
 
     print(engine)
     print(f"default scale Delta: {default_scale:.17g}")

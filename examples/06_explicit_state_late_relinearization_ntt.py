@@ -17,6 +17,7 @@ from common import (
 )
 
 import fhelium as fh
+from fhelium.eager import Engine
 
 
 def _state(ct: fh.Ciphertext) -> str:
@@ -27,7 +28,7 @@ def _state(ct: fh.Ciphertext) -> str:
 
 
 def late_relinearization(
-    engine: fh.CkksEngine, pair_count: int
+    engine: Engine, pair_count: int
 ) -> tuple[fh.Ciphertext, torch.Tensor]:
     accumulator: fh.Ciphertext | None = None
     reference: torch.Tensor | None = None
@@ -67,7 +68,7 @@ def late_relinearization(
 
 
 def ntt_reuse(
-    engine: fh.CkksEngine,
+    engine: Engine,
 ) -> tuple[fh.Ciphertext, torch.Tensor]:
     fixed_values = small_complex_vector(engine.num_slots, seed=300, scale=0.005)
     source_values = small_complex_vector(
@@ -106,7 +107,9 @@ def main() -> None:
         ("NTT operand reuse", reuse, reuse_reference),
     ]:
         error = error_stats(
-            engine.decrypt_message(value), reference, engine.num_slots
+            engine.decrypt_message(value).cpu(),
+            reference,
+            engine.num_slots,
         )
         rows.append(
             [name, value.level, _state(value), f"{error['max_abs']:.3e}"]

@@ -9,11 +9,10 @@ enum class RepetitionLayout : int { kCyclic, kContiguous };
 inline void check_compressed_rns_binary_3d(const torch::Tensor& lhs,
                                            const torch::Tensor& compressed_rhs,
                                            const char* operation) {
-  TORCH_CHECK(
-      lhs.dim() == 3 && compressed_rhs.dim() == 3,
-      operation,
-      " requires canonical lhs [batch, limb, coefficient] and compressed_rhs "
-      "[batch, limb, unique] operands");
+  TORCH_CHECK(lhs.dim() == 3 && compressed_rhs.dim() == 3,
+              operation,
+              " requires lhs [batch, limb, coefficient] and compressed_rhs "
+              "[batch, limb, unique] operands");
   TORCH_CHECK(lhs.size(1) == compressed_rhs.size(1),
               operation,
               " operand limb counts differ: ",

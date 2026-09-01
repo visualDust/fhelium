@@ -15,25 +15,25 @@ from typing import Any
 import numpy as np
 import torch
 
-from fhelium.core import (
+from fhelium.values import (
     Ciphertext,
     Plaintext,
     RelinearizationKey,
     RotationKey,
     RotationKeySet,
 )
-from fhelium.engine.ckks_engine import CkksEngine
+from fhelium.eager import Engine
 from fhelium.experimental.bootstrap._linear import (
     DiagonalLinearTransform,
 )
 from fhelium.experimental.bootstrap._modraise import ModRaisedCiphertext
-from fhelium.core.rotation import (
+from fhelium.utils.rotation import (
     decompose_signed_power_of_two_rotation,
 )
 
 
 def _rotate_with_key_inventory(
-    engine: CkksEngine,
+    engine: Engine,
     decomposition_cache: MutableMapping[int, tuple[int, ...]],
     ciphertext: Ciphertext,
     step: int,
@@ -42,7 +42,7 @@ def _rotate_with_key_inventory(
 ) -> Ciphertext:
     r"""Compute $\operatorname{Rot}_r(c)$ with direct or composed keys.
 
-    The function first canonicalizes `step` as signed slot rotation $r$ and uses a direct key when the
+    The function first normalizes `step` as signed slot rotation $r$ and uses a direct key when the
     inventory contains one. Otherwise it caches a signed power-of-two
     decomposition and applies those keyed rotations in sequence. The cache
     contains only integer steps; it never retains ciphertexts or key tensors.
@@ -54,33 +54,36 @@ def _rotate_with_key_inventory(
     new storage; a zero step clones rather than aliases the input.
     """
 
-    canonical = RotationKey.canonical_step(step, ring_dimension=engine.config.N)
-    if canonical == 0:
+    normalized = RotationKey.normalize_step(
+        step, ring_dimension=engine.config.N
+    )
+    if normalized == 0:
         return ciphertext.clone()
-    direct_key = rotation_keys.get(canonical)
+    direct_key = rotation_keys.get(normalized)
     if direct_key is not None:
         return engine.rotate_with_key(ciphertext, direct_key)
-    decomposition = decomposition_cache.get(canonical)
+    decomposition = decomposition_cache.get(normalized)
     if decomposition is None:
         decomposition = tuple(
-            decompose_signed_power_of_two_rotation(canonical, engine.num_slots)
+            decompose_signed_power_of_two_rotation(normalized, engine.num_slots)
         )
-        decomposition_cache[canonical] = decomposition
+        decomposition_cache[normalized] = decomposition
     result = ciphertext
     for substep in decomposition:
         key = rotation_keys.get(substep)
         if key is None:
             raise KeyError(
-                f'Cannot compose rotation {canonical}; missing key {substep}'
+                f'Cannot compose rotation {normalized}; missing key {substep}'
             )
         result = engine.rotate_with_key(result, key)
     return result
 
 
 def _encode_diagonal(
-    engine: CkksEngine,
+    engine: Engine,
     cache: MutableMapping[tuple[int, int, int, int], Plaintext],
     *,
+    device: torch.device,
     retain: bool,
     transform: DiagonalLinearTransform,
     offset: int,
@@ -107,7 +110,7 @@ def _encode_diagonal(
             torch.as_tensor(
                 np.roll(diagonal, -giant),
                 dtype=torch.complex128,
-                device=engine.device,
+                device=device,
             ),
             level=level,
             scale=engine.config.default_scale,
@@ -120,7 +123,7 @@ def _encode_diagonal(
 
 
 def _apply_linear_transform(
-    engine: CkksEngine,
+    engine: Engine,
     stages: tuple[Any, ...],
     evaluator,
     ciphertext: Ciphertext,
@@ -166,6 +169,7 @@ def _apply_linear_transform(
         return _encode_diagonal(
             engine,
             diagonal_cache,
+            device=ciphertext.device,
             retain=retain_diagonals,
             **kwargs,
         )
@@ -184,7 +188,7 @@ def _apply_linear_transform(
 
 
 def _apply_modraised_linear(
-    engine: CkksEngine,
+    engine: Engine,
     raised: ModRaisedCiphertext,
     stages: tuple[Any, ...],
     evaluator,
@@ -213,7 +217,7 @@ def _apply_modraised_linear(
 
 
 def _multiply_by_monomial(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
     exponent: int,
 ) -> Ciphertext:
@@ -229,14 +233,14 @@ def _multiply_by_monomial(
     The input must use coefficient-domain standard residues on the engine
     device. The operation is functional and preserves shape, component count,
     level, actual scale, basis, `prime_ids`, polynomial domain, and
-    residue representation. The output is canonicalized into each limb's
+    residue representation. The output is reduced into each limb's
     interval $[0,q_i)$ and does not alias the input.
     """
 
     ciphertext.assert_state(
         polynomial_domain='coefficient', residue_representation="standard"
     )
-    engine._assert_engine_ciphertext(ciphertext)
+    engine.validate_ciphertext(ciphertext)
     degree = engine.config.N
     exponent %= 2 * degree
     sign = -1 if exponent >= degree else 1
@@ -250,7 +254,9 @@ def _multiply_by_monomial(
         data.neg_()
     moduli = torch.tensor(
         [
-            engine.montgomery_parameters.moduli[index]
+            engine._rns_context_for(
+                ciphertext.device
+            ).montgomery_parameters.moduli[index]
             for index in ciphertext.prime_ids
         ],
         dtype=data.dtype,
@@ -260,7 +266,7 @@ def _multiply_by_monomial(
 
 
 def _align_levels(
-    engine: CkksEngine,
+    engine: Engine,
     lhs: Ciphertext,
     rhs: Ciphertext,
 ) -> tuple[Ciphertext, Ciphertext]:
@@ -280,7 +286,7 @@ def _align_levels(
 
 
 def _advance_level(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
 ) -> Ciphertext:
     r"""Consume one Q level and return the private target scale $\Delta_0$.
@@ -307,7 +313,7 @@ def _advance_level(
 
 
 def _multiply_relinearize_rescale(
-    engine: CkksEngine,
+    engine: Engine,
     lhs: Ciphertext,
     rhs: Ciphertext,
     *,
@@ -337,7 +343,7 @@ def _multiply_relinearize_rescale(
 
 
 def _rescale_to_default_scale(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
 ) -> Ciphertext:
     r"""Rescale once, then explicitly reinterpret metadata at $\Delta_0$.
@@ -370,7 +376,7 @@ def _rescale_to_default_scale(
 
 
 def _multiply_scalar(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
     scalar: complex,
 ) -> Ciphertext:
@@ -391,7 +397,7 @@ def _multiply_scalar(
                 (engine.num_slots,),
                 complex(scalar),
                 dtype=torch.complex128,
-                device=engine.device,
+                device=ciphertext.device,
             ),
             level=ciphertext.level,
             scale=engine.config.default_scale,
@@ -410,7 +416,7 @@ def _multiply_scalar(
 
 
 def _add_scalar(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
     scalar: complex,
 ) -> Ciphertext:
@@ -429,7 +435,7 @@ def _add_scalar(
                 (engine.num_slots,),
                 complex(scalar),
                 dtype=torch.complex128,
-                device=engine.device,
+                device=ciphertext.device,
             ),
             level=ciphertext.level,
             scale=ciphertext.scale,
