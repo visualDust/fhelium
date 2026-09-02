@@ -132,15 +132,16 @@ path after a prior complete Linux build and project verification have passed.
 
 Protected `publish` mode is a separate operator choice. It requires an existing
 release tag matching the project version and `build_scope=all`. It publishes
-immutable R2 objects, verifies the PyPI source distribution, updates cumulative
-indexes, and checks public Linux and Windows installs. Once those checks pass,
-it preserves the source distribution, release manifest, and generated
-installation-catalog patch as a workflow artifact. The release operator writes
-the release notes and creates the GitHub Release manually from the existing tag
-and those three files. The catalog patch is reviewed and applied only after the
-public release exists, so the documentation does not advertise unavailable
-wheel recipes. FHElium 0.10.0 remains immutable; Windows wheels begin with
-FHElium 0.20.0.
+immutable R2 objects, verifies the PyPI source distribution, and updates
+cumulative indexes. Separate credential-free Linux and Windows jobs then install
+every declared wheel from its public index and execute CPU or CUDA operations.
+Once both jobs pass, the workflow preserves the source distribution, release
+manifest, and generated installation-catalog patch as a workflow artifact. The
+release operator writes the release notes and creates the GitHub Release
+manually from the existing tag and those three files. The catalog patch is
+reviewed and applied only after the public release exists, so the documentation
+does not advertise unavailable wheel recipes. FHElium 0.10.0 remains immutable;
+Windows wheels begin with FHElium 0.20.0.
 
 ## Packaging validation
 

@@ -94,9 +94,11 @@ build and project verification have already passed.
 
 Protected `publish` mode requires an existing release `tag` matching the project
 version and `build_scope=all`. It performs publication only after both platform
-builds and candidate preparation succeed. The Windows runner receives no PyPI
-or R2 publication credentials. After public Linux and Windows installation
-checks pass, the workflow preserves the source distribution, release manifest,
-and generated installation-catalog patch as one Actions artifact. The release
+builds and candidate preparation succeed. The publication job uploads artifacts
+and indexes but does not execute platform installation checks. Separate Linux
+and Windows jobs install every declared wheel from its public index and execute
+CPU or CUDA operations; neither job receives PyPI or R2 credentials. After both
+jobs pass, the workflow preserves the source distribution, release manifest, and
+generated installation-catalog patch as one Actions artifact. The release
 operator writes the release notes and creates the GitHub Release manually from
 the existing tag and those files.
