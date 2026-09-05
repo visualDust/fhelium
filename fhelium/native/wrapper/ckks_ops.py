@@ -273,13 +273,14 @@ def keyswitch_accumulate_digit_products_(
     key_switch_key_digit: torch.Tensor,
     rns_params: torch.Tensor,
     key_digit_row_start: int,
+    source_indices: torch.Tensor | None = None,
 ) -> None:
     """
     Typed wrapper for ``fhelium_ckks_ops::keyswitch_accumulate_digit_products_``.
 
     Torch schema::
 
-        fhelium_ckks_ops::keyswitch_accumulate_digit_products_(Tensor(a!) accumulator0_qp, Tensor(b!) accumulator1_qp, Tensor extended_digit_ntt_qp, Tensor key_switch_key_digit, Tensor rns_params, int key_digit_row_start) -> ()
+        fhelium_ckks_ops::keyswitch_accumulate_digit_products_(Tensor(a!) accumulator0_qp, Tensor(b!) accumulator1_qp, Tensor extended_digit_ntt_qp, Tensor key_switch_key_digit, Tensor rns_params, int key_digit_row_start, Tensor? source_indices=None) -> ()
 
     Args:
         accumulator0_qp: torch.Tensor (modified in-place).
@@ -288,6 +289,7 @@ def keyswitch_accumulate_digit_products_(
         key_switch_key_digit: torch.Tensor.
         rns_params: torch.Tensor.
         key_digit_row_start: int.
+        source_indices: torch.Tensor | None.
 
     Returns: None.
     """
@@ -299,6 +301,7 @@ def keyswitch_accumulate_digit_products_(
         key_switch_key_digit,
         rns_params,
         key_digit_row_start,
+        source_indices,
     )
 
 

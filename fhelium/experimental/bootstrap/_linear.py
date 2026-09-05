@@ -352,13 +352,20 @@ class DiagonalBSGSEvaluator:
                 ciphertext,
                 [rotation_keys[step] for step in nonzero_babies],
                 use_hoisting=True,
+                output_domain="ntt",
             )
-            baby_ciphertexts = dict(zip(nonzero_babies, rotations, strict=True))
+            baby_ciphertexts_ntt = dict(
+                zip(nonzero_babies, rotations, strict=True)
+            )
             if 0 in used_babies:
-                baby_ciphertexts[0] = ciphertext
+                baby_ciphertexts_ntt[0] = (
+                    engine.coefficient_domain_to_ntt_domain(ciphertext)
+                )
         else:
-            baby_ciphertexts = {
-                step: ciphertext if step == 0 else rotate(ciphertext, step)
+            baby_ciphertexts_ntt = {
+                step: engine.coefficient_domain_to_ntt_domain(
+                    ciphertext if step == 0 else rotate(ciphertext, step)
+                )
                 for step in used_babies
             }
 
@@ -374,9 +381,7 @@ class DiagonalBSGSEvaluator:
                     diagonal=diagonal,
                 )
                 term = engine.multiply_plaintext(
-                    engine.coefficient_domain_to_ntt_domain(
-                        baby_ciphertexts[baby]
-                    ),
+                    baby_ciphertexts_ntt[baby],
                     plaintext,
                 )
                 inner = term if inner is None else engine.add(inner, term)

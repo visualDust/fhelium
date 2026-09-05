@@ -126,6 +126,7 @@ def _fake_fhelium_ckks_ops_keyswitch__accumulate__digit__products__(
     key_switch_key_digit: torch.Tensor,
     rns_params: torch.Tensor,
     key_digit_row_start: int,
+    source_indices: torch.Tensor | None = None,
 ) -> None:
     pass
 
@@ -263,6 +264,7 @@ def _fake_fhelium_ntt_ops_forward__ntt__montgomery__compact__keyswitch__accumula
     accumulator0_qp: torch.Tensor,
     accumulator1_qp: torch.Tensor,
     key_row_start: int,
+    grouped_stage_count: int = 4,
 ) -> None:
     pass
 
@@ -286,6 +288,20 @@ def _fake_fhelium_ntt_ops_forward__ntt__montgomery__power__of__two__radix__compa
     outer_twiddles: torch.Tensor,
     radix_root_powers: torch.Tensor,
     rns_params: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake(
+    "fhelium_ntt_ops::forward_ntt_to_montgomery_compact_add_scaled_"
+)
+def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__compact__add__scaled__(
+    source: torch.Tensor,
+    addend: torch.Tensor,
+    multiplier: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+    grouped_stage_count: int,
 ) -> None:
     pass
 

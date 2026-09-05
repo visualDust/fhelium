@@ -38,6 +38,7 @@ from .backend import (
     LinkProgramPass,
     MaterializeResourcesPass,
     ResolveBackendOperationsPass,
+    ValidateExecutionRepresentationsPass,
     backend_linking_pipeline,
 )
 from .codegen import EmitBackendPythonPass, EmitEagerPythonPass
@@ -67,6 +68,7 @@ __all__ = [
     "LinkProgramPass",
     "MaterializeResourcesPass",
     "ResolveBackendOperationsPass",
+    "ValidateExecutionRepresentationsPass",
     "ResolveRotationKeyOperandsPass",
     "SvgGraphDirection",
     "SvgGraphError",

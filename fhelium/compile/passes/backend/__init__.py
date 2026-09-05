@@ -10,6 +10,7 @@ from ._materialize_resources import (
 )
 from ._pipeline import backend_linking_pipeline
 from ._resolve_operations import ResolveBackendOperationsPass
+from ._validate_representations import ValidateExecutionRepresentationsPass
 
 __all__ = [
     "AssignImplementationsPass",
@@ -19,5 +20,6 @@ __all__ = [
     "LinkProgramPass",
     "MaterializeResourcesPass",
     "ResolveBackendOperationsPass",
+    "ValidateExecutionRepresentationsPass",
     "backend_linking_pipeline",
 ]

@@ -135,12 +135,17 @@ def main() -> None:
         args.size,
     )
 
-    local_terms = []
+    source_ntt = engine.coefficient_domain_to_ntt_domain(source)
+    local_terms_ntt = []
     for rotation_step in local_rotation_steps:
         rotated = (
-            source.clone()
+            source_ntt
             if rotation_step == 0
-            else engine.rotate_with_key(source, local_keys[rotation_step])
+            else engine.rotate_with_key(
+                source,
+                local_keys[rotation_step],
+                output_domain="ntt",
+            )
         )
         diagonal = engine.prepare_plaintext_for_multiplication(
             engine.encode(
@@ -148,18 +153,16 @@ def main() -> None:
                 level=rotated.level,
             )
         )
-        local_terms.append(
-            engine.rescale_to_next_level(
-                engine.ntt_domain_to_coefficient_domain(
-                    engine.multiply_plaintext(
-                        engine.coefficient_domain_to_ntt_domain(rotated),
-                        diagonal,
-                    )
-                )
+        local_terms_ntt.append(
+            engine.multiply_plaintext(
+                rotated,
+                diagonal,
             )
         )
 
-    local_partial = engine.sum_ciphertexts(local_terms)
+    local_partial = engine.rescale_to_next_level(
+        engine.sum_ciphertexts(local_terms_ntt)
+    )
 
     # These are additive contributions to one result, so reduction is the
     # correct operation. Gathering would retain unnecessary per-rank objects.
@@ -176,7 +179,7 @@ def main() -> None:
             secret_key=secret_key,
             is_real=True,
         ).cpu()[: args.size]
-        expected = matrix @ vector
+        expected = (matrix @ vector).cpu()
         max_error = float(torch.max(torch.abs(decoded - expected)))
         torch.testing.assert_close(decoded, expected, atol=3e-5, rtol=0)
         print(

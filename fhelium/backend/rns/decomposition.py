@@ -18,8 +18,8 @@ class RnsDecompositionDigit:
 class HybridRnsDecomposition:
     r"""Partition $Q$ into composite RNS digits for hybrid key switching.
 
-    Scale-prime rows are split into fixed digits whose maximum width is
-    $|P|$.  The base Q prime forms the final singleton digit.  Dropping a Q
+    All Q rows, including the base prime, are split into contiguous digits
+    whose maximum width is $|P|$. Dropping a Q
     prefix at a later level may shrink or remove an active digit, but every
     remaining digit keeps its level-zero ``key_digit_index`` so it selects
     the correct axis of the level-zero key-switching key. The enumeration index
@@ -29,13 +29,12 @@ class HybridRnsDecomposition:
 
     def __init__(self, chain: RnsChain) -> None:
         self.chain = chain
-        scale_prime_ids = chain.q_prime_ids[:-1]
+        q_prime_ids = chain.q_prime_ids
         digit_width = chain.num_p_primes
-        scale_digits = tuple(
-            tuple(scale_prime_ids[start : start + digit_width])
-            for start in range(0, len(scale_prime_ids), digit_width)
+        self.level_zero_digits = tuple(
+            tuple(q_prime_ids[start : start + digit_width])
+            for start in range(0, len(q_prime_ids), digit_width)
         )
-        self.level_zero_digits = scale_digits + ((chain.base_q_prime_id,),)
 
     @property
     def digit_count(self) -> int:

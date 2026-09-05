@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal, cast
+
 from ..._pipeline import (
     PassResult,
     PassStats,
@@ -14,7 +16,6 @@ from xdsl.dialects.builtin import (
     Float64Type,
     FloatAttr,
     IntegerAttr,
-    StringAttr,
     UnrealizedConversionCastOp,
 )
 from xdsl.ir import Attribute, Operation, SSAValue, Use
@@ -33,6 +34,7 @@ from ._transition_state import (
     is_ckks_value_bridge,
     is_same_dialect_ckks_cast,
     reconcile_transition_paths,
+    representation_pair,
     represented_state,
     retype_path,
     retype_result,
@@ -104,12 +106,6 @@ def _classify_rescale_use(use: Use) -> tuple[bool, tuple[Use, ...]]:
     return True, frontiers
 
 
-def _is_ntt(value: SSAValue) -> bool:
-    state = getattr(getattr(value.type, "state", None), "data", {})
-    domain = state.get("polynomial_domain")
-    return isinstance(domain, StringAttr) and domain.data == "ntt"
-
-
 def _cast_preserves_rescale_state(cast: UnrealizedConversionCastOp) -> bool:
     source = represented_state(cast.inputs[0]) or {}
     result = represented_state(cast.outputs[0]) or {}
@@ -174,27 +170,24 @@ def _materialize_rescale(
         def insert(created: Operation) -> None:
             block.insert_op_before(created, consumer)
 
-    if _is_ntt(source):
-        coefficient = ckks.FromNttOp(
-            source,
-            ciphertext_type(
-                source,
-                domain="coefficient",
-                residues="standard",
-            ),
-        )
-        coefficient.result.name_hint = f"{display_name(operation)}_coefficient"
-        insert(coefficient)
-        source = coefficient.result
-        inserted += 1
-
-    result_state = dict(
-        ciphertext_type(
-            source,
-            domain="coefficient",
-            residues="standard",
-        ).state.data
+    representation = representation_pair(
+        source, operation="CKKS rescale placement"
     )
+    if representation not in {
+        ("coefficient", "standard"),
+        ("ntt", "montgomery"),
+    }:
+        raise ValueError(
+            "CKKS rescale placement cannot consume representation "
+            f"{representation!r}"
+        )
+
+    source_type = ciphertext_type(
+        source,
+        domain=representation[0],
+        residues=representation[1],
+    )
+    result_state = dict(source_type.state.data)
     level = result_state.get("level")
     if isinstance(level, IntegerAttr):
         source_level = int(level.value.data)
@@ -216,6 +209,9 @@ def _materialize_rescale(
         source,
         ckks.CiphertextType().with_state(result_state),
         rounding=request.rounding,
+        polynomial_domain=cast(
+            Literal["coefficient", "ntt"], representation[0]
+        ),
     )
     rescaled.result.name_hint = f"{display_name(operation)}_rescaled"
     insert(rescaled)

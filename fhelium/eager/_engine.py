@@ -847,20 +847,29 @@ class Engine:
         plaintext: Plaintext,
         *,
         modulus_basis: Literal["Q", "QP"] = "Q",
+        polynomial_domain: PolynomialDomain = "coefficient",
     ) -> Plaintext:
         r"""Prepare a plaintext for modular addition to component zero.
 
-        The method first issues ``ckks.IntegerCoefficientsToRnsOp`` as needed, then
-        ``rns.StandardToMontgomeryOp``.  It returns coefficient-domain Montgomery RNS
-        on the requested Q or QP rows.  Message, level, and actual scale are unchanged;
-        the eventual ``rns.AddPlaintextOp`` requires that scale to match the
-        ciphertext."""
+        The method first issues ``ckks.IntegerCoefficientsToRnsOp`` as needed,
+        then ``rns.StandardToMontgomeryOp``. ``polynomial_domain="ntt"`` also
+        transforms the prepared polynomial for direct addition to an
+        NTT/Montgomery ciphertext. Message, level, actual scale, and requested
+        Q or QP rows are unchanged."""
 
+        if polynomial_domain not in ("coefficient", "ntt"):
+            raise ValueError("polynomial_domain must be 'coefficient' or 'ntt'")
         standard = self.integer_coefficients_to_rns(
             plaintext,
             modulus_basis=modulus_basis,
         )
-        return self.standard_residues_to_montgomery_residues(standard)
+        prepared = self.standard_residues_to_montgomery_residues(standard)
+        if polynomial_domain == "ntt":
+            return cast(
+                Plaintext,
+                self.coefficient_domain_to_ntt_domain(prepared),
+            )
+        return prepared
 
     def prepare_plaintext_for_multiplication(
         self,
@@ -1079,15 +1088,21 @@ class Engine:
         public_key: PublicKey | None = None,
         *,
         device: torch.device | str | None = None,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> Ciphertext:
         r"""Encrypt an integer coefficient plaintext under a public key.
 
         For public key $(k_0,k_1)$, sampled binary $v$, and errors $e_0,e_1$,
         ``ckks.EncryptOp`` computes
         $(c_0,c_1)=(k_0v+a+e_0,\ k_1v+e_1)$ modulo each active prime.  The
-        ``native-ckks-encrypt`` implementation returns a CT2 coefficient/standard Q or
-        QP ciphertext with the plaintext's level and actual scale."""
+        ``native-ckks-encrypt`` implementation returns a CT2 Q or QP
+        ciphertext with the plaintext's level and actual scale.
+        ``output_domain`` selects coefficient/standard or NTT/Montgomery
+        output. NTT output transforms the error-and-message terms and adds them
+        directly to the public-key products."""
 
+        if output_domain not in ("coefficient", "ntt"):
+            raise ValueError("output_domain must be 'coefficient' or 'ntt'")
         if device is not None:
             plaintext = plaintext.to(device)
         target = plaintext.device
@@ -1120,6 +1135,7 @@ class Engine:
                 attributes={
                     "key_symbol": symbol,
                     "level": plaintext.level,
+                    "output_domain": output_domain,
                 },
                 bindings=self._key_resource(symbol, key),
             ),
@@ -1135,9 +1151,11 @@ class Engine:
                 plaintext.level,
                 include_p=basis == "QP",
             ),
-            polynomial_domain="coefficient",
+            polynomial_domain=output_domain,
             modulus_basis=basis,
-            residue_representation="standard",
+            residue_representation=(
+                "standard" if output_domain == "coefficient" else "montgomery"
+            ),
         )
 
     def decrypt(
@@ -1149,12 +1167,13 @@ class Engine:
     ) -> Plaintext:
         r"""Evaluate the ciphertext phase and reconstruct bounded coefficients.
 
-        For CT2 coefficient/standard input the phase is $c_0+c_1s$; for CT3
-        NTT/Montgomery input it is $c_0+c_1s+c_2s^2$, evaluated in every active
-        prime.  ``ckks.DecryptOp`` dispatches to ``native-ckks-decrypt``, which
-        converts the phase to coefficient/standard RNS and reconstructs centered
-        coefficients from trailing Q rows.  The returned approximate-coefficient
-        plaintext retains level and actual scale."""
+        For CT2 the phase is $c_0+c_1s$; for CT3 it is
+        $c_0+c_1s+c_2s^2$, evaluated in every active prime. Both component
+        counts may use coefficient/standard or NTT/Montgomery input. NTT input
+        is summed before one inverse transform; coefficient input transforms
+        each nonconstant term for multiplication by the matching secret power.
+        The returned approximate-coefficient plaintext retains level and actual
+        scale."""
 
         if device is not None:
             ciphertext = ciphertext.to(device)
@@ -1179,6 +1198,7 @@ class Engine:
                     "key_symbol": symbol,
                     "level": ciphertext.level,
                     "modulus_basis": ciphertext.modulus_basis,
+                    "input_domain": ciphertext.polynomial_domain,
                 },
                 bindings=self._key_resource(symbol, key),
             ),
@@ -1203,6 +1223,7 @@ class Engine:
         level: int = 0,
         scale: float | None = None,
         device: torch.device | str | None = None,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> Ciphertext:
         r"""Encode slots and encrypt the resulting polynomial.
 
@@ -1216,6 +1237,7 @@ class Engine:
             self.encode(message, level=level, scale=scale, device=device),
             public_key,
             device=device,
+            output_domain=output_domain,
         )
 
     def decrypt_message(
@@ -1876,14 +1898,13 @@ class Engine:
         bases = self._operand_bases(value)
         if is_ciphertext:
             data = value_data if inplace else value_data.clone()
-            for component in data.unbind(0):
-                self._execute(
-                    operation_type,
-                    component,
-                    resource_kinds=("ntt",),
-                    bases=bases,
-                    in_place=True,
-                )
+            self._execute(
+                operation_type,
+                data,
+                resource_kinds=("ntt",),
+                bases=bases,
+                in_place=True,
+            )
         else:
             data = cast(
                 torch.Tensor,
@@ -1983,14 +2004,13 @@ class Engine:
         bases = self._operand_bases(value)
         if is_ciphertext:
             data = value_data if inplace else value_data.clone()
-            for component in data.unbind(0):
-                self._execute(
-                    operation_type,
-                    component,
-                    resource_kinds=("ntt",),
-                    bases=bases,
-                    in_place=True,
-                )
+            self._execute(
+                operation_type,
+                data,
+                resource_kinds=("ntt",),
+                bases=bases,
+                in_place=True,
+            )
         else:
             data = cast(
                 torch.Tensor,
@@ -2193,10 +2213,13 @@ class Engine:
     ) -> Ciphertext:
         r"""Divide-round by the leading Q prime and advance one level.
 
-        The input is coefficient-domain standard Q residue data.  For dropped prime
-        $q_d$, ``rns.RescaleDropLeadingPrimeOp`` computes a rounded quotient of
-        every component coefficient, removes the $q_d$ row, and retains the
-        surviving standard Q residues.  ``native-rescale`` implements the
+        The input is Q residue data in coefficient/standard or NTT/Montgomery
+        representation. For dropped prime $q_d$,
+        ``rns.RescaleDropLeadingPrimeOp`` computes a rounded quotient of every
+        component coefficient and removes the $q_d$ row. With NTT input, only
+        the dropped row is inverted for rounding; transformed corrections are
+        added to the scaled surviving evaluations, so output remains
+        NTT/Montgomery. ``native-rescale`` implements the
         selected nearest or truncating rule.  Level becomes $\ell+1$ and this
         value's actual scale becomes $\Delta/q_d$; no fixed default scale is
         substituted."""
@@ -2210,16 +2233,23 @@ class Engine:
             )
         dropped_prime = self.config.moduli[value.prime_ids[0]]
         bases = self._operand_bases(value)
+        input_domain = value.polynomial_domain
         data = cast(
             torch.Tensor,
             self._execute(
                 rns.RescaleDropLeadingPrimeOp,
                 value.data,
-                resource_kinds=("rescale",),
+                resource_kinds=(
+                    ("rescale", "rns", "ntt")
+                    if input_domain == "ntt"
+                    else ("rescale",)
+                ),
                 attributes={
                     "rounding": (
                         "truncate" if rounding == "floor" else rounding
                     ),
+                    "input_domain": input_domain,
+                    "output_domain": input_domain,
                 },
                 bases=bases,
                 in_place=inplace,
@@ -2564,6 +2594,25 @@ class Engine:
         prepared = plaintext
         if prepared.data is None:
             raise ValueError("Plaintext addition requires RNS Tensor data")
+        if prepared.polynomial_domain != ciphertext.polynomial_domain:
+            raise ValueError(
+                "Plaintext addition requires matching polynomial domains"
+            )
+        if (
+            prepared.residue_representation != "montgomery"
+            or (
+                ciphertext.polynomial_domain == "coefficient"
+                and ciphertext.residue_representation != "standard"
+            )
+            or (
+                ciphertext.polynomial_domain == "ntt"
+                and ciphertext.residue_representation != "montgomery"
+            )
+        ):
+            raise ValueError(
+                "Plaintext addition requires a Montgomery plaintext and a "
+                "coefficient/standard or NTT/Montgomery ciphertext"
+            )
         prepared_data = cast(torch.Tensor, prepared.data)
         bases = self._operand_bases(ciphertext, prepared)
         data = cast(
@@ -2573,6 +2622,7 @@ class Engine:
                 ciphertext.data,
                 prepared_data,
                 resource_kinds=("rns",),
+                attributes={"polynomial_domain": ciphertext.polynomial_domain},
                 bases=bases,
                 in_place=inplace,
             ),
@@ -2675,186 +2725,12 @@ class Engine:
 
         return self.multiply_plaintext(ciphertext, plaintext, inplace=True)
 
-    def _extract_component_tensor(
-        self,
-        data: torch.Tensor,
-        component: int,
-        *,
-        basis: str,
-    ) -> torch.Tensor:
-        return cast(
-            torch.Tensor,
-            self._execute(
-                rns.ExtractComponentOp,
-                data,
-                attributes={"component": component},
-                bases=(basis,),
-            ),
-        )
-
-    def _key_switch_corrections(
-        self,
-        source: torch.Tensor,
-        *,
-        level: int,
-        key: KeySwitchKey,
-        key_symbol: str,
-    ) -> torch.Tensor:
-        key = cast(
-            KeySwitchKey,
-            self._key_on_device(
-                key,
-                source.device,
-                operation_name="key switching",
-            ),
-        )
-        key_resource = self._bind_key(key_symbol, key)
-        dispatcher = self._dispatcher_for(source.device)
-        rns_resource = dispatcher.resources(
-            (("active-rns-parameters", RNS_RESOURCE_KIND),)
-        )
-        key_switch_resource = dispatcher.resources(
-            (
-                (
-                    "active-key-switch-plan",
-                    KEY_SWITCH_PLAN_RESOURCE_KIND,
-                ),
-            )
-        )
-        accumulator: torch.Tensor | None = None
-        for digit_index, digit_spec in enumerate(
-            self._rns_layout.digit_specs(level)
-        ):
-            lifted = cast(
-                torch.Tensor,
-                self._execute(
-                    rns.HybridModUpDigitOp,
-                    source,
-                    resource_kinds=("rns", "key_switch"),
-                    attributes={"digit_index": digit_index},
-                    bases=("Q",),
-                ),
-            )
-            transformed = cast(
-                torch.Tensor,
-                self._execute(
-                    ntt.CoefficientMontgomeryToNttMontgomeryOp,
-                    lifted,
-                    resource_kinds=("ntt",),
-                    bases=("QP",),
-                ),
-            )
-            product = cast(
-                torch.Tensor,
-                self._execute(
-                    rns.KeySwitchDigitProductOp,
-                    transformed,
-                    resources=(
-                        key_resource,
-                        *rns_resource,
-                        *key_switch_resource,
-                    ),
-                    attributes={"key_digit_index": digit_spec.key_digit_index},
-                    bases=("QP",),
-                ),
-            )
-            if accumulator is None:
-                accumulator = product
-            else:
-                accumulator = cast(
-                    torch.Tensor,
-                    self._execute(
-                        rns.AddMontgomeryLazyOp,
-                        accumulator,
-                        product,
-                        resource_kinds=("rns",),
-                        bases=("QP", "QP"),
-                    ),
-                )
-        if accumulator is None:
-            raise ValueError("Key switching requires at least one RNS digit")
-        coefficient = cast(
-            torch.Tensor,
-            self._execute(
-                ntt.NttMontgomeryToCoefficientStandardOp,
-                accumulator,
-                resource_kinds=("ntt",),
-                bases=("QP",),
-            ),
-        )
-        return cast(
-            torch.Tensor,
-            self._execute(
-                rns.ModDownQpToQOp,
-                coefficient,
-                resource_kinds=("rns", "key_switch"),
-                bases=("QP",),
-            ),
-        )
-
-    def _assemble_key_switch(
-        self,
-        component0: torch.Tensor,
-        switched_component: torch.Tensor,
-        *,
-        value: Ciphertext,
-        key: KeySwitchKey,
-        key_symbol: str,
-        component1: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        corrections = self._key_switch_corrections(
-            switched_component,
-            level=value.level,
-            key=key,
-            key_symbol=key_symbol,
-        )
-        correction0 = self._extract_component_tensor(
-            corrections,
-            0,
-            basis="Q",
-        )
-        correction1 = self._extract_component_tensor(
-            corrections,
-            1,
-            basis="Q",
-        )
-        result0 = cast(
-            torch.Tensor,
-            self._execute(
-                rns.AddStandardOp,
-                component0,
-                correction0,
-                resource_kinds=("rns",),
-                bases=("Q", "Q"),
-            ),
-        )
-        if component1 is not None:
-            result1 = cast(
-                torch.Tensor,
-                self._execute(
-                    rns.AddStandardOp,
-                    component1,
-                    correction1,
-                    resource_kinds=("rns",),
-                    bases=("Q", "Q"),
-                ),
-            )
-        else:
-            result1 = correction1
-        return cast(
-            torch.Tensor,
-            self._execute(
-                rns.PackTwoComponentsOp,
-                result0,
-                result1,
-                bases=("Q", "Q"),
-            ),
-        )
-
     def relinearize(
         self,
         value: Ciphertext,
         key: RelinearizationKey | None = None,
+        *,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> Ciphertext:
         r"""Map a CT3 product phase back to two components.
 
@@ -2862,9 +2738,12 @@ class Engine:
         $c_0+c_1s+c_2s^2$, the relinearization key switches the $c_2s^2$ term into
         corrections $(d_0,d_1)$.  ``ckks.RelinearizeOp`` dispatches to
         ``native-relinearize-streaming`` and returns
-        $(c_0+d_0,c_1+d_1)$ in coefficient/standard Q rows.  Level and actual scale
-        are unchanged."""
+        $(c_0+d_0,c_1+d_1)$. ``output_domain="ntt"`` retains $c_0,c_1$
+        and the corrections in NTT/Montgomery form; the default returns
+        coefficient/standard Q rows. Level and actual scale are unchanged."""
 
+        if output_domain not in ("coefficient", "ntt"):
+            raise ValueError("output_domain must be 'coefficient' or 'ntt'")
         symbol = "relinearization-key"
         selected = key if key is not None else self.relinearization_key
         selected = cast(
@@ -2883,73 +2762,105 @@ class Engine:
                 value.data,
                 bindings=self._key_switch_bindings(value.device, key_resource),
                 bases=("Q",),
+                attributes={"output_domain": output_domain},
                 implementation="native-relinearize-streaming",
             ),
         )
         return _ciphertext_result(
             value,
             data,
-            polynomial_domain="coefficient",
-            residue_representation="standard",
+            polynomial_domain=output_domain,
+            residue_representation=(
+                "standard" if output_domain == "coefficient" else "montgomery"
+            ),
         )
 
-    def switch_key(self, value: Ciphertext, key: KeySwitchKey) -> Ciphertext:
+    def switch_key(
+        self,
+        value: Ciphertext,
+        key: KeySwitchKey,
+        *,
+        output_domain: PolynomialDomain = "coefficient",
+    ) -> Ciphertext:
         r"""Switch a CT2 ciphertext from a source secret to a destination secret.
 
         The input is a two-component coefficient/standard Q ciphertext.  For
         $c_0+c_1s_{src}$, hybrid key switching maps the second term to
         corrections $(d_0,d_1)$ under $s_{dst}$, producing
-        $(c_0+d_0,d_1)$.  Eager composes ``rns.ExtractComponentOp``, hybrid basis
-        extension (ModUp), NTT, digit products, accumulation, special-prime removal
-        (ModDown), addition, and packing rather than dispatching
-        ``ckks.SwitchKeyOp``.  Level, Q rows, actual scale, and CT2 shape are
-        preserved."""
+        $(c_0+d_0,d_1)$. ``ckks.SwitchKeyOp`` dispatches the whole operation
+        through one streaming hybrid-RNS implementation, which shares its QP
+        accumulator across decomposition digits. ``output_domain="ntt"``
+        combines $c_0$ with its correction before the forward transform.
+        Level, Q rows, actual scale, and CT2 shape are preserved."""
 
+        if output_domain not in ("coefficient", "ntt"):
+            raise ValueError("output_domain must be 'coefficient' or 'ntt'")
         symbol = "key-switch-key:caller"
-        component0 = self._extract_component_tensor(
-            value.data,
-            0,
-            basis="Q",
+        selected = cast(
+            KeySwitchKey,
+            self._key_on_device(
+                key, value.device, operation_name="key switching"
+            ),
         )
-        component1 = self._extract_component_tensor(
-            value.data,
-            1,
-            basis="Q",
+        key_resource = self._bind_key(symbol, selected)
+        data = cast(
+            torch.Tensor,
+            self._execute(
+                ckks.SwitchKeyOp,
+                value.data,
+                bindings=self._key_switch_bindings(value.device, key_resource),
+                attributes={
+                    "key_symbol": symbol,
+                    "output_domain": output_domain,
+                },
+                bases=("Q",),
+                implementation="native-key-switch-streaming",
+            ),
         )
-        data = self._assemble_key_switch(
-            component0,
-            component1,
-            value=value,
-            key=key,
-            key_symbol=symbol,
+        return _ciphertext_result(
+            value,
+            data,
+            polynomial_domain=output_domain,
+            residue_representation=(
+                "standard" if output_domain == "coefficient" else "montgomery"
+            ),
         )
-        return _ciphertext_result(value, data)
 
     def rotate_with_key(
         self,
         value: Ciphertext,
         key: RotationKey,
+        *,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> Ciphertext:
         r"""Apply the slot displacement carried by a direct rotation key.
 
-        The input is a two-component coefficient/standard Q ciphertext.  The call
-        dispatches ``ckks.RotateOp`` to ``native-rotate-streaming``.  Its
+        The input is a two-component coefficient/standard or NTT/Montgomery Q
+        ciphertext. The call dispatches ``ckks.RotateOp`` to
+        ``native-rotate-streaming``. Its
         Galois automorphism $\sigma_g:X\mapsto X^g$ rotates encoded slots and hybrid
         key switching restores secret $s$ from $\sigma_g(s)$.  CT2 shape, level,
-        active Q rows, actual scale, and coefficient/standard state are preserved."""
+        active Q rows and actual scale are preserved. ``output_domain="ntt"``
+        requests NTT/Montgomery output. For NTT input and output, the
+        automorphism and unchanged component-zero contribution remain in NTT
+        form while only component one is inverted for key switching."""
 
-        return self._rotate_with_key(value, key)
+        if output_domain not in ("coefficient", "ntt"):
+            raise ValueError("output_domain must be 'coefficient' or 'ntt'")
+        return self._rotate_with_key(value, key, output_domain=output_domain)
 
     def _rotate_with_key(
         self,
         value: Ciphertext,
         key: RotationKey,
+        *,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> Ciphertext:
         r"""Execute one ``ckks.RotateOp`` automorphism and key switch.
 
         The bound rotation key supplies its signed displacement and the corresponding
         Galois relation.  ``native-rotate-streaming`` returns a CT2 ciphertext in the
-        same level, Q rows, actual scale, and coefficient/standard representation."""
+        same level, Q rows and actual scale, with the selected output representation."""
 
         key = cast(
             RotationKey,
@@ -2967,11 +2878,22 @@ class Engine:
                 ckks.RotateOp,
                 value.data,
                 resources=(key_resource,),
+                attributes={
+                    "input_domain": value.polynomial_domain,
+                    "output_domain": output_domain,
+                },
                 bases=("Q",),
                 implementation="native-rotate-streaming",
             ),
         )
-        return _ciphertext_result(value, data)
+        return _ciphertext_result(
+            value,
+            data,
+            polynomial_domain=output_domain,
+            residue_representation="montgomery"
+            if output_domain == "ntt"
+            else "standard",
+        )
 
     def rotate_by_step(
         self,
@@ -3066,31 +2988,50 @@ class Engine:
         keys: Sequence[RotationKey],
         *,
         use_hoisting: bool = True,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> list[Ciphertext]:
         r"""Apply each supplied rotation key and preserve its output order.
 
         With hoisting, one ``ckks.RotateManyOp`` shares key-switch preparation while
         each result equals the corresponding independent ``ckks.RotateOp``.  Without
         hoisting, keys dispatch separately.  Every output keeps CT2 shape, level,
-        active Q rows, actual scale, and coefficient/standard representation."""
+        active Q rows and actual scale. ``output_domain="ntt"`` returns
+        NTT/Montgomery results, equivalent to transforming each coefficient
+        result. The hoisted implementation retains Q evaluations during ModDown;
+        independent rotations combine c0 with the coefficient correction before
+        its forward NTT."""
 
-        return (
-            self._hoisted_rotate_many(value, list(keys))
-            if use_hoisting
-            else [self.rotate_with_key(value, key) for key in keys]
-        )
+        if output_domain not in ("coefficient", "ntt"):
+            raise ValueError("output_domain must be 'coefficient' or 'ntt'")
+        if use_hoisting:
+            return self._hoisted_rotate_many(
+                value, list(keys), output_domain=output_domain
+            )
+        return [
+            self.rotate_with_key(value, key, output_domain=output_domain)
+            for key in keys
+        ]
 
     def _hoisted_rotate_many(
         self,
         value: Ciphertext,
         entries: Sequence[RotationKey | None],
+        *,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> list[Ciphertext]:
         r"""Execute one caller-selected group through ``ckks.RotateManyOp``.
 
         ``native-rotate-many-hoisted`` shares hybrid decomposition of component one,
         then applies each key's Galois automorphism and key product independently.
         Each output is mathematically the requested slot rotation and retains the
-        input's CKKS state."""
+        input's level, scale and Q rows. The selected output domain determines
+        coefficient/standard or NTT/Montgomery representation."""
+
+        identity = (
+            self.coefficient_domain_to_ntt_domain(value)
+            if output_domain == "ntt" and any(key is None for key in entries)
+            else value
+        )
 
         nonzero = [
             cast(
@@ -3106,7 +3047,8 @@ class Engine:
         ]
         if not nonzero:
             return [
-                _ciphertext_result(value, value.data.clone()) for _ in entries
+                _ciphertext_result(identity, identity.data.clone())
+                for _ in entries
             ]
         key_resources: list[BoundResource] = []
         for index, key in enumerate(nonzero):
@@ -3116,16 +3058,27 @@ class Engine:
             ckks.RotateManyOp,
             value.data,
             resources=key_resources,
+            attributes={"output_domain": output_domain},
             bases=("Q",),
             result_count=len(nonzero),
             implementation="native-rotate-many-hoisted",
         )
         tensors = executed if isinstance(executed, tuple) else (executed,)
-        results = [_ciphertext_result(value, tensor) for tensor in tensors]
+        results = [
+            _ciphertext_result(
+                value,
+                tensor,
+                polynomial_domain=output_domain,
+                residue_representation="montgomery"
+                if output_domain == "ntt"
+                else "standard",
+            )
+            for tensor in tensors
+        ]
         rotated = iter(results)
         output = [
             (
-                _ciphertext_result(value, value.data.clone())
+                _ciphertext_result(identity, identity.data.clone())
                 if key is None
                 else next(rotated)
             )
@@ -3149,48 +3102,50 @@ class Engine:
         self,
         value: Ciphertext,
         key: ConjugationKey | None = None,
+        *,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> Ciphertext:
         r"""Apply complex conjugation to every CKKS slot.
 
         The input is a two-component coefficient/standard Q ciphertext.  The method
-        applies ``rns.CoefficientAutomorphismOp`` with
-        $g=2N-1$, which substitutes $X\mapsto X^{-1}$, then performs the same
-        hybrid-RNS key-switch stages as ``switch_key`` to return from
-        $\sigma_g(s)$ to $s$.  It composes registered RNS/NTT operations rather
-        than dispatching ``ckks.ConjugateOp``.  CT2 shape, level, Q rows, actual scale,
-        and coefficient/standard state remain unchanged."""
+        dispatches ``ckks.ConjugateOp`` to a whole-operation implementation. It
+        applies $g=2N-1$, which substitutes $X\mapsto X^{-1}$, then uses the
+        streaming hybrid-RNS key-switch path to return from $\sigma_g(s)$ to
+        $s$. ``output_domain`` selects coefficient/standard or
+        NTT/Montgomery output. CT2 shape, level, Q rows, and actual scale remain
+        unchanged."""
 
+        if output_domain not in ("coefficient", "ntt"):
+            raise ValueError("output_domain must be 'coefficient' or 'ntt'")
         selected = (
             key if key is not None else self._keys.require_conjugation_key()
         )
-        transformed = cast(
-            torch.Tensor,
-            self._execute(
-                rns.CoefficientAutomorphismOp,
-                value.data,
-                resource_kinds=("rns",),
-                attributes={"galois_element": 2 * self.ring_dimension - 1},
-                bases=("Q",),
+        selected = cast(
+            ConjugationKey,
+            self._key_on_device(
+                selected, value.device, operation_name="conjugate"
             ),
         )
-        component0 = self._extract_component_tensor(
-            transformed,
-            0,
-            basis="Q",
+        key_resource = self._bind_key("conjugation-key", selected)
+        data = cast(
+            torch.Tensor,
+            self._execute(
+                ckks.ConjugateOp,
+                value.data,
+                bindings=self._key_switch_bindings(value.device, key_resource),
+                bases=("Q",),
+                attributes={"output_domain": output_domain},
+                implementation="native-key-switch-streaming",
+            ),
         )
-        component1 = self._extract_component_tensor(
-            transformed,
-            1,
-            basis="Q",
+        return _ciphertext_result(
+            value,
+            data,
+            polynomial_domain=output_domain,
+            residue_representation=(
+                "standard" if output_domain == "coefficient" else "montgomery"
+            ),
         )
-        data = self._assemble_key_switch(
-            component0,
-            component1,
-            value=value,
-            key=selected,
-            key_symbol="active-conjugation-key",
-        )
-        return _ciphertext_result(value, data)
 
     def __str__(self) -> str:
         """Return the CKKS configuration and initialized resource state."""

@@ -2,10 +2,10 @@ r"""Concrete rotate-many key-switch execution with shared digit preparation.
 
 `_RotationHoistExecutor` prepares the hybrid-RNS digits of one coefficient-domain
 ciphertext component once, then consumes those NTT/Montgomery QP digits for
-multiple direct rotation keys.  The caller supplies the coefficient-automorphed
-$c_0$ component for each rotation.  This module owns the concrete native
-execution choice; it does not define a CKKS semantic operation or select a
-fallback implementation.
+multiple direct rotation keys. Coefficient outputs use a transformed $c_0$
+for each key. NTT outputs share the original $c_0$ evaluations and retain Q
+evaluations during ModDown. The product accumulator gathers each digit's NTT
+indices while reading it instead of materializing a permuted digit tensor.
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ import torch
 from fhelium.config import CkksConfig
 from fhelium.values import RotationKey
 from fhelium.backend.ntt.context import NttContext
+from fhelium.backend.ckks._moddown import moddown_ntt_qp_to_q
+from fhelium.backend.ckks.resources import KeySwitchExecutionResource
 from fhelium.backend.rns.context import RnsContext
 from fhelium.backend.rns.layout import RnsDigitSpec
 from fhelium.native.wrapper import ckks_ops, rns_ops
@@ -369,9 +371,48 @@ class _RotationHoistExecutor:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Consume prepared digits for one direct rotation key."""
 
+        accumulator = self._accumulate(prepared, key)
+        correction0, correction1 = self._moddown(
+            accumulator[0], accumulator[1], prepared.level
+        )
+        return (
+            self.rns_context.add_standard(rotated_c0, correction0),
+            correction1,
+        )
+
+    def apply_ntt(
+        self,
+        c0_ntt: torch.Tensor,
+        prepared: _PreparedRotationDigits,
+        key: RotationKey,
+        plan: KeySwitchExecutionResource,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Rotate shared c0 evaluations and return Q NTT/Montgomery components."""
+
+        accumulator = self._accumulate(prepared, key)
+        corrections = moddown_ntt_qp_to_q(accumulator, plan, prepared.level)
+        indices = self._ntt_galois_source_indices(
+            key.rotation_step, c0_ntt.device
+        )
+        rotated_c0 = ckks_ops.apply_ntt_galois_automorphism(c0_ntt, indices)
+        return (
+            self.rns_context.add_lazy(rotated_c0, corrections[0]),
+            corrections[1],
+        )
+
+    def _accumulate(
+        self,
+        prepared: _PreparedRotationDigits,
+        key: RotationKey,
+    ) -> torch.Tensor:
+        """Accumulate both QP key products with the NTT permutation in the load."""
+
         prototype = prepared.ntt_digits_qp[0]
-        accumulator0 = torch.zeros_like(prototype)
-        accumulator1 = torch.zeros_like(prototype)
+        accumulator = torch.zeros(
+            (2, *prototype.shape),
+            dtype=prototype.dtype,
+            device=prototype.device,
+        )
         active = self.rns_context.basis_parameters(
             prepared.level,
             include_p=True,
@@ -385,27 +426,16 @@ class _RotationHoistExecutor:
             prepared.ntt_digits_qp,
             strict=True,
         ):
-            rotated_digit = ckks_ops.apply_ntt_galois_automorphism(
-                digit_qp,
-                source_indices,
-            )
             ckks_ops.keyswitch_accumulate_digit_products_(
-                accumulator0,
-                accumulator1,
-                rotated_digit,
+                accumulator[0],
+                accumulator[1],
+                digit_qp,
                 key.digit(digit_spec.key_digit_index),
                 active.native_parameters,
                 active.parameter_row_start,
+                source_indices,
             )
-        correction0, correction1 = self._moddown(
-            accumulator0,
-            accumulator1,
-            prepared.level,
-        )
-        return (
-            self.rns_context.add_standard(rotated_c0, correction0),
-            correction1,
-        )
+        return accumulator
 
 
 __all__: list[str] = []

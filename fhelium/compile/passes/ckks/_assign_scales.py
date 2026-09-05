@@ -20,6 +20,7 @@ from fhelium.config import CkksConfig
 from fhelium.ir import Program, value_role
 from fhelium.ir.dialects import ckks
 from fhelium.ir.dialects._common import OpenStateType
+from ._transition_state import is_same_dialect_ckks_cast
 
 
 _PREPARE_ADD_TYPES = (
@@ -205,14 +206,29 @@ class AssignCkksScalesPass:
                             "encrypted conversion cast lacks an assigned scale"
                         )
                     continue
-                copied = dict(
+                source_state = dict(
                     getattr(
                         getattr(operation.inputs[0].type, "state", None),
                         "data",
                         {},
                     )
                 )
-                record(operation.outputs[0], source_scale, copied_state=copied)
+                target_state = dict(
+                    getattr(
+                        getattr(operation.outputs[0].type, "state", None),
+                        "data",
+                        {},
+                    )
+                )
+                record(
+                    operation.outputs[0],
+                    source_scale,
+                    copied_state=(
+                        target_state
+                        if is_same_dialect_ckks_cast(operation)
+                        else {**source_state, **target_state}
+                    ),
+                )
                 matched += 1
                 continue
             if not operation.results:

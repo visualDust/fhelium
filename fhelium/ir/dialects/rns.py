@@ -16,6 +16,7 @@ assets that an eager or JIT executable binds before running a backend.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Literal
 
 from xdsl.dialects.builtin import (
     Float64Type,
@@ -182,10 +183,13 @@ class _CiphertextPlaintextOp(IRDLOperation):
         plaintext: SSAValue | Operation,
         parameters: SSAValue | Operation,
         result_type: Attribute,
+        *,
+        attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         super().__init__(
             operands=[ciphertext, plaintext, parameters],
             result_types=[result_type],
+            attributes=attributes,
         )
 
 
@@ -195,12 +199,16 @@ class AddPlaintextOp(_CiphertextPlaintextOp):
 
     For ciphertext $(c_0,\ldots,c_{k-1})$ and plaintext polynomial $p$, each
     active-prime row computes $c'_0=c_0+p\pmod {q_i}$ and
-    $c'_j=c_j$ for $j>0$.  The prepared plaintext uses coefficient-domain
-    Montgomery residues in the same Q or QP rows; Montgomery reduction produces
-    the standard-residue component.  Level, component count, and ciphertext scale
-    are preserved."""
+    $c'_j=c_j$ for $j>0$. With coefficient/standard ciphertext input, the
+    prepared plaintext uses coefficient-domain Montgomery residues and the
+    operation returns standard residues. With NTT/Montgomery input, both
+    operands and the result remain NTT/Montgomery. Level, component count, and
+    ciphertext scale are preserved."""
 
     name = "fhelium_rns.add_plaintext"
+    polynomial_domain = attr_def(
+        StringAttr, default_value=StringAttr("coefficient")
+    )
 
 
 @irdl_op_definition
@@ -227,14 +235,20 @@ class RescaleDropLeadingPrimeOp(IRDLOperation):
     $d>q_d/2$, otherwise $t=d$.  Each surviving row is
     $y_i=(x_i-t)q_d^{-1}\bmod q_i$, representing the selected rounded
     quotient of $x/q_d$.  The $q_d$ row is removed, the public level advances
-    by one, and actual scale $\Delta$ becomes $\Delta/q_d$.  Component count
-    and coefficient/standard representation are preserved."""
+    by one, and actual scale $\Delta$ becomes $\Delta/q_d$. Component count
+    is preserved. Coefficient/standard input returns coefficient/standard
+    output. NTT/Montgomery input inverts only the dropped row for rounding and
+    retains the surviving rows in NTT/Montgomery form."""
 
     name = "fhelium_rns.rescale_drop_leading_prime"
     value = operand_def(RnsBundleType)
     plan = operand_def(RescalePlanType)
     result = result_def(RnsBundleType)
     rounding = opt_attr_def(StringAttr)
+    input_domain = attr_def(StringAttr, default_value=StringAttr("coefficient"))
+    output_domain = attr_def(
+        StringAttr, default_value=StringAttr("coefficient")
+    )
     traits = traits_def(Pure())
 
     def __init__(
@@ -244,12 +258,15 @@ class RescaleDropLeadingPrimeOp(IRDLOperation):
         result_type: Attribute,
         *,
         rounding: str | StringAttr = "nearest",
+        polynomial_domain: Literal["coefficient", "ntt"] = "coefficient",
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         attrs: dict[str, Attribute | None] = dict(attributes or {})
         attrs["rounding"] = (
             StringAttr(rounding) if isinstance(rounding, str) else rounding
         )
+        attrs["input_domain"] = StringAttr(polynomial_domain)
+        attrs["output_domain"] = StringAttr(polynomial_domain)
         super().__init__(
             operands=[value, plan],
             result_types=[result_type],
@@ -265,6 +282,13 @@ class RescaleDropLeadingPrimeOp(IRDLOperation):
         }:
             raise VerifyException(
                 "RNS rescale rounding must be 'nearest' or 'floor'"
+            )
+        if (
+            self.input_domain.data not in {"coefficient", "ntt"}
+            or self.output_domain != self.input_domain
+        ):
+            raise VerifyException(
+                "RNS rescale must preserve coefficient or NTT domain"
             )
 
 
@@ -549,6 +573,44 @@ class ModDownQpToQOp(IRDLOperation):
 
 
 @irdl_op_definition
+class ModDownNttQpToQOp(IRDLOperation):
+    r"""Remove P from two QP accumulators and retain NTT/Montgomery Q rows.
+
+    The input has shape ``[2, *batch, |Q|+|P|, N]``; the result has shape
+    ``[2, *batch, |Q|, N]``. The NTT-plan operand supplies the transforms
+    for the same RNS context as the parameters and key-switch plan.
+
+    Let $r\in[0,P)$ be the coefficient representative reconstructed from
+    $\operatorname{INTT}_P(\widehat{x}_P)$. The result is
+    $\widehat{x}_Q P^{-1}+\operatorname{NTT}_Q(-rP^{-1})\bmod q_i$.
+    This equals coefficient-domain ModDown followed by forward NTT, without
+    inverting the Q rows. Output drops P, preserves active Q rows and N,
+    and remains in Montgomery representation. It does not rescale CKKS values.
+    """
+
+    name = "fhelium_rns.moddown_ntt_qp_to_q"
+    value = operand_def(RnsBundleType)
+    parameters = operand_def(RnsParametersType)
+    ntt_plan = operand_def()
+    plan = operand_def(KeySwitchPlanType)
+    result = result_def(RnsBundleType)
+    traits = traits_def(Pure())
+
+    def __init__(
+        self,
+        value: SSAValue | Operation,
+        parameters: SSAValue | Operation,
+        ntt_plan: SSAValue | Operation,
+        plan: SSAValue | Operation,
+        result_type: Attribute,
+    ) -> None:
+        super().__init__(
+            operands=[value, parameters, ntt_plan, plan],
+            result_types=[result_type],
+        )
+
+
+@irdl_op_definition
 class CoefficientAutomorphismOp(IRDLOperation):
     r"""Apply the negacyclic ring automorphism $\sigma_g$.
 
@@ -719,6 +781,7 @@ _RNS_OPERATION_TYPES = (
     KeySwitchDigitProductOp,
     AddMontgomeryLazyOp,
     ModDownQpToQOp,
+    ModDownNttQpToQOp,
     CoefficientAutomorphismOp,
     StandardToMontgomeryOp,
     MontgomeryToStandardOp,
@@ -727,7 +790,12 @@ _RNS_OPERATION_TYPES = (
 )
 
 _RNS_ATTRIBUTES: dict[type[Operation], tuple[str, ...]] = {
-    RescaleDropLeadingPrimeOp: ("rounding",),
+    AddPlaintextOp: ("polynomial_domain",),
+    RescaleDropLeadingPrimeOp: (
+        "rounding",
+        "input_domain",
+        "output_domain",
+    ),
     ExtractComponentOp: ("component",),
     HybridModUpDigitOp: ("digit_index",),
     KeySwitchDigitProductOp: ("key_digit_index",),
@@ -779,6 +847,7 @@ __all__ = [
     "KeySwitchDigitProductOp",
     "KeySwitchPlanType",
     "ModDownQpToQOp",
+    "ModDownNttQpToQOp",
     "MontgomeryToStandardOp",
     "MontgomeryMultiplyOp",
     "MultiplyPlaintextOp",

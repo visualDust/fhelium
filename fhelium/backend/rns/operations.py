@@ -221,6 +221,21 @@ class NativePlaintextArithmeticImplementation(_OperandResourceImplementation):
             include_p=include_p,
         )
         if invocation.operation_type is rns.AddPlaintextOp:
+            if (
+                invocation.attributes.get("polynomial_domain", "coefficient")
+                == "ntt"
+            ):
+                component0 = resource.add_lazy(
+                    ciphertext[0],
+                    plaintext,
+                    include_p=include_p,
+                )
+                if in_place:
+                    ciphertext[0].copy_(component0)
+                    return (ciphertext,)
+                return (
+                    torch.cat((component0.unsqueeze(0), ciphertext[1:]), dim=0),
+                )
             if in_place:
                 ckks_ops.add_prepared_plaintext_component_(
                     ciphertext[0],

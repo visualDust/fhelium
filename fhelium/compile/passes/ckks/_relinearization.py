@@ -10,7 +10,7 @@ from ..._pipeline import (
 from dataclasses import dataclass
 
 from xdsl.ir import Attribute, Operation, SSAValue, Use
-from xdsl.dialects.builtin import StringAttr, UnrealizedConversionCastOp
+from xdsl.dialects.builtin import UnrealizedConversionCastOp
 
 from fhelium.ir import Program
 from fhelium.ir.dialects import ckks
@@ -26,6 +26,7 @@ from ._transition_state import (
     is_ckks_value_bridge,
     is_same_dialect_ckks_cast,
     reconcile_transition_paths,
+    representation_pair,
     represented_state,
     retype_path,
     retype_result,
@@ -113,8 +114,9 @@ def _materialize_relinearization(
             if edge is None
             else edge.operation.operands[edge.index]
         )
-    state = represented_state(source) or {}
-    domain = state.get("polynomial_domain")
+    representation = representation_pair(
+        source, operation="CKKS relinearization placement"
+    )
     block = operation.parent_block()
     if block is None:
         raise ValueError("relinearization carrier is not attached to a block")
@@ -134,7 +136,7 @@ def _materialize_relinearization(
         def insert(created: Operation) -> None:
             block.insert_op_before(created, consumer)
 
-    if not (isinstance(domain, StringAttr) and domain.data == "ntt"):
+    if representation == ("coefficient", "standard"):
         ntt = ckks.ToNttOp(
             source,
             ciphertext_type(
@@ -147,13 +149,22 @@ def _materialize_relinearization(
         insert(ntt)
         source = ntt.result
         inserted += 1
+    elif representation != ("ntt", "montgomery"):
+        raise ValueError(
+            "CKKS relinearization placement cannot consume representation "
+            f"{representation!r}"
+        )
     result_type = ciphertext_type(
         source,
-        domain="coefficient",
-        residues="standard",
+        domain="ntt",
+        residues="montgomery",
         components=2,
     )
-    relinearized = ckks.RelinearizeOp(source, result_type)
+    relinearized = ckks.RelinearizeOp(
+        source,
+        result_type,
+        output_domain="ntt",
+    )
     relinearized.result.name_hint = f"{display_name(operation)}_relinearized"
     insert(relinearized)
     if edge is not None and opaque_cast is None:

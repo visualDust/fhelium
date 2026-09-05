@@ -133,6 +133,8 @@ def _spec_data(spec: InputSpec) -> dict[str, object]:
         "scale": spec.scale,
         "slots": spec.slots,
         "batch_mode": spec.batch_mode,
+        "polynomial_domain": spec.polynomial_domain,
+        "residue_representation": spec.residue_representation,
         "static_value": encode_literal(spec.static_value),
     }
 
@@ -202,6 +204,19 @@ class _Emitter:
                         ),
                         "slots": StringAttr(str(spec.slots)),
                         "batch_mode": StringAttr(spec.batch_mode),
+                        **(
+                            {
+                                "polynomial_domain": StringAttr(
+                                    spec.polynomial_domain
+                                ),
+                                "residue_representation": StringAttr(
+                                    spec.residue_representation
+                                ),
+                            }
+                            if spec.polynomial_domain is not None
+                            and spec.residue_representation is not None
+                            else {}
+                        ),
                     },
                 )
                 for spec in runtime_specs

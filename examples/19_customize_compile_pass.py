@@ -306,7 +306,13 @@ def _fhelium_operation_counts(program: ir.Program) -> list[tuple[str, int]]:
 def main() -> None:
     config = CkksConfig.parse(Preset.slots8192_scale40_levels7_int64)
     device = "cpu"
-    capture_inputs = {"x": fh_compile.encrypted(slots=_MATRIX_SIZE)}
+    capture_inputs = {
+        "x": fh_compile.encrypted(
+            slots=_MATRIX_SIZE,
+            polynomial_domain="coefficient",
+            residue_representation="standard",
+        )
+    }
     workspace = fh_compile.CompileWorkspace({CkksConfig: config})
     # Capture the source call while retaining the matrix Tensor in the
     # Compilation's ConstantBundle rather than embedding it in textual IR.

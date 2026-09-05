@@ -60,7 +60,8 @@ construct the public result
 For example, ciphertext multiplication preserves the current prime rows,
 multiplies the input scales, and produces three ciphertext components. Rescale
 removes the leading active Q prime, advances the level, divides the scale by
-the removed prime, and returns coefficient-domain standard residues.
+the removed prime, and preserves either coefficient/standard or
+NTT/Montgomery arithmetic state.
 
 Conceptually, an Eager implementation expresses rescale as:
 

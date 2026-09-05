@@ -61,6 +61,25 @@ torch::Tensor keyswitch_moddown_cpu(const torch::Tensor q_residues,
     const int64_t result_stride0 = output.stride(0);
     const int64_t result_stride1 = output.stride(1);
     const int64_t result_stride2 = output.stride(2);
+    // After preparing the reverse mixed-radix P digits d_j, the sequential
+    // divisions equal q/P - sum_j d_j/(p_0 ... p_j) modulo each Q prime.
+    // These coefficients are shared by all coefficients and batch items.
+    c10::SmallVector<scalar_t, 64> prefix_inverse(q_count * p_count);
+    for (int64_t row = 0; row < q_count; ++row) {
+      const auto constants = fhelium::cpu::load_constants(
+          parameter_rows, parameter_row_stride, parameter_limb_stride, row);
+      scalar_t product = inverse_values[(p_count - 1) * inverse_drop_stride +
+                                        row * inverse_limb_stride];
+      prefix_inverse[row * p_count] = product;
+      for (int64_t j = 1; j < p_count; ++j) {
+        product = fhelium::cpu::multiply(
+            product,
+            inverse_values[(p_count - j - 1) * inverse_drop_stride +
+                           row * inverse_limb_stride],
+            constants);
+        prefix_inverse[row * p_count + j] = product;
+      }
+    }
     const int64_t elements = batch_count * coefficients;
     at::parallel_for(
         0,
@@ -115,23 +134,16 @@ torch::Tensor keyswitch_moddown_cpu(const torch::Tensor q_residues,
                                                  row);
                 scalar_t value = fhelium::cpu::multiply(
                     q_rows[row * q_stride1 + coefficient * q_stride2],
-                    constants.r2,
+                    prefix_inverse[row * p_count + p_count - 1],
                     constants);
-                for (int64_t p_row = p_count - 1; p_row >= 0; --p_row) {
-                  const scalar_t p_value_montgomery = fhelium::cpu::multiply(
+                for (int64_t p_row = 0; p_row < p_count; ++p_row) {
+                  const scalar_t contribution = fhelium::cpu::multiply(
                       p_chain[static_cast<size_t>(p_row)],
-                      constants.r2,
+                      prefix_inverse[row * p_count + p_row],
                       constants);
                   value = fhelium::cpu::subtract_lazy(
-                      value, p_value_montgomery, constants.twice_modulus);
-                  value = fhelium::cpu::multiply_split(
-                      value,
-                      inverse_values[(p_count - p_row - 1) *
-                                         inverse_drop_stride +
-                                     row * inverse_limb_stride],
-                      constants);
+                      value, contribution, constants.twice_modulus);
                 }
-                value = fhelium::cpu::reduce(value, constants);
                 result_rows[row * result_stride1 +
                             coefficient * result_stride2] =
                     fhelium::cpu::reduce_to_standard(value,
@@ -150,7 +162,8 @@ void keyswitch_accumulate_cpu_(torch::Tensor accumulator0_qp,
                                const torch::Tensor digit_qp,
                                const torch::Tensor key_digit,
                                const torch::Tensor rns_params,
-                               const int64_t key_row_start) {
+                               const int64_t key_row_start,
+                               const std::optional<torch::Tensor> source_indices) {
   constexpr const char* operation = "keyswitch_accumulate_digit_products";
   for (const auto& peer :
        {accumulator0_qp, accumulator1_qp, key_digit, rns_params}) {
@@ -162,6 +175,24 @@ void keyswitch_accumulate_cpu_(torch::Tensor accumulator0_qp,
   check_rns_binary_3d(accumulator0, digit, operation, false);
   check_rns_binary_3d(accumulator1, digit, operation, false);
   check_rns_parameter_rows(digit, rns_params, operation);
+  const int32_t* permutation = nullptr;
+  int64_t permutation_stride = 0;
+  if (source_indices) {
+    const auto& indices = *source_indices;
+    TORCH_CHECK(indices.device() == digit_qp.device() &&
+                    indices.scalar_type() == torch::kInt32 &&
+                    indices.dim() == 1 && indices.size(0) == digit.size(2),
+                operation, " requires int32 source indices matching N");
+    at::assert_no_overlap(accumulator0, indices);
+    at::assert_no_overlap(accumulator1, indices);
+    permutation = indices.data_ptr<int32_t>();
+    permutation_stride = indices.stride(0);
+    for (int64_t i = 0; i < digit.size(2); ++i) {
+      TORCH_CHECK(permutation[i * permutation_stride] >= 0 &&
+                      permutation[i * permutation_stride] < digit.size(2),
+                  operation, " source index is out of bounds");
+    }
+  }
   TORCH_CHECK(key_digit.dim() == 3 && key_digit.size(0) == 2 &&
                   key_row_start >= 0 &&
                   key_row_start + digit.size(1) <= key_digit.size(1) &&
@@ -230,7 +261,9 @@ void keyswitch_accumulate_cpu_(torch::Tensor accumulator0_qp,
             for (int64_t coefficient = coefficient_begin;
                  coefficient < coefficient_end;
                  ++coefficient) {
-              const scalar_t value = source_row[coefficient * digit_stride2];
+              const int64_t source_coefficient = permutation
+                  ? permutation[coefficient * permutation_stride] : coefficient;
+              const scalar_t value = source_row[source_coefficient * digit_stride2];
               const scalar_t product0 = fhelium::cpu::multiply(
                   value, key_row0[coefficient * key_stride2], constants);
               const scalar_t product1 = fhelium::cpu::multiply(

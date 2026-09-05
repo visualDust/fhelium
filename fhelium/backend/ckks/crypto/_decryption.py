@@ -14,7 +14,7 @@ from fhelium.backend.ntt.context import NttContext
 from fhelium.backend.ntt.resources import NTT_RESOURCE_KIND
 from fhelium.backend.rns.context import RnsContext
 from fhelium.backend.rns.resources import RNS_RESOURCE_KIND
-from fhelium.values import ModulusBasis, SecretKey
+from fhelium.values import ModulusBasis, PolynomialDomain, SecretKey
 from fhelium.ir.dialects import ckks
 from fhelium.native.wrapper import rns_ops
 
@@ -32,54 +32,68 @@ def _decrypt_tensor_to_coefficient_standard_rns(
     level: int,
     includes_p: bool,
     secret_key_basis: ModulusBasis,
+    input_domain: PolynomialDomain,
     rns_context: RnsContext,
     ntt_context: NttContext,
 ) -> torch.Tensor:
-    """Evaluate a ciphertext Tensor phase in coefficient standard RNS."""
+    r"""Evaluate $\sum_j c_js^j$ and return coefficient standard RNS.
+
+    NTT inputs form the complete phase before one inverse transform.
+    Coefficient inputs transform each nonconstant component for multiplication
+    by its NTT/Montgomery secret-key power and return that product before the
+    coefficient-domain sum.
+    """
 
     secret_data = secret_key_data[rns_context.level_row_starts[level] :]
     if not includes_p and secret_key_basis == "QP":
         secret_data = secret_data[: -rns_context.config.num_p_primes]
-    if ciphertext_data.size(0) == 3:
-        d0 = ciphertext_data[0].clone()
-        ntt_context.inverse_to_standard_(d0, include_p=includes_p)
-        d1_s = rns_context.montgomery_mul(
-            ciphertext_data[1],
-            secret_data,
-            include_p=includes_p,
-        )
-        s2 = rns_context.montgomery_mul(
-            secret_data,
-            secret_data,
-            include_p=includes_p,
-        )
-        d2_s2 = rns_context.montgomery_mul(
-            ciphertext_data[2],
-            s2,
-            include_p=includes_p,
-        )
-        ntt_context.inverse_to_standard_lazy_(d1_s, include_p=includes_p)
-        ntt_context.inverse_to_standard_lazy_(d2_s2, include_p=includes_p)
-        plaintext_rns = rns_context.add_lazy(
-            d0,
-            d1_s,
-            include_p=includes_p,
-        )
-        return rns_context.add_standard(
-            plaintext_rns,
-            d2_s2,
-            include_p=includes_p,
+    if ciphertext_data.size(0) not in (2, 3):
+        raise ValueError("Decryption requires a CT2 or CT3 payload")
+    if input_domain not in ("coefficient", "ntt"):
+        raise ValueError(
+            "Decryption input_domain must be 'coefficient' or 'ntt'"
         )
 
-    a = ciphertext_data[1].clone()
-    ntt_context.forward_to_montgomery_(a, include_p=includes_p)
-    sa = rns_context.montgomery_mul(a, secret_data, include_p=includes_p)
-    ntt_context.inverse_to_standard_lazy_(sa, include_p=includes_p)
-    return rns_context.add_standard(
-        ciphertext_data[0],
-        sa,
-        include_p=includes_p,
-    )
+    phase = ciphertext_data[0].clone()
+    secret_power = secret_data
+    for component in range(1, ciphertext_data.size(0)):
+        value = ciphertext_data[component]
+        if input_domain == "coefficient":
+            value = value.clone()
+            ntt_context.forward_to_montgomery_(
+                value,
+                include_p=includes_p,
+            )
+        product = rns_context.montgomery_mul(
+            value,
+            secret_power,
+            include_p=includes_p,
+        )
+        if input_domain == "coefficient":
+            ntt_context.inverse_to_standard_(
+                product,
+                include_p=includes_p,
+            )
+            phase = rns_context.add_standard(
+                phase,
+                product,
+                include_p=includes_p,
+            )
+        else:
+            phase = rns_context.add_lazy(
+                phase,
+                product,
+                include_p=includes_p,
+            )
+        if component + 1 < ciphertext_data.size(0):
+            secret_power = rns_context.montgomery_mul(
+                secret_power,
+                secret_data,
+                include_p=includes_p,
+            )
+    if input_domain == "ntt":
+        ntt_context.inverse_to_standard_(phase, include_p=includes_p)
+    return phase
 
 
 def _mixed_radix_is_above_half(
@@ -188,6 +202,7 @@ def decrypt_tensor(
     level: int,
     ciphertext_basis: ModulusBasis,
     secret_key_basis: ModulusBasis,
+    input_domain: PolynomialDomain,
     rns_context: RnsContext,
     ntt_context: NttContext,
     reconstruction: DecryptReconstructionResource,
@@ -201,6 +216,7 @@ def decrypt_tensor(
         level=level,
         includes_p=includes_p,
         secret_key_basis=secret_key_basis,
+        input_domain=input_domain,
         rns_context=rns_context,
         ntt_context=ntt_context,
     )
@@ -266,6 +282,10 @@ class NativeDecryptImplementation:
                     invocation.attributes["modulus_basis"],
                 ),
                 secret_key_basis=key.modulus_basis,
+                input_domain=cast(
+                    PolynomialDomain,
+                    invocation.attributes["input_domain"],
+                ),
                 rns_context=rns_context,
                 ntt_context=ntt_context,
                 reconstruction=reconstruction,

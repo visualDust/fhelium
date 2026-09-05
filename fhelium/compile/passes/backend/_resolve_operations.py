@@ -21,6 +21,7 @@ from fhelium.backend.implementation import (
 from fhelium.ir import Program
 
 from ._operations import executable_operations
+from ._validate_representations import ValidateExecutionRepresentationsPass
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,7 @@ class ResolveBackendOperationsPass:
         program: Program,
         shared_data: dict[object, object],
     ) -> PassResult:
+        ValidateExecutionRepresentationsPass().run(program, shared_data)
         operations = executable_operations(program)
         if self.in_place and len(operations) != 1:
             raise ValueError(

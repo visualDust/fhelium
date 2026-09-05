@@ -77,12 +77,11 @@ flowchart LR
     PT[Prepared plaintext<br/>NTT/Montgomery, scale s_pt]
     PM[multiply_plaintext]
     OUT[NTT ciphertext<br/>level l, scale s_ct * s_pt]
-    COEFF[ntt_domain_to_coefficient_domain]
     RS[rescale_to_next_level]
-    NEXT[Ciphertext<br/>level l + 1, scale s_ct * s_pt / q_l]
+    NEXT[NTT ciphertext<br/>level l + 1, scale s_ct * s_pt / q_l]
     CT --> NTT --> PM
     PT --> PM
-    PM --> OUT --> COEFF --> RS --> NEXT
+    PM --> OUT --> RS --> NEXT
 ```
 
 `multiply_plaintext` accepts an operation-ready plaintext constructed with
@@ -90,17 +89,14 @@ flowchart LR
 two-component NTT/Montgomery ciphertext. The result remains NTT/Montgomery,
 stays at the input level, and records the product of the operand scales. This
 matches ciphertext-ciphertext `multiply`: multiplication regions own their
-through separate NTT-domain transition calls, and compatible terms can be accumulated before
-one inverse transition. Rescale still requires coefficient-domain standard
-residues.
+NTT-domain transition calls, and compatible terms can be accumulated and
+rescaled without an intermediate inverse transition.
 
 ```python
 source_ntt = engine.coefficient_domain_to_ntt_domain(source)
 term_ntt = engine.multiply_plaintext(source_ntt, prepared_weight)
 sum_ntt = engine.add(sum_ntt, term_ntt)
-result = engine.rescale_to_next_level(
-    engine.ntt_domain_to_coefficient_domain(sum_ntt)
-)
+result = engine.rescale_to_next_level(sum_ntt)
 ```
 
 For repeated model weights, encode and prepare operation-ready plaintexts at

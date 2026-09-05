@@ -96,8 +96,8 @@ void launch_forward_ntt_compact_keyswitch_accumulate_cuda(
     torch::Tensor accumulator0,
     torch::Tensor accumulator1,
     const int key_row_start,
+    const int grouped_stage_count,
     cudaStream_t stream) {
-  constexpr int kVerifiedGroupedStageCount = 4;
   constexpr int kVerifiedTailStageCount = 8;
   const int N = static_cast<int>(coefficient_digit.size(2));
   int logN = 0;
@@ -109,7 +109,7 @@ void launch_forward_ntt_compact_keyswitch_accumulate_cuda(
       coefficient_digit,
       forward_twiddles,
       rns_params,
-      kVerifiedGroupedStageCount,
+      grouped_stage_count,
       row_count,
       0,
       tail_start_stage,
@@ -135,7 +135,22 @@ void forward_ntt_montgomery_compact_keyswitch_accumulate_inplace_cuda(
     const torch::Tensor key_digit_qp,
     torch::Tensor accumulator0_qp,
     torch::Tensor accumulator1_qp,
-    const int64_t key_row_start) {
+    const int64_t key_row_start,
+    const int64_t grouped_stage_count) {
+  for (const auto& tensor : {key_digit_qp, accumulator0_qp, accumulator1_qp}) {
+    TORCH_CHECK(tensor.device() == coefficient_digit_qp.device() &&
+                    tensor.scalar_type() == coefficient_digit_qp.scalar_type(),
+                "Fused NTT key products require one dtype and CUDA device");
+  }
+  for (const auto& tensor : {accumulator0_qp, accumulator1_qp}) {
+    at::assert_no_internal_overlap(tensor);
+    for (const auto& input : {coefficient_digit_qp, key_digit_qp,
+                              forward_twiddles, rns_params}) {
+      at::assert_no_overlap(tensor, input);
+    }
+  }
+  at::assert_no_overlap(accumulator0_qp, accumulator1_qp);
+  at::assert_no_overlap(coefficient_digit_qp, key_digit_qp);
   auto digit = view_rns_batch_3d(coefficient_digit_qp, "coefficient_digit_qp");
   auto accumulator0 = view_rns_batch_3d(accumulator0_qp, "accumulator0_qp");
   auto accumulator1 = view_rns_batch_3d(accumulator1_qp, "accumulator1_qp");
@@ -166,6 +181,7 @@ void forward_ntt_montgomery_compact_keyswitch_accumulate_inplace_cuda(
             accumulator0,
             accumulator1,
             static_cast<int>(key_row_start),
+            static_cast<int>(grouped_stage_count),
             stream);
       });
   C10_CUDA_KERNEL_LAUNCH_CHECK();

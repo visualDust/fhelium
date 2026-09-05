@@ -12,7 +12,7 @@ may carry its own actual scale $\Delta$.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import ClassVar
+from typing import ClassVar, Literal, cast
 
 from xdsl.dialects.builtin import FloatAttr, IntegerAttr, StringAttr
 from xdsl.ir import Attribute, Dialect, Operation, SSAValue
@@ -140,14 +140,17 @@ class EncryptOp(IRDLOperation):
     $k_0+k_1s\approx0$, let $v$ be a sampled binary polynomial, and let
     $e_0,e_1$ be sampled error polynomials.  For plaintext $a$, the result is
     $c_0=k_0v+a+e_0$ and $c_1=k_1v+e_1$ modulo every active prime.  The output
-    has two components in coefficient-domain standard Q or QP residues and keeps
-    the plaintext level and actual scale.  ``key_symbol`` identifies the bound
-    public-key resource."""
+    has two components and keeps the plaintext level and actual scale.
+    ``output_domain`` selects coefficient/standard or NTT/Montgomery Q or QP
+    residues. ``key_symbol`` identifies the bound public-key resource."""
 
     name = "fhelium_ckks.encrypt"
     plaintext = operand_def(PlaintextType)
     result = result_def(CiphertextType)
     key_symbol = attr_def(StringAttr)
+    output_domain = attr_def(
+        StringAttr, default_value=StringAttr("coefficient")
+    )
 
 
 @irdl_op_definition
@@ -159,12 +162,15 @@ class DecryptOp(IRDLOperation):
     decryption implementation converts products to coefficient-domain standard
     RNS, then reconstructs a centered bounded integer from the trailing active Q
     rows.  The result is an approximate coefficient plaintext at the ciphertext's
-    level and actual scale.  ``key_symbol`` selects the secret key."""
+    level and actual scale. ``input_domain`` records whether the ciphertext
+    payload arrives in coefficient/standard or NTT/Montgomery form, and
+    ``key_symbol`` selects the secret key."""
 
     name = "fhelium_ckks.decrypt"
     ciphertext = operand_def(CiphertextType)
     result = result_def(PlaintextType)
     key_symbol = attr_def(StringAttr)
+    input_domain = attr_def(StringAttr)
     traits = traits_def(Pure())
 
 
@@ -224,17 +230,24 @@ class NegateOp(_UnaryCiphertextOp):
 class RotateOp(IRDLOperation):
     r"""Rotate CKKS slots through a Galois automorphism and key switch.
 
-    The input is a coefficient-domain standard-Q CT2 ciphertext.  A rotation key
-    records a signed slot displacement $r$ and its odd Galois element $g$.
+    The input is a CT2 ciphertext in coefficient/standard or NTT/Montgomery
+    Q state. A rotation key records a signed slot displacement $r$ and its odd
+    Galois element $g$.
     Applying $\sigma_g:X\mapsto X^g$ rotates the encoded slots and changes the
     secret relation from $s$ to $\sigma_g(s)$; the key-switch stage returns
-    that relation to $s$.  The result is a coefficient/standard CT2 ciphertext
-    with level, actual scale, and active Q rows preserved."""
+    that relation to $s$.  The result is a CT2 ciphertext
+    with level, actual scale, and active Q rows preserved. ``output_domain``
+    selects coefficient/standard or NTT/Montgomery output; the NTT choice
+    equals a coefficient rotation followed by ``ToNttOp``."""
 
     name = "fhelium_ckks.rotate"
     value = operand_def(CiphertextType)
     key = operand_def(EvaluationKeyType)
     result = result_def(CiphertextType)
+    output_domain = attr_def(
+        StringAttr, default_value=StringAttr("coefficient")
+    )
+    input_domain = attr_def(StringAttr, default_value=StringAttr("coefficient"))
     traits = traits_def(Pure())
 
     def __init__(
@@ -245,10 +258,32 @@ class RotateOp(IRDLOperation):
         *,
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
+        attrs = dict(attributes or {})
+        if "input_domain" not in attrs:
+            source_type = cast(CiphertextType, SSAValue.get(value).type)
+            represented = source_type.state.data.get("polynomial_domain")
+            attrs["input_domain"] = (
+                represented
+                if isinstance(represented, StringAttr)
+                else StringAttr("coefficient")
+            )
+        if result_type is None:
+            source_type = cast(CiphertextType, SSAValue.get(value).type)
+            domain = attrs.get("output_domain", StringAttr("coefficient"))
+            result_type = source_type.with_state(
+                {
+                    "polynomial_domain": domain,
+                    "residue_representation": StringAttr(
+                        "montgomery"
+                        if domain == StringAttr("ntt")
+                        else "standard"
+                    ),
+                }
+            )
         super().__init__(
             operands=[value, key],
-            result_types=[result_type or SSAValue.get(value).type],
-            attributes=attributes,
+            result_types=[result_type],
+            attributes=attrs,
         )
 
 
@@ -261,12 +296,18 @@ class RotateManyOp(IRDLOperation):
     the mathematical result equals an independent ``RotateOp`` of the same input.
     Hoisting shares hybrid digit decomposition and Q-to-QP basis-extension work
     across outputs but does not change their order or values.  Every result
-    preserves the input level, actual scale, and active Q rows."""
+    preserves the input level, actual scale, and active Q rows.
+    ``output_domain`` selects coefficient/standard (the default) or
+    NTT/Montgomery output. The latter equals applying ``ToNttOp`` to each
+    coefficient result and permits ModDown to retain Q evaluations."""
 
     name = "fhelium_ckks.hoisted_rotate_many"
     value = operand_def(CiphertextType)
     keys = var_operand_def(EvaluationKeyType)
     outputs = var_result_def(CiphertextType)
+    output_domain = attr_def(
+        StringAttr, default_value=StringAttr("coefficient")
+    )
     traits = traits_def(Pure())
 
     def __init__(
@@ -274,10 +315,13 @@ class RotateManyOp(IRDLOperation):
         value: SSAValue | Operation,
         keys: tuple[SSAValue | Operation, ...],
         result_types: tuple[CiphertextType, ...],
+        *,
+        output_domain: Literal["coefficient", "ntt"] = "coefficient",
     ) -> None:
         super().__init__(
             operands=(value, keys),
             result_types=(result_types,),
+            attributes={"output_domain": StringAttr(output_domain)},
         )
 
     def verify_(self) -> None:
@@ -305,9 +349,32 @@ class _RepresentationOp(IRDLOperation):
         *,
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
+        source_type = SSAValue.get(value).type
+        if result_type is None and isinstance(source_type, OpenStateType):
+            updates: dict[str, Attribute] = {}
+            if self.name == "fhelium_ckks.to_ntt":
+                updates = {
+                    "polynomial_domain": StringAttr("ntt"),
+                    "residue_representation": StringAttr("montgomery"),
+                }
+            elif self.name == "fhelium_ckks.from_ntt":
+                updates = {
+                    "polynomial_domain": StringAttr("coefficient"),
+                    "residue_representation": StringAttr(
+                        "standard"
+                        if isinstance(source_type, CiphertextType)
+                        else "montgomery"
+                    ),
+                }
+            elif self.name == "fhelium_ckks.to_montgomery_residues":
+                updates = {"residue_representation": StringAttr("montgomery")}
+            elif self.name == "fhelium_ckks.to_standard_residues":
+                updates = {"residue_representation": StringAttr("standard")}
+            if updates:
+                result_type = source_type.with_state(updates)
         super().__init__(
             operands=[value],
-            result_types=[result_type or SSAValue.get(value).type],
+            result_types=[result_type or source_type],
             attributes=attributes,
         )
 
@@ -576,22 +643,62 @@ class MultiplyCompressedPlaintextOp(_CiphertextCompressedPlaintextOp):
     name = "fhelium_ckks.multiply_compressed_plaintext"
 
 
+class _OutputDomainCiphertextOp(_UnaryCiphertextOp):
+    output_domain = attr_def(
+        StringAttr, default_value=StringAttr("coefficient")
+    )
+
+    def __init__(
+        self,
+        value: SSAValue | Operation,
+        result_type: Attribute | None = None,
+        *,
+        output_domain: Literal["coefficient", "ntt"] = "coefficient",
+        attributes: Mapping[str, Attribute] | None = None,
+    ) -> None:
+        attrs = dict(attributes or {})
+        domain_attr = attrs.get("output_domain", StringAttr(output_domain))
+        if not isinstance(domain_attr, StringAttr):
+            raise TypeError("output_domain must be a StringAttr")
+        attrs["output_domain"] = domain_attr
+        output_domain = cast(Literal["coefficient", "ntt"], domain_attr.data)
+        if result_type is None:
+            source_type = cast(CiphertextType, SSAValue.get(value).type)
+            result_type = source_type.with_state(
+                {
+                    "polynomial_domain": StringAttr(output_domain),
+                    "residue_representation": StringAttr(
+                        "standard"
+                        if output_domain == "coefficient"
+                        else "montgomery"
+                    ),
+                }
+            )
+        super().__init__(value, result_type, attributes=attrs)
+
+    def verify_(self) -> None:
+        if self.output_domain.data not in {"coefficient", "ntt"}:
+            raise VerifyException(
+                "CKKS key-switch output_domain must be 'coefficient' or 'ntt'"
+            )
+
+
 @irdl_op_definition
-class RelinearizeOp(_UnaryCiphertextOp):
+class RelinearizeOp(_OutputDomainCiphertextOp):
     r"""Convert a three-component product ciphertext to two components.
 
     The input is an NTT/Montgomery CT3 product.  For phase
     $c_0+c_1s+c_2s^2$, hybrid key switching maps the $c_2s^2$ term to
     correction polynomials $(d_0,d_1)$ under secret $s$.  The result
     $(c_0+d_0,c_1+d_1)$ preserves the phase up to key-switch error.  Level,
-    actual scale, and active Q rows remain unchanged; the direct implementation
-    returns coefficient-domain standard residues."""
+    actual scale, and active Q rows remain unchanged. ``output_domain`` selects
+    coefficient/standard or NTT/Montgomery output."""
 
     name = "fhelium_ckks.relinearize"
 
 
 @irdl_op_definition
-class SwitchKeyOp(_UnaryCiphertextOp):
+class SwitchKeyOp(_OutputDomainCiphertextOp):
     r"""Change the secret-key relation of a CT2 ciphertext.
 
     The input is a coefficient-domain standard-Q CT2 ciphertext.  For phase
@@ -599,7 +706,9 @@ class SwitchKeyOp(_UnaryCiphertextOp):
     the $c_1s_{\mathrm{src}}$ term to corrections $(d_0,d_1)$ satisfying the
     destination relation.  The result $(c_0+d_0,d_1)$ decrypts under
     $s_{\mathrm{dst}}$ to the same approximate message, apart from key-switch
-    error.  Level, actual scale, active Q rows, and component count are preserved."""
+    error. ``output_domain`` selects coefficient/standard or NTT/Montgomery
+    output. Level, actual scale, active Q rows, and component count are
+    preserved."""
 
     name = "fhelium_ckks.switch_key"
     key_symbol = attr_def(StringAttr)
@@ -610,6 +719,7 @@ class SwitchKeyOp(_UnaryCiphertextOp):
         result_type: Attribute | None = None,
         *,
         key_symbol: str | StringAttr,
+        output_domain: Literal["coefficient", "ntt"] = "coefficient",
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         attrs = dict(attributes or {})
@@ -618,22 +728,29 @@ class SwitchKeyOp(_UnaryCiphertextOp):
             if isinstance(key_symbol, str)
             else key_symbol
         )
-        super().__init__(value, result_type, attributes=attrs)
+        super().__init__(
+            value,
+            result_type,
+            output_domain=output_domain,
+            attributes=attrs,
+        )
 
     def verify_(self) -> None:
+        super().verify_()
         if not self.key_symbol.data:
             raise VerifyException("CKKS switch-key symbol must be non-empty")
 
 
 @irdl_op_definition
-class ConjugateOp(_UnaryCiphertextOp):
+class ConjugateOp(_OutputDomainCiphertextOp):
     r"""Apply complex conjugation to every encoded CKKS slot.
 
     The input is a coefficient-domain standard-Q CT2 ciphertext.  The ring
     automorphism $\sigma_{2N-1}:X\mapsto X^{-1}$ maps the CKKS
     embedding to slotwise complex conjugation.  It also changes the secret
     relation to $\sigma_{2N-1}(s)$, so a conjugation key switches the result back
-    to $s$.  CT2 shape, level, actual scale, and active Q rows are preserved."""
+    to $s$. ``output_domain`` selects coefficient/standard or NTT/Montgomery
+    output. CT2 shape, level, actual scale, and active Q rows are preserved."""
 
     name = "fhelium_ckks.conjugate"
 
@@ -645,15 +762,20 @@ class RescaleOp(IRDLOperation):
     For dropped prime $q_d$, every component coefficient is quotient-rounded as
     $c'_j=\operatorname{round}(c_j/q_d)$ and represented on the surviving Q
     rows.  The $q_d$ row is removed, level advances by one, and actual scale
-    changes from $\Delta$ to $\Delta/q_d$.  Component count and
-    coefficient-domain standard representation remain.  ``rounding`` selects the
-    supported quotient rule."""
+    changes from $\Delta$ to $\Delta/q_d$. Component count is unchanged.
+    Coefficient/standard input uses coefficient quotient arithmetic;
+    NTT/Montgomery input retains surviving evaluations by transforming only the
+    rounding correction. ``rounding`` selects the quotient rule."""
 
     name = "fhelium_ckks.rescale"
 
     value = operand_def(CiphertextType)
     result = result_def(CiphertextType)
     rounding = opt_attr_def(StringAttr)
+    input_domain = attr_def(StringAttr, default_value=StringAttr("coefficient"))
+    output_domain = attr_def(
+        StringAttr, default_value=StringAttr("coefficient")
+    )
     traits = traits_def(Pure())
 
     def __init__(
@@ -662,15 +784,30 @@ class RescaleOp(IRDLOperation):
         result_type: Attribute | None = None,
         *,
         rounding: str | StringAttr = "nearest",
+        polynomial_domain: Literal["coefficient", "ntt"] = "coefficient",
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         attrs: dict[str, Attribute | None] = dict(attributes or {})
         attrs["rounding"] = (
             StringAttr(rounding) if isinstance(rounding, str) else rounding
         )
+        attrs["input_domain"] = StringAttr(polynomial_domain)
+        attrs["output_domain"] = StringAttr(polynomial_domain)
+        if result_type is None:
+            source_type = cast(CiphertextType, SSAValue.get(value).type)
+            result_type = source_type.with_state(
+                {
+                    "polynomial_domain": StringAttr(polynomial_domain),
+                    "residue_representation": StringAttr(
+                        "standard"
+                        if polynomial_domain == "coefficient"
+                        else "montgomery"
+                    ),
+                }
+            )
         super().__init__(
             operands=[value],
-            result_types=[result_type or SSAValue.get(value).type],
+            result_types=[result_type],
             attributes=attrs,
         )
 
@@ -683,6 +820,13 @@ class RescaleOp(IRDLOperation):
         }:
             raise VerifyException(
                 "CKKS rescale rounding must be 'nearest' or 'floor'"
+            )
+        if (
+            self.input_domain.data not in {"coefficient", "ntt"}
+            or self.output_domain != self.input_domain
+        ):
+            raise VerifyException(
+                "CKKS rescale must preserve coefficient or NTT domain"
             )
 
 
@@ -861,9 +1005,17 @@ def _with_ciphertext_components(
 
 def _rotate_specification(operation: Operation) -> tuple[str, ...]:
     diagnostics = list(flat_operation(operation))
-    unsupported = unsupported_attributes(operation, ())
+    unsupported = unsupported_attributes(
+        operation, ("input_domain", "output_domain")
+    )
     if unsupported:
         diagnostics.append(f"unsupported attributes {list(unsupported)}")
+    if isinstance(operation, RotateOp):
+        if operation.input_domain.data not in ("coefficient", "ntt"):
+            diagnostics.append("input_domain must be 'coefficient' or 'ntt'")
+        if operation.output_domain.data not in ("coefficient", "ntt"):
+            diagnostics.append("output_domain must be 'coefficient' or 'ntt'")
+        diagnostics.extend(_rotation_output_state_diagnostics(operation))
     return tuple(diagnostics)
 
 
@@ -871,13 +1023,55 @@ def _hoisted_rotate_many_specification(
     operation: Operation,
 ) -> tuple[str, ...]:
     diagnostics = list(flat_operation(operation))
-    unsupported = unsupported_attributes(operation, ())
+    unsupported = unsupported_attributes(operation, ("output_domain",))
     if unsupported:
         diagnostics.append(f"unsupported attributes {list(unsupported)}")
     if not isinstance(operation, RotateManyOp):
         diagnostics.append(
             "requires the registered CKKS hoisted-rotation operation"
         )
+    elif operation.output_domain.data not in ("coefficient", "ntt"):
+        diagnostics.append("output_domain must be 'coefficient' or 'ntt'")
+    else:
+        diagnostics.extend(_rotation_output_state_diagnostics(operation))
+    return tuple(diagnostics)
+
+
+def _rotation_output_state_diagnostics(
+    operation: (
+        RotateOp
+        | RotateManyOp
+        | EncryptOp
+        | RescaleOp
+        | _OutputDomainCiphertextOp
+    ),
+) -> tuple[str, ...]:
+    """Check represented result domains against execution output."""
+
+    domain = operation.output_domain.data
+    if domain not in {"coefficient", "ntt"}:
+        return ("output_domain must be 'coefficient' or 'ntt'",)
+    expected = {
+        "polynomial_domain": domain,
+        "residue_representation": "montgomery"
+        if domain == "ntt"
+        else "standard",
+    }
+    diagnostics: list[str] = []
+    for index, result in enumerate(operation.results):
+        if not isinstance(result.type, CiphertextType):
+            continue
+        for name, value in expected.items():
+            represented = result.type.state.data.get(name)
+            if represented is None:
+                continue
+            if (
+                not isinstance(represented, StringAttr)
+                or represented.data != value
+            ):
+                diagnostics.append(
+                    f"result {index} {name} must be {value!r} for output_domain={domain!r}"
+                )
     return tuple(diagnostics)
 
 
@@ -916,7 +1110,9 @@ def _prepare_specification(
 
 def _rescale_specification(operation: Operation) -> tuple[str, ...]:
     diagnostics = list(flat_operation(operation))
-    unsupported = unsupported_attributes(operation, ("rounding",))
+    unsupported = unsupported_attributes(
+        operation, ("rounding", "input_domain", "output_domain")
+    )
     if unsupported:
         diagnostics.append(f"unsupported attributes {list(unsupported)}")
     rounding = required_string_attribute(operation, "rounding")
@@ -924,6 +1120,12 @@ def _rescale_specification(operation: Operation) -> tuple[str, ...]:
         diagnostics.append(
             "rescale requires represented rounding='nearest' or 'floor'"
         )
+    if isinstance(operation, RescaleOp):
+        if operation.input_domain.data not in {"coefficient", "ntt"}:
+            diagnostics.append("input_domain must be 'coefficient' or 'ntt'")
+        if operation.output_domain != operation.input_domain:
+            diagnostics.append("rescale must preserve its polynomial domain")
+        diagnostics.extend(_rotation_output_state_diagnostics(operation))
     expected_roles = ("encrypted",)
     actual_roles = tuple(
         (
@@ -939,6 +1141,19 @@ def _rescale_specification(operation: Operation) -> tuple[str, ...]:
         diagnostics.append(
             f"rescale requires operand roles {expected_roles}, got {actual_roles}"
         )
+    return tuple(diagnostics)
+
+
+def _decrypt_specification(operation: Operation) -> tuple[str, ...]:
+    diagnostics = list(flat_operation(operation))
+    unsupported = unsupported_attributes(
+        operation, ("key_symbol", "input_domain")
+    )
+    if unsupported:
+        diagnostics.append(f"unsupported attributes {list(unsupported)}")
+    domain = required_string_attribute(operation, "input_domain")
+    if domain not in {"coefficient", "ntt"}:
+        diagnostics.append("input_domain must be 'coefficient' or 'ntt'")
     return tuple(diagnostics)
 
 
@@ -963,12 +1178,15 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         EncryptOp,
         "ckks",
         effect="rng-write",
-        validator=flat_with_attributes("key_symbol"),
+        validator=lambda operation: (
+            *flat_with_attributes("key_symbol", "output_domain")(operation),
+            *_rotation_output_state_diagnostics(cast(EncryptOp, operation)),
+        ),
     ),
     registered_operation_spec(
         DecryptOp,
         "ckks",
-        validator=flat_with_attributes("key_symbol"),
+        validator=_decrypt_specification,
     ),
     *(
         registered_operation_spec(op, "ckks", validator=flat_operation)
@@ -1025,7 +1243,12 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         RelinearizeOp,
         "ckks",
         validator=_with_ciphertext_components(
-            flat_operation,
+            lambda operation: (
+                *flat_with_attributes("output_domain")(operation),
+                *_rotation_output_state_diagnostics(
+                    cast(RelinearizeOp, operation)
+                ),
+            ),
             operands=((0, 3),),
             results=((0, 2),),
         ),
@@ -1034,7 +1257,12 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         SwitchKeyOp,
         "ckks",
         validator=_with_ciphertext_components(
-            flat_with_attributes("key_symbol"),
+            lambda operation: (
+                *flat_with_attributes("key_symbol", "output_domain")(operation),
+                *_rotation_output_state_diagnostics(
+                    cast(SwitchKeyOp, operation)
+                ),
+            ),
             operands=((0, 2),),
             results=((0, 2),),
         ),
@@ -1043,7 +1271,12 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         ConjugateOp,
         "ckks",
         validator=_with_ciphertext_components(
-            flat_operation,
+            lambda operation: (
+                *flat_with_attributes("output_domain")(operation),
+                *_rotation_output_state_diagnostics(
+                    cast(ConjugateOp, operation)
+                ),
+            ),
             operands=((0, 2),),
             results=((0, 2),),
         ),

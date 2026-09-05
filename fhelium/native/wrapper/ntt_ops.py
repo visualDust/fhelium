@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+
 import torch
 
 
@@ -47,13 +48,14 @@ def forward_ntt_montgomery_compact_keyswitch_accumulate_(
     accumulator0_qp: torch.Tensor,
     accumulator1_qp: torch.Tensor,
     key_row_start: int,
+    grouped_stage_count: int = 4,
 ) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::forward_ntt_montgomery_compact_keyswitch_accumulate_``.
 
     Torch schema::
 
-        fhelium_ntt_ops::forward_ntt_montgomery_compact_keyswitch_accumulate_(Tensor(a!) coefficient_digit_qp, Tensor forward_twiddles, Tensor rns_params, Tensor key_digit_qp, Tensor(b!) accumulator0_qp, Tensor(c!) accumulator1_qp, int key_row_start) -> ()
+        fhelium_ntt_ops::forward_ntt_montgomery_compact_keyswitch_accumulate_(Tensor(a!) coefficient_digit_qp, Tensor forward_twiddles, Tensor rns_params, Tensor key_digit_qp, Tensor(b!) accumulator0_qp, Tensor(c!) accumulator1_qp, int key_row_start, int grouped_stage_count=4) -> ()
 
     Args:
         coefficient_digit_qp: torch.Tensor (modified in-place).
@@ -63,6 +65,7 @@ def forward_ntt_montgomery_compact_keyswitch_accumulate_(
         accumulator0_qp: torch.Tensor (modified in-place).
         accumulator1_qp: torch.Tensor (modified in-place).
         key_row_start: int.
+        grouped_stage_count: int.
 
     Returns: None.
     """
@@ -75,6 +78,7 @@ def forward_ntt_montgomery_compact_keyswitch_accumulate_(
         accumulator0_qp,
         accumulator1_qp,
         key_row_start,
+        grouped_stage_count,
     )
 
 
@@ -135,6 +139,42 @@ def forward_ntt_montgomery_power_of_two_radix_compact_(
     _require_native()
     torch.ops.fhelium_ntt_ops.forward_ntt_montgomery_power_of_two_radix_compact_(
         montgomery_residues, outer_twiddles, radix_root_powers, rns_params
+    )
+
+
+def forward_ntt_to_montgomery_compact_add_scaled_(
+    source: torch.Tensor,
+    addend: torch.Tensor,
+    multiplier: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+    grouped_stage_count: int,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::forward_ntt_to_montgomery_compact_add_scaled_``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::forward_ntt_to_montgomery_compact_add_scaled_(Tensor(a!) source, Tensor addend, Tensor multiplier, Tensor forward_twiddles, Tensor rns_params, int grouped_stage_count) -> ()
+
+    Args:
+        source: torch.Tensor (modified in-place).
+        addend: torch.Tensor.
+        multiplier: torch.Tensor.
+        forward_twiddles: torch.Tensor.
+        rns_params: torch.Tensor.
+        grouped_stage_count: int.
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_compact_add_scaled_(
+        source,
+        addend,
+        multiplier,
+        forward_twiddles,
+        rns_params,
+        grouped_stage_count,
     )
 
 

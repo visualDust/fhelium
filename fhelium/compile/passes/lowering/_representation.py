@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal, cast
+
 from xdsl.dialects.builtin import StringAttr
 from xdsl.ir import Operation
 
@@ -18,6 +20,22 @@ from ._types import (
     _resource_type_state,
     _rns_type,
 )
+
+
+def _represented_string(
+    operation: Operation,
+    value_type: object,
+    name: str,
+    *,
+    value: str,
+) -> str:
+    state = getattr(getattr(value_type, "state", None), "data", {})
+    attribute = state.get(name)
+    if not isinstance(attribute, StringAttr) or attribute.data == "unknown":
+        raise ValueError(
+            f"{operation.name} requires concrete {value} {name!r} state"
+        )
+    return attribute.data
 
 
 def _lower_ntt(
@@ -38,16 +56,64 @@ def _lower_ntt(
         if isinstance(operation.value.type, ckks.CiphertextType)
         else "plaintext"
     )
+    input_domain = _represented_string(
+        operation,
+        operation.value.type,
+        "polynomial_domain",
+        value=f"{value_kind} input",
+    )
+    input_residues = _represented_string(
+        operation,
+        operation.value.type,
+        "residue_representation",
+        value=f"{value_kind} input",
+    )
+    output_domain = _represented_string(
+        operation,
+        operation.result.type,
+        "polynomial_domain",
+        value="result",
+    )
+    output_residues = _represented_string(
+        operation,
+        operation.result.type,
+        "residue_representation",
+        value="result",
+    )
     if isinstance(operation, ckks.ToNttOp):
+        if input_domain != "coefficient" or input_residues not in {
+            "standard",
+            "montgomery",
+        }:
+            raise ValueError(
+                f"{operation.name} requires coefficient-domain standard or "
+                "Montgomery input"
+            )
+        if (output_domain, output_residues) != ("ntt", "montgomery"):
+            raise ValueError(
+                f"{operation.name} requires NTT/Montgomery result state"
+            )
         operation_type: type[Operation] = (
             ntt.CoefficientStandardToNttMontgomeryOp
-            if value_kind == "ciphertext"
+            if input_residues == "standard"
             else ntt.CoefficientMontgomeryToNttMontgomeryOp
         )
     else:
+        if (input_domain, input_residues) != ("ntt", "montgomery"):
+            raise ValueError(
+                f"{operation.name} requires NTT/Montgomery input state"
+            )
+        if output_domain != "coefficient" or output_residues not in {
+            "standard",
+            "montgomery",
+        }:
+            raise ValueError(
+                f"{operation.name} requires coefficient-domain standard or "
+                "Montgomery result"
+            )
         operation_type = (
             ntt.NttMontgomeryToCoefficientStandardOp
-            if value_kind == "ciphertext"
+            if output_residues == "standard"
             else ntt.InverseMontgomeryOp
         )
     logical = operation_type.create(
@@ -84,6 +150,9 @@ def _lower_rescale(
         resource,
         _rns_type(operation.result.type),
         rounding=rounding,
+        polynomial_domain=cast(
+            Literal["coefficient", "ntt"], operation.input_domain.data
+        ),
     )
     result_cast, result = _cast_to_ckks(logical.result, operation.result.type)
     return LoweredCkksOperation(

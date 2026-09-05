@@ -9,6 +9,8 @@ from typing import Literal
 ValueRole = Literal["encrypted", "message", "plaintext", "static"]
 SlotExtent = int | Literal["full"]
 BatchMode = Literal["none", "any"]
+PolynomialDomainSpec = Literal["coefficient", "ntt"]
+ResidueRepresentationSpec = Literal["standard", "montgomery"]
 StaticValue = bool | int | float | complex | str | None
 
 
@@ -30,6 +32,8 @@ class InputSpec:
     scale: float | None = None
     slots: SlotExtent = "full"
     batch_mode: BatchMode = "none"
+    polynomial_domain: PolynomialDomainSpec | None = None
+    residue_representation: ResidueRepresentationSpec | None = None
     static_value: StaticValue = None
 
     def __post_init__(self) -> None:
@@ -41,6 +45,8 @@ class InputSpec:
             or self.scale is not None
             or self.slots != "full"
             or self.batch_mode != "none"
+            or self.polynomial_domain is not None
+            or self.residue_representation is not None
         ):
             raise ValueError(
                 f"{self.role} inputs do not declare encrypted slot/state "
@@ -98,6 +104,19 @@ class InputSpec:
             raise ValueError(
                 "Encrypted input batch mode must be 'none' or 'any'"
             )
+        representation = (
+            self.polynomial_domain,
+            self.residue_representation,
+        )
+        if representation not in {
+            (None, None),
+            ("coefficient", "standard"),
+            ("ntt", "montgomery"),
+        }:
+            raise ValueError(
+                "Encrypted input representation must be omitted or be "
+                "coefficient/standard or NTT/Montgomery"
+            )
 
 
 def encrypted(
@@ -106,6 +125,8 @@ def encrypted(
     scale: float | None = None,
     slots: SlotExtent = "full",
     batch_mode: BatchMode = "none",
+    polynomial_domain: PolynomialDomainSpec | None = None,
+    residue_representation: ResidueRepresentationSpec | None = None,
 ) -> InputSpec:
     """Declare a secret slot input accepted as Tensor or ``Ciphertext``.
 
@@ -114,6 +135,10 @@ def encrypted(
     specifies either the engine's full capacity or a final-axis extent.
     ``batch_mode='none'`` requires a one-dimensional Tensor and an unbatched
     Ciphertext; ``'any'`` permits leading batch axes.
+
+    ``polynomial_domain`` and ``residue_representation`` may jointly declare a
+    coefficient/standard or NTT/Montgomery input contract; omitting both leaves
+    representation assignment to later passes.
 
     These fields are frontend metadata. Later transforms and runtimes may use,
     refine, ignore, or diagnose them according to caller-selected policy. The
@@ -127,6 +152,8 @@ def encrypted(
         scale=scale,
         slots=slots,
         batch_mode=batch_mode,
+        polynomial_domain=polynomial_domain,
+        residue_representation=residue_representation,
     )
 
 

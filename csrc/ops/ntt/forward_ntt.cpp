@@ -48,10 +48,14 @@ TORCH_LIBRARY_FRAGMENT(fhelium_ntt_ops, m) {
       "standard_residues, Tensor forward_twiddles, Tensor rns_params, int "
       "grouped_stage_count) -> Tensor");
   m.def(
+      "forward_ntt_to_montgomery_compact_add_scaled_(Tensor(a!) source, "
+      "Tensor addend, Tensor multiplier, Tensor forward_twiddles, "
+      "Tensor rns_params, int grouped_stage_count) -> ()");
+  m.def(
       "forward_ntt_montgomery_compact_keyswitch_accumulate_(Tensor(a!) "
       "coefficient_digit_qp, Tensor forward_twiddles, Tensor rns_params, "
       "Tensor key_digit_qp, Tensor(b!) accumulator0_qp, Tensor(c!) "
-      "accumulator1_qp, int key_row_start) -> ()");
+      "accumulator1_qp, int key_row_start, int grouped_stage_count=4) -> ()");
   m.def(
       "forward_ntt_montgomery_power_of_two_radix_compact_(Tensor(a!) "
       "montgomery_residues, Tensor outer_twiddles, Tensor radix_root_powers, "

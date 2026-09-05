@@ -111,18 +111,19 @@ void forward_ntt_montgomery_compact_keyswitch_accumulate_(
     const torch::Tensor key_digit_qp,
     torch::Tensor accumulator0_qp,
     torch::Tensor accumulator1_qp,
-    const int64_t key_row_start) {
-  // Specialized mutating fusion: coefficient_digit_qp changes in place from
-  // coefficient/Montgomery to NTT/Montgomery [*batch, QP limb, N], then its
-  // rowwise products with key_digit_qp[key component, QP limb, N] are added to
+    const int64_t key_row_start,
+    const int64_t grouped_stage_count) {
+  // Specialized mutating fusion: coefficient_digit_qp is disposable scratch
+  // with coefficient/Montgomery input [*batch, QP limb, N]. Its NTT values
+  // are consumed inside the final kernel and not written back to scratch.
+  // Products with key_digit_qp[key component, QP limb, N] are added to
   // the two NTT/Montgomery QP accumulators. key_row_start maps local limb j to
   // key limb key_row_start+j. Key/tables/params are read-only; the three schema
   // write aliases are distinct and no implicit broadcast changes public batch.
-  constexpr int64_t kVerifiedGroupedStageCount = 4;
   fhelium::ntt::validate_compact_tables(coefficient_digit_qp,
                                         forward_twiddles,
                                         rns_params,
-                                        kVerifiedGroupedStageCount);
+                                        grouped_stage_count);
   forward_ntt_montgomery_compact_keyswitch_accumulate_inplace_cuda(
       coefficient_digit_qp,
       forward_twiddles,
@@ -130,7 +131,8 @@ void forward_ntt_montgomery_compact_keyswitch_accumulate_(
       key_digit_qp,
       accumulator0_qp,
       accumulator1_qp,
-      key_row_start);
+      key_row_start,
+      grouped_stage_count);
 }
 
 void forward_ntt_montgomery_compact_grouped_smem_diagnostic_(
@@ -216,6 +218,8 @@ void forward_ntt_montgomery_power_of_two_radix_compact_diagnostic_(
 }
 
 TORCH_LIBRARY_IMPL(fhelium_ntt_ops, CUDA, m) {
+  m.impl("forward_ntt_to_montgomery_compact_add_scaled_",
+         &forward_ntt_to_montgomery_compact_add_scaled_inplace_cuda);
   m.impl("forward_ntt_montgomery_indexed_", &forward_ntt_montgomery_indexed_);
   m.impl("forward_ntt_to_montgomery_indexed_",
          &forward_ntt_to_montgomery_indexed_);

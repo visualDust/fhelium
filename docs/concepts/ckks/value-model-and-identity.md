@@ -195,9 +195,10 @@ For example:
   key;
 - rotation requires a two-component ciphertext and a key for the requested
   normalized step;
-- rescale requires coefficient-domain standard residues, every expected active
-  row for the Q or QP modulus basis, and another legal level; it records the
-  actual scale quotient.
+- rescale accepts coefficient/standard or NTT/Montgomery residues, requires
+  every expected active row for the Q or QP modulus basis and another legal
+  level, preserves the selected arithmetic state, and records the actual scale
+  quotient.
 
 The caller remains responsible for the mathematical relationship among the
 chosen configuration, values, and keys. These objects carry no parameter-set

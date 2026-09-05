@@ -16,6 +16,7 @@ from fhelium.backend.ntt.resources import NTT_RESOURCE_KIND
 from fhelium.backend.rns.context import RnsContext
 from fhelium.backend.rns.resources import RNS_RESOURCE_KIND
 from fhelium.values import ModulusBasis, PublicKey
+from fhelium.values import PolynomialDomain
 from fhelium.ir.dialects import ckks
 from fhelium.rng import Csprng
 
@@ -57,8 +58,9 @@ def _encrypt_rns_plaintext_tensor(
     rns_context: RnsContext,
     ntt_context: NttContext,
     rng: Csprng,
+    output_domain: PolynomialDomain = "coefficient",
 ) -> torch.Tensor:
-    """Encrypt standard RNS plaintext rows and return ciphertext payload."""
+    """Encrypt standard RNS plaintext rows in the selected output domain."""
 
     include_p = public_key_basis == "QP"
     expected_prime_ids = rns_context.rns_layout.prime_ids(
@@ -105,13 +107,22 @@ def _encrypt_rns_plaintext_tensor(
         include_p=include_p,
     )
     ntt_context.forward_to_montgomery_(v, include_p=include_p)
-    vpk0 = rns_context.montgomery_mul(v, pk0, include_p=include_p)
-    vpk1 = rns_context.montgomery_mul(v, pk1, include_p=include_p)
-    ntt_context.inverse_to_standard_lazy_(vpk0, include_p=include_p)
-    ntt_context.inverse_to_standard_lazy_(vpk1, include_p=include_p)
+    products = torch.stack(
+        (
+            rns_context.montgomery_mul(v, pk0, include_p=include_p),
+            rns_context.montgomery_mul(v, pk1, include_p=include_p),
+        )
+    )
+    if output_domain == "ntt":
+        added = torch.stack((pte0, e1_tiled))
+        ntt_context.forward_to_montgomery_(added, include_p=include_p)
+        return rns_context.add_lazy(products, added, include_p=include_p)
+    if output_domain != "coefficient":
+        raise ValueError("Encryption output_domain is unsupported")
+    ntt_context.inverse_to_standard_lazy_(products, include_p=include_p)
 
-    ct0 = rns_context.add_standard(vpk0, pte0, include_p=include_p)
-    ct1 = rns_context.add_standard(vpk1, e1_tiled, include_p=include_p)
+    ct0 = rns_context.add_standard(products[0], pte0, include_p=include_p)
+    ct1 = rns_context.add_standard(products[1], e1_tiled, include_p=include_p)
     return torch.stack((ct0, ct1), dim=0)
 
 
@@ -124,6 +135,7 @@ def encrypt_tensor(
     rns_context: RnsContext,
     ntt_context: NttContext,
     rng: Csprng,
+    output_domain: PolynomialDomain = "coefficient",
 ) -> torch.Tensor:
     """Encrypt integer coefficients with call-bound rns_context resources."""
 
@@ -145,6 +157,7 @@ def encrypt_tensor(
         rns_context=rns_context,
         ntt_context=ntt_context,
         rng=rng,
+        output_domain=output_domain,
     )
 
 
@@ -196,6 +209,10 @@ class NativeEncryptImplementation:
                 rns_context=rns_context,
                 ntt_context=ntt_context,
                 rng=rng,
+                output_domain=cast(
+                    PolynomialDomain,
+                    invocation.attributes.get("output_domain", "coefficient"),
+                ),
             ),
         )
 

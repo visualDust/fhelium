@@ -230,11 +230,41 @@ def analyze_state_flow(
                 ),
             )
         elif isinstance(operation, ckks.FromNttOp):
+            result_type = operation.result.type
+            represented_residues = (
+                result_type.state.data.get("residue_representation")
+                if isinstance(result_type, ckks.PlaintextType)
+                else None
+            )
+            residues = "standard"
+            if isinstance(result_type, ckks.PlaintextType):
+                residues = (
+                    represented_residues.data
+                    if isinstance(represented_residues, StringAttr)
+                    and represented_residues.data in {"standard", "montgomery"}
+                    else "montgomery"
+                )
             inferred = (
                 _unary_state(
                     operation,
                     states,
                     polynomial_domain=StateFact.known("coefficient"),
+                    residue_representation=StateFact.known(residues),
+                ),
+            )
+        elif isinstance(operation, ckks.ToMontgomeryResiduesOp):
+            inferred = (
+                _unary_state(
+                    operation,
+                    states,
+                    residue_representation=StateFact.known("montgomery"),
+                ),
+            )
+        elif isinstance(operation, ckks.ToStandardResiduesOp):
+            inferred = (
+                _unary_state(
+                    operation,
+                    states,
                     residue_representation=StateFact.known("standard"),
                 ),
             )
@@ -272,29 +302,62 @@ def analyze_state_flow(
                 ),
             )
         elif isinstance(operation, ckks.RelinearizeOp):
+            domain = operation.output_domain.data
             inferred = (
                 _unary_state(
                     operation,
                     states,
                     components=StateFact.known(2),
                     basis=StateFact.known("Q"),
-                    polynomial_domain=StateFact.known("coefficient"),
-                    residue_representation=StateFact.known("standard"),
+                    polynomial_domain=StateFact.known(domain),
+                    residue_representation=StateFact.known(
+                        "montgomery" if domain == "ntt" else "standard"
+                    ),
                 ),
             )
         elif isinstance(
             operation,
-            (ckks.SwitchKeyOp, ckks.RotateOp, ckks.ConjugateOp),
+            (ckks.SwitchKeyOp, ckks.ConjugateOp),
         ):
-            inferred = (_unary_state(operation, states),)
+            domain = operation.output_domain.data
+            inferred = (
+                _unary_state(
+                    operation,
+                    states,
+                    polynomial_domain=StateFact.known(domain),
+                    residue_representation=StateFact.known(
+                        "montgomery" if domain == "ntt" else "standard"
+                    ),
+                ),
+            )
+        elif isinstance(operation, ckks.RotateOp):
+            domain = operation.output_domain.data
+            inferred = (
+                _unary_state(
+                    operation,
+                    states,
+                    polynomial_domain=StateFact.known(domain),
+                    residue_representation=StateFact.known(
+                        "montgomery" if domain == "ntt" else "standard"
+                    ),
+                ),
+            )
         elif isinstance(operation, ckks.RotateManyOp):
             source = states[operation.value]
+            domain = operation.output_domain.data
+            fields = {
+                **source.fields,
+                "polynomial_domain": StateFact.known(domain),
+                "residue_representation": StateFact.known(
+                    "montgomery" if domain == "ntt" else "standard"
+                ),
+            }
             inferred = tuple(
-                _result_state(result, source.fields)
-                for result in operation.outputs
+                _result_state(result, fields) for result in operation.outputs
             )
         elif isinstance(operation, ckks.RescaleOp):
             source = states[operation.value]
+            domain = operation.output_domain.data
             level = source.field("level")
             prime_ids = source.field("prime_ids")
             next_level = (
@@ -314,6 +377,10 @@ def analyze_state_flow(
                     states,
                     level=next_level,
                     prime_ids=next_primes,
+                    polynomial_domain=StateFact.known(domain),
+                    residue_representation=StateFact.known(
+                        "montgomery" if domain == "ntt" else "standard"
+                    ),
                     scale=StateFact.symbolic(
                         "divide_by_dropped_prime",
                         source.field("scale"),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import prod
 from types import MappingProxyType
 from typing import Mapping
 
@@ -121,6 +122,9 @@ class KeySwitchExecutionResource:
     ntt_context: NttContext
     moddown_p_drop_inverses_montgomery_by_level: tuple[torch.Tensor, ...]
     galois_generator: int = 3
+    p_inverse_montgomery: torch.Tensor = field(
+        init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if self.ntt_context.rns_context is not self.rns_context:
@@ -133,6 +137,18 @@ class KeySwitchExecutionResource:
             raise ValueError(
                 "Key-switch resource galois generator must be 3 or 5"
             )
+        config = self.rns_context.config
+        p_product = prod(config.p_moduli)
+        radix = self.rns_context.montgomery_parameters.R
+        object.__setattr__(
+            self,
+            "p_inverse_montgomery",
+            torch.tensor(
+                [pow(p_product, -1, q) * radix % q for q in config.q_moduli],
+                dtype=config.torch_dtype,
+                device=self.rns_context.device,
+            ),
+        )
 
     @property
     def device(self) -> torch.device:

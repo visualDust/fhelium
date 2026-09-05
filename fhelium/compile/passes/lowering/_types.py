@@ -74,12 +74,12 @@ def _key_switch_digit_indices(
         raise ValueError(
             f"{operation} requires a public CKKS level, got {level}"
         )
-    scale_prime_ids = tuple(range(config.num_scale_primes))
+    q_prime_ids = tuple(range(config.num_q_primes))
     digit_width = config.num_p_primes
     level_zero_digits = tuple(
-        scale_prime_ids[start : start + digit_width]
-        for start in range(0, len(scale_prime_ids), digit_width)
-    ) + ((config.num_q_primes - 1,),)
+        q_prime_ids[start : start + digit_width]
+        for start in range(0, len(q_prime_ids), digit_width)
+    )
     return tuple(
         key_digit_index
         for key_digit_index, digit in enumerate(level_zero_digits)

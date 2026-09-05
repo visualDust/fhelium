@@ -191,7 +191,8 @@ def _eager_expression(
     if isinstance(operation, ckks.EncryptOp):
         symbol = string(operation.key_symbol, label="public-key symbol")
         return (
-            f"engine.encrypt({operands[0]}, resources[{symbol!r}])",
+            f"engine.encrypt({operands[0]}, resources[{symbol!r}], "
+            f"output_domain={operation.output_domain.data!r})",
             (symbol,),
         )
     if isinstance(operation, ckks.DecryptOp):
@@ -210,14 +211,14 @@ def _eager_expression(
         return f"engine.multiply({operands[0]}, {operands[1]})", resources
     if isinstance(operation, ckks.RotateOp):
         return (
-            f"engine.rotate_with_key({operands[0]}, {operands[1]})",
+            f"engine.rotate_with_key({operands[0]}, {operands[1]}, output_domain={operation.output_domain.data!r})",
             resources,
         )
     if isinstance(operation, ckks.RotateManyOp):
         keys = ", ".join(operands[1:])
         return (
             f"engine.rotate_many_with_keys({operands[0]}, ({keys},), "
-            "use_hoisting=True)",
+            f"use_hoisting=True, output_domain={operation.output_domain.data!r})",
             resources,
         )
     if isinstance(operation, ckks.ToNttOp):
@@ -278,19 +279,22 @@ def _eager_expression(
     if isinstance(operation, ckks.RelinearizeOp):
         symbol = "relinearization-key"
         return (
-            f"engine.relinearize({operands[0]}, resources[{symbol!r}])",
+            f"engine.relinearize({operands[0]}, resources[{symbol!r}], "
+            f"output_domain={operation.output_domain.data!r})",
             (symbol,),
         )
     if isinstance(operation, ckks.SwitchKeyOp):
         symbol = string(operation.key_symbol, label="switch-key symbol")
         return (
-            f"engine.switch_key({operands[0]}, resources[{symbol!r}])",
+            f"engine.switch_key({operands[0]}, resources[{symbol!r}], "
+            f"output_domain={operation.output_domain.data!r})",
             (symbol,),
         )
     if isinstance(operation, ckks.ConjugateOp):
         symbol = "conjugation-key"
         return (
-            f"engine.conjugate({operands[0]}, resources[{symbol!r}])",
+            f"engine.conjugate({operands[0]}, resources[{symbol!r}], "
+            f"output_domain={operation.output_domain.data!r})",
             (symbol,),
         )
     if isinstance(operation, ckks.RescaleOp):

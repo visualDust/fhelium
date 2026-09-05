@@ -34,6 +34,7 @@ import torch
 
 TYPE_MAP = {
     "Tensor": "torch.Tensor",
+    "Optional[Tensor]": "torch.Tensor | None",
     "List[Tensor]": "list[torch.Tensor]",
     "List[List[Tensor]]": "list[list[torch.Tensor]]",
     "int": "int",

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from typing import cast
+
+from xdsl.dialects.builtin import StringAttr
 from xdsl.ir import Operation
 
 from fhelium.config import CkksConfig
@@ -130,9 +133,20 @@ def _lower_plaintext_arithmetic(
         if isinstance(operation, ckks.AddPlaintextOp)
         else rns.MultiplyPlaintextOp
     )
+    polynomial_domain = cast(
+        StringAttr,
+        cast(ckks.CiphertextType, operation.ciphertext.type).state.data[
+            "polynomial_domain"
+        ],
+    )
     logical = operation_type.create(
         operands=(ciphertext, plaintext, resource.value),
         result_types=(_rns_type(operation.result.type),),
+        attributes=(
+            {"polynomial_domain": StringAttr(polynomial_domain.data)}
+            if isinstance(operation, ckks.AddPlaintextOp)
+            else {}
+        ),
     )
     result_cast, result = _cast_to_ckks(
         logical.results[0], operation.result.type

@@ -97,9 +97,9 @@ def _summarize(samples: list[float]) -> dict[str, object]:
     }
 
 
-def _sync() -> None:
-    if torch.cuda.is_available():
-        torch.cuda.synchronize(dist.local_device())
+def _sync(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
 
 
 def _max_rank_ms(value: float) -> float:
@@ -165,6 +165,7 @@ def _prepare_groups(
     local_giants: tuple[int, ...],
     baby_step: int,
     input_level: int,
+    device: torch.device,
 ) -> tuple[
     dict[int, fh.Plaintext],
     dict[int, fh.Ciphertext],
@@ -187,7 +188,11 @@ def _prepare_groups(
                 plaintext_groups[giant_index] = fh.Plaintext.stack_batch(
                     [
                         engine.prepare_plaintext_for_multiplication(
-                            engine.encode(message, level=input_level)
+                            engine.encode(
+                                message,
+                                level=input_level,
+                                device=device,
+                            )
                         )
                         for message in messages
                     ]
@@ -197,7 +202,12 @@ def _prepare_groups(
         if dist.get_rank() == 0:
             assert public_key is not None
             root_ciphertexts = [
-                engine.encrypt_message(message, public_key, level=input_level)
+                engine.encrypt_message(
+                    message,
+                    public_key,
+                    level=input_level,
+                    device=device,
+                )
                 for message in messages
             ]
         received = [
@@ -227,15 +237,23 @@ def _evaluate_local(
     plaintext_groups: dict[int, fh.Plaintext],
     ciphertext_groups: dict[int, fh.Ciphertext],
     relinearization_key: fh.RelinearizationKey | None,
+    retained_domain: str,
 ) -> fh.Ciphertext:
     baby_rotations = engine.rotate_many_with_keys(
         source,
         [rotation_keys[step] for step in range(1, baby_step)],
         use_hoisting=True,
+        output_domain=retained_domain,
     )
-    baby_batch = engine.coefficient_domain_to_ntt_domain(
-        fh.Ciphertext.stack_batch([source, *baby_rotations])
-    )
+    if retained_domain == "ntt":
+        source_for_batch = engine.coefficient_domain_to_ntt_domain(source)
+        baby_batch = fh.Ciphertext.stack_batch(
+            [source_for_batch, *baby_rotations]
+        )
+    else:
+        baby_batch = engine.coefficient_domain_to_ntt_domain(
+            fh.Ciphertext.stack_batch([source, *baby_rotations])
+        )
     accumulator = None
     for giant_index in local_giants:
         if mode == "pt-ct":
@@ -243,10 +261,10 @@ def _evaluate_local(
                 baby_batch,
                 plaintext_groups[giant_index],
             )
-            group_ntt = engine.sum_ciphertext_batch(product_batch)
-            group = engine.rescale_to_next_level(
-                engine.ntt_domain_to_coefficient_domain(group_ntt)
-            )
+            group = engine.sum_ciphertext_batch(product_batch)
+            if retained_domain == "coefficient":
+                group = engine.ntt_domain_to_coefficient_domain(group)
+            group = engine.rescale_to_next_level(group)
         else:
             assert relinearization_key is not None
             product_batch = engine.multiply(
@@ -255,12 +273,17 @@ def _evaluate_local(
             )
             group_triplet = engine.sum_ciphertext_batch(product_batch)
             group = engine.rescale_to_next_level(
-                engine.relinearize(group_triplet, relinearization_key)
+                engine.relinearize(
+                    group_triplet,
+                    relinearization_key,
+                    output_domain=retained_domain,
+                )
             )
         if giant_index:
             group = engine.rotate_with_key(
                 group,
                 rotation_keys[giant_index * baby_step],
+                output_domain=retained_domain,
             )
         if accumulator is None:
             accumulator = group
@@ -281,6 +304,7 @@ def _run_case(
     runs: int,
     device: str,
     input_level: int,
+    retained_domain: str,
 ) -> dict[str, object] | None:
     if size % baby_step:
         raise ValueError("baby_step must divide matrix size")
@@ -302,6 +326,9 @@ def _run_case(
     dist.init()
     try:
         world_size = dist.get_world_size()
+        execution_device = (
+            dist.local_device() if device == "cuda" else torch.device("cpu")
+        )
         giant_count = size // baby_step
         if world_size > giant_count:
             raise ValueError("world size exceeds BSGS giant count")
@@ -309,7 +336,6 @@ def _run_case(
         setup_started = time.perf_counter()
         engine = Engine(
             PRESETS[depth],
-            device=dist.local_device() if device == "cuda" else "cpu",
             ntt_backend=(
                 CUDA_NTT_BACKENDS[(depth, mode)]
                 if device == "cuda"
@@ -325,12 +351,13 @@ def _run_case(
         root_source = None
         root_relinearization_key = None
         if dist.get_rank() == 0:
-            secret_key = engine.create_secret_key()
+            secret_key = engine.create_secret_key(device=execution_device)
             public_key = engine.create_public_key(secret_key)
             root_source = engine.encrypt_message(
                 _periodic(vector, engine.num_slots),
                 public_key,
                 level=input_level,
+                device=execution_device,
             )
             if mode == "ct-ct":
                 root_relinearization_key = engine.create_relinearization_key(
@@ -358,8 +385,9 @@ def _run_case(
             local_giants=local_giants,
             baby_step=baby_step,
             input_level=input_level,
+            device=execution_device,
         )
-        _sync()
+        _sync(execution_device)
         dist.barrier()
         setup_ms = _max_rank_ms((time.perf_counter() - setup_started) * 1e3)
 
@@ -374,6 +402,7 @@ def _run_case(
                 plaintext_groups=plaintext_groups,
                 ciphertext_groups=ciphertext_groups,
                 relinearization_key=relinearization_key,
+                retained_domain=retained_domain,
             )
 
         replay_local = evaluate_local
@@ -394,15 +423,15 @@ def _run_case(
         for _ in range(warmup):
             dist.barrier()
             last = evaluate()
-            _sync()
+            _sync(execution_device)
         gc.collect()
         samples = []
         for _ in range(runs):
             dist.barrier()
-            _sync()
+            _sync(execution_device)
             started = time.perf_counter()
             last = evaluate()
-            _sync()
+            _sync(execution_device)
             samples.append(_max_rank_ms((time.perf_counter() - started) * 1e3))
         assert last is not None
         max_abs_error = 0.0
@@ -433,7 +462,15 @@ def _run_case(
             "version": fh.__version__,
             "mode": mode,
             "algorithm": "baby-step/giant-step cyclic-diagonal packed dense matrix-vector",
-            "schedule": "hoisted babies, adjusted diagonals, per-group completion and rescale, giant rotations",
+            "schedule": (
+                "hoisted NTT-output babies, adjusted diagonals, NTT group "
+                "completion and rescale, NTT-domain giant rotations"
+                if retained_domain == "ntt"
+                else "hoisted coefficient-output babies, adjusted diagonals, "
+                "coefficient group completion and rescale, coefficient-domain "
+                "giant rotations"
+            ),
+            "retained_domain": retained_domain,
             "cuda_graph": graph_program is not None,
             "cuda_graph_scope": (
                 "rank-local BSGS evaluation; ciphertext reduction remains eager"
@@ -452,7 +489,7 @@ def _run_case(
             "device": device,
             "depth_label": depth,
             "preset": PRESETS[depth].value,
-            "ntt_backend": engine.ntt_backend_name,
+            "ntt_backend": engine.ntt_backend_name(execution_device),
             "ring_dimension": config.N,
             "q_product_bits": math.prod(config.q_moduli).bit_length(),
             "qp_product_bits": math.prod(config.moduli).bit_length(),
@@ -517,6 +554,8 @@ def _launch_cuda(args: argparse.Namespace) -> None:
             str(args.runs),
             "--input-level",
             str(args.input_level),
+            "--retained-domain",
+            args.retained_domain,
             "--output",
             str(worker_output),
         ]
@@ -539,6 +578,11 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--runs", type=int, default=10)
     parser.add_argument("--input-level", type=int, default=0)
+    parser.add_argument(
+        "--retained-domain",
+        choices=("coefficient", "ntt"),
+        default="ntt",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -554,6 +598,7 @@ def main() -> None:
         runs=args.runs,
         device=args.device,
         input_level=args.input_level,
+        retained_domain=args.retained_domain,
     )
     if result is not None:
         args.output.write_text(json.dumps(result, indent=2) + "\n")

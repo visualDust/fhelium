@@ -129,10 +129,13 @@ def test_eager_cuda_add_matches_handwritten_engine() -> None:
     )
 
 
-def test_eager_key_graphs_match_handwritten_engine() -> None:
+@pytest.mark.parametrize(
+    "device", ["cpu", pytest.param("cuda:0", marks=pytest.mark.gpu)]
+)
+def test_eager_key_operations_match_handwritten_engine(device: str) -> None:
     engine = CkksEngine(
         Preset.slots8192_scale40_levels7_int64,
-        device="cpu",
+        device=device,
         rng_seed=17,
     )
     runtime = Engine(
@@ -145,6 +148,7 @@ def test_eager_key_graphs_match_handwritten_engine() -> None:
         0.05,
         engine.num_slots,
         dtype=torch.float64,
+        device=device,
     )
     ciphertext = engine.encrypt(engine.encode(message))
 
