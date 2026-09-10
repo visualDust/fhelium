@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from fhelium.config import CkksConfig
+from fhelium.backend.rns.format import RnsExecutionFormat
 from fhelium.backend.ntt.plans.twiddles import (
     build_compact_twiddles,
 )
@@ -16,7 +17,7 @@ class CompactRadix2NttPlan:
     Compact CUDA kernels compute butterfly indices in-kernel and consume one
     integral ``[prime, coefficient]`` twiddle table per transform direction.
     Prime rows follow ``ckks_config.moduli`` exactly; final extent is $N$ and
-    both tables use ``ckks_config.torch_dtype`` on ``device``. Construction is
+    both tables use the selected execution dtype on ``device``. Construction is
     functional and the forward and inverse tables do not alias.
     """
 
@@ -25,6 +26,7 @@ class CompactRadix2NttPlan:
         ckks_config: CkksConfig,
         *,
         device: str | int | torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ) -> None:
         self.cfg = ckks_config
         self.device = (
@@ -33,7 +35,7 @@ class CompactRadix2NttPlan:
         self.forward_twiddles, self.inverse_twiddles = build_compact_twiddles(
             self.cfg.moduli,
             self.cfg.logN,
-            self.cfg.torch_dtype,
+            RnsExecutionFormat.select(self.cfg.moduli, dtype).dtype,
             device=self.device,
         )
 

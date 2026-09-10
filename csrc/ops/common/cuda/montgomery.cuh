@@ -3,6 +3,10 @@
 #include <torch/torch.h>
 #include <type_traits>
 
+template <typename scalar_t>
+inline constexpr int kMontgomeryRadixBits =
+    sizeof(scalar_t) == sizeof(int32_t) ? 32 : 62;
+
 // ------------------------------------------------------------------
 // mont scalar cuda kernels
 // ------------------------------------------------------------------
@@ -58,12 +62,33 @@ montgomery_mul(const scalar_t a,
   return alpha + betah + sqbh + carry + sh * modulus_hi;
 }
 
+template <>
+__device__ __forceinline__ int32_t montgomery_mul<int32_t>(
+    const int32_t a,
+    const int32_t b,
+    const int32_t modulus_lo,
+    const int32_t modulus_hi,
+    const int32_t neg_inv_modulus_lo,
+    const int32_t neg_inv_modulus_hi) {
+  const uint32_t q = static_cast<uint32_t>(modulus_lo) |
+                     (static_cast<uint32_t>(modulus_hi) << 16);
+  const uint32_t neg_inverse =
+      static_cast<uint32_t>(neg_inv_modulus_lo) |
+      (static_cast<uint32_t>(neg_inv_modulus_hi) << 16);
+  const uint64_t product = static_cast<uint64_t>(static_cast<uint32_t>(a)) *
+                           static_cast<uint32_t>(b);
+  const uint32_t correction = static_cast<uint32_t>(product) * neg_inverse;
+  const uint64_t reduced =
+      (product + static_cast<uint64_t>(correction) * q) >> 32;
+  return static_cast<int32_t>(reduced < q ? reduced : reduced - q);
+}
+
 template <typename scalar_t>
 __device__ __forceinline__ scalar_t
 reduce_montgomery_operand(const scalar_t value,
                           const scalar_t modulus_lo,
                           const scalar_t modulus_hi) {
-  constexpr scalar_t half_nbits = sizeof(scalar_t) * 4 - 1;
+  constexpr scalar_t half_nbits = kMontgomeryRadixBits<scalar_t> / 2;
   const scalar_t modulus = modulus_lo + (modulus_hi << half_nbits);
   scalar_t reduced = value % modulus;
   if constexpr (std::is_signed_v<scalar_t>) {
@@ -77,7 +102,7 @@ __device__ __forceinline__ scalar_t
 reduce_lazy_montgomery_operand(const scalar_t value,
                                const scalar_t modulus_lo,
                                const scalar_t modulus_hi) {
-  constexpr scalar_t half_nbits = sizeof(scalar_t) * 4 - 1;
+  constexpr scalar_t half_nbits = kMontgomeryRadixBits<scalar_t> / 2;
   const scalar_t modulus = modulus_lo + (modulus_hi << half_nbits);
   return value < modulus ? value : value - modulus;
 }
@@ -165,6 +190,21 @@ montgomery_reduce(const scalar_t a,
   // calculated value directly without conditional subtraction.
   return sqbh + carry + sh * modulus_hi;
   // result within [0,2q)
+}
+
+template <>
+__device__ __forceinline__ int32_t montgomery_reduce<int32_t>(
+    const int32_t a,
+    const int32_t modulus_lo,
+    const int32_t modulus_hi,
+    const int32_t neg_inv_modulus_lo,
+    const int32_t neg_inv_modulus_hi) {
+  return montgomery_mul<int32_t>(a,
+                                 1,
+                                 modulus_lo,
+                                 modulus_hi,
+                                 neg_inv_modulus_lo,
+                                 neg_inv_modulus_hi);
 }
 
 template <typename scalar_t>

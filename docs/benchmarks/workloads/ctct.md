@@ -1,0 +1,13 @@
+---
+title: CT × CT matrix multiplication
+layout: page
+pageClass: benchmark-portal-page
+sidebar: false
+aside: false
+---
+
+<script setup>
+import WorkloadBenchmarks from '../../.vitepress/theme/benchmarks/workloads/WorkloadBenchmarks.vue'
+</script>
+
+<WorkloadBenchmarks workload-id="ctct" />

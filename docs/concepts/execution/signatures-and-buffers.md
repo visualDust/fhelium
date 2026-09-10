@@ -12,7 +12,7 @@ to decide whether a value tree may be copied into reusable fixed storage.
 - Python container structure and dictionary keys;
 - tensor shape, stride, dtype, layout, and `requires_grad`;
 - concrete FHElium value type and schema version;
-- level, scale, prime IDs, polynomial domain, modulus basis, and residue representation;
+- depth, scale, prime IDs, polynomial domain, modulus basis, and residue representation;
 - key specialization such as a rotation step.
 
 Device is deliberately excluded. A CPU value and a CUDA value can share an
@@ -149,7 +149,7 @@ window from measured tile storage, allocator usage, and operation peaks.
 
 ## Common failures
 
-- Comparing only shape and dtype while level or prime IDs differ.
+- Comparing only shape and dtype while depth or prime IDs differ.
 - Expecting pageable CPU memory to provide fully asynchronous H2D overlap.
 - Overwriting a buffer before the previous reader finishes.
 - Reusing a buffer for a different rotation-key step.

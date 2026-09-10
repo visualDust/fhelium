@@ -10,7 +10,7 @@ Run on one process or one process per GPU:
 
 The program evaluates ``(a + b)^2`` in two limb-local stages:
 
-1. scatter level-0 limb fragments, add locally, and reconstruct ``a + b``;
+1. scatter depth-0 limb fragments, add locally, and reconstruct ``a + b``;
 2. rank 0 performs full-basis rescale/NTT preparation, scatters the remaining
    limbs, ranks run local ciphertext multiplication, and rank 0 reconstructs and relinearizes.
 
@@ -54,7 +54,7 @@ def main() -> None:
     dist.init()
     torch.set_default_device(dist.local_device())
     engine = Engine(
-        fh.Preset.slots32768_scale40_levels34_int64,
+        fh.Preset.slots32768_scale40_depth34_int64,
         allow_automatic_key_generation=False,
     )
 
@@ -114,7 +114,7 @@ def main() -> None:
         assert secret_key is not None
         assert relinearization_key is not None
         assert full_triplet is not None
-        result = engine.rescale_to_next_level(
+        result = engine.rescale_to_next_depth(
             engine.relinearize(full_triplet, relinearization_key)
         )
         decoded = engine.decrypt_message(

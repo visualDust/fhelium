@@ -11,9 +11,9 @@ builtin.module attributes {
   fhelium.schema_version = "1",
   fhelium.dialect_version = "0.2"
 } {
-  func.func @main(%secret: !fhelium_ckks.ciphertext<{level = 0 : i64}>) -> !fhelium_ckks.ciphertext<{}> {
+  func.func @main(%secret: !fhelium_ckks.ciphertext<{depth = 0 : i64}>) -> !fhelium_ckks.ciphertext<{}> {
     %relin = "fhelium.material.ref"() {symbol = "keys/relinearization", kind = "relinearization_key"} : () -> !fhelium.material<{}>
-    %product = "fhelium_ckks.multiply"(%secret, %secret) : (!fhelium_ckks.ciphertext<{level = 0 : i64}>, !fhelium_ckks.ciphertext<{level = 0 : i64}>) -> !fhelium_ckks.ciphertext<{scale = 9.99 : f64}>
+    %product = "fhelium_ckks.multiply"(%secret, %secret) : (!fhelium_ckks.ciphertext<{depth = 0 : i64}>, !fhelium_ckks.ciphertext<{depth = 0 : i64}>) -> !fhelium_ckks.ciphertext<{scale = 9.99 : f64}>
     %view = "torch.aten.view.default"(%product) {shape = [4 : i64, 8 : i64]} : (!fhelium_ckks.ciphertext<{scale = 9.99 : f64}>) -> !third_party.tensor<"opaque-layout">
     %result = "vendor.ckks.bootstrap"(%view, %relin) : (!third_party.tensor<"opaque-layout">, !fhelium.material<{}>) -> !fhelium_ckks.ciphertext<{}>
     func.return %result : !fhelium_ckks.ciphertext<{}>

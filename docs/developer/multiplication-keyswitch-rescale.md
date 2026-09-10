@@ -61,10 +61,10 @@ flowchart LR
     PT --> M1
 ```
 
-The output scale is multiplied, but level is unchanged until a rescale. `multiply_plaintext` does not perform hidden forward or inverse NTTs;
+The output scale is multiplied, but depth is unchanged until a rescale. `multiply_plaintext` does not perform hidden forward or inverse NTTs;
 the caller or JIT places transitions around a multiplication region. Compatible
 products may be added in NTT form and converted to coefficient-domain standard
-residues once before rescale. Prepared plaintext reuse must match level, scale,
+residues once before rescale. Prepared plaintext reuse must match depth, scale,
 basis, prime IDs, domain, and residue representation exactly.
 
 ## Ciphertext multiplication
@@ -101,7 +101,9 @@ graph LR
 ```
 
 The original first two components are combined with corrections that replace
-the $s^2$ dependency represented by `e2`.
+the $s^2$ dependency represented by `e2`. Coefficient output inverses all
+required terms. NTT output inverses only `e2` for digit decomposition, retains
+the first two components as evaluations, and adds NTT-domain corrections.
 
 ## Hybrid key-switch pipeline
 
@@ -124,32 +126,34 @@ Each stage has distinct row, basis, and representation requirements. Fusing stag
 be useful, but a fused operator must preserve the same observable state and
 residue-range assumptions.
 
-## Hybrid digits across levels
+## Hybrid digits across depths
 
-Scale Q primes are partitioned into composite digits, while the base Q prime is
-a final singleton digit. At later levels, an active digit can become shorter or
-disappear.
+All Q primes, including the terminal group, are partitioned into contiguous
+digits by their products. Each digit takes the longest next Q prefix whose
+product is below the special modulus P; a single prime at or above P occupies
+its own digit. At later depths, consumed Q groups shorten or remove digits.
 
 ```mermaid
 graph LR
-    subgraph L0[level 0]
+    subgraph L0[depth 0]
       D0[q0 q1 q2 q3]
-      D1[q4 q5 q6 q7]
-      DB[q_base]
+      D1[q4 q5 q6 q_base]
     end
-    subgraph L2[later level]
+    subgraph L2[later depth]
       E0[q2 q3]
-      E1[q4 q5 q6 q7]
-      EB[q_base]
+      E1[q4 q5 q6 q_base]
     end
     D0 -->|same key_digit_index| E0
     D1 --> E1
-    DB --> EB
 ```
 
-`RnsDigitSpec` keeps both the active digit index and stable level-zero
+`RnsDigitSpec` keeps both the active digit index and stable depth-zero
 `key_digit_index` used to select the correct evaluation-key axis. A local digit
 index is not necessarily the key tensor index.
+
+The partition determines the evaluation key's digit axis. Key generation,
+Compile lowering, and execution derive that axis from the same decomposition.
+Changing the partition requires regenerating the key.
 
 ## Rotation and hoisting
 
@@ -173,27 +177,88 @@ flowchart TB
 Step-specific work and outputs remain. Hoist chunking must account for live
 prepared digits, accumulators, rotated outputs, and key residency.
 
-## Rescale
+The native product accumulator can gather the prepared digit's NTT indices while
+reading it. This combines the rotation-specific permutation with multiplication
+by the key, avoiding a separate permuted-digit tensor. It changes neither the
+key's row order nor the destination accumulator order.
 
-For leading active prime $q_l$:
+### Keeping key-switch outputs in NTT representation
+
+`Engine.rotate_with_key(..., output_domain="ntt")`,
+`Engine.rotate_many_with_keys(..., output_domain="ntt")`, `relinearize`,
+`switch_key`, `conjugate`, and the corresponding CKKS operation attributes
+request NTT/Montgomery outputs. The default remains coefficient/standard. Both
+choices preserve Q rows, depth and actual scale.
+
+The logical `rns.ModDownNttQpToQOp` removes P without inverting the Q rows. For
+QP NTT data $\widehat{x}$, let $r\in[0,P)$ be the coefficient representative
+reconstructed from the P residues. Then
 
 $$
-c'\approx\operatorname{round}(c/q_l)\pmod{Q_{l+1}}.
+\widehat{y}_{q_i}
+=\widehat{x}_{q_i}P^{-1}
++\operatorname{NTT}_{q_i}(-rP^{-1})\pmod{q_i}.
+$$
+
+This is coefficient-domain ModDown followed by forward NTT. The implementation
+inverts only P rows, builds the correction in Q, and adds its forward transform
+to the retained Q evaluations multiplied by $P^{-1}$. Shared rotations also
+transform the input's $c_0$ once and permute those evaluations for each output.
+The consumer can multiply these results by NTT plaintexts without another
+coefficient-to-NTT transition. Output representation is a caller-selected part
+of the operation, independent of CPU or CUDA execution.
+
+An independent `rotate_with_key` may also consume NTT/Montgomery input. The
+automorphism permutes both components in NTT representation; only the second
+component is inverted for hybrid decomposition and key switching. When NTT
+output is requested, the permuted first component remains in NTT and receives
+the NTT-domain correction directly. This form is useful when both the producer
+and consumer already use NTT values, but it is not assumed to be the fastest
+form on every CPU and GPU workload.
+
+For independent rotations with coefficient input, the $c_0$ contribution is
+added to the coefficient correction before its forward NTT. Linearity gives
+$\operatorname{NTT}(c_0+\delta)$ instead of separate transforms of $c_0$ and
+$\delta$. The compact radix-2 implementation folds multiplication of the retained
+Q evaluations by $P^{-1}$ and addition of the correction into the final NTT write.
+
+The same NTT policy also supports streaming digit consumption: the last NTT
+stages directly multiply the digit by both evaluation-key components and add
+the products to QP accumulators. The digit scratch is disposable; its completed
+NTT values are not written back. Each scratch is released before the next digit
+is prepared. Other NTT policies retain their separate transform and product
+implementation, with the same CKKS operation semantics.
+
+## Rescale
+
+For the leading active Q depth group $G_l$, let
+$M_l=\prod_{q\in G_l}q$:
+
+$$
+c'\approx\operatorname{round}(c/M_l)\pmod{Q_{l+1}}.
 $$
 
 ```mermaid
 flowchart LR
-    IN[coefficient residues in Q_l]
-    DROP[select dropped leading row]
+    IN[Q_l residue rows]
+    DROP[select dropped Q-group rows]
     ROUND[nearest/truncate correction]
-    INV[multiply inverse of q_l modulo remaining primes]
+    INV[multiply inverse of M_l modulo remaining primes]
     OUT[remaining rows in Q_l+1]
     IN --> DROP --> ROUND --> INV --> OUT
 ```
 
-The implementation must select constants using configured prime identity, not
-an ambiguous compact row position. Output metadata must increase level, remove
-the dropped prime ID, reduce row count, and update scale.
+The implementation must select constants using configured prime identities, not
+an ambiguous compact row position. Output metadata must increase depth, remove
+all IDs in the dropped group, reduce row count by that group's size, and update
+scale by $M_l$.
+
+NTT/Montgomery input can remain in that representation. The implementation
+inverts only the dropped row to obtain the rounding value, forms the quotient
+correction on surviving Q rows, transforms that correction, and adds it to the
+surviving evaluations multiplied by $M_l^{-1}$. This is congruent to
+coefficient rescale followed by a forward NTT without inverting the surviving
+input rows.
 
 ## Correctness hazards
 
@@ -214,8 +279,8 @@ For a change in these paths, cover:
 
 ```text
 fresh single operation
-chained operation across several levels
-level 0 / middle / last legal level
+chained operation across several depths
+depth 0 / middle / maximum depth
 single-row digit and shortened digit
 Q / QP
 2 / 3 components
@@ -231,7 +296,7 @@ incorrect stage.
 
 ## Continue
 
-- [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md)
+- [Scale and depth lifecycle](../concepts/ckks/scale-and-depth-lifecycle.md)
 - [RNS and NTT architecture](rns-and-ntt.md)
 - [Native operator workflow](native-operator-workflow.md)
 - [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)

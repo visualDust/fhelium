@@ -20,7 +20,7 @@ Start with the default period on the 8,192-slot, 40-bit-scale baseline:
 ```bash
 python examples/16_compressed_plaintext.py \
   --device cpu \
-  --preset slots8192-scale40-levels7-int64 \
+  --preset slots8192-scale40-depth7-int64 \
   --period 256 \
   --iterations 20
 ```
@@ -36,13 +36,13 @@ Use `--device cuda:0` to run the same example through CUDA. The command reports:
 Try several powers of two that divide the slot count:
 
 ```bash
-python examples/16_compressed_plaintext.py --preset slots8192-scale40-levels7-int64 --period 64
-python examples/16_compressed_plaintext.py --preset slots8192-scale40-levels7-int64 --period 512
+python examples/16_compressed_plaintext.py --preset slots8192-scale40-depth7-int64 --period 64
+python examples/16_compressed_plaintext.py --preset slots8192-scale40-depth7-int64 --period 512
 ```
 
 A smaller `period` usually stores fewer unique encoded values, but storage
 reduction alone does not predict evaluator latency. Measure the operation,
-level, batch shape, device, and period used by the deployed workload.
+depth, batch shape, device, and period used by the deployed workload.
 
 ## 1. Identify the representation requirement
 
@@ -108,7 +108,7 @@ For every layout:
 - `0 < U < N`;
 - `U` must divide `N`;
 - `data` is integral and uses Montgomery residues;
-- the value records its format version, ring dimension, level, actual
+- the value records its format version, ring dimension, depth, actual
   scale, domain, basis, residue form, and ordered `prime_ids`.
 
 ## 3. Build the dense operation-ready values first
@@ -139,7 +139,7 @@ dense_add = engine.prepare_plaintext_for_addition(
 ```
 
 The multiplication value is NTT-domain Montgomery RNS. The addition value is
-coefficient-domain Montgomery RNS. Both retain the level, actual scale, basis,
+coefficient-domain Montgomery RNS. Both retain the depth, actual scale, basis,
 and active prime rows chosen by the engine. The application retains their CKKS
 parameter provenance.
 
@@ -206,7 +206,7 @@ compressed_result = engine.multiply_plaintext(
 )
 ```
 
-The operation preserves the ciphertext level and records the scale product:
+The operation preserves the ciphertext depth and records the scale product:
 
 $$
 \Delta_{\mathrm{out}}
@@ -329,7 +329,7 @@ Expect conversion or evaluation to fail in these cases:
 - the dense encoded axis is not bit-exactly representable by the requested
   layout;
 - `strided_sparse` is requested for an NTT value or used for multiplication;
-- the compressed value and ciphertext differ in level, basis,
+- the compressed value and ciphertext differ in depth, basis,
   `prime_ids`, ring dimension, dtype, device, or required domain;
 - a batched compressed plaintext has a different nonempty batch shape;
 - addition scales are not exactly equal;

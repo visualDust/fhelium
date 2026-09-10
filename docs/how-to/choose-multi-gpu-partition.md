@@ -10,7 +10,7 @@ Keep a synchronized single-GPU eager implementation with a cleartext oracle.
 Record its:
 
 - operation and rotation counts;
-- level schedule;
+- depth schedule;
 - required keys;
 - latency by major phase;
 - peak allocated/reserved memory;
@@ -106,7 +106,7 @@ operations with documented partial-layout semantics, and reconstruct every
 expected active row before rescale, rotation, key switching, relinearization, or
 decryption.
 
-Repeated complete-row reconstruction points can erase local row-level gains.
+Repeated complete-row reconstruction points can erase local row-depth gains.
 
 ## 6. Build a cost table
 

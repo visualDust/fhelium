@@ -47,7 +47,7 @@ def test_ciphertext_add_inplace_reuses_storage_without_mutating_inputs() -> (
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
 
-    engine = CkksEngine(Preset.slots8192_scale40_levels7_int64, device="cuda:0")
+    engine = CkksEngine(Preset.slots8192_scale40_depth7_int64, device="cuda:0")
     left = engine.encrypt_message(torch.randn(32, dtype=torch.float64) * 0.01)
     right = engine.encrypt_message(torch.randn(32, dtype=torch.float64) * 0.01)
     left_before = left.data.clone()

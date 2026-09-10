@@ -27,7 +27,7 @@ def _ciphertext(device: str = "cpu") -> Ciphertext:
             dtype=torch.int64,
             device=device,
         ).reshape(3, 2, 3, 8),
-        level=1,
+        depth=1,
         scale=2.0**40,
         prime_ids=(1, 2, 3),
     )
@@ -36,7 +36,7 @@ def _ciphertext(device: str = "cpu") -> Ciphertext:
 def _prepared_plaintext(device: str = "cpu") -> Plaintext:
     return Plaintext(
         message=None,
-        level=1,
+        depth=1,
         scale=2.0**40,
         data=torch.arange(
             3 * 8,
@@ -60,7 +60,7 @@ def _sparse_plaintext(device: str = "cpu") -> CompressedPlaintext:
         ).reshape(3, 4),
         ring_dimension=16,
         compression_layout="strided_sparse",
-        level=1,
+        depth=1,
         scale=2.0**40,
         polynomial_domain="coefficient",
         modulus_basis="Q",
@@ -132,12 +132,12 @@ def test_value_envelope_is_a_path_independent_representation() -> None:
                 [1.0 + 2.0j, 3.0 - 4.0j],
                 dtype=torch.complex128,
             ),
-            level=2,
+            depth=2,
             scale=2.0**35,
         ),
         Plaintext(
             message=None,
-            level=1,
+            depth=1,
             scale=2.0**40,
             data=torch.arange(8, dtype=torch.float64),
             representation="approximate_coefficients",

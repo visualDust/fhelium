@@ -87,10 +87,6 @@ def load_builtin_benchmarks() -> BenchmarkRegistry:
 
     global _builtins_loaded
     if not _builtins_loaded:
-        import_module("fhelium.benchmarks.v1.operations")
-        import_module("fhelium.benchmarks.v1.ntt")
-        import_module("fhelium.benchmarks.v1.matrix")
-        import_module("fhelium.benchmarks.v1.polynomial")
         import_module(
             "fhelium.benchmarks.standalone."
             "ckks_operator_latency_and_rotation_hoisting"

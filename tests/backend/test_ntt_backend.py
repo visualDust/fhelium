@@ -14,6 +14,7 @@ from fhelium.config.ntt import (
     resolve_ntt_backend_policy,
 )
 from fhelium.backend.assembly import create_builtin_operation_registry
+from fhelium.backend.rns.format import RnsExecutionFormat
 from fhelium.ir.dialects import ntt as ntt_dialect
 from fhelium.legacy.engine.ntt.plans import (
     CompactPowerOfTwoRadixNttPlan,
@@ -33,17 +34,17 @@ RADIX2_PRODUCTION_BACKENDS = (
     "radix2_compact_group16_smem8",
 )
 FIXED_RADIX_CASES = (
-    (Preset.slots8192_scale40_levels7_int64, "radix4_compact"),
-    (Preset.slots16384_scale40_levels16_int64, "radix8_compact"),
-    (Preset.slots32768_scale40_levels34_int64, "radix16_compact"),
+    (Preset.slots8192_scale40_depth7_int64, "radix4_compact"),
+    (Preset.slots16384_scale40_depth16_int64, "radix8_compact"),
+    (Preset.slots32768_scale40_depth34_int64, "radix16_compact"),
 )
 EXACT_BACKEND_CASES = (
     (
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         (*RADIX2_PRODUCTION_BACKENDS, "radix4_compact"),
     ),
-    (Preset.slots16384_scale40_levels16_int64, ("radix8_compact",)),
-    (Preset.slots32768_scale40_levels34_int64, ("radix16_compact",)),
+    (Preset.slots16384_scale40_depth16_int64, ("radix8_compact",)),
+    (Preset.slots32768_scale40_depth34_int64, ("radix16_compact",)),
 )
 
 
@@ -82,18 +83,14 @@ def _require_cuda() -> None:
 
 
 def _cpu_indexed_runtime(
-    *, buffer_bit_length: int, scale_bits: int
+    preset: Preset,
 ) -> tuple[
     CkksConfig,
     tuple[IndexedRadix2NttPlan, torch.Tensor, torch.Tensor],
     torch.Tensor,
 ]:
-    config = CkksConfig.parse(
-        Preset.slots8192_scale30_levels9_int64,
-        buffer_bit_length=buffer_bit_length,
-        scale_bits=scale_bits,
-        enforce_security_budget=False,
-    )
+    config = CkksConfig.parse(preset)
+    dtype = RnsExecutionFormat.select(config.moduli).dtype
     montgomery = MontgomeryParameters(config)
     plan = IndexedRadix2NttPlan(config, device="cpu")
     parameters = torch.tensor(
@@ -112,7 +109,7 @@ def _cpu_indexed_runtime(
                 )
             ],
         ],
-        dtype=config.torch_dtype,
+        dtype=dtype,
     )
 
     def to_montgomery(table: torch.Tensor) -> torch.Tensor:
@@ -122,7 +119,7 @@ def _cpu_indexed_runtime(
                     (int(value) * montgomery.R) % modulus
                     for value in row.reshape(-1)
                 ],
-                dtype=config.torch_dtype,
+                dtype=dtype,
             ).reshape_as(row)
             for row, modulus in zip(table, config.moduli, strict=True)
         ]
@@ -140,16 +137,19 @@ def _cpu_indexed_runtime(
 
 
 @pytest.mark.parametrize(
-    ("buffer_bit_length", "scale_bits"), [(30, 25), (62, 30)]
+    "preset",
+    [
+        Preset.slots8192_scale25_depth14_int32,
+        Preset.slots8192_scale30_depth9_int64,
+    ],
 )
 def test_cpu_indexed_ntt_uses_the_same_exact_schema_and_representation(
-    buffer_bit_length: int, scale_bits: int
+    preset: Preset,
 ) -> None:
-    config, tables, parameters = _cpu_indexed_runtime(
-        buffer_bit_length=buffer_bit_length, scale_bits=scale_bits
-    )
+    config, tables, parameters = _cpu_indexed_runtime(preset)
+    dtype = RnsExecutionFormat.select(config.moduli).dtype
     plan, forward_twiddles, inverse_twiddles = tables
-    generator = torch.Generator().manual_seed(20260811 + buffer_bit_length)
+    generator = torch.Generator().manual_seed(20260811 + config.total_modulus_bits)
     active_limb_count = 3
     standard = (
         torch.stack(
@@ -158,7 +158,7 @@ def test_cpu_indexed_ntt_uses_the_same_exact_schema_and_representation(
                     0,
                     modulus,
                     (2, config.N),
-                    dtype=config.torch_dtype,
+                    dtype=dtype,
                     generator=generator,
                 )
                 for modulus in config.moduli[:active_limb_count]
@@ -199,7 +199,7 @@ def test_cpu_indexed_ntt_uses_the_same_exact_schema_and_representation(
         active_parameters,
     )
     active_moduli = torch.tensor(
-        config.moduli[:active_limb_count], dtype=config.torch_dtype
+        config.moduli[:active_limb_count], dtype=dtype
     ).view(1, -1, 1)
     assert torch.equal(
         torch.remainder(transformed_inplace - transformed, active_moduli),
@@ -277,12 +277,13 @@ def test_cpu_indexed_ntt_uses_the_same_exact_schema_and_representation(
 
 def test_cpu_indexed_ntt_rejects_unsafe_schedules_and_storage() -> None:
     config, tables, parameters = _cpu_indexed_runtime(
-        buffer_bit_length=30, scale_bits=25
+        Preset.slots8192_scale25_depth14_int32
     )
+    dtype = RnsExecutionFormat.select(config.moduli).dtype
     plan, forward_twiddles, _ = tables
     standard = torch.stack(
         [
-            torch.arange(config.N, dtype=config.torch_dtype) % modulus
+            torch.arange(config.N, dtype=dtype) % modulus
             for modulus in config.moduli
         ]
     )
@@ -332,7 +333,7 @@ def test_cpu_indexed_ntt_rejects_unsafe_schedules_and_storage() -> None:
 def _standard_rows(engine: CkksEngine) -> torch.Tensor:
     coefficients = torch.arange(
         engine.config.N,
-        dtype=engine.config.torch_dtype,
+        dtype=engine.rns_runtime.dtype,
         device=engine.device,
     )
     rows = []
@@ -500,7 +501,7 @@ def test_native_ntt_schema_families_reject_invalid_twiddle_shapes(
 ) -> None:
     _require_cuda()
     engine = CkksEngine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         device="cuda:0",
         ntt_backend=backend,
         allow_sk_gen=False,
@@ -534,17 +535,17 @@ def test_native_ntt_schema_families_reject_invalid_twiddle_shapes(
     ("preset", "backend", "shared_memory_limits"),
     [
         (
-            Preset.slots8192_scale40_levels7_int64,
+            Preset.slots8192_scale40_depth7_int64,
             "radix4_compact",
             (1, 2, 4, 6, 8),
         ),
         (
-            Preset.slots16384_scale40_levels16_int64,
+            Preset.slots16384_scale40_depth16_int64,
             "radix8_compact",
             (2, 3, 5, 6, 8),
         ),
         (
-            Preset.slots32768_scale40_levels34_int64,
+            Preset.slots32768_scale40_depth34_int64,
             "radix16_compact",
             (3, 4, 7, 8),
         ),

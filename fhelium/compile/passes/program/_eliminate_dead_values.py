@@ -40,6 +40,7 @@ _KNOWN_PURE_TYPES: tuple[type[Operation], ...] = (
     ckks.NegateOp,
     ckks.RotateOp,
     ckks.RotateManyOp,
+    ckks.GroupedRotationWeightedSumOp,
     ckks.ToNttOp,
     ckks.FromNttOp,
     ckks.AddOp,

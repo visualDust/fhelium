@@ -18,7 +18,7 @@ def evaluator(source, *, engine, weights, rotation_keys):
 Before capture, record:
 
 - output error against a cleartext oracle;
-- output level, scale, polynomial domain, modulus basis, and component count;
+- output depth, scale, polynomial domain, modulus basis, and component count;
 - eager latency with correct CUDA synchronization;
 - peak allocated/reserved memory.
 
@@ -48,7 +48,7 @@ Keep outside capture:
 - key generation/loading;
 - fresh-randomness encryption;
 - request I/O and artifact misses;
-- dynamic shape/level/control flow;
+- dynamic shape/depth/control flow;
 - process-group initialization;
 - dynamic distributed gather/reduction;
 - cache admission and eviction.
@@ -142,4 +142,4 @@ lifetime plan.
 - [CUDA Graph model](../concepts/execution/cuda-graph-model.md)
 - [CUDA Graph tutorial](../tutorial/cuda-graph-matvec.md)
 - [Value signatures and buffers](../concepts/execution/signatures-and-buffers.md)
-- [Benchmark a workload](benchmark-a-workload.md)
+- [Benchmark methodology](/benchmarks/methodology)

@@ -19,17 +19,18 @@ from fhelium.experimental.bootstrap.presets import (
 )
 
 
-def deplete_public_levels(
+def deplete_to_bootstrap_input(
     engine: Engine,
     ciphertext: fh.Ciphertext,
+    target_depth: int,
 ) -> fh.Ciphertext:
-    r"""Consume public Q levels with multiplication by semantic $1$.
+    r"""Consume public Q depths with multiplication by semantic $1$.
 
     Each iteration multiplies a two-component coefficient-domain standard-RNS
     Q ciphertext by an unbatched NTT/Montgomery plaintext at scale $\Delta_0$,
     then drops the leading Q row. The output remains coefficient-domain
     standard RNS with axes `[component, *batch, limb, coefficient]`, unchanged
-    batch shape and component count, next-level `prime_ids`, and actual
+    batch shape and component count, next-depth `prime_ids`, and actual
     scale $\Delta_{\rm out}=\Delta_{\rm in}\Delta_0/q_{\rm drop}$. The
     returned ciphertext is functional; the argument's storage is not mutated.
     """
@@ -39,13 +40,13 @@ def deplete_public_levels(
         dtype=torch.float64,
         device=torch.get_default_device(),
     )
-    while ciphertext.level < engine.final_public_level:
+    while ciphertext.depth < target_depth:
         identity = engine.prepare_plaintext_for_multiplication(
             engine.encode(
-                ones, level=ciphertext.level, scale=engine.config.default_scale
+                ones, depth=ciphertext.depth, scale=engine.config.default_scale
             )
         )
-        ciphertext = engine.rescale_to_next_level(
+        ciphertext = engine.rescale_to_next_depth(
             engine.ntt_domain_to_coefficient_domain(
                 engine.multiply_plaintext(
                     engine.coefficient_domain_to_ntt_domain(ciphertext),
@@ -58,12 +59,12 @@ def deplete_public_levels(
 
 def main() -> None:
     torch.set_default_device("cuda:0")
+    config = fh.CkksConfig.parse(
+        fh.Preset.slots32768_scale50_depth27_int64,
+        galois_generator=5,
+    )
     engine = Engine(
-        fh.CkksConfig.parse(
-            fh.Preset.slots32768_scale50_levels27_int64,
-            base_prime_bits=50,
-            galois_generator=5,
-        ),
+        config,
         allow_automatic_key_generation=False,
     )
     bootstrap = cosine_depth_refresh_logn16_v1(engine)
@@ -85,9 +86,10 @@ def main() -> None:
         engine.num_slots,
         dtype=torch.float64,
     )
-    depleted = deplete_public_levels(
+    depleted = deplete_to_bootstrap_input(
         engine,
         engine.encrypt_message(values, public_key),
+        bootstrap.input_depth,
     )
 
     torch.cuda.synchronize()
@@ -102,11 +104,11 @@ def main() -> None:
 
     decoded = engine.decrypt_message(refreshed, secret_key, is_real=True).cpu()
     error = (decoded - values.cpu()).abs()
-    print(f'input level: {depleted.level}')
-    print(f'output level: {refreshed.level}')
+    print(f'input depth: {depleted.depth}')
+    print(f'output depth: {refreshed.depth}')
     print(
         'pipeline depth: '
-        f'{bootstrap.output_level - bootstrap.modulus_raise_target_level}'
+        f'{bootstrap.output_depth - bootstrap.modulus_raise_target_depth}'
     )
     print(
         f'periodic raw input bound: {bootstrap.modular_reduction.input_bound}'

@@ -44,7 +44,7 @@ from fhelium.legacy.engine.hybrid_keyswitch import HybridKeySwitcher
 from fhelium.legacy.engine.key_generator import CkksKeyGenerator
 from fhelium.legacy.engine.rns.runtime import RnsRuntime
 from fhelium.errors import (
-    MaximumLevelError,
+    MaximumDepthError,
     ScaleMismatchError,
 )
 from fhelium.native.wrapper import ckks_ops
@@ -56,8 +56,8 @@ class CkksEngine:
 
     The engine fixes $N=2^{\mathtt{logN}}$, the ordered Q and P primes, one
     integral tensor dtype, one local device, and an NTT backend. Public values
-    carry level, actual scale, polynomial domain, modulus basis,
-    residue form, and ``prime_ids``; operations never infer hidden level
+    carry depth, actual scale, polynomial domain, modulus basis,
+    residue form, and ``prime_ids``; operations never infer hidden depth
     or scale alignment.
 
     ``ntt_backend`` selects a named engine execution policy. When omitted,
@@ -85,7 +85,7 @@ class CkksEngine:
         rng_nonce: int | None = None,
     ) -> None:
         if ckks_config is None:
-            ckks_config = Preset.slots16384_scale40_levels16_int64
+            ckks_config = Preset.slots16384_scale40_depth16_int64
         if not isinstance(ckks_config, CkksConfig):
             ckks_config = CkksConfig.parse(ckks_config)
         self.config = ckks_config
@@ -137,7 +137,7 @@ class CkksEngine:
             num_repeating_channels=max(self.config.num_p_primes, 2),
             sigma=self.config.sigma,
             devices=[str(self.device)],
-            torch_dtype=self.config.torch_dtype,
+            torch_dtype=self.rns_runtime.dtype,
             seed=rng_seed,
             nonce=rng_nonce,
         )
@@ -155,7 +155,7 @@ class CkksEngine:
             rns_layout=self.rns_layout,
             rns_runtime=self.rns_runtime,
             engine_id=self.id,
-            validate_public_level=self._validate_public_level,
+            validate_public_depth=self._validate_public_depth,
         )
         self._encryptor = CkksEncryptor(
             config=self.config,
@@ -166,7 +166,7 @@ class CkksEngine:
             montgomery_parameters=self.montgomery_parameters,
             plaintext_codec=self._plaintext_codec,
             engine_id=self.id,
-            validate_public_level=self._validate_public_level,
+            validate_public_depth=self._validate_public_depth,
             ciphertext_from_components=self._ciphertext_from_components,
         )
         self._decryptor = CkksDecryptor(
@@ -188,8 +188,8 @@ class CkksEngine:
         self._hybrid_key_switcher = HybridKeySwitcher(
             config=self.config,
             rns_runtime=self.rns_runtime,
-            moddown_p_drop_inverses_montgomery_by_level=(
-                self.moddown_p_drop_inverses_montgomery_by_level
+            moddown_p_drop_inverses_montgomery_by_depth=(
+                self.moddown_p_drop_inverses_montgomery_by_depth
             ),
             direct_digit_consumer=StandardDirectKeySwitchDigitConsumer(
                 self.rns_runtime
@@ -198,15 +198,15 @@ class CkksEngine:
         self._rescaler = CkksRescaler(
             engine_id=self.id,
             device=self.device,
-            public_level_count=self.public_level_count,
+            public_depth_count=self.public_depth_count,
             rns_runtime=self.rns_runtime,
             montgomery_parameters=self.montgomery_parameters,
-            dropped_q_inverses_montgomery_by_level=(
-                self.rescale_dropped_q_inverses_montgomery_by_level
+            dropped_q_inverses_montgomery_by_depth=(
+                self.rescale_dropped_q_inverses_montgomery_by_depth
             ),
             assert_engine_ciphertext=self._assert_engine_ciphertext,
             ciphertext_from_components=self._ciphertext_from_components,
-            rescale_to_next_output_scale=self.rescale_to_next_output_scale,
+            rescale_output_scale=self.rescale_output_scale,
         )
         self._secret_key: SecretKey | None = None
         self._public_key: PublicKey | None = None
@@ -220,27 +220,33 @@ class CkksEngine:
         return self.config.galois_generator
 
     @property
-    def public_level_count(self) -> int:
-        r"""Number of ordinary public CKKS levels.
+    def dtype(self) -> torch.dtype:
+        """Return the integral dtype used by live RNS values."""
 
-        The count equals ``config.num_scale_primes``. Public levels satisfy
-        $0\leq\mathtt{level}<\mathtt{public\_level\_count}$. The subsequent
+        return self.rns_runtime.dtype
+
+    @property
+    def public_depth_count(self) -> int:
+        r"""Number of ordinary public CKKS depths.
+
+        The count equals ``config.max_depth + 1``. Public depths satisfy
+        $0\leq\mathtt{depth}<\mathtt{public\_depth\_count}$. The subsequent
         one-prime structural-basis state is internal to bootstrap entry.
         """
 
-        return self.config.num_scale_primes
+        return self.config.max_depth + 1
 
     @property
-    def final_public_level(self) -> int:
-        r"""Greatest ordinary public CKKS level.
+    def max_depth(self) -> int:
+        r"""Greatest ordinary public CKKS depth.
 
-        The value is ``public_level_count - 1``. Its active Q basis contains
-        the final scale prime and the structural base prime. Public next-level
-        transitions require a source below this level. The bootstrap structural
-        transition consumes a ciphertext at this level.
+        The value is ``public_depth_count - 1``. Its active Q basis contains
+        the final scale prime and the structural base prime. Public next-depth
+        transitions require a source below this depth. The bootstrap structural
+        transition consumes a ciphertext at this depth.
         """
 
-        return self.public_level_count - 1
+        return self.public_depth_count - 1
 
     @property
     def rng(self) -> Csprng:
@@ -264,10 +270,10 @@ class CkksEngine:
         r"""Sample a fresh secret polynomial without installing it.
 
         Coefficients of $s(X)\in R$ are sampled from ``{-1, 0, 1}``, reduced
-        over the complete level-zero Q or QP basis, and transformed to
+        over the complete depth-zero Q or QP basis, and transformed to
         NTT-domain Montgomery residues. The result has layout
         ``[limb, ntt_index]``, engine integral dtype/device, final extent $N$,
-        and level-zero ``prime_ids``. Generation allocates independent
+        and depth-zero ``prime_ids``. Generation allocates independent
         key storage and does not change the engine's installed key lifecycle.
         """
 
@@ -291,7 +297,7 @@ class CkksEngine:
         $$
 
         where $B_0$ is Q or QP as requested. Output layout is
-        ``[key_component=2, limb, ntt_index]`` in level-zero NTT-domain
+        ``[key_component=2, limb, ntt_index]`` in depth-zero NTT-domain
         Montgomery form with engine integral dtype/device and
         ``prime_ids``. The input secret key is not mutated and the public key
         is not installed on the engine.
@@ -313,10 +319,10 @@ class CkksEngine:
         r"""Create QP key-switch material from $s(X)^2$ to $s(X)$.
 
         The result replaces $d_2(X)s(X)^2$ by two corrections under $s(X)$,
-        reducing a three-component product to two while preserving level
+        reducing a three-component product to two while preserving depth
         and actual scale up to key-switch error. Storage is
         ``[key_digit, key_component=2, limb, ntt_index]`` in complete
-        level-zero QP, NTT-domain Montgomery form on the engine device. It is
+        depth-zero QP, NTT-domain Montgomery form on the engine device. It is
         returned without being installed; ``secret_key`` is not mutated.
         """
 
@@ -334,7 +340,7 @@ class CkksEngine:
         applies $\sigma_g$ to $s(X)$, and creates a key switch from
         $\sigma_g(s(X))$ back to $s(X)$. The matching operation produces
         $m'_j=m_{(j-r)\bmod S}$, equal to ``torch.roll(m, shifts=r)``.
-        The result uses the full level-zero QP basis, NTT-domain Montgomery
+        The result uses the full depth-zero QP basis, NTT-domain Montgomery
         form, engine integral dtype/device, and independent storage; it is not
         installed automatically.
         """
@@ -352,7 +358,7 @@ class CkksEngine:
 
         The result has layout
         ``[key_digit, key_component=2, limb, ntt_index]`` in complete
-        level-zero QP, NTT-domain Montgomery form with engine integral
+        depth-zero QP, NTT-domain Montgomery form with engine integral
         dtype/device and ``prime_ids``. It enables semantic slot
         conjugation and is returned without installation; ``secret_key`` is
         not mutated.
@@ -380,7 +386,7 @@ class CkksEngine:
         c'_0(X)+c'_1(X)s_{\mathrm{destination}}(X).
         $$
 
-        Both secret keys must be complete level-zero QP NTT/Montgomery values
+        Both secret keys must be complete depth-zero QP NTT/Montgomery values
         for this engine. The output layout is
         ``[key_digit, key_component=2, limb, ntt_index]`` with engine integral
         dtype/device and QP ``prime_ids``. Optional uniform components
@@ -493,7 +499,7 @@ class CkksEngine:
         )
         self._rotation_keys.add(key)
 
-    def plaintext(self, message, *, level: int = 0, scale=None) -> Plaintext:
+    def plaintext(self, message, *, depth: int = 0, scale=None) -> Plaintext:
         r"""Create a lazy slots-only plaintext with an actual scale argument.
 
         No encoding arithmetic is performed. The value stores semantic slots
@@ -507,7 +513,7 @@ class CkksEngine:
 
         Args:
             message: Tensor-like real or complex slot values.
-            level: Public CKKS level at which a later encode will materialize
+            depth: Public CKKS depth at which a later encode will materialize
                 the message.
             scale: Positive finite per-value scale. The context's
                 ``config.default_scale`` is used only when this is ``None``.
@@ -519,21 +525,21 @@ class CkksEngine:
 
         Raises:
             InvalidScaleError: If ``scale`` is not positive and finite.
-            ValueError: If the requested level or message layout is invalid.
+            ValueError: If the requested depth or message layout is invalid.
         """
 
         return self._plaintext_codec.plaintext(
-            message, level=level, scale=scale
+            message, depth=depth, scale=scale
         )
 
     def encode(
         self,
         message,
         *,
-        level: int = 0,
+        depth: int = 0,
         scale=None,
     ) -> Plaintext:
-        r"""Encode slots at one programmer-selected level and actual scale.
+        r"""Encode slots at one programmer-selected depth and actual scale.
 
         For $m\in\mathbb{C}^S$, compute
 
@@ -546,7 +552,7 @@ class CkksEngine:
 
         Args:
             message: Tensor-like real or complex slot values.
-            level: Public CKKS level for the encoded value.
+            depth: Public CKKS depth for the encoded value.
             scale: Positive finite per-value scale, or ``None`` to use
                 ``config.default_scale``.
         Returns:
@@ -557,12 +563,12 @@ class CkksEngine:
 
         Raises:
             InvalidScaleError: If ``scale`` is not positive and finite.
-            ValueError: If the requested level or arithmetic state is invalid.
+            ValueError: If the requested depth or arithmetic state is invalid.
         """
 
         return self._plaintext_codec.encode(
             message,
-            level=level,
+            depth=depth,
             scale=scale,
         )
 
@@ -586,7 +592,7 @@ class CkksEngine:
 
         The result has ``representation="rns"``,
         ``polynomial_domain="coefficient"``, and
-        ``residue_representation="standard"``. Its level, scale, semantic
+        ``residue_representation="standard"``. Its depth, scale, semantic
         polynomial, and active ``prime_ids`` are preserved. The input
         must be the ``integer_coefficients`` result of :meth:`encode`; this
         transition never performs encoding or CRT reconstruction implicitly.
@@ -616,7 +622,7 @@ class CkksEngine:
 
         The result's state is ``(representation="rns",
         polynomial_domain="coefficient",
-        residue_representation="montgomery")``. Level, scale, semantic
+        residue_representation="montgomery")``. Depth, scale, semantic
         polynomial, modulus basis, and ``prime_ids`` are preserved.
 
         Semantically, this convenience operation is equivalent to
@@ -644,7 +650,7 @@ class CkksEngine:
         $p(X)$ and compute its negacyclic NTT in Montgomery form. Input
         ``[*batch, coefficient]`` becomes ``[*batch, limb, ntt_index]`` with
         engine integral dtype/device and final extent $N$. This changes only
-        arithmetic representation; it does not change level or actual scale.
+        arithmetic representation; it does not change depth or actual scale.
 
         The result's state is ``(representation="rns",
         polynomial_domain="ntt",
@@ -704,7 +710,7 @@ class CkksEngine:
         ``[component=2, *batch, limb, coefficient]`` ciphertext in coefficient
         domain and standard residues, over Q or QP according to the public
         key. It uses engine integral dtype/device, active ``prime_ids``,
-        unchanged level, and $\Delta(c)=\Delta(p)$. Input and key are not
+        unchanged depth, and $\Delta(c)=\Delta(p)$. Input and key are not
         mutated, and output storage does not alias them.
         """
 
@@ -715,7 +721,7 @@ class CkksEngine:
         prepared_plaintext = self._plaintext_codec._ensure_integer_plaintext(
             plaintext
         )
-        self._validate_public_level(prepared_plaintext.level)
+        self._validate_public_depth(prepared_plaintext.depth)
         if prepared_plaintext.data is None:
             raise RuntimeError(
                 "Coefficient Plaintext data was not materialized"
@@ -744,7 +750,7 @@ class CkksEngine:
         ``[*batch, coefficient]`` tensor on the engine device. It is bounded
         ``approximate_coefficients`` for decoding, not a full-$Q_\ell$
         CRT inverse and not encryptable RNS input. The returned plaintext keeps
-        ``ct.level`` and $\Delta(p)=\Delta(ct)$; scale division occurs only in
+        ``ct.depth`` and $\Delta(p)=\Delta(ct)$; scale division occurs only in
         :meth:`decode`. Inputs are unchanged and output storage is independent.
         """
 
@@ -763,10 +769,10 @@ class CkksEngine:
         message,
         public_key: PublicKey | None = None,
         *,
-        level: int = 0,
+        depth: int = 0,
         scale=None,
     ) -> Ciphertext:
-        r"""Encode and encrypt slots at the requested level and actual scale.
+        r"""Encode and encrypt slots at the requested depth and actual scale.
 
         First compute
 
@@ -785,7 +791,7 @@ class CkksEngine:
         Args:
             message: Tensor-like real or complex slot values.
             public_key: Compatible key, or the engine-installed/default key.
-            level: Public CKKS level for the new ciphertext.
+            depth: Public CKKS depth for the new ciphertext.
             scale: Positive finite per-value scale, or ``None`` to use
                 ``config.default_scale``.
 
@@ -793,15 +799,15 @@ class CkksEngine:
             A new two-component ``[component, *batch, limb, coefficient]``
             ciphertext in coefficient domain and standard residues, with
             engine integral dtype/device, Q or QP ``prime_ids`` selected
-            by the public key, unchanged level, and actual scale $\Delta$.
+            by the public key, unchanged depth, and actual scale $\Delta$.
 
         Raises:
             InvalidScaleError: If ``scale`` is not positive and finite.
-            ValueError: If the message, level, key, or direct-encode range is
+            ValueError: If the message, depth, key, or direct-encode range is
                 invalid.
         """
 
-        level = self._validate_public_level(level)
+        depth = self._validate_public_depth(depth)
         scale = coerce_scale(
             self.config.default_scale if scale is None else scale,
             value_name="Ciphertext",
@@ -809,7 +815,7 @@ class CkksEngine:
         return self._encryptor.encrypt_message(
             message,
             self._resolve_public_key(public_key),
-            level=level,
+            depth=depth,
             scale=scale,
         )
 
@@ -877,7 +883,7 @@ class CkksEngine:
 
         Layout ``[*batch, limb, N]`` for plaintext or
         ``[component, *batch, limb, N]`` for ciphertext, engine integral
-        dtype/device, level, actual scale, component count, Q/QP basis, and
+        dtype/device, depth, actual scale, component count, Q/QP basis, and
         ``prime_ids`` are preserved. The functional result has
         independent storage. Input already in NTT domain is rejected because
         this is a strict source-to-target transition. No CRT reconstruction
@@ -937,7 +943,7 @@ class CkksEngine:
         ``(ntt, montgomery)`` becomes ``(coefficient, standard)`` through
         inverse NTT and Montgomery reduction.
 
-        Tensor shape, engine integral dtype/device, level, actual scale,
+        Tensor shape, engine integral dtype/device, depth, actual scale,
         component count, Q/QP basis, and ``prime_ids`` are preserved.
         The functional result owns independent storage. Input already in
         coefficient domain is rejected because this is a strict
@@ -979,7 +985,7 @@ class CkksEngine:
 
         For limb prime $q_i$, map $r_{i,j}$ to $r_{i,j}R\bmod q_i$. Input and
         output layout is ``[*batch, limb, coefficient]`` with engine integral
-        dtype/device. Representation, level, actual scale, Q/QP basis, and
+        dtype/device. Representation, depth, actual scale, Q/QP basis, and
         ``prime_ids`` are preserved. The functional output has
         independent storage. Input already using Montgomery residues is
         rejected because this is a strict source-to-target transition.
@@ -1014,7 +1020,7 @@ class CkksEngine:
         For limb prime $q_i$, Montgomery-reduce each residue to its ordinary
         representative. Input and output layout is
         ``[*batch, limb, coefficient]`` with engine integral dtype/device.
-        Representation, level, actual scale, Q/QP basis, and
+        Representation, depth, actual scale, Q/QP basis, and
         ``prime_ids`` are preserved. The functional output has independent
         storage. Input already using standard residues is rejected because
         this is a strict source-to-target transition.
@@ -1041,49 +1047,49 @@ class CkksEngine:
         )
         return self._to_standard_plaintext_(plaintext)
 
-    def rescale_to_next_drop_prime(self, *, level: int) -> int:
+    def rescale_divisor(self, *, depth: int) -> int:
         r"""Return the Q prime used by one rescale-to-next transition.
 
-        For source level $\ell$ with ordered active Q-prime identifiers
+        For source depth $\ell$ with ordered active Q-prime identifiers
         $I_\ell$, the result is the modulus $q_i$ for the leading identifier
-        $i=I_\ell[0]$. :meth:`rescale_to_next_level` divides by this integer and
+        $i=I_\ell[0]$. :meth:`rescale_to_next_depth` divides by this integer and
         removes its residue row.
 
         Args:
-            level: Current public CKKS level. It must have a following public
-                level, so the final legal public level is not accepted.
+            depth: Current public CKKS depth. It must have a following public
+                depth, so the final legal public depth is not accepted.
 
         Returns:
-            The leading active Q modulus at ``level``.
+            The leading active Q modulus at ``depth``.
 
         Raises:
-            TypeError: If ``level`` is not an integer.
-            ValueError: If ``level`` is negative.
-            MaximumLevelError: If no further public rescale level exists.
+            TypeError: If ``depth`` is not an integer.
+            ValueError: If ``depth`` is negative.
+            MaximumDepthError: If no further public rescale depth exists.
         """
 
-        if type(level) is not int:
-            raise TypeError("level must be an integer")
-        if level < 0:
-            raise ValueError(f"level must be non-negative; got {level}.")
-        if level >= self.final_public_level:
-            raise MaximumLevelError(
-                level=level,
-                maximum_level=self.final_public_level,
+        if type(depth) is not int:
+            raise TypeError("depth must be an integer")
+        if depth < 0:
+            raise ValueError(f"depth must be non-negative; got {depth}.")
+        if depth >= self.max_depth:
+            raise MaximumDepthError(
+                depth=depth,
+                maximum_depth=self.max_depth,
             )
-        dropped_prime_id = self.rns_layout.prime_ids(level)[0]
+        dropped_prime_id = self.rns_layout.prime_ids(depth)[0]
         return int(self.montgomery_parameters.moduli[dropped_prime_id])
 
-    def rescale_to_next_output_scale(
+    def rescale_output_scale(
         self,
         input_scale: float,
         *,
-        level: int,
+        depth: int,
     ) -> float:
         r"""Calculate the binary64 output scale of one rescale transition.
 
         The result is the same binary64 calculation used by
-        :meth:`rescale_to_next_level`:
+        :meth:`rescale_to_next_depth`:
 
         $$
         \Delta_{\mathrm{out}}=
@@ -1092,37 +1098,37 @@ class CkksEngine:
 
         Args:
             input_scale: Positive finite scale immediately before rescale.
-            level: Current public CKKS level.
+            depth: Current public CKKS depth.
 
         Returns:
-            The positive finite binary64 scale after dropping the level's
+            The positive finite binary64 scale after dropping the depth's
             leading active Q modulus.
 
         Raises:
             InvalidScaleError: If ``input_scale`` or the resulting quotient is
                 not a positive finite binary64 value.
-            TypeError: If ``level`` is not an integer.
-            ValueError: If ``level`` is negative.
-            MaximumLevelError: If no further public rescale level exists.
+            TypeError: If ``depth`` is not an integer.
+            ValueError: If ``depth`` is negative.
+            MaximumDepthError: If no further public rescale depth exists.
         """
 
         scale = coerce_scale(
             input_scale,
             value_name="rescale input",
         )
-        modulus = self.rescale_to_next_drop_prime(level=level)
+        modulus = self.rescale_divisor(depth=depth)
         return coerce_scale(
             scale / float(modulus),
             value_name="rescale result",
         )
 
-    def rescale_to_next_level(
+    def rescale_to_next_depth(
         self,
         ct: Ciphertext,
         *,
         rounding: Literal["nearest", "floor"] = "nearest",
     ) -> Ciphertext:
-        r"""Rescale a ciphertext to the next public CKKS level.
+        r"""Rescale a ciphertext to the next public CKKS depth.
 
         For each component polynomial,
 
@@ -1142,58 +1148,58 @@ class CkksEngine:
 
         Args:
             ct: Full-layout coefficient-domain, standard-residue ciphertext at
-                a non-final public level. Two- and three-component Q or QP
+                a non-final public depth. Two- and three-component Q or QP
                 values are accepted.
             rounding: Quotient rule, either ``"nearest"`` or ``"floor"``.
 
         Returns:
-            A new coefficient-domain standard ciphertext at ``ct.level + 1``
+            A new coefficient-domain standard ciphertext at ``ct.depth + 1``
             with the same two/three component count and Q/QP basis, engine
             integral dtype/device, ``prime_ids=ct.prime_ids[1:]``, and
             residues in $[0,q_i)$. ``ct`` is unchanged and output
             storage does not alias it.
 
         Raises:
-            MaximumLevelError: If ``ct`` is already at the final public level.
+            MaximumDepthError: If ``ct`` is already at the final public depth.
             InvalidScaleError: If the output scale is not positive and finite.
             ValueError: If the ciphertext state or engine layout is invalid.
         """
 
-        return self._rescaler.rescale_to_next_level(ct, rounding=rounding)
+        return self._rescaler.rescale_to_next_depth(ct, rounding=rounding)
 
-    def rescale_to_next_level_(
+    def rescale_to_next_depth_(
         self,
         ct: Ciphertext,
         *,
         rounding: Literal["nearest", "floor"] = "nearest",
     ) -> Ciphertext:
-        r"""Advance one public level and update ``ct`` in place.
+        r"""Advance one public depth and update ``ct`` in place.
 
         Native kernels update the remaining RNS rows through views into the
         original allocation. The method then narrows ``ct.data`` and updates
-        ``level``, ``prime_ids``, and the actual per-value scale.
+        ``depth``, ``prime_ids``, and the actual per-value scale.
 
         The mathematical quotient, scale transition, Q/QP row selection, and
         standard-residue output in $[0,q_i)$ are identical to
-        :meth:`rescale_to_next_level`. Only storage ownership differs.
+        :meth:`rescale_to_next_depth`. Only storage ownership differs.
 
         Args:
             ct: Full-layout coefficient-domain, standard-residue ciphertext at
-                a non-final public level. Aliases observe the mutation.
+                a non-final public depth. Aliases observe the mutation.
             rounding: Quotient rule, either ``"nearest"`` or ``"floor"``.
 
         Returns:
             ``ct`` itself after the rescale transition.
 
         Raises:
-            MaximumLevelError: If ``ct`` is already at the final public level.
+            MaximumDepthError: If ``ct`` is already at the final public depth.
             InvalidScaleError: If the output scale is not positive and finite.
             ValueError: If the ciphertext state or engine layout is invalid.
         """
 
-        return self._rescaler.rescale_to_next_level_(ct, rounding=rounding)
+        return self._rescaler.rescale_to_next_depth_(ct, rounding=rounding)
 
-    def mod_switch_to_next_level(self, ct: Ciphertext) -> Ciphertext:
+    def mod_switch_to_next_depth(self, ct: Ciphertext) -> Ciphertext:
         r"""Restrict a ciphertext to the next public RNS basis.
 
         For every component,
@@ -1209,68 +1215,68 @@ class CkksEngine:
         within the smaller modulus.
 
         Args:
-            ct: Full-layout ciphertext at a non-final public CKKS level. Its
+            ct: Full-layout ciphertext at a non-final public CKKS depth. Its
                 component count, polynomial domain, representation, and Q/QP
                 basis are preserved.
 
         Returns:
-            A new ciphertext at ``ct.level + 1`` with unchanged component
+            A new ciphertext at ``ct.depth + 1`` with unchanged component
             count, domain, basis, residue form, dtype/device, actual scale, and
             ``prime_ids=ct.prime_ids[1:]``. ``ct`` is unchanged and storage is
             independent.
 
         Raises:
-            MaximumLevelError: If ``ct`` is already at the final public level.
+            MaximumDepthError: If ``ct`` is already at the final public depth.
             ValueError: If ``ct`` is incompatible with this engine or does not
                 contain the complete active RNS layout.
         """
 
         self._assert_engine_ciphertext(ct)
-        if ct.level >= self.final_public_level:
-            raise MaximumLevelError(
-                level=ct.level,
-                maximum_level=self.final_public_level,
+        if ct.depth >= self.max_depth:
+            raise MaximumDepthError(
+                depth=ct.depth,
+                maximum_depth=self.max_depth,
             )
-        return self._copy_at_level(ct, ct.level + 1)
+        return self._copy_at_depth(ct, ct.depth + 1)
 
-    def mod_switch_to_next_level_(self, ct: Ciphertext) -> Ciphertext:
+    def mod_switch_to_next_depth_(self, ct: Ciphertext) -> Ciphertext:
         """Restrict ``ct`` to the next public RNS basis in place.
 
         The mathematical RNS restriction and no-wrap condition are identical
-        to :meth:`mod_switch_to_next_level`. ``ct.data`` is narrowed to a view of its
-        existing allocation; level and ``prime_ids`` change, while
+        to :meth:`mod_switch_to_next_depth`. ``ct.data`` is narrowed to a view of its
+        existing allocation; depth and ``prime_ids`` change, while
         actual scale and all other state axes are preserved. Aliases observe
         metadata mutation and retained storage rows.
 
         Args:
-            ct: Full-layout ciphertext at a non-final public level. Aliases
-                observe its narrowed tensor and updated level metadata.
+            ct: Full-layout ciphertext at a non-final public depth. Aliases
+                observe its narrowed tensor and updated depth metadata.
 
         Returns:
             ``ct`` itself with unchanged scale and one fewer active Q row.
 
         Raises:
-            MaximumLevelError: If ``ct`` is already at the final public level.
+            MaximumDepthError: If ``ct`` is already at the final public depth.
             ValueError: If ``ct`` is incompatible with this engine or does not
                 contain the complete active RNS layout.
         """
 
         self._assert_engine_ciphertext(ct)
-        if ct.level >= self.final_public_level:
-            raise MaximumLevelError(
-                level=ct.level,
-                maximum_level=self.final_public_level,
+        if ct.depth >= self.max_depth:
+            raise MaximumDepthError(
+                depth=ct.depth,
+                maximum_depth=self.max_depth,
             )
-        return self._restrict_to_level_(ct, ct.level + 1)
+        return self._restrict_to_depth_(ct, ct.depth + 1)
 
-    def mod_switch_to_level(
+    def mod_switch_to_depth(
         self,
         ct: Ciphertext,
-        target_level: int,
+        target_depth: int,
     ) -> Ciphertext:
-        r"""Restrict a ciphertext to the RNS basis at ``target_level``.
+        r"""Restrict a ciphertext to the RNS basis at ``target_depth``.
 
-        For target level $t\geq\ell$,
+        For target depth $t\geq\ell$,
 
         $$
         c'=c\pmod{B_t},\qquad \Delta(c')=\Delta(c).
@@ -1282,54 +1288,54 @@ class CkksEngine:
         remain within $B_t$.
 
         Args:
-            ct: Full-layout ciphertext whose current level is no later than
-                ``target_level``.
-            target_level: Destination public level in the inclusive range
-                ``[ct.level, final_public_level]``.
+            ct: Full-layout ciphertext whose current depth is no later than
+                ``target_depth``.
+            target_depth: Destination public depth in the inclusive range
+                ``[ct.depth, max_depth]``.
 
         Returns:
-            A new ciphertext at ``target_level`` with unchanged component
+            A new ciphertext at ``target_depth`` with unchanged component
             count, domain, Q/QP basis, residue form, dtype/device, and actual
             scale. ``prime_ids`` are restricted accordingly. Passing the
-            current level returns a full clone; output never aliases ``ct``.
+            current depth returns a full clone; output never aliases ``ct``.
 
         Raises:
-            TypeError: If ``target_level`` is not an integer.
-            ValueError: If the target is earlier than ``ct.level``, beyond the
-                final public level, or the ciphertext layout is incompatible.
+            TypeError: If ``target_depth`` is not an integer.
+            ValueError: If the target is earlier than ``ct.depth``, beyond the
+                final public depth, or the ciphertext layout is incompatible.
         """
 
-        self._validate_mod_switch_target(ct, target_level)
-        return self._copy_at_level(ct, target_level)
+        self._validate_mod_switch_target(ct, target_depth)
+        return self._copy_at_depth(ct, target_depth)
 
-    def mod_switch_to_level_(
+    def mod_switch_to_depth_(
         self,
         ct: Ciphertext,
-        target_level: int,
+        target_depth: int,
     ) -> Ciphertext:
-        r"""In-place form of :meth:`mod_switch_to_level`.
+        r"""In-place form of :meth:`mod_switch_to_depth`.
 
         The same RNS restriction and no-wrap condition apply. The narrowed
-        tensor remains a view into the original allocation; level and
+        tensor remains a view into the original allocation; depth and
         ``prime_ids`` change while actual scale and other state axes are
         preserved. Aliases observe mutation.
 
         Args:
             ct: Full-layout ciphertext to mutate.
-            target_level: Destination public level in the inclusive range
-                ``[ct.level, final_public_level]``.
+            target_depth: Destination public depth in the inclusive range
+                ``[ct.depth, max_depth]``.
 
         Returns:
-            ``ct`` itself with unchanged scale. Passing its current level is a
+            ``ct`` itself with unchanged scale. Passing its current depth is a
             no-op.
 
         Raises:
-            TypeError: If ``target_level`` is not an integer.
+            TypeError: If ``target_depth`` is not an integer.
             ValueError: If the target or ciphertext layout is invalid.
         """
 
-        self._validate_mod_switch_target(ct, target_level)
-        return self._restrict_to_level_(ct, target_level)
+        self._validate_mod_switch_target(ct, target_depth)
+        return self._restrict_to_depth_(ct, target_depth)
 
     def reinterpret_at_scale(
         self,
@@ -1363,7 +1369,7 @@ class CkksEngine:
 
         Returns:
             A new ciphertext with cloned payload, independent storage, and
-            ``target_scale``. Level, component count, domain, basis, residue
+            ``target_scale``. Depth, component count, domain, basis, residue
             form, dtype/device, and ``prime_ids`` are unchanged.
 
         Raises:
@@ -1420,14 +1426,14 @@ class CkksEngine:
         r"""Construct semantic zero in the same plaintext state.
 
         Slots, integer coefficients, approximate coefficients, or RNS payloads
-        are materialized as zero with matching batch shape, level, actual
+        are materialized as zero with matching batch shape, depth, actual
         scale, representation, domain, Q/QP basis, residue form, and
         ``prime_ids``. The result uses the engine-compatible dtype/device for
         newly encoded storage and owns independent storage. The input is not
         mutated.
         """
 
-        self._validate_public_level(plaintext.level)
+        self._validate_public_depth(plaintext.depth)
         if plaintext.message is None:
             message = torch.zeros(
                 (*plaintext.batch_shape, self.num_slots),
@@ -1439,7 +1445,7 @@ class CkksEngine:
         if plaintext.is_slots:
             return Plaintext(
                 message=message,
-                level=plaintext.level,
+                depth=plaintext.depth,
                 scale=plaintext.scale,
             )
         if plaintext.is_approximate_coefficients:
@@ -1450,7 +1456,7 @@ class CkksEngine:
             return result
         encoded = self.encode(
             message,
-            level=plaintext.level,
+            depth=plaintext.depth,
             scale=plaintext.scale,
         )
         if plaintext.is_integer_coefficients:
@@ -1484,7 +1490,7 @@ class CkksEngine:
         The output phase satisfies
         $c_0(X)+c_1(X)s(X)=e(X)\pmod{B_\ell}$ and decodes to
         zero up to encryption error. It is a new two-component ciphertext with
-        ``ct``'s batch shape, level, actual scale, coefficient/NTT domain,
+        ``ct``'s batch shape, depth, actual scale, coefficient/NTT domain,
         Q/QP basis, standard/Montgomery form, engine dtype/device, and
         ``prime_ids``. The supplied public key must select the same basis.
         Neither input nor key is mutated and no storage aliases them.
@@ -1499,7 +1505,7 @@ class CkksEngine:
         result = self.encrypt_message(
             zero,
             public_key,
-            level=ct.level,
+            depth=ct.depth,
             scale=ct.scale,
         )
         if result.modulus_basis != ct.modulus_basis:
@@ -1522,7 +1528,7 @@ class CkksEngine:
 
         Both inputs must be two-component NTT values, and the output is a
         three-component NTT value.  Programs call
-        :meth:`relinearize` and :meth:`rescale_to_next_level` as separate calls. This also
+        :meth:`relinearize` and :meth:`rescale_to_next_depth` as separate calls. This also
         makes communication required by a limb-parallel implementation
         visible.
 
@@ -1542,7 +1548,7 @@ class CkksEngine:
                 Its scale may differ from ``lhs.scale``.
 
         Returns:
-            A new three-component NTT/Montgomery ciphertext at unchanged level
+            A new three-component NTT/Montgomery ciphertext at unchanged depth
             and Q/QP basis, with engine integral dtype/device, the shared
             ``prime_ids``, the operands' batch shape, and product actual scale.
             Inputs are unchanged and output storage is independent.
@@ -1581,7 +1587,7 @@ class CkksEngine:
         )
         return Ciphertext(
             data=product_data,
-            level=lhs.level,
+            depth=lhs.depth,
             scale=product_scale,
             prime_ids=lhs.prime_ids,
             polynomial_domain="ntt",
@@ -1605,7 +1611,7 @@ class CkksEngine:
         $$
 
         using QP material directed from $s(X)^2$ to $s(X)$. It preserves the
-        represented message, level, and actual scale up to configured
+        represented message, depth, and actual scale up to configured
         key-switch error.
 
         Args:
@@ -1616,7 +1622,7 @@ class CkksEngine:
         Returns:
             A new two-component coefficient-domain standard ciphertext with
             Q basis, the same batch shape, engine integral dtype/device,
-            active Q ``prime_ids``, level, and actual scale as ``ct``. Inputs
+            active Q ``prime_ids``, depth, and actual scale as ``ct``. Inputs
             are unchanged and output storage is independent.
 
         Raises:
@@ -1643,7 +1649,7 @@ class CkksEngine:
         self.rns_runtime.inverse_to_standard_(d1)
         self.rns_runtime.inverse_to_standard_(d2)
         correction0, correction1 = self._hybrid_key_switcher.apply_key_switch(
-            d2, relinearization_key, ct.level
+            d2, relinearization_key, ct.depth
         )
         d0 = d0 + correction0
         d1 = d1 + correction1
@@ -1651,7 +1657,7 @@ class CkksEngine:
         self.rns_runtime.reduce_to_standard_(d1)
         return self._ciphertext_from_components(
             [d0, d1],
-            level=ct.level,
+            depth=ct.depth,
             scale=ct.scale,
             polynomial_domain="coefficient",
             modulus_basis=ct.modulus_basis,
@@ -1670,7 +1676,7 @@ class CkksEngine:
         $$
 
         The key object does not self-identify these lineages; the caller owns
-        that invariant. The represented message, level, and actual scale are
+        that invariant. The represented message, depth, and actual scale are
         preserved up to key-switch error. Input must be coefficient-domain
         standard, two-component, full-layout Q RNS. Output is a new Q value
         with unchanged batch shape, engine dtype/device, and active Q
@@ -1698,7 +1704,7 @@ class CkksEngine:
     ) -> Ciphertext:
         r"""Add ciphertexts with exactly equal scale and arithmetic state.
 
-        The method performs no level alignment, scale reinterpretation,
+        The method performs no depth alignment, scale reinterpretation,
         relinearization, or domain conversion.
 
         $$
@@ -1714,7 +1720,7 @@ class CkksEngine:
                 new ciphertext and leave both inputs unchanged.
 
         Returns:
-            The sum with unchanged component count, level, domain, Q/QP basis,
+            The sum with unchanged component count, depth, domain, Q/QP basis,
             residue form, engine dtype/device, and ``prime_ids``. The
             functional result owns independent storage; ``inplace=True``
             mutates and returns ``lhs`` so aliases observe reduced
@@ -1722,7 +1728,7 @@ class CkksEngine:
 
         Raises:
             ScaleMismatchError: If ``lhs.scale != rhs.scale``.
-            ValueError: If context, level, state, shape, or RNS layout differs.
+            ValueError: If context, depth, state, shape, or RNS layout differs.
         """
 
         self._assert_same_cipher_layout(
@@ -1809,7 +1815,7 @@ class CkksEngine:
                 axes are not addressable through this argument.
 
         Returns:
-            A new ciphertext with the selected batch axis removed. Level,
+            A new ciphertext with the selected batch axis removed. Depth,
             scale, polynomial domain, modulus basis, residue representation,
             component count, device, dtype, and ``prime_ids`` are
             preserved. The input is unchanged.
@@ -1873,14 +1879,14 @@ class CkksEngine:
             inplace: Mutate and return ``lhs`` when true.
 
         Returns:
-            The difference with unchanged component count, level, domain,
+            The difference with unchanged component count, depth, domain,
             Q/QP basis, residue form, engine dtype/device, and
             ``prime_ids``. The functional result owns independent storage;
             ``inplace=True`` mutates and returns ``lhs``.
 
         Raises:
             ScaleMismatchError: If ``lhs.scale != rhs.scale``.
-            ValueError: If context, level, state, shape, or RNS layout differs.
+            ValueError: If context, depth, state, shape, or RNS layout differs.
         """
 
         self._assert_same_cipher_layout(
@@ -1907,7 +1913,7 @@ class CkksEngine:
         c'_j=-c_j\pmod{B_\ell},\qquad \Delta(c')=\Delta(c).
         $$
 
-        Component count, level, domain, Q/QP basis, residue form,
+        Component count, depth, domain, Q/QP basis, residue form,
         dtype/device, and ``prime_ids`` are preserved. The functional
         result owns independent storage; ``inplace=True`` mutates reduced
         residues in ``ct`` and aliases observe the change.
@@ -1960,12 +1966,12 @@ class CkksEngine:
         \Delta(c')=\Delta(c)=\Delta(p).
         $$
 
-        No scale or level alignment is implicit.
+        No scale or depth alignment is implicit.
 
         Args:
             ct: Two-component coefficient-domain standard ciphertext.
             plaintext: Coefficient-domain RNS ``Plaintext`` or compatible
-                compressed form at the same level, basis, rows, and equal
+                compressed form at the same depth, basis, rows, and equal
                 binary64 scale. A batched plaintext must match
                 ``ct.batch_shape`` exactly; an unbatched plaintext broadcasts
                 over every ciphertext batch entry.
@@ -1973,7 +1979,7 @@ class CkksEngine:
 
         Returns:
             A two-component coefficient-domain standard ciphertext with
-            unchanged level, Q/QP basis, batch shape, engine dtype/device,
+            unchanged depth, Q/QP basis, batch shape, engine dtype/device,
             ``prime_ids``, and shared actual scale. Functional mode
             allocates independent output; ``inplace=True`` mutates only
             ``ct.c0`` and aliases observe the change.
@@ -2041,7 +2047,7 @@ class CkksEngine:
             )
         result = self._ciphertext_from_components(
             [c0, ct.c1.clone()],
-            level=ct.level,
+            depth=ct.depth,
             scale=ct.scale,
             polynomial_domain=ct.polynomial_domain,
             modulus_basis=ct.modulus_basis,
@@ -2068,7 +2074,7 @@ class CkksEngine:
         r"""Multiply an NTT ciphertext by an operation-ready plaintext.
 
         The operands need not have equal scales. This operation preserves the
-        ciphertext level and records their binary64 scale product.
+        ciphertext depth and records their binary64 scale product.
 
         $$
         c'_j=c_jp\pmod{B_\ell},\qquad
@@ -2083,7 +2089,7 @@ class CkksEngine:
         Args:
             ct: Two-component NTT-domain Montgomery ciphertext.
             plaintext: NTT/Montgomery RNS ``Plaintext`` or compatible
-                compressed form at the same context, level, basis, rows, and
+                compressed form at the same context, depth, basis, rows, and
                 batch layout. A batched plaintext must match
                 ``ct.batch_shape`` exactly; an unbatched plaintext broadcasts
                 over every ciphertext batch entry.
@@ -2091,7 +2097,7 @@ class CkksEngine:
 
         Returns:
             A new two-component NTT-domain Montgomery ciphertext at
-            unchanged level and Q/QP basis, with the ciphertext batch shape,
+            unchanged depth and Q/QP basis, with the ciphertext batch shape,
             engine integral dtype/device, ``prime_ids``, and product
             actual scale. Functional mode leaves inputs unchanged and owns
             independent storage; ``inplace=True`` replaces all ``ct`` state
@@ -2143,7 +2149,7 @@ class CkksEngine:
             )
         result = self._ciphertext_from_components(
             [c0, c1],
-            level=ct.level,
+            depth=ct.depth,
             scale=product_scale,
             polynomial_domain="ntt",
             modulus_basis=ct.modulus_basis,
@@ -2210,7 +2216,7 @@ class CkksEngine:
 
         Input must be a two-component coefficient-domain standard full-layout
         Q ciphertext. Output is a new Q ciphertext with unchanged batch shape,
-        level, actual scale, engine integral dtype/device, and active Q
+        depth, actual scale, engine integral dtype/device, and active Q
         ``prime_ids``; key switching adds its configured approximation error.
         Inputs are unchanged and output storage is independent. Step zero
         returns a clone without automorphism or key switch.
@@ -2340,7 +2346,7 @@ class CkksEngine:
         polynomials and uses ``key`` in the direction
         $\sigma_{-1}(s(X))\longmapsto s(X)$. Input must be two-component,
         coefficient-domain, standard-residue, full-layout Q RNS. Output is a
-        new Q ciphertext with unchanged batch shape, level, actual scale,
+        new Q ciphertext with unchanged batch shape, depth, actual scale,
         engine integral dtype/device, and active Q ``prime_ids``, up to
         key-switch error. Inputs are unchanged and output storage is
         independent.
@@ -2372,7 +2378,7 @@ class CkksEngine:
                     active_moduli,
                 ),
             ],
-            level=ct.level,
+            depth=ct.depth,
             scale=ct.scale,
             polynomial_domain=ct.polynomial_domain,
             modulus_basis=ct.modulus_basis,
@@ -2394,19 +2400,19 @@ class CkksEngine:
     # Internal validation and value construction.
     # ------------------------------------------------------------------
 
-    def _validate_public_level(self, level: object) -> int:
-        """Validate a level addressable by this public CKKS context."""
+    def _validate_public_depth(self, depth: object) -> int:
+        """Validate a depth addressable by this public CKKS context."""
 
-        if type(level) is not int:
+        if type(depth) is not int:
             raise TypeError(
-                f"level must be an integer, got {type(level).__name__}"
+                f"depth must be an integer, got {type(depth).__name__}"
             )
-        if not 0 <= level < self.public_level_count:
+        if not 0 <= depth < self.public_depth_count:
             raise ValueError(
-                "level must satisfy 0 <= level < "
-                f"{self.public_level_count}; got {level}"
+                "depth must satisfy 0 <= depth < "
+                f"{self.public_depth_count}; got {depth}"
             )
-        return level
+        return depth
 
     @staticmethod
     def _validate_modulus_basis(value: object) -> ModulusBasis:
@@ -2426,7 +2432,7 @@ class CkksEngine:
         self,
         components: Sequence[torch.Tensor],
         *,
-        level: int,
+        depth: int,
         scale: float | None,
         polynomial_domain: PolynomialDomain,
         modulus_basis: ModulusBasis,
@@ -2440,7 +2446,7 @@ class CkksEngine:
         ``prime_ids`` (or the engine's active basis rows). The output has
         layout ``[component, *batch, limb, coefficient_or_ntt_index]`` and
         copies every component into new storage. Domain, Q/QP basis, standard
-        or Montgomery form, level, and actual scale are recorded as supplied;
+        or Montgomery form, depth, and actual scale are recorded as supplied;
         no arithmetic conversion occurs.
         """
 
@@ -2465,7 +2471,7 @@ class CkksEngine:
             local[component_id].copy_(component)
         return Ciphertext(
             data=local,
-            level=level,
+            depth=depth,
             scale=(
                 self.config.default_scale
                 if scale is None
@@ -2475,7 +2481,7 @@ class CkksEngine:
                 tuple(prime_ids)
                 if prime_ids is not None
                 else self.rns_layout.prime_ids(
-                    level, include_p=modulus_basis == "QP"
+                    depth, include_p=modulus_basis == "QP"
                 )
             ),
             polynomial_domain=polynomial_domain,
@@ -2511,7 +2517,7 @@ class CkksEngine:
         """Compare two engine-local ciphertext layouts."""
 
         fields = (
-            "level",
+            "depth",
             "polynomial_domain",
             "modulus_basis",
             "residue_representation",
@@ -2543,7 +2549,7 @@ class CkksEngine:
         """Validate a complete dense ciphertext against this engine.
 
         The check re-runs the value's mutable-storage invariants and requires the
-        matching ring dimension, dtype, device, public level, modulus
+        matching ring dimension, dtype, device, public depth, modulus
         basis, and complete active ``prime_ids`` expected by ordinary engine
         operations. It performs no evaluator work and does not mutate the
         ciphertext.
@@ -2613,7 +2619,7 @@ class CkksEngine:
 
         The common compatibility requirements cover the ring dimension,
         rank-local device, and RNS structure active at the
-        ciphertext's level and declared Q or QP basis. ``prime_ids`` must be a
+        ciphertext's depth and declared Q or QP basis. ``prime_ids`` must be a
         nonempty, ordered, contiguous interval of that structure. Unlike
         :meth:`_assert_engine_ciphertext`, this check accepts a proper interval
         for RNS-limb-partitioned workflows.
@@ -2632,10 +2638,10 @@ class CkksEngine:
 
         if not isinstance(ct, Ciphertext):
             raise TypeError(f"Expected Ciphertext, got {type(ct).__name__}")
-        if _allow_structural_base and ct.level == self.public_level_count:
+        if _allow_structural_base and ct.depth == self.public_depth_count:
             pass
         else:
-            self._validate_public_level(ct.level)
+            self._validate_public_depth(ct.depth)
         if ct.ring_dimension != self.config.N:
             raise ValueError(
                 "Ciphertext ring dimension does not match engine: "
@@ -2646,13 +2652,13 @@ class CkksEngine:
                 "Ciphertext device does not match this rank-local engine: "
                 f"{ct.data.device} != {self.device}"
             )
-        if ct.data.dtype != self.config.torch_dtype:
+        if ct.data.dtype != self.rns_runtime.dtype:
             raise TypeError(
                 "Ciphertext dtype does not match engine: "
-                f"{ct.data.dtype} != {self.config.torch_dtype}"
+                f"{ct.data.dtype} != {self.rns_runtime.dtype}"
             )
         expected_prime_ids = self.rns_layout.prime_ids(
-            ct.level, include_p=ct.includes_p
+            ct.depth, include_p=ct.includes_p
         )
         if not ct.prime_ids:
             raise ValueError("Ciphertext local RNS structure cannot be empty")
@@ -2683,7 +2689,7 @@ class CkksEngine:
         ct.with_data(ct.data)
         self._assert_local_ciphertext(ct)
         expected_prime_ids = self.rns_layout.prime_ids(
-            ct.level, include_p=ct.includes_p
+            ct.depth, include_p=ct.includes_p
         )
         if ct.prime_ids != expected_prime_ids:
             raise ValueError(
@@ -2696,13 +2702,13 @@ class CkksEngine:
     def _assert_structural_base_ciphertext(self, ct: Ciphertext) -> None:
         """Validate the private one-prime bootstrap structural value."""
 
-        if ct.level != self.public_level_count:
+        if ct.depth != self.public_depth_count:
             raise ValueError(
-                "Structural-base Ciphertext must use private level "
-                f"{self.public_level_count}, got {ct.level}"
+                "Structural-base Ciphertext must use private depth "
+                f"{self.public_depth_count}, got {ct.depth}"
             )
         self._assert_local_ciphertext(ct, _allow_structural_base=True)
-        expected_prime_ids = self.rns_layout.prime_ids(ct.level)
+        expected_prime_ids = self.rns_layout.prime_ids(ct.depth)
         if ct.prime_ids != expected_prime_ids:
             raise ValueError(
                 "Structural-base Ciphertext RNS layout differs from engine: "
@@ -2728,7 +2734,7 @@ class CkksEngine:
         # value invariants without cloning the tensor payload.
         Plaintext(
             message=plaintext.message,
-            level=plaintext.level,
+            depth=plaintext.depth,
             scale=plaintext.scale,
             data=plaintext.data,
             representation=plaintext.representation,
@@ -2737,13 +2743,13 @@ class CkksEngine:
             residue_representation=plaintext.residue_representation,
             prime_ids=plaintext.prime_ids,
         )
-        self._validate_public_level(plaintext.level)
+        self._validate_public_depth(plaintext.depth)
         if plaintext.data.device != self.device:
             raise ValueError("Plaintext data is on the wrong local device")
-        if plaintext.data.dtype != self.config.torch_dtype:
+        if plaintext.data.dtype != self.rns_runtime.dtype:
             raise TypeError(
                 "Plaintext dtype does not match engine: "
-                f"{plaintext.data.dtype} != {self.config.torch_dtype}"
+                f"{plaintext.data.dtype} != {self.rns_runtime.dtype}"
             )
         if plaintext.data.size(-1) != self.config.N:
             raise ValueError(
@@ -2751,7 +2757,7 @@ class CkksEngine:
                 f"{plaintext.data.size(-1)} != {self.config.N}"
             )
         expected_prime_ids = self.rns_layout.prime_ids(
-            plaintext.level,
+            plaintext.depth,
             include_p=plaintext.modulus_basis == "QP",
         )
         if plaintext.prime_ids != expected_prime_ids:
@@ -2841,7 +2847,7 @@ class CkksEngine:
         The compatibility requirements cover the concrete key type,
         polynomial degree, configured dtype and local device, NTT
         polynomial domain, Montgomery residues, an optional required basis, complete
-        level-zero prime layout, and key-switch digit shape where applicable.
+        depth-zero prime layout, and key-switch digit shape where applicable.
 
         Args:
             key: Dense secret, public, or key-switch key to validate.
@@ -2869,10 +2875,10 @@ class CkksEngine:
                 f"{type(key).__name__} device does not match engine: "
                 f"{key.data.device} != {self.device}"
             )
-        if key.data.dtype != self.config.torch_dtype:
+        if key.data.dtype != self.rns_runtime.dtype:
             raise TypeError(
                 f"{type(key).__name__} dtype does not match engine: "
-                f"{key.data.dtype} != {self.config.torch_dtype}"
+                f"{key.data.dtype} != {self.rns_runtime.dtype}"
             )
         if key.polynomial_domain != "ntt":
             raise ValueError(
@@ -2918,24 +2924,24 @@ class CkksEngine:
     # ------------------------------------------------------------------
 
     def _create_rescale_dropped_q_inverses_montgomery(self) -> None:
-        r"""Build per-level dropped-Q inverse vectors for rescale.
+        r"""Build per-depth dropped-Q inverse vectors for rescale.
 
-        Entry ``level`` is an engine-integral CPU or CUDA tensor with layout
+        Entry ``depth`` is an engine-integral CPU or CUDA tensor with layout
         ``[remaining_qp_limb]``. Element $i$ is
         $q_{\mathrm{drop}}^{-1}R\bmod r_i$ for the corresponding row of
-        ``rns_layout.prime_ids(level, include_p=True)[1:]``. The table is
+        ``rns_layout.prime_ids(depth, include_p=True)[1:]``. The table is
         Montgomery-form scalar metadata, not a polynomial tensor. It is newly
         allocated and retained by the engine.
         """
 
-        self.rescale_dropped_q_inverses_montgomery_by_level: list[
+        self.rescale_dropped_q_inverses_montgomery_by_depth: list[
             torch.Tensor
         ] = []
-        for level in range(self.public_level_count):
+        for depth in range(self.public_depth_count):
             # Store the complete remaining QP interval. A Q ciphertext uses
             # its leading Q-only prefix; a QP ciphertext also consumes the P
-            # entries. This keeps one shared table per public level.
-            active_prime_ids = self.rns_layout.prime_ids(level, include_p=True)
+            # entries. This keeps one shared table per public depth.
+            active_prime_ids = self.rns_layout.prime_ids(depth, include_p=True)
             remaining_moduli = [
                 self.montgomery_parameters.moduli[index]
                 for index in active_prime_ids[1:]
@@ -2948,10 +2954,10 @@ class CkksEngine:
                 % modulus
                 for modulus in remaining_moduli
             ]
-            self.rescale_dropped_q_inverses_montgomery_by_level.append(
+            self.rescale_dropped_q_inverses_montgomery_by_depth.append(
                 torch.tensor(
                     dropped_q_inverses_montgomery,
-                    dtype=self.config.torch_dtype,
+                    dtype=self.rns_runtime.dtype,
                     device=self.device,
                 )
             )
@@ -2959,12 +2965,12 @@ class CkksEngine:
     def _create_keyswitch_moddown_parameters(self) -> None:
         r"""Build sequential P-ModDown dropped-prime inverse tables.
 
-        ``moddown_p_drop_inverses_montgomery_by_level[level]`` is a dense
+        ``moddown_p_drop_inverses_montgomery_by_depth[depth]`` is a dense
         engine-integral tensor on the engine device with layout
         ``[p_drop_step, surviving_limb]``. Valid entries store
         $p_{\mathrm{drop}}^{-1}R\bmod r_i$ for each surviving QP row after
         that sequential P-prime drop. Row order follows the active
-        ``prime_ids`` at ``level``; unused packed tail entries are never
+        ``prime_ids`` at ``depth``; unused packed tail entries are never
         consumed. Construction allocates engine-owned table storage.
         """
 
@@ -2992,15 +2998,15 @@ class CkksEngine:
                 torch.tensor(
                     row,
                     device=self.device,
-                    dtype=self.config.torch_dtype,
+                    dtype=self.rns_runtime.dtype,
                 )
             )
 
-        self.moddown_p_drop_inverses_montgomery_by_level: list[
+        self.moddown_p_drop_inverses_montgomery_by_depth: list[
             torch.Tensor
         ] = []
-        for level in range(self.public_level_count):
-            start = self.rns_layout.start_row(level)
+        for depth in range(self.public_depth_count):
+            start = self.rns_layout.start_row(depth)
             rows = [
                 base_rows[drop_step][start:]
                 for drop_step in range(self.config.num_p_primes)
@@ -3008,15 +3014,15 @@ class CkksEngine:
             max_len = max(row.numel() for row in rows)
             packed = torch.empty(
                 (len(rows), max_len),
-                dtype=self.config.torch_dtype,
+                dtype=self.rns_runtime.dtype,
                 device=self.device,
             )
             for row_id, row in enumerate(rows):
                 packed[row_id, : row.numel()] = row
-            self.moddown_p_drop_inverses_montgomery_by_level.append(packed)
+            self.moddown_p_drop_inverses_montgomery_by_depth.append(packed)
 
     def _create_p_product_montgomery_q(self) -> None:
-        r"""Build $PR\bmod q_i$ for every level-zero Q row.
+        r"""Build $PR\bmod q_i$ for every depth-zero Q row.
 
         The result has layout ``[q_limb]``, engine integral dtype/device,
         Montgomery scalar form, and row order
@@ -3032,7 +3038,7 @@ class CkksEngine:
         self.p_product_montgomery_q = torch.tensor(
             [pr % self.montgomery_parameters.moduli[index] for index in dest],
             device=self.device,
-            dtype=self.config.torch_dtype,
+            dtype=self.rns_runtime.dtype,
         )
 
     # ------------------------------------------------------------------
@@ -3154,10 +3160,10 @@ class CkksEngine:
         return plaintext
 
     # ------------------------------------------------------------------
-    # Internal scale and level transitions.
+    # Internal scale and depth transitions.
     # ------------------------------------------------------------------
 
-    def _rescale_final_public_level_to_structural_base(
+    def _rescale_max_depth_to_structural_base(
         self,
         ct: Ciphertext,
         *,
@@ -3165,11 +3171,11 @@ class CkksEngine:
     ) -> Ciphertext:
         """Rescale into the structural Q basis consumed by ModRaise.
 
-        This engine-owned transition connects the final public level to the
+        This engine-owned transition connects the final public depth to the
         private bootstrap representation.
         """
 
-        return self._rescaler._rescale_final_public_level_to_structural_base(
+        return self._rescaler._rescale_max_depth_to_structural_base(
             ct,
             rounding=rounding,
         )
@@ -3177,36 +3183,36 @@ class CkksEngine:
     def _validate_mod_switch_target(
         self,
         ct: Ciphertext,
-        target_level: int,
+        target_depth: int,
     ) -> None:
-        """Validate a full-layout ciphertext and one public target level."""
+        """Validate a full-layout ciphertext and one public target depth."""
 
         self._assert_engine_ciphertext(ct)
-        if type(target_level) is not int:
-            raise TypeError("target_level must be an integer")
-        if not ct.level <= target_level <= self.final_public_level:
+        if type(target_depth) is not int:
+            raise TypeError("target_depth must be an integer")
+        if not ct.depth <= target_depth <= self.max_depth:
             raise ValueError(
-                "mod_switch_to_level requires "
-                f"{ct.level} <= target_level <= {self.final_public_level}; "
-                f"got {target_level}."
+                "mod_switch_to_depth requires "
+                f"{ct.depth} <= target_depth <= {self.max_depth}; "
+                f"got {target_depth}."
             )
 
-    def _copy_at_level(
+    def _copy_at_depth(
         self,
         ct: Ciphertext,
-        target_level: int,
+        target_depth: int,
     ) -> Ciphertext:
-        """Copy a ciphertext onto an already resolved suffix level."""
+        """Copy a ciphertext onto an already resolved suffix depth."""
 
-        if target_level == ct.level:
+        if target_depth == ct.depth:
             return ct.clone()
-        rows_to_drop = target_level - ct.level
+        rows_to_drop = target_depth - ct.depth
         return self._ciphertext_from_components(
             [
                 ct.component(index)[..., rows_to_drop:, :]
                 for index in range(ct.component_count)
             ],
-            level=target_level,
+            depth=target_depth,
             scale=ct.scale,
             polynomial_domain=ct.polynomial_domain,
             modulus_basis=ct.modulus_basis,
@@ -3215,17 +3221,17 @@ class CkksEngine:
         )
 
     @staticmethod
-    def _restrict_to_level_(
+    def _restrict_to_depth_(
         ct: Ciphertext,
-        target_level: int,
+        target_depth: int,
     ) -> Ciphertext:
-        """Narrow a ciphertext onto an already resolved suffix level."""
+        """Narrow a ciphertext onto an already resolved suffix depth."""
 
-        rows_to_drop = target_level - ct.level
+        rows_to_drop = target_depth - ct.depth
         if rows_to_drop:
             ct.data = ct.data[..., rows_to_drop:, :]
             ct.prime_ids = ct.prime_ids[rows_to_drop:]
-            ct.level = target_level
+            ct.depth = target_depth
         return ct
 
     @staticmethod
@@ -3278,7 +3284,7 @@ class CkksEngine:
         This is not an encryption of zero and must not be treated as a
         semantically secure output ciphertext. The new allocation matches
         ``ct`` in component count, ``[*batch, limb, index]`` shape,
-        dtype/device, level, actual scale, domain, Q/QP basis, residue form, and
+        dtype/device, depth, actual scale, domain, Q/QP basis, residue form, and
         ``prime_ids``; it does not alias ``ct``.
         """
 
@@ -3288,7 +3294,7 @@ class CkksEngine:
                 torch.zeros_like(ct.component(i))
                 for i in range(ct.component_count)
             ],
-            level=ct.level,
+            depth=ct.depth,
             scale=ct.scale,
             polynomial_domain=ct.polynomial_domain,
             modulus_basis=ct.modulus_basis,
@@ -3305,12 +3311,12 @@ class CkksEngine:
         """Apply concrete key-switch material to an engine-local ciphertext."""
 
         correction0, correction1 = self._hybrid_key_switcher.apply_key_switch(
-            ct.c1, key, ct.level
+            ct.c1, key, ct.depth
         )
         switched_c0 = self.rns_runtime.add_standard(ct.c0, correction0)
         return self._ciphertext_from_components(
             [switched_c0, correction1],
-            level=ct.level,
+            depth=ct.depth,
             scale=ct.scale,
             polynomial_domain=ct.polynomial_domain,
             modulus_basis=ct.modulus_basis,
@@ -3399,10 +3405,10 @@ class CkksEngine:
         value is mutated.
         """
 
-        if plaintext.level != ct.level:
+        if plaintext.depth != ct.depth:
             raise ValueError(
-                f"Plaintext level {plaintext.level} does not match "
-                f"ciphertext level {ct.level}."
+                f"Plaintext depth {plaintext.depth} does not match "
+                f"ciphertext depth {ct.depth}."
             )
         if plaintext.data is None:
             raise ValueError(
@@ -3461,10 +3467,10 @@ class CkksEngine:
         ``[*batch, limb]`` shape and matching dtype/device. No mutation occurs.
         """
 
-        if plaintext.level != ct.level:
+        if plaintext.depth != ct.depth:
             raise ValueError(
-                f"CompressedPlaintext level {plaintext.level} does not match "
-                f"ciphertext level {ct.level}."
+                f"CompressedPlaintext depth {plaintext.depth} does not match "
+                f"ciphertext depth {ct.depth}."
             )
         if (
             plaintext.polynomial_domain != polynomial_domain
@@ -3484,14 +3490,14 @@ class CkksEngine:
                 "CompressedPlaintext data is on the wrong local device: "
                 f"{plaintext.data.device} != {self.device}"
             )
-        if plaintext.data.dtype != self.config.torch_dtype:
+        if plaintext.data.dtype != self.rns_runtime.dtype:
             raise TypeError(
                 "CompressedPlaintext dtype does not match engine: "
-                f"{plaintext.data.dtype} != {self.config.torch_dtype}"
+                f"{plaintext.data.dtype} != {self.rns_runtime.dtype}"
             )
         if (
             plaintext.implicit_data is not None
-            and plaintext.implicit_data.dtype != self.config.torch_dtype
+            and plaintext.implicit_data.dtype != self.rns_runtime.dtype
         ):
             raise TypeError(
                 "CompressedPlaintext implicit dtype does not match engine"
@@ -3743,7 +3749,7 @@ class CkksEngine:
             return results
 
         prepared = self._hybrid_key_switcher.prepare_rotation_digits(
-            ct.c1, ct.level
+            ct.c1, ct.depth
         )
         results = []
         for step, key in entries:
@@ -3754,7 +3760,7 @@ class CkksEngine:
             rotated_c0 = self._apply_rotation_automorphism(
                 ct.c0,
                 rotation_step=step,
-                level=ct.level,
+                depth=ct.depth,
                 include_p=ct.includes_p,
             )
             switched0, switched1 = (
@@ -3768,7 +3774,7 @@ class CkksEngine:
             results.append(
                 self._ciphertext_from_components(
                     [switched0, switched1],
-                    level=ct.level,
+                    depth=ct.depth,
                     scale=ct.scale,
                     polynomial_domain=ct.polynomial_domain,
                     modulus_basis=ct.modulus_basis,
@@ -3792,17 +3798,17 @@ class CkksEngine:
                 self._apply_rotation_automorphism(
                     ct.c0,
                     rotation_step=rotation_step,
-                    level=ct.level,
+                    depth=ct.depth,
                     include_p=ct.includes_p,
                 ),
                 self._apply_rotation_automorphism(
                     ct.c1,
                     rotation_step=rotation_step,
-                    level=ct.level,
+                    depth=ct.depth,
                     include_p=ct.includes_p,
                 ),
             ],
-            level=ct.level,
+            depth=ct.depth,
             scale=ct.scale,
             polynomial_domain=ct.polynomial_domain,
             modulus_basis=ct.modulus_basis,
@@ -3815,14 +3821,14 @@ class CkksEngine:
         component: torch.Tensor,
         *,
         rotation_step: int,
-        level: int,
+        depth: int,
         include_p: bool,
     ) -> torch.Tensor:
         r"""Apply the polynomial automorphism for one slot rotation.
 
         ``component`` is an engine-integral tensor on the engine device with
         layout ``[*batch, limb, coefficient]`` and standard residues; limb
-        order is the engine's Q or QP ``prime_ids`` at ``level``.
+        order is the engine's Q or QP ``prime_ids`` at ``depth``.
         For the Galois element $g$ derived from ``rotation_step``, the kernel
         computes $\sigma_g(c)(X)=c(X^g)$ in
         $R=\mathbb{Z}[X]/(X^N+1)$, including the coefficient sign induced by
@@ -3850,6 +3856,6 @@ class CkksEngine:
             source_indices,
             source_sign,
             self.rns_runtime.twice_modulus_for_basis(
-                level, include_p=include_p
+                depth, include_p=include_p
             ),
         )

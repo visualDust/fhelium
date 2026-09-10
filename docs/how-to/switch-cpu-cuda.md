@@ -35,7 +35,7 @@ import fhelium as fh
 import torch
 from fhelium.eager import Engine
 
-config = fh.CkksConfig.parse(fh.Preset.slots8192_scale40_levels7_int64)
+config = fh.CkksConfig.parse(fh.Preset.slots8192_scale40_depth7_int64)
 engine = Engine(config)
 
 torch.set_default_device("cuda:0")
@@ -94,7 +94,7 @@ cpu_slots = engine.decode(
 ```
 
 Without `device`, encrypt, decrypt, and decode inherit placement from their
-materialized plaintext or ciphertext. Movement preserves level, scale, prime
+materialized plaintext or ciphertext. Movement preserves depth, scale, prime
 IDs, polynomial domain, modulus basis, residue representation,
 and component count.
 

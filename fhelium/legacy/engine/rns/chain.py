@@ -11,7 +11,7 @@ class RnsChain:
 
     Prime ids follow the engine's parameter order ``[Q | P]``.
     For Q ids ``(0, ..., num_q_primes - 1)`` and P ids in the fixed suffix,
-    public level $\ell$ has
+    public depth $\ell$ has
 
     $$
     I_\ell=(\ell,\ldots,\mathtt{num\_q\_primes}-1),\qquad
@@ -33,7 +33,7 @@ class RnsChain:
             raise ValueError("key switching requires at least one P prime")
 
     @property
-    def rns_basis_level_count(self) -> int:
+    def rns_basis_depth_count(self) -> int:
         return self.num_q_primes
 
     @property
@@ -52,35 +52,35 @@ class RnsChain:
     def base_q_prime_id(self) -> int:
         return self.num_q_primes - 1
 
-    def check_level(self, level: int) -> None:
-        if not 0 <= level < self.rns_basis_level_count:
+    def check_depth(self, depth: int) -> None:
+        if not 0 <= depth < self.rns_basis_depth_count:
             raise ValueError(
-                f"level must be in [0, {self.rns_basis_level_count}), got {level}"
+                f"depth must be in [0, {self.rns_basis_depth_count}), got {depth}"
             )
 
-    def q_prime_ids_at_level(self, level: int) -> tuple[int, ...]:
+    def q_prime_ids_at_depth(self, depth: int) -> tuple[int, ...]:
         r"""Return ordered ids for $Q_\ell$."""
 
-        self.check_level(level)
-        return tuple(range(level, self.num_q_primes))
+        self.check_depth(depth)
+        return tuple(range(depth, self.num_q_primes))
 
-    def qp_prime_ids_at_level(self, level: int) -> tuple[int, ...]:
+    def qp_prime_ids_at_depth(self, depth: int) -> tuple[int, ...]:
         r"""Return ordered ids for $Q_\ell P$."""
 
-        return self.q_prime_ids_at_level(level) + self.p_prime_ids
+        return self.q_prime_ids_at_depth(depth) + self.p_prime_ids
 
     def prime_ids(
-        self, level: int, *, include_p: bool = False
+        self, depth: int, *, include_p: bool = False
     ) -> tuple[int, ...]:
         return (
-            self.qp_prime_ids_at_level(level)
+            self.qp_prime_ids_at_depth(depth)
             if include_p
-            else self.q_prime_ids_at_level(level)
+            else self.q_prime_ids_at_depth(depth)
         )
 
-    def parameter_rows(self, level: int, *, include_p: bool = False) -> slice:
+    def parameter_rows(self, depth: int, *, include_p: bool = False) -> slice:
         """Return the zero-copy interval for the selected basis."""
 
-        self.check_level(level)
+        self.check_depth(depth)
         stop = self.total_modulus_count if include_p else self.num_q_primes
-        return slice(level, stop)
+        return slice(depth, stop)

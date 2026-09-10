@@ -13,7 +13,7 @@ workflow.
 import fhelium as fh
 from fhelium.eager import Engine
 
-engine = Engine(fh.Preset.slots8192_scale40_levels7_int64)
+engine = Engine(fh.Preset.slots8192_scale40_depth7_int64)
 ```
 
 An eager `Engine` is process-local and creates device-specific arithmetic
@@ -37,7 +37,7 @@ ct_x = engine.encrypt_message(x)
 ct_y = engine.encrypt_message(y)
 ```
 
-The returned [`Ciphertext`](../api/fhelium/values/ciphertext.md#ciphertext) carries its level, scale,
+The returned [`Ciphertext`](../api/fhelium/values/ciphertext.md#ciphertext) carries its depth, scale,
 prime IDs, polynomial domain, modulus basis, and residue representation alongside one
 dense tensor.
 
@@ -48,7 +48,7 @@ ct_sum = engine.add(ct_x, ct_y)
 ```
 
 `add` is out of place and requires compatible ciphertext layouts. It does not
-change the level or scale.
+change the depth or scale.
 
 ## 4. Prepare and multiply ciphertexts
 
@@ -56,14 +56,15 @@ change the level or scale.
 mul_x = engine.coefficient_domain_to_ntt_domain(ct_x)
 mul_y = engine.coefficient_domain_to_ntt_domain(ct_y)
 product_triplet = engine.multiply(mul_x, mul_y)
-ct_product = engine.rescale_to_next_level(engine.relinearize(product_triplet))
+ct_product = engine.rescale_to_next_depth(engine.relinearize(product_triplet))
 ```
 
 FHElium deliberately does not hide rescale or relinearization. This makes the
-level, representation, and key-switch transitions visible to algorithms that
+depth, representation, and key-switch transitions visible to algorithms that
 reuse NTT-domain operands or delay relinearization. With default-scale inputs,
 the product carries scale $\Delta^2$; the post-relinearization rescale consumes
-one level and records the actual scale $\Delta^2/q_0$.
+one depth and records the actual scale $\Delta^2/M_0$, where $M_0$ is the
+product of the primes in the leading Q depth group.
 
 ## 5. Rotate with a key
 
@@ -93,7 +94,7 @@ for the scale, depth, input range, and workload.
 
 ## Related concepts and guides
 
-- [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md)
+- [Scale and depth lifecycle](../concepts/ckks/scale-and-depth-lifecycle.md)
 - [Value model and identity](../concepts/ckks/value-model-and-identity.md)
 - [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)
 - [Choose a preset and chain depth](../how-to/choose-preset-and-depth.md)

@@ -27,7 +27,7 @@ from fhelium import (
     RotationKeySet,
 )
 from fhelium.legacy.engine import CkksEngine
-from fhelium.errors import MaximumLevelError
+from fhelium.errors import MaximumDepthError
 
 
 def test_default_device_falls_back_to_included_cpu_backend(
@@ -41,7 +41,7 @@ def test_default_device_falls_back_to_included_cpu_backend(
         "native_backend_available",
         lambda backend: backend == "cpu",
     )
-    engine = CkksEngine(Preset.slots8192_scale40_levels7_int64)
+    engine = CkksEngine(Preset.slots8192_scale40_depth7_int64)
     assert engine.device == torch.device("cpu")
 
 
@@ -63,7 +63,7 @@ def engine(request: pytest.FixtureRequest) -> Iterator[CkksEngine]:
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
     instance = CkksEngine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         device=device,
     )
     yield instance
@@ -172,7 +172,7 @@ def _assert_decryption_error_distribution(
 @pytest.fixture(scope="module")
 def cpu_engine() -> CkksEngine:
     return CkksEngine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         device="cpu",
     )
 
@@ -198,7 +198,7 @@ def test_cpu_complete_ckks_engine_surface(cpu_engine: CkksEngine) -> None:
         engine.coefficient_domain_to_ntt_domain(source),
         engine.coefficient_domain_to_ntt_domain(rhs),
     )
-    product = engine.rescale_to_next_level(engine.relinearize(triplet))
+    product = engine.rescale_to_next_depth(engine.relinearize(triplet))
     _assert_decrypts_to(
         engine,
         product,
@@ -217,7 +217,7 @@ def test_cpu_complete_ckks_engine_surface(cpu_engine: CkksEngine) -> None:
     )
 
     prepared = engine.prepare_plaintext_for_addition(
-        engine.encode(other, level=source.level)
+        engine.encode(other, depth=source.depth)
     )
     _assert_decrypts_to(
         engine,
@@ -276,13 +276,13 @@ def _assert_same_rns_value_modulo_primes(
 @pytest.mark.parametrize(
     ("preset", "cuda_ntt_backend"),
     [
-        (Preset.slots8192_scale25_levels14_int32, "radix2_indexed"),
-        (Preset.slots16384_scale25_levels29_int32, "radix2_indexed"),
-        (Preset.slots32768_scale25_levels24_int32, None),
-        (Preset.slots65536_scale25_levels14_int32, "radix2_indexed"),
-        (Preset.slots8192_scale40_levels7_int64, "radix2_indexed"),
-        (Preset.slots16384_scale40_levels16_int64, None),
-        (Preset.slots32768_scale40_levels34_int64, "radix2_indexed"),
+        (Preset.slots8192_scale25_depth14_int32, "radix2_indexed"),
+        (Preset.slots16384_scale25_depth29_int32, "radix2_indexed"),
+        (Preset.slots32768_scale25_depth24_int32, None),
+        (Preset.slots65536_scale25_depth14_int32, "radix2_indexed"),
+        (Preset.slots8192_scale40_depth7_int64, "radix2_indexed"),
+        (Preset.slots16384_scale40_depth16_int64, None),
+        (Preset.slots32768_scale40_depth34_int64, "radix2_indexed"),
     ],
     ids=[
         "indexed-int32-p1",
@@ -294,7 +294,7 @@ def _assert_same_rns_value_modulo_primes(
         "indexed-int64-p4",
     ],
 )
-def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_levels(
+def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_depths(
     preset: Preset,
     cuda_ntt_backend: str | None,
 ) -> None:
@@ -331,27 +331,29 @@ def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_levels(
     cuda_rotation_key = cuda.rotation_key(1)
     assert_value(cpu_rotation_key, cuda_rotation_key)
 
-    levels = sorted(
+    # These product checks need Q capacity for an unrescaled squared scale.
+    # The terminal singleton basis is exercised by final-depth decryption.
+    depths = sorted(
         {
             0,
-            (config.num_scale_primes - 1) // 2,
-            config.num_scale_primes - 1,
+            (config.max_depth - 1) // 2,
+            config.max_depth - 1,
         }
     )
-    with pytest.raises(ValueError, match="level must satisfy"):
-        cpu.encrypt_message(message, level=config.num_scale_primes)
-    with pytest.raises(ValueError, match="level must satisfy"):
-        cuda.encrypt_message(message, level=config.num_scale_primes)
-    for level in levels:
-        cpu_ciphertext = cpu.encrypt_message(message, level=level)
-        cuda_ciphertext = cuda.encrypt_message(message, level=level)
+    with pytest.raises(ValueError, match="depth must satisfy"):
+        cpu.encrypt_message(message, depth=config.max_depth + 1)
+    with pytest.raises(ValueError, match="depth must satisfy"):
+        cuda.encrypt_message(message, depth=config.max_depth + 1)
+    for depth in depths:
+        cpu_ciphertext = cpu.encrypt_message(message, depth=depth)
+        cuda_ciphertext = cuda.encrypt_message(message, depth=depth)
         assert_value(cpu_ciphertext, cuda_ciphertext)
         _assert_decryption_error_distribution(
             cuda,
             cuda_ciphertext,
             message,
             p99_noise_factor=12.0,
-            operation=f"{preset.value} encrypt at level {level}",
+            operation=f"{preset.value} encrypt at depth {depth}",
         )
 
         cpu_ntt = cpu.coefficient_domain_to_ntt_domain(cpu_ciphertext)
@@ -370,7 +372,7 @@ def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_levels(
             cuda_relinearized,
             message * message,
             p99_noise_factor=0.5,
-            operation=f"{preset.value} relinearize at level {level}",
+            operation=f"{preset.value} relinearize at depth {depth}",
         )
 
         cpu_rotated = cpu.rotate_with_key(cpu_ciphertext, cpu_rotation_key)
@@ -381,19 +383,19 @@ def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_levels(
             cuda_rotated,
             torch.roll(message, shifts=1),
             p99_noise_factor=12.0,
-            operation=f"{preset.value} rotate at level {level}",
+            operation=f"{preset.value} rotate at depth {depth}",
         )
 
-        if level + 1 < config.num_scale_primes:
-            cpu_rescaled = cpu.rescale_to_next_level(cpu_relinearized)
-            cuda_rescaled = cuda.rescale_to_next_level(cuda_relinearized)
+        if depth + 1 < config.max_depth:
+            cpu_rescaled = cpu.rescale_to_next_depth(cpu_relinearized)
+            cuda_rescaled = cuda.rescale_to_next_depth(cuda_relinearized)
             assert_value(cpu_rescaled, cuda_rescaled)
             _assert_decryption_error_distribution(
                 cuda,
                 cuda_rescaled,
                 message * message,
                 p99_noise_factor=1.25,
-                operation=f"{preset.value} rescale at level {level}",
+                operation=f"{preset.value} rescale at depth {depth}",
             )
 
     del cpu, cuda
@@ -423,12 +425,12 @@ def _mixed_radix_integer_reference(
 @pytest.mark.parametrize(
     ("preset", "digit_rows"),
     [
-        (Preset.slots8192_scale25_levels14_int32, 2),
-        (Preset.slots8192_scale25_levels14_int32, 4),
-        (Preset.slots8192_scale25_levels14_int32, 6),
-        (Preset.slots8192_scale40_levels7_int64, 2),
-        (Preset.slots8192_scale40_levels7_int64, 4),
-        (Preset.slots8192_scale40_levels7_int64, 6),
+        (Preset.slots8192_scale25_depth14_int32, 2),
+        (Preset.slots8192_scale25_depth14_int32, 4),
+        (Preset.slots8192_scale25_depth14_int32, 6),
+        (Preset.slots8192_scale40_depth7_int64, 2),
+        (Preset.slots8192_scale40_depth7_int64, 4),
+        (Preset.slots8192_scale40_depth7_int64, 6),
     ],
     ids=[
         "int32-rows2",
@@ -446,10 +448,16 @@ def test_cuda_mixed_radix_decomposition_matches_integer_reference(
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
 
-    config = CkksConfig.parse(
-        preset,
-        num_scale_primes=max(digit_rows, 2),
-        num_p_primes=digit_rows,
+    source_config = CkksConfig.parse(
+        Preset.slots65536_scale25_depth14_int32
+        if "int32" in preset.value
+        else Preset.slots65536_scale40_depth72_int64
+    )
+    config = CkksConfig(
+        default_scale=source_config.default_scale,
+        q_depth_groups=source_config.q_depth_groups[: digit_rows + 2],
+        p_moduli=source_config.p_moduli[:digit_rows],
+        logN=12,
         enforce_security_budget=False,
     )
     cpu = CkksEngine(config, device="cpu", allow_sk_gen=False)
@@ -466,7 +474,7 @@ def test_cuda_mixed_radix_decomposition_matches_integer_reference(
     source = torch.empty(
         digit_rows,
         coefficient_count,
-        dtype=config.torch_dtype,
+        dtype=cpu.rns_runtime.dtype,
     )
     for row, modulus in enumerate(moduli):
         for coefficient in range(coefficient_count):
@@ -502,7 +510,7 @@ def test_cuda_rns_parameters_are_isolated_between_engines(
     """Contexts with different rings and RNS bases remain independent."""
 
     other_engine = CkksEngine(
-        Preset.slots16384_scale40_levels16_int64,
+        Preset.slots16384_scale40_depth16_int64,
         device="cuda:0",
     )
     try:
@@ -521,25 +529,25 @@ def test_cuda_rns_parameters_are_isolated_between_engines(
         torch.cuda.empty_cache()
 
 
-@pytest.mark.parametrize("level", [0, 3, 6])
+@pytest.mark.parametrize("depth", [0, 3, 6])
 def test_codec_encrypt_decrypt_and_convenience_paths_are_correct(
     engine: CkksEngine,
-    level: int,
+    depth: int,
 ) -> None:
     """Cover encode/decode, lazy plaintext, encrypt/decrypt and encrypt_message."""
 
     message = _message(engine)
 
-    eager = engine.encode(message, level=level)
-    assert eager.is_integer_coefficients and eager.level == level
+    eager = engine.encode(message, depth=depth)
+    assert eager.is_integer_coefficients and eager.depth == depth
     _assert_array_close(
         engine.decode(eager),
         message,
         atol=_CODEC_ATOL,
-        operation=f"encode/decode at level {level}",
+        operation=f"encode/decode at depth {depth}",
     )
 
-    lazy = engine.plaintext(message, level=level)
+    lazy = engine.plaintext(message, depth=depth)
     assert lazy.is_slots
     encrypted = engine.encrypt(lazy, engine.public_key)
     # Consuming operations materialize the required encoded state without
@@ -550,7 +558,7 @@ def test_codec_encrypt_decrypt_and_convenience_paths_are_correct(
         encrypted,
         message,
         atol=_CODEC_ATOL,
-        operation=f"plaintext/encrypt/decrypt_message at level {level}",
+        operation=f"plaintext/encrypt/decrypt_message at depth {depth}",
     )
 
     decrypted_plaintext = engine.decrypt(encrypted, engine.secret_key)
@@ -562,18 +570,18 @@ def test_codec_encrypt_decrypt_and_convenience_paths_are_correct(
         engine.decode(decrypted_plaintext),
         message,
         atol=_CODEC_ATOL,
-        operation=f"decrypt/decode at level {level}",
+        operation=f"decrypt/decode at depth {depth}",
     )
 
     convenience = engine.encrypt_message(
-        message, engine.public_key, level=level
+        message, engine.public_key, depth=depth
     )
     _assert_decrypts_to(
         engine,
         convenience,
         message,
         atol=_CODEC_ATOL,
-        operation=f"encrypt_message/decrypt_message at level {level}",
+        operation=f"encrypt_message/decrypt_message at depth {depth}",
     )
 
 
@@ -582,7 +590,7 @@ def test_int64_coefficients_wider_than_scale_prime_use_exact_rns_lift() -> None:
     """An int64 coefficient may still exceed a 40-bit active modulus."""
 
     engine = CkksEngine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         device="cuda:0",
     )
     message = torch.full((32,), 2.0e8, dtype=torch.float64)
@@ -634,7 +642,7 @@ def test_int64_coefficients_wider_than_scale_prime_use_exact_rns_lift() -> None:
 
 @pytest.mark.gpu
 def test_message_encryption_rejects_decoder_range_aliasing() -> None:
-    engine = CkksEngine(Preset.slots8192_scale40_levels7_int64, device="cuda:0")
+    engine = CkksEngine(Preset.slots8192_scale40_depth7_int64, device="cuda:0")
     message = torch.full((32,), 1.0e20, dtype=torch.float64)
 
     with pytest.raises(OverflowError, match="direct decoder range"):
@@ -668,7 +676,7 @@ def test_ntt_and_coefficient_state_round_trips_are_correct(
     assert round_trip.limb_count == source.limb_count
     assert round_trip.prime_ids == source.prime_ids
     assert round_trip.modulus_basis == source.modulus_basis
-    assert round_trip.level == source.level
+    assert round_trip.depth == source.depth
     assert round_trip.scale == source.scale
     _assert_decrypts_to(
         engine,
@@ -806,10 +814,10 @@ def test_plaintext_arithmetic_and_plaintext_zero_are_correct(
     factor_message = torch.full((engine.num_slots,), 1.5, dtype=torch.float64)
     source = engine.encrypt_message(message)
     addend = engine.prepare_plaintext_for_addition(
-        engine.encode(addend_message, level=source.level)
+        engine.encode(addend_message, depth=source.depth)
     )
     factor = engine.prepare_plaintext_for_multiplication(
-        engine.encode(factor_message, level=source.level)
+        engine.encode(factor_message, depth=source.depth)
     )
 
     added = engine.add_plaintext(source, addend)
@@ -841,10 +849,10 @@ def test_plaintext_arithmetic_and_plaintext_zero_are_correct(
 
     source_ntt = engine.coefficient_domain_to_ntt_domain(source)
     multiplied = engine.multiply_plaintext(source_ntt, factor)
-    assert multiplied.level == source.level
+    assert multiplied.depth == source.depth
     assert multiplied.polynomial_domain == "ntt"
     assert multiplied.residue_representation == "montgomery"
-    multiplied = engine.rescale_to_next_level(
+    multiplied = engine.rescale_to_next_depth(
         engine.ntt_domain_to_coefficient_domain(multiplied)
     )
     _assert_decrypts_to(
@@ -860,15 +868,15 @@ def test_plaintext_arithmetic_and_plaintext_zero_are_correct(
         engine.multiply_plaintext_(multiplied_inplace, factor)
         is multiplied_inplace
     )
-    assert multiplied_inplace.level == source.level
+    assert multiplied_inplace.depth == source.depth
     engine.ntt_domain_to_coefficient_domain_(multiplied_inplace)
-    engine.rescale_to_next_level_(multiplied_inplace)
+    engine.rescale_to_next_depth_(multiplied_inplace)
     _assert_decrypts_to(
         engine,
         multiplied_inplace,
         message * factor_message,
         atol=_MULTIPLICATION_ATOL,
-        operation="multiply_plaintext_ followed by explicit rescale_to_next_level_",
+        operation="multiply_plaintext_ followed by explicit rescale_to_next_depth_",
     )
 
     with pytest.raises(ValueError, match="expected 'ntt'"):
@@ -886,7 +894,7 @@ def test_plaintext_arithmetic_and_plaintext_zero_are_correct(
         operation="zero_plaintext_like(RNS coefficient state)",
     )
     lazy_zero = engine.zero_plaintext_like(
-        engine.plaintext(addend_message, level=source.level)
+        engine.plaintext(addend_message, depth=source.depth)
     )
     assert lazy_zero.is_slots
     _assert_array_close(
@@ -929,7 +937,7 @@ def test_multiply_and_relinearize_pipeline_is_correct(
         relinearized.is_coefficient_domain
         and relinearized.residue_representation == "standard"
     )
-    rescaled = engine.rescale_to_next_level(relinearized)
+    rescaled = engine.rescale_to_next_depth(relinearized)
     _assert_decrypts_to(
         engine,
         rescaled,
@@ -974,7 +982,7 @@ def test_multiply_matches_reference_component_convolution(
         right.data.data_ptr(),
     }
     assert actual.component_count == 3
-    assert actual.level == left.level
+    assert actual.depth == left.depth
     assert actual.scale == left.scale * right.scale
     assert actual.prime_ids == left.prime_ids
     assert actual.polynomial_domain == "ntt"
@@ -982,12 +990,20 @@ def test_multiply_matches_reference_component_convolution(
 
 
 @pytest.mark.gpu
-def test_final_legal_level_remains_decryptable() -> None:
-    """A short chain must support decryption at its last legal level."""
+def test_final_legal_depth_remains_decryptable() -> None:
+    """A short chain must support decryption at its last legal depth."""
 
+    base_config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
     engine = CkksEngine(
-        CkksConfig.parse(
-            Preset.slots8192_scale40_levels7_int64, num_scale_primes=3
+        CkksConfig(
+            default_scale=base_config.default_scale,
+            q_depth_groups=base_config.q_depth_groups[:3],
+            p_moduli=base_config.p_moduli,
+            logN=base_config.logN,
+            sigma=base_config.sigma,
+            security_bits=base_config.security_bits,
+            enforce_security_budget=False,
+            galois_generator=base_config.galois_generator,
         ),
         device="cuda:0",
     )
@@ -999,32 +1015,32 @@ def test_final_legal_level_remains_decryptable() -> None:
             dtype=torch.float64,
         )
         first = engine.coefficient_domain_to_ntt_domain(
-            engine.encrypt_message(message, level=0)
+            engine.encrypt_message(message, depth=0)
         )
         second = engine.coefficient_domain_to_ntt_domain(
-            engine.encrypt_message(message, level=0)
+            engine.encrypt_message(message, depth=0)
         )
-        product = engine.rescale_to_next_level(
+        product = engine.rescale_to_next_depth(
             engine.relinearize(engine.multiply(first, second))
         )
         product = engine.coefficient_domain_to_ntt_domain(product)
         third = engine.coefficient_domain_to_ntt_domain(
-            engine.encrypt_message(message, level=1)
+            engine.encrypt_message(message, depth=1)
         )
-        final_product = engine.rescale_to_next_level(
+        final_product = engine.rescale_to_next_depth(
             engine.relinearize(engine.multiply(product, third))
         )
 
-        assert final_product.level == engine.final_public_level
+        assert final_product.depth == engine.max_depth
         _assert_decrypts_to(
             engine,
             final_product,
             message**3,
             atol=_MULTIPLICATION_ATOL,
-            operation="decryption at final legal level",
+            operation="decryption at final legal depth",
         )
-        with pytest.raises(MaximumLevelError):
-            engine.rescale_to_next_level(final_product)
+        with pytest.raises(MaximumDepthError):
+            engine.rescale_to_next_depth(final_product)
     finally:
         del engine
         gc.collect()
@@ -1046,11 +1062,11 @@ def test_explicit_key_switch_changes_key_without_changing_message(
     )
     key_data_ref = weakref.ref(switching_key.data)
 
-    for level in (0, 3):
+    for depth in (0, 3):
         source = engine.encrypt_message(
             message,
             source_public_key,
-            level=level,
+            depth=depth,
         )
         switched = engine.switch_key(source, switching_key)
         _assert_decrypts_to(
@@ -1058,7 +1074,7 @@ def test_explicit_key_switch_changes_key_without_changing_message(
             switched,
             message,
             atol=_KEYSWITCH_ATOL,
-            operation=f"switch_key at level {level}",
+            operation=f"switch_key at depth {depth}",
             secret_key=destination_secret_key,
         )
 
@@ -1081,7 +1097,7 @@ def test_explicit_key_installation_drives_correct_operations() -> None:
     """Installed public, relinearization, and rotation keys are operational."""
 
     engine = CkksEngine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         device="cuda:0",
         allow_sk_gen=False,
     )
@@ -1116,7 +1132,7 @@ def test_explicit_key_installation_drives_correct_operations() -> None:
         )
 
         prepared = engine.coefficient_domain_to_ntt_domain(source)
-        squared = engine.rescale_to_next_level(
+        squared = engine.rescale_to_next_depth(
             engine.relinearize(engine.multiply(prepared, prepared))
         )
         _assert_decrypts_to(

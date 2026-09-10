@@ -112,7 +112,10 @@ class HoistRotationsPass:
                     if normalized is None or normalized == 0:
                         flush()
                         continue
-                    if run and operation.value is not run[0][0].value:
+                    if run and (
+                        operation.value is not run[0][0].value
+                        or operation.output_domain != run[0][0].output_domain
+                    ):
                         flush()
                     run.append((operation, normalized))
                 flush()
@@ -139,6 +142,7 @@ class HoistRotationsPass:
             first.value,
             keys,
             tuple(result_types),  # type: ignore[arg-type]
+            output_domain=first.output_domain.data,  # type: ignore[arg-type]
         )
         for (source, _), result in zip(group, hoisted.results, strict=True):
             result.name_hint = source.result.name_hint

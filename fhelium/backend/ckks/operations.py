@@ -14,9 +14,10 @@ from fhelium.backend.ckks.crypto._galois import (
 )
 from fhelium.backend.implementation import OperationInvocation
 from fhelium.backend.ntt.context import NttContext
+from fhelium.backend.ntt.executors.compact_radix2 import CompactRadix2NttBackend
 from fhelium.backend.ntt.resources import NTT_RESOURCE_KIND
 from fhelium.backend.resources import BoundResource, ResourceRequirement
-from fhelium.backend.rns._operand_state import _active_level, _operand_basis
+from fhelium.backend.rns._operand_state import _active_depth, _operand_basis
 from fhelium.backend.rns.context import RnsContext
 from fhelium.backend.rns.resources import RNS_RESOURCE_KIND
 from fhelium.values import KeySwitchKey, RelinearizationKey, RotationKey
@@ -24,10 +25,13 @@ from fhelium.ir.dialects import ckks, rns
 from fhelium.native.wrapper import ckks_ops, rns_ops
 
 from .resources import (
+    CONJUGATION_KEY_RESOURCE_KIND,
+    KEY_SWITCH_KEY_RESOURCE_KIND,
     KEY_SWITCH_PLAN_RESOURCE_KIND,
     RELINEARIZATION_KEY_RESOURCE_KIND,
     KeySwitchExecutionResource,
 )
+from ._moddown import moddown_ntt_qp_to_q
 
 
 def _key_switch_contexts(
@@ -53,21 +57,21 @@ def _hybrid_modup_digit(
     source: torch.Tensor,
     *,
     rns_context: RnsContext,
-    level: int,
+    depth: int,
     digit_index: int,
 ) -> torch.Tensor:
     """Extend one coefficient-domain Q digit into active QP rows."""
 
-    digit_spec = rns_context.rns_layout.digit_specs(level)[digit_index]
+    digit_spec = rns_context.rns_layout.digit_specs(depth)[digit_index]
     source_rows = digit_spec.component_row_ids
     mixed = source[..., source_rows[0] : source_rows[-1] + 1, :]
     digit_width = len(source_rows)
     row_parameters = rns_context.row_parameters(digit_spec.prime_ids)
     if digit_width > 1:
-        if digit_width > 8:
+        if digit_width > 16:
             raise ValueError(
                 "native streaming key switching supports digit widths "
-                "through eight"
+                "through sixteen"
             )
         normalizers = row_parameters.mixed_radix_normalizers
         propagation = row_parameters.mixed_radix_propagation_coefficients
@@ -87,7 +91,7 @@ def _hybrid_modup_digit(
             neg_inv_lo.contiguous(),
             neg_inv_hi.contiguous(),
         )
-    active_basis = rns_context.basis_parameters(level, include_p=True)
+    active_basis = rns_context.basis_parameters(depth, include_p=True)
     basis_extension = row_parameters.basis_extension_coefficients
     if basis_extension is None:
         basis_extension = torch.empty(
@@ -113,24 +117,28 @@ def _stream_key_switch_corrections(
     ntt_context: NttContext,
     plan: KeySwitchExecutionResource,
     key: KeySwitchKey,
-    level: int,
+    depth: int,
+    output_ntt: bool = False,
+    coefficient_c0: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Stream one coefficient-domain Q component through hybrid key switching."""
+    """Stream a coefficient Q component and return Q key-switch corrections.
 
-    qp_parameters = rns_context.basis_parameters(level, include_p=True)
+    Compact radix-2 resources consume each digit's NTT evaluations in the
+    key-product tail kernel. Other NTT resources use a transform followed by
+    key multiplication. Each digit scratch is released before preparing the
+    next one. NTT output may combine coefficient c0 into the correction first.
+    """
+
+    qp_parameters = rns_context.basis_parameters(depth, include_p=True)
     accumulator: torch.Tensor | None = None
     for digit_index, digit_spec in enumerate(
-        rns_context.rns_layout.digit_specs(level)
+        rns_context.rns_layout.digit_specs(depth)
     ):
         lifted = _hybrid_modup_digit(
             source,
             rns_context=rns_context,
-            level=level,
+            depth=depth,
             digit_index=digit_index,
-        )
-        ntt_context.forward_montgomery_(
-            lifted,
-            parameter_row_start=qp_parameters.parameter_row_start,
         )
         if accumulator is None:
             accumulator = torch.zeros(
@@ -138,30 +146,135 @@ def _stream_key_switch_corrections(
                 dtype=lifted.dtype,
                 device=lifted.device,
             )
-        ckks_ops.keyswitch_accumulate_digit_products_(
-            accumulator[0],
-            accumulator[1],
-            lifted,
-            key.digit(digit_spec.key_digit_index),
-            qp_parameters.native_parameters,
-            qp_parameters.parameter_row_start,
-        )
+        backend = ntt_context.ntt_backend
+        if isinstance(backend, CompactRadix2NttBackend):
+            backend.forward_montgomery_accumulate_key_(
+                lifted,
+                key.digit(digit_spec.key_digit_index),
+                accumulator,
+                qp_parameters.parameter_row_start,
+            )
+        else:
+            ntt_context.forward_montgomery_(
+                lifted,
+                parameter_row_start=qp_parameters.parameter_row_start,
+            )
+            ckks_ops.keyswitch_accumulate_digit_products_(
+                accumulator[0],
+                accumulator[1],
+                lifted,
+                key.digit(digit_spec.key_digit_index),
+                qp_parameters.native_parameters,
+                qp_parameters.parameter_row_start,
+            )
+        del lifted
     if accumulator is None:
         raise ValueError("Key switching requires at least one RNS digit")
 
-    for component in accumulator.unbind(0):
-        ntt_context.inverse_to_standard_(
-            component,
-            parameter_row_start=qp_parameters.parameter_row_start,
+    if output_ntt:
+        return moddown_ntt_qp_to_q(
+            accumulator, plan, depth, coefficient_c0=coefficient_c0
         )
+
+    ntt_context.inverse_to_standard_(
+        accumulator,
+        parameter_row_start=qp_parameters.parameter_row_start,
+    )
     p_count = rns_context.config.num_p_primes
-    inverses = plan.moddown_tables[level]
+    inverses = plan.moddown_tables[depth]
     return ckks_ops.keyswitch_moddown_qp_to_q(
         accumulator[..., :-p_count, :],
         accumulator[..., -p_count:, :],
         inverses,
         qp_parameters.native_parameters,
     )
+
+
+@dataclass(frozen=True)
+class NativeKeySwitchImplementation:
+    r"""Switch CT2 secret relations with a shared streaming QP accumulator.
+
+    For input phase $c_0+c_1s_{src}$, the key produces corrections
+    $(d_0,d_1)$ under $s_{dst}$ and the result is $(c_0+d_0,d_1)$.
+    Conjugation first applies $X\mapsto X^{-1}$ to both components.
+    Inputs and outputs use coefficient-domain standard Q residues.
+    """
+
+    supports_in_place: bool = False
+    name: str = "native-key-switch-streaming"
+    operation_types: tuple[type[Operation], ...] = (
+        ckks.SwitchKeyOp,
+        ckks.ConjugateOp,
+    )
+
+    def resource_requirements(
+        self, invocation: OperationInvocation
+    ) -> tuple[ResourceRequirement, ...]:
+        key_requirement = (
+            ResourceRequirement(
+                "conjugation-key", CONJUGATION_KEY_RESOURCE_KIND
+            )
+            if invocation.operation_type is ckks.ConjugateOp
+            else ResourceRequirement(
+                str(invocation.attributes["key_symbol"]),
+                KEY_SWITCH_KEY_RESOURCE_KIND,
+            )
+        )
+        return (
+            ResourceRequirement("active-rns-parameters", RNS_RESOURCE_KIND),
+            ResourceRequirement("active-ntt-plan", NTT_RESOURCE_KIND),
+            ResourceRequirement(
+                "active-key-switch-plan", KEY_SWITCH_PLAN_RESOURCE_KIND
+            ),
+            key_requirement,
+        )
+
+    def execute(
+        self,
+        invocation: OperationInvocation,
+        inputs: tuple[torch.Tensor, ...],
+        resources: tuple[BoundResource, ...],
+        *,
+        in_place: bool,
+    ) -> tuple[torch.Tensor, ...]:
+        del in_place
+        source = inputs[0]
+        if source.size(0) != 2:
+            raise ValueError("Key switching requires ciphertext components=2")
+        rns_context, ntt_context, plan = _key_switch_contexts(resources)
+        key = cast(KeySwitchKey, resources[3].value)
+        depth = _active_depth(source, rns_context, include_p=False)
+        if invocation.operation_type is ckks.ConjugateOp:
+            indices, signs = coefficient_galois_gather_indices(
+                rns_context.config.N,
+                2 * rns_context.config.N - 1,
+                source.device,
+            )
+            source = ckks_ops.apply_coefficient_galois_automorphism(
+                source,
+                indices,
+                signs,
+                rns_context.twice_modulus_for_basis(depth, include_p=False),
+            )
+        output_ntt = (
+            invocation.attributes.get("output_domain", "coefficient") == "ntt"
+        )
+        corrections = _stream_key_switch_corrections(
+            source[1],
+            rns_context=rns_context,
+            ntt_context=ntt_context,
+            plan=plan,
+            key=key,
+            depth=depth,
+            output_ntt=output_ntt,
+            coefficient_c0=source[0],
+        )
+        if output_ntt:
+            return (corrections,)
+        result0 = rns_context.add_standard(
+            source[0], corrections[0], include_p=False
+        )
+        return (torch.stack((result0, corrections[1]), dim=0),)
 
 
 @dataclass(frozen=True)
@@ -247,7 +360,6 @@ class NativeRelinearizeImplementation:
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
         del in_place
-        del invocation
         source = inputs[0]
         if source.size(0) != 3:
             raise ValueError(
@@ -257,24 +369,27 @@ class NativeRelinearizeImplementation:
         rns_context, ntt_context, plan = _key_switch_contexts(resources)
         key = cast(RelinearizationKey, resources[3].value)
 
-        level = _active_level(source, rns_context, include_p=False)
-        q_parameters = rns_context.basis_parameters(level, include_p=False)
-        coefficient = source.clone()
-        for component in coefficient.unbind(0):
-            ntt_context.inverse_to_standard_(
-                component,
-                parameter_row_start=q_parameters.parameter_row_start,
-            )
-        switched_component = coefficient[2]
-
+        depth = _active_depth(source, rns_context, include_p=False)
+        output_ntt = (
+            invocation.attributes.get("output_domain", "coefficient") == "ntt"
+        )
+        switched_component = source[2].clone()
+        ntt_context.inverse_to_standard_(switched_component)
         corrections = _stream_key_switch_corrections(
             switched_component,
             rns_context=rns_context,
             ntt_context=ntt_context,
             plan=plan,
             key=key,
-            level=level,
+            depth=depth,
+            output_ntt=output_ntt,
         )
+        if output_ntt:
+            return (
+                rns_context.add_lazy(source[:2], corrections, include_p=False),
+            )
+        coefficient = source[:2].clone()
+        ntt_context.inverse_to_standard_(coefficient)
         return (
             rns_context.add_standard(
                 coefficient[:2],
@@ -291,11 +406,42 @@ class NativeRotateImplementation:
     supports_in_place: bool = False
     name: str = "native-rotate-streaming"
     operation_types: tuple[type[Operation], ...] = (ckks.RotateOp,)
+    _ntt_galois_source_index_cache: dict[
+        tuple[int, int, int, str], torch.Tensor
+    ] = field(default_factory=dict, init=False, repr=False, compare=False)
+
+    def _ntt_galois_source_indices(
+        self,
+        n: int,
+        generator: int,
+        rotation_step: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        cache_key = (n, generator, rotation_step % n, str(device))
+        cached = self._ntt_galois_source_index_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        source = torch.arange(n, dtype=torch.int64, device=device)
+        remaining = source.clone()
+        bit_reversed = torch.zeros_like(source)
+        for _ in range(n.bit_length() - 1):
+            bit_reversed = (bit_reversed << 1) | (remaining & 1)
+            remaining >>= 1
+        destination_exponents = 2 * bit_reversed + 1
+        exponent = -rotation_step if generator == 5 else rotation_step
+        galois_element = pow(generator, exponent % n, 2 * n)
+        source_bit_reversed = (
+            (destination_exponents * galois_element) % (2 * n) - 1
+        ) // 2
+        indices = bit_reversed.index_select(
+            0, source_bit_reversed.to(torch.long)
+        ).to(torch.int32)
+        self._ntt_galois_source_index_cache[cache_key] = indices
+        return indices
 
     def resource_requirements(
         self, invocation: OperationInvocation
     ) -> tuple[ResourceRequirement, ...]:
-        del invocation
         return (
             ResourceRequirement(
                 "active-rns-parameters",
@@ -320,7 +466,6 @@ class NativeRotateImplementation:
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
         del in_place
-        del invocation
         source = inputs[0]
         if source.size(0) != 2:
             raise ValueError(
@@ -339,28 +484,67 @@ class NativeRotateImplementation:
             exponent % rns_context.config.N,
             2 * rns_context.config.N,
         )
-        level = _active_level(source, rns_context, include_p=False)
-        source_indices, source_sign = coefficient_galois_gather_indices(
-            rns_context.config.N,
-            galois_element,
-            source.device,
+        depth = _active_depth(source, rns_context, include_p=False)
+        input_ntt = (
+            invocation.attributes.get("input_domain", "coefficient") == "ntt"
         )
-        rotated = ckks_ops.apply_coefficient_galois_automorphism(
-            source,
-            source_indices,
-            source_sign,
-            rns_context.twice_modulus_for_basis(level, include_p=False),
+        if input_ntt:
+            source_indices = self._ntt_galois_source_indices(
+                rns_context.config.N,
+                plan.galois_generator,
+                key.rotation_step,
+                source.device,
+            )
+            rotated = ckks_ops.apply_ntt_galois_automorphism(
+                source, source_indices
+            )
+            switched_component = rotated[1].clone()
+            ntt_context.inverse_to_standard_(switched_component)
+        else:
+            source_indices, source_sign = coefficient_galois_gather_indices(
+                rns_context.config.N,
+                galois_element,
+                source.device,
+            )
+            rotated = ckks_ops.apply_coefficient_galois_automorphism(
+                source,
+                source_indices,
+                source_sign,
+                rns_context.twice_modulus_for_basis(depth, include_p=False),
+            )
+            switched_component = rotated[1]
+        output_ntt = (
+            invocation.attributes.get("output_domain", "coefficient") == "ntt"
         )
         corrections = _stream_key_switch_corrections(
-            rotated[1],
+            switched_component,
             rns_context=rns_context,
             ntt_context=ntt_context,
             plan=plan,
             key=key,
-            level=level,
+            depth=depth,
+            output_ntt=output_ntt,
+            coefficient_c0=rotated[0] if output_ntt and not input_ntt else None,
         )
+        if output_ntt:
+            return (
+                torch.stack(
+                    (
+                        rns_context.add_lazy(
+                            rotated[0], corrections[0], include_p=False
+                        ),
+                        corrections[1],
+                    )
+                )
+                if input_ntt
+                else corrections,
+            )
+        component0 = rotated[0]
+        if input_ntt:
+            component0 = component0.clone()
+            ntt_context.inverse_to_standard_(component0)
         result0 = rns_context.add_standard(
-            rotated[0],
+            component0,
             corrections[0],
             include_p=False,
         )
@@ -513,8 +697,8 @@ class NativeKeySwitchDigitProductImplementation:
             )
         accumulator0 = torch.zeros_like(digit)
         accumulator1 = torch.zeros_like(digit)
-        level = _active_level(digit, rns_context, include_p=True)
-        active = rns_context.basis_parameters(level, include_p=True)
+        depth = _active_depth(digit, rns_context, include_p=True)
+        active = rns_context.basis_parameters(depth, include_p=True)
         ckks_ops.keyswitch_accumulate_digit_products_(
             accumulator0,
             accumulator1,
@@ -528,11 +712,14 @@ class NativeKeySwitchDigitProductImplementation:
 
 @dataclass(frozen=True)
 class NativeKeySwitchModDownImplementation:
-    """Divide a coefficient QP key-switch accumulator by P into active Q."""
+    """Divide QP accumulators by P in coefficient or NTT representation."""
 
     name: str = "native-key-switch-moddown"
     supports_in_place: bool = False
-    operation_types: tuple[type[Operation], ...] = (rns.ModDownQpToQOp,)
+    operation_types: tuple[type[Operation], ...] = (
+        rns.ModDownQpToQOp,
+        rns.ModDownNttQpToQOp,
+    )
 
     def resource_requirements(
         self, invocation: OperationInvocation
@@ -548,7 +735,6 @@ class NativeKeySwitchModDownImplementation:
         *,
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
-        del invocation
         del in_place
         if len(values) != 1:
             raise ValueError("Key-switch ModDown requires one accumulator")
@@ -557,13 +743,17 @@ class NativeKeySwitchModDownImplementation:
             raise ValueError(
                 "Key-switch ModDown requires two correction components"
             )
+        if invocation.operation_type is rns.ModDownNttQpToQOp:
+            rns_context, _, plan = _key_switch_contexts(resources)
+            depth = _active_depth(source, rns_context, include_p=True)
+            return (moddown_ntt_qp_to_q(source, plan, depth),)
         rns_context = cast(RnsContext, resources[0].value)
         plan = cast(KeySwitchExecutionResource, resources[1].value)
-        level = _active_level(source, rns_context, include_p=True)
+        depth = _active_depth(source, rns_context, include_p=True)
         p_count = rns_context.config.num_p_primes
-        inverses = plan.moddown_tables[level]
+        inverses = plan.moddown_tables[depth]
         parameters = rns_context.basis_parameters(
-            level, include_p=True
+            depth, include_p=True
         ).native_parameters
         corrections = tuple(
             ckks_ops.keyswitch_moddown_qp_to_q(
@@ -612,7 +802,7 @@ class NativeHoistedRotateManyImplementation:
             config=rns_context.config,
             rns_context=rns_context,
             ntt_context=ntt_context,
-            moddown_p_drop_inverses_montgomery_by_level=plan.moddown_tables,
+            moddown_p_drop_inverses_montgomery_by_depth=plan.moddown_tables,
             galois_generator=plan.galois_generator,
         )
         object.__setattr__(
@@ -664,30 +854,127 @@ class NativeHoistedRotateManyImplementation:
             resources,
             offset=key_count,
         )
-        level = _active_level(source, rns_context, include_p=False)
+        depth = _active_depth(source, rns_context, include_p=False)
         executor = self._executor(plan, rns_context, ntt_context)
-        prepared = executor.prepare(source[1], level)
+        prepared = executor.prepare(source[1], depth)
+        output_ntt = (
+            invocation.attributes.get("output_domain", "coefficient") == "ntt"
+        )
+        c0_ntt = (
+            ntt_context.forward_to_montgomery(
+                source[0],
+                parameter_row_start=rns_context.basis_parameters(depth).parameter_row_start,
+            )
+            if output_ntt
+            else None
+        )
         outputs: list[torch.Tensor] = []
         for key_binding in resources[:key_count]:
             key = cast(RotationKey, key_binding.value)
-            rotated_c0 = executor.rotate_component(
-                source[0],
-                level=level,
-                key=key,
-            )
-            output0, output1 = executor.apply(
-                rotated_c0,
-                prepared,
-                key,
-            )
+            if c0_ntt is not None:
+                output0, output1 = executor.apply_ntt(
+                    c0_ntt, prepared, key, plan
+                )
+            else:
+                rotated_c0 = executor.rotate_component(
+                    source[0],
+                    depth=depth,
+                    key=key,
+                )
+                output0, output1 = executor.apply(rotated_c0, prepared, key)
             outputs.append(torch.stack((output0, output1), dim=0))
         return tuple(outputs)
+
+
+@dataclass(frozen=True)
+class NativeGroupedRotationWeightedSumImplementation:
+    """Execute one supplied direct-rotation/plaintext group matrix."""
+
+    supports_in_place: bool = False
+    name: str = "native-grouped-rotation-weighted-sum"
+    operation_types: tuple[type[Operation], ...] = (
+        ckks.GroupedRotationWeightedSumOp,
+    )
+    _hoisted: NativeHoistedRotateManyImplementation = field(
+        default_factory=NativeHoistedRotateManyImplementation,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def resource_requirements(
+        self,
+        invocation: OperationInvocation,
+    ) -> tuple[ResourceRequirement, ...]:
+        del invocation
+        return (
+            ResourceRequirement("active-rns-parameters", RNS_RESOURCE_KIND),
+            ResourceRequirement("active-ntt-plan", NTT_RESOURCE_KIND),
+            ResourceRequirement(
+                "active-key-switch-plan", KEY_SWITCH_PLAN_RESOURCE_KIND
+            ),
+        )
+
+    def execute(
+        self,
+        invocation: OperationInvocation,
+        inputs: tuple[torch.Tensor, ...],
+        resources: tuple[BoundResource, ...],
+        *,
+        in_place: bool,
+    ) -> tuple[torch.Tensor, ...]:
+        del in_place
+        steps = cast(tuple[int, ...], invocation.attributes["baby_steps"])
+        term_count = cast(int, invocation.attributes["term_count"])
+        group_count = cast(int, invocation.attributes["group_count"])
+        key_count = sum(step != 0 for step in steps)
+        if (
+            len(steps) != term_count
+            or len(inputs) != 1 + term_count * group_count
+            or len(resources) != key_count + 3
+        ):
+            raise ValueError(
+                "Grouped rotation weighted-sum input or resource count differs"
+            )
+        source = inputs[0]
+        rns_context, ntt_context, plan = _key_switch_contexts(
+            resources, offset=key_count
+        )
+        depth = _active_depth(source, rns_context, include_p=False)
+        executor = self._hoisted._executor(plan, rns_context, ntt_context)
+        prepared = executor.prepare(source[1], depth)
+        source_ntt = ntt_context.forward_to_montgomery(
+            source,
+            parameter_row_start=rns_context.basis_parameters(depth).parameter_row_start,
+        )
+        keys = iter(resources[:key_count])
+        babies: list[torch.Tensor] = []
+        for step in steps:
+            if step == 0:
+                babies.append(source_ntt)
+                continue
+            key = cast(RotationKey, next(keys).value)
+            output0, output1 = executor.apply_ntt(
+                source_ntt[0], prepared, key, plan
+            )
+            babies.append(torch.stack((output0, output1), dim=0))
+        parameters = rns_context.rns_parameters_for(babies[0], include_p=False)
+        return (
+            rns_ops.montgomery_weighted_sums(
+                babies,
+                list(inputs[1:]),
+                group_count,
+                parameters,
+            ),
+        )
 
 
 __all__ = [
     "NativeCiphertextMultiplyImplementation",
     "NativeHoistedRotateManyImplementation",
+    "NativeGroupedRotationWeightedSumImplementation",
     "NativeKeySwitchDigitProductImplementation",
+    "NativeKeySwitchImplementation",
     "NativeKeySwitchModDownImplementation",
     "NativeRelinearizeImplementation",
     "NativeRotateImplementation",

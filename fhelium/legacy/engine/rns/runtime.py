@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 
+from fhelium.backend.rns.format import RnsExecutionFormat
 from fhelium.config.ckks import CkksConfig
 from fhelium.config.ntt import (
     DEFAULT_CPU_NTT_BACKEND,
@@ -27,7 +28,7 @@ class RnsRuntime:
     Unless a method states otherwise, an RNS operand is an integral tensor
     with shape ``[*batch, limb, coefficient_or_ntt_index]`` and final extent
     $N$. Limb row ``j`` represents the modulus whose parameter id is
-    ``prime_ids[j]``.  Public full-basis calls derive those ids from ``level``
+    ``prime_ids[j]``.  Public full-basis calls derive those ids from ``depth``
     and internal calls supply ``parameter_row_start`` for a contiguous
     row interval.  ``include_p`` is only this internal row selector; it is not
     public ``modulus_basis`` metadata.
@@ -73,6 +74,7 @@ class RnsRuntime:
         self.ntt_backend_name = self.ntt_policy.name
 
         self.config: CkksConfig = ckks_config
+        self.dtype = RnsExecutionFormat.select(ckks_config.moduli).dtype
         self.montgomery_parameters = MontgomeryParameters(ckks_config)
 
         self.rns_chain = RnsChain(
@@ -91,9 +93,9 @@ class RnsRuntime:
             for index in self.rns_layout.prime_ids(0, include_p=True)
         ]
 
-        self.level_row_starts = [
-            self.rns_layout.start_row(level)
-            for level in range(self.rns_basis_level_count)
+        self.depth_row_starts = [
+            self.rns_layout.start_row(depth)
+            for depth in range(self.rns_basis_depth_count)
         ]
         self.qp_row_stop = len(self.rns_layout.prime_ids(0, include_p=True))
         self.q_row_stop = len(self.rns_layout.prime_ids(0))
@@ -101,10 +103,10 @@ class RnsRuntime:
         self._build_parameter_store()
 
     @property
-    def rns_basis_level_count(self) -> int:
-        """Number of RNS row-suffix levels, including private structural levels."""
+    def rns_basis_depth_count(self) -> int:
+        """Number of RNS row-suffix depths, including private structural depths."""
 
-        return self.rns_chain.rns_basis_level_count
+        return self.rns_chain.rns_basis_depth_count
 
     # -------------------------------------------------------------------------------------------------
     # Arrange according to partitioning scheme input variables, and copy to GPUs for fast access.
@@ -113,7 +115,7 @@ class RnsRuntime:
     def _materialize_parameter_rows(self, variable) -> torch.Tensor:
         """Select this rank's QP row order into one tensor."""
 
-        source = torch.as_tensor(variable, dtype=self.config.torch_dtype)
+        source = torch.as_tensor(variable, dtype=self.dtype)
         row_ids = torch.tensor(
             self.rns_layout.prime_ids(0, include_p=True),
             dtype=torch.long,
@@ -134,7 +136,7 @@ class RnsRuntime:
         return self._materialize_parameter_rows(values)
 
     def _prepare_runtime_parameters(self):
-        scale = 2**self.config.scale_bits
+        scale = round(self.config.default_scale)
         self.scaled_montgomery_r2 = self._materialize_parameter_rows(
             [
                 (montgomery_r2 * scale) % q
@@ -178,7 +180,7 @@ class RnsRuntime:
             self._prepare_inverse_ntt_scale_montgomery()
         )
 
-        # Integral tensor [parameter, limb] in level-zero QP
+        # Integral tensor [parameter, limb] in depth-zero QP
         # prime-id order. Parameter rows are [2q_i, q_i low, q_i high,
         # -q_i^{-1} low, -q_i^{-1} high, R^2 mod q_i,
         # Delta_0 R^2 mod q_i, N^{-1} R mod q_i]. The scaled-R2 row remains
@@ -220,9 +222,9 @@ class RnsRuntime:
             rns_layout=self.rns_layout,
             montgomery_parameters=self.montgomery_parameters,
             device=self.device,
-            torch_dtype=self.config.torch_dtype,
-            rns_basis_level_count=self.rns_basis_level_count,
-            level_row_starts=self.level_row_starts,
+            torch_dtype=self.dtype,
+            rns_basis_depth_count=self.rns_basis_depth_count,
+            depth_row_starts=self.depth_row_starts,
             basis_row_stops=(self.qp_row_stop, self.q_row_stop),
             montgomery_reduction_parameter_tables=self.montgomery_reduction_parameter_tables,
             native_parameter_tensor=self.rns_parameter_tensor,
@@ -242,14 +244,14 @@ class RnsRuntime:
         self._cache_row_parameters(
             self.parameter_store.row_parameters(self.rns_chain.p_prime_ids)
         )
-        for level in range(self.rns_basis_level_count):
+        for depth in range(self.rns_basis_depth_count):
             for include_p in (False, True):
                 self._cache_row_parameters(
                     self.parameter_store.basis_parameters(
-                        level, include_p=include_p
+                        depth, include_p=include_p
                     )
                 )
-            for digit_spec in self.rns_layout.digit_specs(level):
+            for digit_spec in self.rns_layout.digit_specs(depth):
                 self._cache_row_parameters(
                     self.parameter_store.row_parameters(digit_spec.prime_ids)
                 )
@@ -293,7 +295,7 @@ class RnsRuntime:
         Full-basis operands infer their dropped-Q prefix from the row count and
         whether the basis is ``Q`` or ``QP``. Internal digit operations pass an
         specified ``parameter_row_start`` because a key-switch digit is not a
-        complete level basis.
+        complete depth basis.
         """
 
         row_count = tensor.size(rns_dimension)
@@ -390,27 +392,27 @@ class RnsRuntime:
         return self.parameter_store.row_parameters(key)
 
     def basis_parameters(
-        self, level: int, *, include_p: bool = False
+        self, depth: int, *, include_p: bool = False
     ) -> RnsRowParameters:
-        """Return parameters for the Q or QP rows active at ``level``."""
+        """Return parameters for the Q or QP rows active at ``depth``."""
 
-        return self.parameter_store.basis_parameters(level, include_p=include_p)
+        return self.parameter_store.basis_parameters(depth, include_p=include_p)
 
     def twice_modulus_for_basis(
-        self, level: int, *, include_p: bool = False
+        self, depth: int, *, include_p: bool = False
     ) -> torch.Tensor:
         r"""Return integral row vector $[2q_i]$ for the active basis."""
 
         return self.parameter_store.twice_modulus_for_basis(
-            level, include_p=include_p
+            depth, include_p=include_p
         )
 
     def moduli_for_basis(
-        self, level: int, *, include_p: bool = False
+        self, depth: int, *, include_p: bool = False
     ) -> list[int]:
         """Return host integers in the active basis's ``prime_ids`` order."""
 
-        return self.parameter_store.moduli_for_basis(level, include_p=include_p)
+        return self.parameter_store.moduli_for_basis(depth, include_p=include_p)
 
     # -------------------------------------------------------------------------------------------------
     # Helper functions to do the Montgomery and NTT operations.
@@ -660,7 +662,7 @@ class RnsRuntime:
     def lift_centered_coefficients(
         self,
         a: torch.Tensor,
-        level: int = 0,
+        depth: int = 0,
         *,
         include_p: bool = False,
     ) -> torch.Tensor:
@@ -669,19 +671,19 @@ class RnsRuntime:
         The input is an integral tensor of final extent $N$ with
         $-q_i<x<q_i$ for every selected prime. Output is
         ``[*batch, limb, coefficient]`` in standard representation with limb
-        order ``rns_layout.prime_ids(level, include_p=include_p)`` and lazy
+        order ``rns_layout.prime_ids(depth, include_p=include_p)`` and lazy
         range $[0,2q_i)$. The functional result does not alias ``a``.
         """
 
         return rns_ops.lift_centered_coefficients(
             a,
-            self.twice_modulus_for_basis(level, include_p=include_p),
+            self.twice_modulus_for_basis(depth, include_p=include_p),
         )
 
     def lift_integer_coefficients_exact(
         self,
         coefficients: torch.Tensor,
-        level: int = 0,
+        depth: int = 0,
         *,
         include_p: bool = False,
         max_abs: int | None = None,
@@ -694,7 +696,7 @@ class RnsRuntime:
         remainder for each RNS row.
         """
 
-        prime_ids = self.rns_layout.prime_ids(level, include_p=include_p)
+        prime_ids = self.rns_layout.prime_ids(depth, include_p=include_p)
         moduli = tuple(
             int(self.montgomery_parameters.moduli[index]) for index in prime_ids
         )
@@ -703,7 +705,7 @@ class RnsRuntime:
         if max_abs < min(moduli):
             return self.lift_centered_coefficients(
                 coefficients,
-                level,
+                depth,
                 include_p=include_p,
             )
         modulus_tensor = torch.tensor(
@@ -964,12 +966,12 @@ class RnsRuntime:
         return (
             f"RnsRuntime(backend='{self.ntt_backend_name}', "
             f"backend_impl={self.ntt_backend}, logN={self.config.logN}, "
-            f"N={self.config.N}, levels={self.rns_basis_level_count}, "
+            f"N={self.config.N}, depths={self.rns_basis_depth_count}, "
             f"q_prime_count={self.config.num_q_primes}, "
             f"p_prime_count={self.config.num_p_primes}, "
             f"device={self.device}, "
-            f"row_count_level0={len(self.rns_layout.prime_ids(0))}, "
-            f"row_count_qp_level0="
+            f"row_count_depth0={len(self.rns_layout.prime_ids(0))}, "
+            f"row_count_qp_depth0="
             f"{len(self.rns_layout.prime_ids(0, include_p=True))}, "
             f"ntt_policy={self.ntt_policy})"
         )

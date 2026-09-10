@@ -1,159 +1,120 @@
 # Terminology and mathematical model
 
-This page defines FHElium terminology, notation, value
-state, tensor layouts, and cross-layer mathematical relationships. API
-signatures remain authoritative for concrete identifiers and types; the focused
-concept pages linked below explain the corresponding design choices in more
-depth.
+This page defines FHElium terminology for CKKS parameters, value state, tensor
+layouts, and execution. API signatures remain authoritative for concrete
+identifiers and types.
 
-## Configuration, ring, and modulus notation
+## Ring, modulus, and scale notation
 
-FHElium implements the Cheon–Kim–Kim–Song (CKKS) approximate
-homomorphic-encryption scheme. CKKS packs complex or real messages into a
-polynomial ring and supports approximate arithmetic on ciphertexts.
+FHElium implements the Cheon–Kim–Kim–Song (CKKS) approximate homomorphic
+encryption scheme over $R=\mathbb Z[X]/(X^N+1)$.
 
 | Symbol or term | Meaning | FHElium representation |
 | --- | --- | --- |
-| $N=2^{\mathtt{logN}}$ | Cyclotomic ring dimension | `config.N` |
-| $S=N/2$ | Number of complex CKKS slots | `engine.num_slots` |
-| $R=\mathbb{Z}[X]/(X^N+1)$ | Integer polynomial ring | Coefficient-domain polynomial |
-| $q_i$ | One ordinary Q-chain prime | One Q `prime_id` |
-| $I_\ell$ | Ordered identifiers of the active Q primes at public level $\ell$ | Active Q portion of `prime_ids` |
-| $Q_\ell=\prod_{i\in I_\ell}q_i$ | Active ordinary ciphertext modulus | `modulus_basis="Q"` at level $\ell$ |
-| $p_j$ | One special key-switch prime | One P `prime_id` |
-| $J_P$ | Identifiers of the configured special key-switch primes | P portion of `prime_ids` |
-| $P=\prod_{j\in J_P} p_j$ | Product of the special key-switch primes | P portion of a QP basis |
-| $B_\ell$ | Current modulus product, $Q_\ell$ or $Q_\ell P$ | `modulus_basis` plus `level` and `prime_ids` |
-| $\Delta_0$ | Default encoding and planning scale | `config.default_scale` |
+| $N=2^{\mathtt{logN}}$ | Polynomial-ring dimension | `config.N` |
+| $S=N/2$ | Complex slot capacity | `engine.num_slots` |
+| $G_d$ | Q group removed by transition $d\to d+1$ when $d<D$ | `config.q_depth_groups[d]` |
+| $G_D$ | Terminal Q group retained at `max_depth` | `config.q_depth_groups[-1]` |
+| $Q_d$ | Product of all Q groups active at depth $d$ | `depth` plus Q `prime_ids` |
+| $p_j$ | One special prime | One prime in `config.p_moduli` |
+| $P=\prod_jp_j$ | Special modulus used by hybrid key switching | P portion of a QP basis |
+| $B_d$ | Current modulus product, $Q_d$ or $Q_dP$ | `modulus_basis`, `depth`, and `prime_ids` |
+| $D$ | Greatest public depth | `config.max_depth` or `engine.max_depth` |
+| $D-d$ | Public rescale transitions remaining | `engine.depth_remaining(value)` |
+| $\Delta_0$ | Default creation and planning scale | `config.default_scale` |
 | $\Delta(v)$ | Actual scale carried by value $v$ | `value.scale` |
 | $s(X)$ | Secret-key polynomial | `SecretKey` |
-| $c(X)=(c_0,\ldots,c_{d-1})$ | Ciphertext component polynomials | Leading component axis |
+| $c(X)=(c_0,\ldots,c_{k-1})$ | Ciphertext component polynomials | Leading component axis |
 | $\sigma_g$ | Galois automorphism $X\mapsto X^g$ | `galois_element` |
 | $\operatorname{Rot}_r$ | Signed slot rotation | `rotation_step` |
 | $\operatorname{SRound}$ | Unbiased stochastic rounding | Encoding quantizer |
 
+A **Q prime** is a prime factor of the ciphertext modulus. Q primes are ordered
+inside depth groups. A **scaling Q group** is one public group $G_d$; a public
+rescale removes the complete group. The final Q group is the terminal group
+at `max_depth`; it remains available for ordinary arithmetic. A **special
+prime** is a factor of P. `auxiliary basis` describes a temporary
+basis-conversion role such as QP; it is not a prime kind.
+
 A **slot** is one packed complex message position. Applications decide how
-vectors, matrices, padding, and masks map to the $S$ slots. Increasing $N$
-increases slot capacity and also increases polynomial, key, NTT, and residue
-storage and computation.
+vectors, matrices, padding, and masks map to the $S$ slots.
 
 ### Construction and compatibility objects
 
 | Term | Definition |
 | --- | --- |
-| `Preset` | A named parameter baseline whose name records complex slot capacity, default scale-prime width, public-level count, and integral tensor dtype. It also selects the residue buffer width, ring dimension, and P-prime count. `CkksConfig.parse` resolves the baseline and applies overrides. |
-| `CkksConfig` | The immutable resolved mathematical and security parameters: ring, Q/P chains, residue buffer width, default scale, Galois generator, Gaussian error standard deviation, classical security category, and modulus-bit-budget enforcement policy. FHElium secret keys use uniform-ternary sampling. |
-| `fhelium.eager.Engine` | The process-local eager evaluator. It lazily creates device-local arithmetic and random resources, owns installed keys, and uses registered operation implementations. |
+| `Preset` | A reviewed named recipe that resolves to one exact `CkksConfig`. Its name records slot capacity, default-scale target, maximum public depth, and the default Engine residue dtype selected by its primes. |
+| `CkksConfig` | The immutable mathematical and security parameter set: ring, default scale, exact Q depth groups, exact P special primes, Galois generator, Gaussian error standard deviation, security category, and budget-enforcement policy. It contains no device or machine-word policy. |
+| `RnsExecutionFormat` | The device-local residue dtype and Montgomery radix selected from the exact prime set, optionally constrained by an expert Engine override. |
+| `fhelium.eager.Engine` | The process-local eager evaluator. It selects an RNS execution format, lazily creates device resources, owns installed keys, and invokes registered implementations. |
 
-See [Configuration and modulus chain](ckks/context-and-modulus-chain.md) for the
-complete construction model.
+Runtime values and keys do not store a parameter-set identifier. The caller
+retains provenance and supplies mathematically compatible configurations,
+values, and keys.
 
-## The CKKS value-state coordinate system
+See [Configuration and modulus chain](ckks/context-and-modulus-chain.md).
 
-A **CKKS value state** is the stored combination of concrete value type, tensor
-topology, level, actual scale, ordered `prime_ids`, plaintext
-representation where applicable, polynomial domain, modulus basis, residue
-representation, and component or key specialization. Device placement is a
-separate storage property. A cryptographic source/destination key relation is
-external unless a concrete type stores a specialization such as
-`rotation_step`.
+## CKKS value-state coordinates
 
-Runtime values and keys do not store a CKKS parameter-set identifier. The
-caller must retain parameter provenance and supply mathematically compatible
-values, keys, and configurations.
-
-The following coordinates are distinct:
+A **CKKS value state** is the combination of concrete value type, tensor
+topology, depth, actual scale, ordered `prime_ids`, plaintext representation,
+polynomial domain, modulus basis, residue representation, and component or key
+specialization. Device placement is a separate storage property.
 
 | Coordinate | Values | Meaning |
 | --- | --- | --- |
-| Plaintext representation | `slots`, `integer_coefficients`, `approximate_coefficients`, `rns` | What a plaintext payload means |
-| Polynomial domain | `coefficient`, `ntt` | Polynomial coefficients versus NTT evaluations |
-| Residue representation | `standard`, `montgomery` | Ordinary residues versus Montgomery residues |
-| Modulus basis | `Q`, `QP` | Active $Q_\ell$ rows versus active $Q_\ell P$ rows |
-| `prime_ids` | Ordered tuple of parameter-row identifiers | Modulus represented by each physical limb row |
-| Level | Public Q-chain level $\ell$ | Number of leading scale primes already consumed |
-| Actual scale | Positive finite binary64 value $\Delta(v)$ | Per-value encoding factor used by arithmetic and decoding |
-| Component count | Two or three for ciphertexts | Current degree of the ciphertext phase in $s(X)$ |
-| Placement | CPU or indexed CUDA device | Location of tensor storage; mathematical state is tracked independently |
+| Plaintext representation | `slots`, `integer_coefficients`, `approximate_coefficients`, `rns` | Meaning of the plaintext payload |
+| Polynomial domain | `coefficient`, `ntt` | Polynomial coefficients or NTT evaluations |
+| Residue representation | `standard`, `montgomery` | Ordinary or Montgomery residues |
+| Modulus basis | `Q`, `QP` | Active $Q_d$ rows or active $Q_dP$ rows |
+| `prime_ids` | Ordered parameter-row identifiers | Modulus represented by each physical limb row |
+| Depth | Integer $d$ in $[0,D]$ | Consumed public rescale transitions |
+| Depth remaining | $D-d$ | Public rescale transitions still available |
+| Actual scale | Positive finite binary64 $\Delta(v)$ | Per-value encoding factor |
+| Component count | Usually two or three for ciphertexts | Degree of the ciphertext phase in $s(X)$ |
+| Placement | CPU or indexed CUDA device | Tensor storage location |
 
-Do not infer one coordinate from another. In particular, QP is a modulus basis,
-not a level; `level` does not replace `prime_ids`; coefficient domain is not the
-same concept as a coefficient plaintext representation; and placement does not
-change the represented value.
+Do not infer one coordinate from another. QP is a modulus basis, not a depth;
+`depth` does not replace `prime_ids`; coefficient domain is not the same as an
+integer-coefficient plaintext; and placement does not change the represented
+value.
 
 ### Plaintext representation
 
-`PlaintextRepresentation` describes the payload before the independent RNS
-coordinates are considered.
-
 | Representation | Payload and use | Dense layout |
 | --- | --- | --- |
-| `slots` | A semantic real or complex CKKS message before encoding. A scalar is repeated to all slots; encoding right-pads a shorter slot axis with zeros. | Scalar or `[*batch, slot]`, with final extent at most $S$ |
-| `integer_coefficients` | Signed integer coefficients after encoding and before modular reduction | `[*batch, coefficient]`, final extent $N$ |
-| `approximate_coefficients` | Bounded binary64 tail-Q reconstruction produced by decryption, valid only for decoding | `[*batch, coefficient]`, final extent $N$ |
-| `rns` | Operation-ready residues with the complete RNS state coordinates | `[*batch, limb, coefficient_or_ntt_index]` |
+| `slots` | Real or complex CKKS message before encoding | Scalar or `[*batch, slot]` |
+| `integer_coefficients` | Signed `int64` coefficients after encoding and before modular reduction | `[*batch, coefficient]` |
+| `approximate_coefficients` | Binary64 tail-Q reconstruction produced by decryption for decoding | `[*batch, coefficient]` |
+| `rns` | Operation-ready residues with complete RNS state | `[*batch, limb, coefficient_or_ntt_index]` |
 
-An `approximate_coefficients` plaintext is not an exact full-$Q_\ell$ Chinese
-Remainder Theorem (CRT) reconstruction and cannot be reduced back to RNS. The
-semantic reconstruction path is `decrypt -> decode`; a new encrypted value uses
-`encode -> encrypt`.
+`integer_coefficients_to_rns` is the representation boundary that reduces each
+signed integer coefficient modulo every active prime and materializes the
+Engine's RNS dtype. An `approximate_coefficients` plaintext is not an exact
+full-$Q_d$ CRT reconstruction and cannot be converted back to RNS.
 
 ### Polynomial domain, residue representation, and basis
 
-A **coefficient-domain** polynomial is indexed by coefficients. An **NTT-domain**
-polynomial is indexed by Number Theoretic Transform evaluations, which make
-negacyclic multiplication pointwise. A **Montgomery representation** stores
-residues in a form efficient for modular multiplication. These remain separate
-concepts even though public ciphertexts couple them into two valid states:
+A coefficient-domain polynomial is indexed by coefficients. An NTT-domain
+polynomial is indexed by Number Theoretic Transform evaluations. Montgomery
+representation stores residues in a form suitable for modular multiplication.
+Public ciphertexts couple these axes into two supported arithmetic states:
 
 ```text
 (coefficient, standard)
 (ntt, montgomery)
 ```
 
-RNS plaintexts additionally support `(coefficient, montgomery)`, so their
-domain and residue transitions compose independently.
+RNS plaintexts additionally support `(coefficient, montgomery)`. A **Residue
+Number System (RNS)** represents an integer polynomial by residues modulo
+pairwise-coprime primes. One residue-polynomial row is a **limb**, and
+`prime_ids[limb_index]` identifies its modulus.
 
-A **Residue Number System (RNS)** represents an integer polynomial by residues
-modulo pairwise-coprime primes. One residue-polynomial row is a **limb**. Its
-modulus is `prime_ids[limb_index]`; code must not assume that a compact tensor
-row number is itself the configured prime identifier.
-
-**Q** is the ordinary ciphertext modulus chain. **P** contains auxiliary
-special primes used by hybrid key switching. **QP** appends P rows to the
-active Q rows at the same level. `modulus_basis`, level, and active-row
-completeness are therefore separate properties.
-
-### Active rows, level, and scale
-
-**Active rows** are the complete Q or QP residue rows expected for a value at
-its level. Level zero uses the complete configured Q chain. Increasing the
-level consumes leading Q scale primes and leaves fewer Q rows. The **final
-public level**, `engine.final_public_level`, retains the final scale prime and
-the structural base Q prime; a public rescale or one-level modulus switch
-requires a source level below it.
-
-The **actual scale** $\Delta(v)$ is stored on every plaintext and ciphertext.
-The **default scale** $\Delta_0=2^{\mathtt{config.scale\_bits}}$ is selected
-only when value creation omits a scale and is also useful for planning. It is
-not an invariant imposed on live values:
-
-$$
-\Delta(ab)=\Delta(a)\Delta(b),
-\qquad
-\Delta\!\left(\operatorname{Rescale}(a)\right)
-=\frac{\Delta(a)}{q_{\mathrm{drop}}}.
-$$
-
-A **scale reinterpretation**, `reinterpret_at_scale`, changes only the scale
-metadata while preserving residues. For old and target scales,
-
-$$
-m'=m\frac{\Delta_{\mathrm{old}}}{\Delta_{\mathrm{target}}}.
-$$
-
-It is not arithmetic alignment and changes the decoded message unless the
-scales are equal. See [Scale and level lifecycle](ckks/scale-and-level-lifecycle.md).
+At depth $d$, Q contains the suffix of configured Q groups beginning at $G_d$.
+QP appends all P special-prime rows to that Q suffix. One public rescale advances
+to $d+1$ and divides scale by $\prod_{q\in G_d}q$; modulus switching changes
+depth while preserving scale. The default scale and the prime widths inside a
+depth group are independent.
 
 ## Tensor and dimension terminology
 
@@ -177,7 +138,7 @@ A **ciphertext component** is one polynomial $c_j(X)$. Fresh ciphertexts have
 two components; ciphertext-ciphertext multiplication produces three until
 relinearization. In key switching, `key_digit_index` is the stable key-storage
 digit identity, whereas a local `digit_index` is the position among digits
-active at one level.
+active at one depth.
 
 Keep these dimensions and identifiers distinct:
 
@@ -290,7 +251,7 @@ $$
 For RNS plaintexts, `standard_residues_to_montgomery_residues` and its inverse
 change residue representation in coefficient domain, while the NTT methods
 change polynomial domain on Montgomery residues. These transitions preserve
-level, actual scale, basis, and `prime_ids`. An inverse NTT remains RNS and is
+depth, actual scale, basis, and `prime_ids`. An inverse NTT remains RNS and is
 not CRT reconstruction. Every primitive transition requires its named source
 state; an input already in the target state is an error rather than an implicit
 no-op.
@@ -304,9 +265,9 @@ c_{\mathrm{out},j}=c_{\mathrm{lhs},j}\mathbin{\pm}c_{\mathrm{rhs},j}
 \pmod{B_\ell}.
 $$
 
-The operands must already match in tensor shape, level, exact binary64 actual
+The operands must already match in tensor shape, depth, exact binary64 actual
 scale, component count, polynomial domain, basis, residue
-representation, and `prime_ids`. FHElium does not hide level, scale, domain, or
+representation, and `prime_ids`. FHElium does not hide depth, scale, domain, or
 component alignment inside addition. The caller is responsible for selecting
 operands produced with compatible CKKS parameters. Negation maps each component to
 $-c_j\bmod B_\ell$ and preserves state metadata.
@@ -325,7 +286,7 @@ w_2=a_1b_1
 \pmod{B_\ell}.
 $$
 
-It returns three NTT/Montgomery components at unchanged level with
+It returns three NTT/Montgomery components at unchanged depth with
 $\Delta(w)=\Delta(a)\Delta(b)$. The primitive does not implicitly
 relinearize, change domain, or rescale. Public relinearization accepts a
 three-component Q ciphertext and uses internal QP key material and scratch
@@ -334,7 +295,7 @@ Q ciphertext.
 
 ### Plaintext arithmetic
 
-An **operation-ready plaintext** is encoded at a level and prepared in the
+An **operation-ready plaintext** is encoded at a depth and prepared in the
 arithmetic state required by an evaluator operation; write its polynomial as
 $a_{\rm pt}$. For addition it is
 coefficient-domain Montgomery RNS and updates only the constant component:
@@ -362,24 +323,26 @@ primitive implicitly rescales.
 
 ### Rescale and modulus switch
 
-At level $\ell$, let $q_{\mathrm{drop}}$ be the leading active Q prime.
-**Rescale** computes a rounded quotient on every surviving row:
+At depth $\ell$, let $G_\ell$ be the leading active Q depth group and
+$M_\ell=\prod_{q\in G_\ell}q$. **Rescale** computes a rounded quotient on
+every surviving row:
 
 $$
-c'=\operatorname{Round}\!\left(\frac{c}{q_{\mathrm{drop}}}\right)
+c'=\operatorname{Round}\!\left(\frac{c}{M_\ell}\right)
 \pmod{B_{\ell+1}},
 \qquad
 \ell'=\ell+1,
 \qquad
-\Delta(c')=\frac{\Delta(c)}{q_{\mathrm{drop}}}.
+\Delta(c')=\frac{\Delta(c)}{M_\ell}.
 $$
 
 `rounding="nearest"` and `rounding="floor"` identify distinct quotient laws.
 A QP rescale retains P rows, so its output basis is $Q_{\ell+1}P$. The
-**rescale drop prime** is available through
-`engine.rescale_to_next_drop_prime(level=...)` for a non-final public level.
+**rescale divisor** is available through
+`engine.rescale_divisor(depth=...)` for a non-final public depth; it is the
+product of every prime in the group removed by that transition.
 
-A **modulus switch** restricts rows from $Q_\ell$ or $Q_\ell P$ to target level
+A **modulus switch** restricts rows from $Q_\ell$ or $Q_\ell P$ to target depth
 $t$'s active rows without dividing coefficients:
 
 $$
@@ -420,7 +383,7 @@ $m'_j=\overline{m_j}$ with a matching key switch.
 | ModRaise | Centered RNS basis extension used by bootstrapping. It reconstructs over a depleted source basis, chooses the centered representative, and reduces it into a larger Q basis. The current full-slot entry uses the single structural row `[q_b]`. |
 | Bootstrapping | CKKS refresh that raises available modulus, maps coefficients to slots, applies periodic reduction, and maps slots back to coefficients. A bootstrap callable executes this composition; its output is a refreshed ciphertext. |
 | CoeffsToSlots / SlotsToCoeffs | Linear transforms between coefficient coordinates and cyclotomic slot coordinates. Full-slot branch construction obtains the conjugate coordinate by conjugation. |
-| BSGS | Baby-step/giant-step decomposition of a diagonal linear transform into two rotation levels, trading key families and repeated work against intermediate computation. |
+| BSGS | Baby-step/giant-step decomposition of a diagonal linear transform into caller-selected rotation groups and an execution schedule, trading key families and repeated work against intermediate computation. |
 | Periodic reduction | Bootstrap approximation of the periodic map that removes the encoded large-modulus quotient. The composition field is named `modular_reduction`. |
 | Structural base Q prime | The single Q prime left after the private bootstrap-entry transition drops every public scale prime. `[q_b]` remains a Q basis, not a third `modulus_basis` value. |
 
@@ -510,7 +473,7 @@ a_{\rm src}-Q_{\rm src}, & a_{\rm src}>\lfloor Q_{\rm src}/2\rfloor,
 \end{cases}
 $$
 
-and extends it to the selected target level $\ell_{\rm raise}$:
+and extends it to the selected target depth $\ell_{\rm raise}$:
 
 $$
 \left(\operatorname{ModRaise}_{Q_{\rm src}\rightarrow Q_{\ell_{\rm raise}}}
@@ -522,7 +485,7 @@ $$
 The application must establish that the intended integer coefficient lies in
 $[-\lfloor Q_{\rm src}/2\rfloor,\lfloor Q_{\rm src}/2\rfloor]$, so the source
 residues identify it without aliasing. FHElium's current full-slot bootstrap is
-the special case $Q_{\rm src}=q_b$ before raising to its selected target level.
+the special case $Q_{\rm src}=q_b$ before raising to its selected target depth.
 
 ### Bootstrap and linear-transform equations
 
@@ -601,7 +564,7 @@ $$
 Direct and BSGS schedules therefore implement the same linear map while using
 different rotation grouping and intermediate accumulation orders. See
 [Composable CKKS bootstrapping](ckks/composable-bootstrapping.md) for the full
-normalization, level, scale, key, and error model.
+normalization, depth, scale, key, and error model.
 
 ## Distributed and multiparty terminology
 
@@ -665,7 +628,7 @@ require a reviewed protocol and parameterization.
 | Value signature | Device-independent description of a nested Tensor/value structure and stored state used to validate reusable copies and graph inputs. External key relations remain properties of the concrete values. |
 | `ReusableValueBuffer` | Fixed-address storage for one value-tree signature on one target device, used for eager streaming or CUDA Graph input staging. |
 | `CopyHandle` | Handle for one reusable-buffer copy. It retains source storage and exposes event-based completion and stream-wait operations. |
-| Eager execution | Immediate call-by-call Python/operator dispatch outside CUDA Graph replay. |
+| Eager execution | Immediate operation dispatch using the supplied values and execution resources. |
 | CUDA Graph | Captured fixed GPU schedule replayed with stable addresses. `CudaGraphProgram` applies it to a deterministic process-local callable with fixed value signatures. |
 | Borrowed output | Output backed by storage retained and reused by another owner, such as a CUDA Graph program. A later replay may overwrite it; an owned copy is required for retention. |
 
@@ -718,8 +681,8 @@ Use the following pairs and groups as different terms, even when one maps to
 another internally:
 
 - default scale $\Delta_0$ and per-value actual scale $\Delta(v)$;
-- level and ordered `prime_ids`;
-- Q/QP modulus basis and level;
+- depth and ordered `prime_ids`;
+- Q/QP modulus basis and depth;
 - semantic `modulus_basis` and the internal `include_p` implementation selector;
 - plaintext representation, polynomial domain, and residue representation;
 - inverse NTT and CRT reconstruction;

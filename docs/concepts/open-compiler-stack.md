@@ -58,14 +58,14 @@ preservation grants neither mathematical meaning nor execution authority.
 
 This mixed-level representation matters because CKKS decisions require
 different information at different times. Source capture knows value roles and
-static arguments. CKKS scheduling needs scale, level, key, and representation facts.
+static arguments. CKKS scheduling needs scale, depth, key, and representation facts.
 Implementation selection may depend on available resources or a target. A
 single mandatory lowering order would force those decisions before their inputs
 are available.
 
 ## Partial state is a representation capability
 
-Program value types can leave CKKS facts unknown, including level, scale, prime
+Program value types can leave CKKS facts unknown, including depth, scale, prime
 identities, polynomial domain, modulus basis, residue representation, and
 ciphertext component count. Unknown state records a decision that remains open;
 a selected pass must make it concrete before an execution boundary requires it.
@@ -107,7 +107,7 @@ choose where to:
 - lower source semantics to logical operations;
 - introduce CKKS representation;
 - place NTT transitions, relinearization, rescale, or rotation hoisting;
-- assign levels and per-value actual scales;
+- assign depths and per-value actual scales;
 - lower selected CKKS operations to RNS/NTT composition;
 - preserve selected operations for whole-operation implementations;
 - assign named implementations;

@@ -55,7 +55,7 @@ def _rescale_inverse_matrix(rns_context: RnsContext) -> torch.Tensor:
         )
     return torch.tensor(
         rows,
-        dtype=rns_context.config.torch_dtype,
+        dtype=rns_context.dtype,
         device=rns_context.device,
     )
 
@@ -73,25 +73,25 @@ def _keyswitch_moddown_tables(
         ]
         for drop_step, dropped in enumerate(p_moduli)
     ]
-    level0_prime_ids = rns_context.rns_layout.prime_ids(0, include_p=True)
+    depth0_prime_ids = rns_context.rns_layout.prime_ids(0, include_p=True)
     base_rows = [
         torch.tensor(
             [
                 inverse_rows[drop_step][prime_id]
-                for prime_id in level0_prime_ids[: -drop_step - 1]
+                for prime_id in depth0_prime_ids[: -drop_step - 1]
             ],
-            dtype=config.torch_dtype,
+            dtype=rns_context.dtype,
             device=rns_context.device,
         )
         for drop_step in range(config.num_p_primes)
     ]
     tables = []
-    for level in range(config.num_scale_primes):
-        start = rns_context.rns_layout.start_row(level)
+    for depth in range(config.max_depth + 1):
+        start = rns_context.basis_parameters(depth).parameter_row_start
         rows = [row[start:] for row in base_rows]
         packed = torch.empty(
             (len(rows), max(row.numel() for row in rows)),
-            dtype=config.torch_dtype,
+            dtype=rns_context.dtype,
             device=rns_context.device,
         )
         for row_index, row in enumerate(rows):
@@ -112,6 +112,7 @@ class CkksDeviceResources:
         ntt_backend: str | None = None,
         rng_seed: int | None = None,
         rng_nonce: int | None = None,
+        rns_dtype: torch.dtype | None = None,
     ) -> None:
         self.config = config
         self.rns_layout = rns_layout
@@ -119,6 +120,7 @@ class CkksDeviceResources:
         self.ntt_backend = ntt_backend
         self.rng_seed = rng_seed
         self.rng_nonce = rng_nonce
+        self.rns_dtype = rns_dtype
         self._bindings: dict[str, BoundResource] = {}
         self._rns_context: RnsContext | None = None
         self._ntt_context: NttContext | None = None
@@ -144,6 +146,7 @@ class CkksDeviceResources:
             self.config,
             device=self.device,
             rns_layout=self.rns_layout,
+            dtype=self.rns_dtype,
         )
         self._rns_context = context
         return context
@@ -184,7 +187,7 @@ class CkksDeviceResources:
             num_repeating_channels=max(self.config.num_p_primes, 2),
             sigma=self.config.sigma,
             devices=[str(self.device)],
-            torch_dtype=self.config.torch_dtype,
+            torch_dtype=self.rns_context.dtype,
             seed=self.rng_seed,
             nonce=stream_nonce,
         )

@@ -45,7 +45,7 @@ Residency and execution buffers retain separate ownership domains. Residency
 manages logical-value materializations; reusable buffers and captured Programs
 own their fixed execution storage.
 
-Moving a value among pageable host, pinned host, and CUDA preserves its level,
+Moving a value among pageable host, pinned host, and CUDA preserves its depth,
 scale, prime IDs, polynomial domain, and key relation.
 Pinned host storage can support asynchronous host-to-device (H2D) transfer when
 the copy preconditions and source-lifetime requirements are satisfied.

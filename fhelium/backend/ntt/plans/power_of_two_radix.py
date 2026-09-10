@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from fhelium.config import CkksConfig
+from fhelium.backend.rns.format import RnsExecutionFormat
 from fhelium.config.ntt import (
     CompactFixedRadixPolicy,
     validate_ntt_backend_for_log_n,
@@ -34,6 +35,7 @@ class CompactPowerOfTwoRadixNttPlan:
         policy: CompactFixedRadixPolicy,
         *,
         device: str | int | torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ) -> None:
         self.cfg = ckks_config
         self.policy = policy
@@ -50,7 +52,7 @@ class CompactPowerOfTwoRadixNttPlan:
             self.cfg.moduli,
             self.cfg.logN,
             self.policy.radix,
-            self.cfg.torch_dtype,
+            RnsExecutionFormat.select(self.cfg.moduli, dtype).dtype,
             device=self.device,
         )
 

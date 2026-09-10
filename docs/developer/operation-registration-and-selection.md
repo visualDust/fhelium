@@ -233,7 +233,7 @@ pipeline = fh_compile.Pipeline(
     (
         fh_compile.AssignImplementationsPass(
             {
-                "fhelium_rns.rescale_drop_leading_prime": "native-rescale",
+                "fhelium_rns.rescale_drop_leading_primes": "native-rescale",
             }
         ),
     )
@@ -341,7 +341,7 @@ The path for a lowered CKKS rescale is therefore:
 ```text
 fhelium_ckks.rescale
   -- rns-drop-leading-prime -->
-fhelium_rns.rescale_drop_leading_prime
+fhelium_rns.rescale_drop_leading_primes
   -- native-rescale on CPU or CUDA -->
 NativeRescaleImplementation
   --> torch.ops.fhelium_ckks_ops rescale kernel

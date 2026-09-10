@@ -9,6 +9,8 @@ operations and invoke neither operation handlers nor binding resolvers.
 
 from __future__ import annotations
 
+from fhelium.values.state import PolynomialDomain
+
 import json
 import operator
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
@@ -834,10 +836,10 @@ def _materialize_entry_input(
         )
     execution_device = torch.device(workspace["execution_device"])
     spec = _input_spec(argument)
-    level = spec.get("level", 0)
+    depth = spec.get("depth", 0)
     scale = spec.get("scale")
-    if isinstance(level, bool) or not isinstance(level, int):
-        raise RuntimeError("Encrypted input_spec level must be an integer")
+    if isinstance(depth, bool) or not isinstance(depth, int):
+        raise RuntimeError("Encrypted input_spec depth must be an integer")
     if scale is None:
         scale = engine.config.default_scale
     if isinstance(scale, bool) or not isinstance(scale, (int, float)):
@@ -849,7 +851,7 @@ def _materialize_entry_input(
     if isinstance(value, Ciphertext):
         if (
             value.device != execution_device
-            or value.data.dtype != engine.config.torch_dtype
+            or value.data.dtype != engine.dtype
         ):
             raise JitInputError(
                 "Encrypted input device or dtype differs from the JIT execution"
@@ -858,11 +860,11 @@ def _materialize_entry_input(
             raise JitInputError(
                 "Encrypted input ring dimension differs from the Eager Engine"
             )
-        if value.level != level or value.scale != expected_scale:
+        if value.depth != depth or value.scale != expected_scale:
             raise JitInputError(
                 "Encrypted input state differs from its InputSpec: "
-                f"level/scale={value.level}/{value.scale!r}, expected "
-                f"{level}/{expected_scale!r}"
+                f"depth/scale={value.depth}/{value.scale!r}, expected "
+                f"{depth}/{expected_scale!r}"
             )
         if slots != "full":
             raise JitInputError(
@@ -902,7 +904,7 @@ def _materialize_entry_input(
     return engine.encrypt_message(
         value,
         public_key,
-        level=level,
+        depth=depth,
         scale=expected_scale,
         device=execution_device,
     )
@@ -1304,7 +1306,7 @@ def _execute_ckks(
             raise RuntimeError("CKKS encode requires one message")
         return engine.encode(
             operands[0],  # type: ignore[arg-type]
-            level=int(operation.level.value.data),
+            depth=int(operation.depth.value.data),
             scale=float(operation.scale.value.data),
         )
     if isinstance(operation, ckks.DecodeOp):
@@ -1330,7 +1332,11 @@ def _execute_ckks(
         public_key = workspace.get("public_key")
         if not isinstance(public_key, PublicKey):
             raise RuntimeError("CKKS encrypt lacks public-key material")
-        return engine.encrypt(operands[0], public_key)
+        return engine.encrypt(
+            operands[0],
+            public_key,
+            output_domain=cast(PolynomialDomain, operation.output_domain.data),
+        )
     if isinstance(operation, ckks.DecryptOp):
         ciphertext = _ciphertext(operands, 0, name)
         secret_key = _mapping(workspace, "resources").get(
@@ -1412,6 +1418,9 @@ def _execute_ckks(
             engine.rotate_many_with_keys(
                 ciphertext,
                 rotation_keys_for_many,
+                output_domain=cast(
+                    PolynomialDomain, operation.output_domain.data
+                ),
             )
         )
     if isinstance(operation, ckks.RotateOp):
@@ -1426,7 +1435,11 @@ def _execute_ckks(
             raise RuntimeError(f"CKKS rotate lacks key resource {symbol!r}")
         if key.rotation_step != step:
             raise RuntimeError(f"CKKS rotation key {symbol!r} has another step")
-        return engine.rotate_with_key(ciphertext, key)
+        return engine.rotate_with_key(
+            ciphertext,
+            key,
+            output_domain=cast(PolynomialDomain, operation.output_domain.data),
+        )
     if isinstance(operation, ckks.ToNttOp):
         return engine.coefficient_domain_to_ntt_domain(
             _ciphertext(operands, 0, name)
@@ -1519,7 +1532,9 @@ def _execute_ckks(
                 "CKKS relinearize lacks matching relinearization-key material"
             )
         return engine.relinearize(
-            _ciphertext(operands, 0, name), keys.relinearization
+            _ciphertext(operands, 0, name),
+            keys.relinearization,
+            output_domain=cast(PolynomialDomain, operation.output_domain.data),
         )
     if isinstance(operation, ckks.SwitchKeyOp):
         key = _mapping(workspace, "resources").get(operation.key_symbol.data)
@@ -1528,7 +1543,11 @@ def _execute_ckks(
                 f"CKKS switch-key resource {operation.key_symbol.data!r} "
                 "is not an exact KeySwitchKey"
             )
-        return engine.switch_key(_ciphertext(operands, 0, name), key)
+        return engine.switch_key(
+            _ciphertext(operands, 0, name),
+            key,
+            output_domain=cast(PolynomialDomain, operation.output_domain.data),
+        )
     if isinstance(operation, ckks.ConjugateOp):
         keys = _evaluation_key_set(
             workspace.get("evaluation_keys"),
@@ -1539,20 +1558,21 @@ def _execute_ckks(
         return engine.conjugate(
             _ciphertext(operands, 0, name),
             keys.conjugation,
+            output_domain=cast(PolynomialDomain, operation.output_domain.data),
         )
     if isinstance(operation, ckks.RescaleOp):
         ciphertext = _ciphertext(operands, 0, name)
         rounding = _string_attr(operation, "rounding")
         if rounding not in {"nearest", "floor"}:
             raise RuntimeError("CKKS rescale lacks represented rounding")
-        return engine.rescale_to_next_level(
+        return engine.rescale_to_next_depth(
             ciphertext,
             rounding=cast(Literal["nearest", "floor"], rounding),
         )
     if isinstance(operation, ckks.ModSwitchOp):
-        return engine.mod_switch_to_level(
+        return engine.mod_switch_to_depth(
             _ciphertext(operands, 0, name),
-            int(operation.target_level.value.data),
+            int(operation.target_depth.value.data),
         )
     if isinstance(operation, ckks.ReinterpretScaleOp):
         return engine.reinterpret_at_scale(

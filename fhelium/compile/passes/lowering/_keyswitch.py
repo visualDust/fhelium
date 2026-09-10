@@ -114,6 +114,8 @@ def _key_switch_corrections(
     source_type: object,
     resources: _KeySwitchResources,
     key_digit_indices: tuple[int, ...],
+    *,
+    output_ntt: bool = False,
 ) -> tuple[tuple[Operation, ...], SSAValue]:
     operations: list[Operation] = []
     accumulator: SSAValue | None = None
@@ -171,6 +173,28 @@ def _key_switch_corrections(
     if accumulator is None:
         raise ValueError("Key switching requires at least one active RNS digit")
 
+    q_prime_ids = None
+    if isinstance(source_type, ckks.CiphertextType):
+        q_prime_ids = source_type.state.data.get("prime_ids")
+    if output_ntt:
+        correction_type = _component_bundle_type(
+            source_type,
+            2,
+            basis=StringAttr("Q"),
+            prime_ids=q_prime_ids,
+            polynomial_domain=StringAttr("ntt"),
+            residue_representation=StringAttr("montgomery"),
+        )
+        moddown_ntt = rns.ModDownNttQpToQOp(
+            accumulator,
+            resources.parameters,
+            resources.ntt_plan,
+            resources.key_switch_plan,
+            correction_type,
+        )
+        operations.append(moddown_ntt)
+        return tuple(operations), moddown_ntt.result
+
     inverse_type = product_type.with_state(
         polynomial_domain=StringAttr("coefficient"),
         residue_representation=StringAttr("standard"),
@@ -180,9 +204,6 @@ def _key_switch_corrections(
         resources.ntt_plan,
         inverse_type,
     )
-    q_prime_ids = None
-    if isinstance(source_type, ckks.CiphertextType):
-        q_prime_ids = source_type.state.data.get("prime_ids")
     correction_type = _component_bundle_type(
         source_type,
         2,
@@ -209,12 +230,57 @@ def _assemble_switched_ciphertext(
     resources: _KeySwitchResources,
     key_digit_indices: tuple[int, ...],
 ) -> tuple[tuple[Operation, ...], SSAValue]:
+    output_state = getattr(getattr(result_type, "state", None), "data", {})
+    output_domain = output_state.get("polynomial_domain")
+    output_ntt = (
+        isinstance(output_domain, StringAttr) and output_domain.data == "ntt"
+    )
     switch_ops, corrections = _key_switch_corrections(
         source_component1,
         source_type,
         resources,
         key_digit_indices,
+        output_ntt=output_ntt,
     )
+    if output_ntt:
+        ntt_updates: dict[str, Attribute] = {
+            "polynomial_domain": StringAttr("ntt"),
+            "residue_representation": StringAttr("montgomery"),
+        }
+        correction0_op, correction0 = _extract_component(
+            corrections, source_type, 0, **ntt_updates
+        )
+        correction1_op, correction1 = _extract_component(
+            corrections, source_type, 1, **ntt_updates
+        )
+        polynomial_type = _polynomial_type(source_type, **ntt_updates)
+        component0_ntt = ntt.CoefficientStandardToNttMontgomeryOp(
+            component0,
+            resources.ntt_plan,
+            polynomial_type,
+        )
+        add0 = rns.AddMontgomeryLazyOp(
+            component0_ntt.result,
+            correction0,
+            resources.parameters,
+            polynomial_type,
+        )
+        packed = rns.PackTwoComponentsOp(
+            add0.result,
+            correction1,
+            _rns_type(result_type),
+        )
+        return (
+            (
+                *switch_ops,
+                correction0_op,
+                correction1_op,
+                component0_ntt,
+                add0,
+                packed,
+            ),
+            packed.result,
+        )
     correction0_op, correction0 = _extract_component(
         corrections, source_type, 0
     )
@@ -260,6 +326,80 @@ def _lower_relinearize(
         key_symbol="relinearization-key",
         key_kind="relinearization-key",
     )
+    if operation.output_domain.data == "ntt":
+        ntt_updates: dict[str, Attribute] = {
+            "polynomial_domain": StringAttr("ntt"),
+            "residue_representation": StringAttr("montgomery"),
+        }
+        d0_op, d0 = _extract_component(
+            value, operation.value.type, 0, **ntt_updates
+        )
+        d1_op, d1 = _extract_component(
+            value, operation.value.type, 1, **ntt_updates
+        )
+        d2_ntt_op, d2_ntt = _extract_component(
+            value, operation.value.type, 2, **ntt_updates
+        )
+        d2_type = _polynomial_type(
+            operation.value.type,
+            polynomial_domain=StringAttr("coefficient"),
+            residue_representation=StringAttr("standard"),
+        )
+        d2_inverse = ntt.NttMontgomeryToCoefficientStandardOp(
+            d2_ntt,
+            resources.ntt_plan,
+            d2_type,
+        )
+        switch_ops, corrections = _key_switch_corrections(
+            d2_inverse.result,
+            operation.value.type,
+            resources,
+            key_digit_indices,
+            output_ntt=True,
+        )
+        correction0_op, correction0 = _extract_component(
+            corrections, operation.value.type, 0, **ntt_updates
+        )
+        correction1_op, correction1 = _extract_component(
+            corrections, operation.value.type, 1, **ntt_updates
+        )
+        polynomial_type = _polynomial_type(
+            operation.value.type,
+            polynomial_domain=StringAttr("ntt"),
+            residue_representation=StringAttr("montgomery"),
+        )
+        result0 = rns.AddMontgomeryLazyOp(
+            d0, correction0, resources.parameters, polynomial_type
+        )
+        result1 = rns.AddMontgomeryLazyOp(
+            d1, correction1, resources.parameters, polynomial_type
+        )
+        packed = rns.PackTwoComponentsOp(
+            result0.result,
+            result1.result,
+            _rns_type(operation.result.type),
+        )
+        result_cast, result = _cast_to_ckks(
+            packed.result, operation.result.type
+        )
+        return LoweredCkksOperation(
+            (
+                input_cast,
+                *resources.operations,
+                d0_op,
+                d1_op,
+                d2_ntt_op,
+                d2_inverse,
+                *switch_ops,
+                correction0_op,
+                correction1_op,
+                result0,
+                result1,
+                packed,
+                result_cast,
+            ),
+            result,
+        )
     coefficient_type = _rns_type(operation.value.type).with_state(
         {
             "polynomial_domain": StringAttr("coefficient"),
@@ -417,6 +557,44 @@ def _lower_rotate(
 ) -> LoweredCkksOperation:
     if not isinstance(operation, ckks.RotateOp):
         raise TypeError("rotate lowering received another operation")
+    if operation.input_domain.data != "coefficient":
+        raise ValueError(
+            "CKKS logical rotation lowering requires coefficient input; "
+            "retain the NTT-input RotateOp for direct Backend execution or "
+            "insert FromNttOp before lowering"
+        )
+    if operation.output_domain.data == "ntt":
+        coefficient_type = operation.result.type.with_state(
+            {
+                "polynomial_domain": StringAttr("coefficient"),
+                "residue_representation": StringAttr("standard"),
+            }
+        )
+        coefficient_operation = ckks.RotateOp(
+            operation.value,
+            operation.key,
+            coefficient_type,
+            attributes={
+                **operation.attributes,
+                "output_domain": StringAttr("coefficient"),
+            },
+        )
+        lowered = _lower_rotate(coefficient_operation, config)
+        input_cast, coefficient = _cast_to_rns(lowered.result)
+        plan = core.ResourceRefOp(
+            ntt.NttPlanType(), symbol="active-ntt-plan", kind="ntt-plan"
+        )
+        forward = ntt.CoefficientStandardToNttMontgomeryOp(
+            coefficient, plan, _rns_type(operation.result.type)
+        )
+        result_cast, result = _cast_to_ckks(
+            forward.result, operation.result.type
+        )
+        coefficient_operation.drop_all_references()
+        return LoweredCkksOperation(
+            (*lowered.operations, input_cast, plan, forward, result_cast),
+            result,
+        )
     ring_dimension = _concrete_ring_dimension(
         operation.value.type,
         operation="CKKS rotation",

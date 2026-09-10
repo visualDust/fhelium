@@ -106,12 +106,12 @@ def _validate_entry_argument(argument: BlockArgument) -> None:
         _fail("Program input_spec role differs from its value type")
     if value_role(argument) != "encrypted":
         return
-    level = spec.get("level")
+    depth = spec.get("depth")
     scale = spec.get("scale")
     slots = spec.get("slots")
     batch_mode = spec.get("batch_mode")
-    if isinstance(level, bool) or not isinstance(level, int) or level < 0:
-        _fail("Encrypted input_spec level must be a nonnegative integer")
+    if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
+        _fail("Encrypted input_spec depth must be a nonnegative integer")
     if scale is not None and (
         isinstance(scale, bool)
         or not isinstance(scale, (int, float))

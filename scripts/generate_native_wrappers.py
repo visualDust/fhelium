@@ -34,6 +34,7 @@ import torch
 
 TYPE_MAP = {
     "Tensor": "torch.Tensor",
+    "Optional[Tensor]": "torch.Tensor | None",
     "List[Tensor]": "list[torch.Tensor]",
     "List[List[Tensor]]": "list[list[torch.Tensor]]",
     "int": "int",
@@ -113,6 +114,7 @@ class FakeTensorShapeRule:
 
     like_arg: str
     shape_expression: str
+    factory_expression: str | None = None
 
 
 FAKE_TENSOR_SHAPE_RULES = {
@@ -127,6 +129,16 @@ FAKE_TENSOR_SHAPE_RULES = {
     "fhelium_rns_ops::lift_centered_coefficients": FakeTensorShapeRule(
         like_arg="centered_coefficients",
         shape_expression="(*centered_coefficients.shape[:-1], twice_modulus.size(0), centered_coefficients.size(-1))",
+    ),
+    "fhelium_rns_ops::montgomery_weighted_sum": FakeTensorShapeRule(
+        like_arg="ciphertexts",
+        shape_expression="ciphertexts[0].shape",
+        factory_expression="ciphertexts[0]",
+    ),
+    "fhelium_rns_ops::montgomery_weighted_sums": FakeTensorShapeRule(
+        like_arg="ciphertexts",
+        shape_expression="(ciphertexts[0].size(0), group_count, *ciphertexts[0].shape[1:])",
+        factory_expression="ciphertexts[0]",
     ),
 }
 
@@ -321,10 +333,8 @@ def fake_return_expression(spec: OpSpec) -> str:
                 f"Fake shape rule for {qualified_name} references missing "
                 f"argument {shape_rule.like_arg!r}"
             )
-        return (
-            f"return {shape_rule.like_arg}.new_empty("
-            f"{shape_rule.shape_expression})"
-        )
+        factory = shape_rule.factory_expression or shape_rule.like_arg
+        return f"return {factory}.new_empty({shape_rule.shape_expression})"
 
     tensor_arg = next(
         (arg for arg in spec.args if arg.py_type == "torch.Tensor"), None

@@ -39,7 +39,7 @@ class CkksKeyGenerator:
     data is ``[limb, ntt_index]``; public keys are
     ``[key_component, limb, ntt_index]``; key-switch keys are
     ``[key_digit, key_component, limb, ntt_index]``. Returned keys are always
-    NTT/Montgomery/lazy at level zero in the stated Q or QP basis and own their
+    NTT/Montgomery/lazy at depth zero in the stated Q or QP basis and own their
     payload storage. Local ``digit_index`` is resolved to stable
     ``key_digit_index`` before key tensor indexing.
     """
@@ -131,7 +131,7 @@ class CkksKeyGenerator:
     def create_secret_key(
         self, *, modulus_basis: ModulusBasis = "QP"
     ) -> SecretKey:
-        r"""Sample ternary $s(X)$ and return its level-zero NTT/Montgomery RNS.
+        r"""Sample ternary $s(X)$ and return its depth-zero NTT/Montgomery RNS.
 
         Output shape is ``[limb, ntt_index]`` with Q or QP ``prime_ids``
         selected by ``modulus_basis``. Sampling and all temporary transitions
@@ -143,7 +143,7 @@ class CkksKeyGenerator:
         include_p = modulus_basis == "QP"
         uniform_ternary = self._rng.randint(amax=3, shift=-1, repeats=1)[0][0]
         unsigned_ternary = self.rns_runtime.lift_centered_coefficients(
-            uniform_ternary, level=0, include_p=include_p
+            uniform_ternary, depth=0, include_p=include_p
         )
         self.rns_runtime.forward_to_montgomery_(
             unsigned_ternary, include_p=include_p
@@ -167,7 +167,7 @@ class CkksKeyGenerator:
         r"""Generate ``(k_0,k_1)`` satisfying $k_0+k_1s=e$ modulo the basis.
 
         Output is integral ``[key_component=2, limb, ntt_index]`` in
-        level-zero NTT/Montgomery form with Q or QP rows. ``secret_key``
+        depth-zero NTT/Montgomery form with Q or QP rows. ``secret_key``
         and optional ``uniform_component`` are read-only and never alias the
         returned stacked tensor.
         """
@@ -186,21 +186,21 @@ class CkksKeyGenerator:
                 operation="Public-key generation",
             )
 
-        level = 0
+        depth = 0
         error = self._rng.discrete_gaussian(repeats=1)[0][0]
         error = self.rns_runtime.lift_centered_coefficients(
-            error, level, include_p=include_p
+            error, depth, include_p=include_p
         )
         self.rns_runtime.forward_to_montgomery_(error, include_p=include_p)
 
         if uniform_component is None:
             repeats = (
                 self.config.num_p_primes
-                if secret_key.modulus_basis == "QP"
+                if include_p
                 else 0
             )
             uniform_component_data = self._rng.randint(
-                [self.rns_runtime.moduli_for_basis(level, include_p=include_p)],
+                [self.rns_runtime.moduli_for_basis(depth, include_p=include_p)],
                 repeats=repeats,
             )[0]
         else:
@@ -245,7 +245,7 @@ class CkksKeyGenerator:
         $k_{d,0}+k_{d,1}s_{\mathrm{dst}}=P s_{\mathrm{src}}+e_d$.
         Output is integral
         ``[key_digit, key_component=2, QP_limb, ntt_index]`` in
-        NTT/Montgomery lazy form and level-zero QP order. Input keys and
+        NTT/Montgomery lazy form and depth-zero QP order. Input keys and
         optional uniform components are not mutated or aliased.
         """
 
@@ -257,7 +257,7 @@ class CkksKeyGenerator:
             destination_secret_key,
             operation="Hybrid key-switch key generation (destination key)",
         )
-        level = 0
+        depth = 0
 
         source_secret_q = source_secret_key.data[
             : self.rns_runtime.q_row_stop
@@ -266,7 +266,7 @@ class CkksKeyGenerator:
             source_secret_q, self.p_product_montgomery_q
         )
 
-        digit_specs = self.rns_layout.digit_specs(level)
+        digit_specs = self.rns_layout.digit_specs(depth)
         key_digits: list[torch.Tensor | None] = [None] * len(digit_specs)
         for digit_spec in digit_specs:
             source_prime_ids = digit_spec.prime_ids

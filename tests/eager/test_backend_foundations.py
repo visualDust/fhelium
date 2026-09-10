@@ -21,7 +21,7 @@ from fhelium.values import Ciphertext, RelinearizationKey
 
 
 def test_eager_factories_follow_torch_default_device() -> None:
-    engine = Engine(Preset.slots8192_scale40_levels7_int64)
+    engine = Engine(Preset.slots8192_scale40_depth7_int64)
 
     encoded = engine.encode([0.125])
     secret_key = engine.create_secret_key()
@@ -36,7 +36,7 @@ def test_first_device_use_shares_one_serial_random_stream_across_threads() -> (
     None
 ):
     engine = Engine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         rng_seed=47,
         rng_nonce=19,
     )
@@ -50,7 +50,7 @@ def test_first_device_use_shares_one_serial_random_stream_across_threads() -> (
 
 @pytest.mark.gpu
 def test_eager_boundary_device_selection_is_caller_controlled() -> None:
-    engine = Engine(Preset.slots8192_scale40_levels7_int64)
+    engine = Engine(Preset.slots8192_scale40_depth7_int64)
     message = torch.tensor([0.03125], dtype=torch.float64)
     secret_key = engine.create_secret_key()
     public_key = engine.create_public_key(secret_key)
@@ -82,7 +82,7 @@ def test_eager_boundary_device_selection_is_caller_controlled() -> None:
 @pytest.mark.gpu
 def test_eager_automatic_key_replication_is_opt_in() -> None:
     engine = Engine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         allow_automatic_key_replication=True,
     )
     secret_key = engine.create_secret_key(device="cpu")
@@ -107,7 +107,7 @@ def test_eager_automatic_key_replication_is_opt_in() -> None:
 @pytest.mark.gpu
 def test_eager_cuda_add_matches_handwritten_engine() -> None:
     engine = CkksEngine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         device="cuda:0",
     )
     runtime = Engine(
@@ -129,10 +129,13 @@ def test_eager_cuda_add_matches_handwritten_engine() -> None:
     )
 
 
-def test_eager_key_graphs_match_handwritten_engine() -> None:
+@pytest.mark.parametrize(
+    "device", ["cpu", pytest.param("cuda:0", marks=pytest.mark.gpu)]
+)
+def test_eager_key_operations_match_handwritten_engine(device: str) -> None:
     engine = CkksEngine(
-        Preset.slots8192_scale40_levels7_int64,
-        device="cpu",
+        Preset.slots8192_scale40_depth7_int64,
+        device=device,
         rng_seed=17,
     )
     runtime = Engine(
@@ -145,6 +148,7 @@ def test_eager_key_graphs_match_handwritten_engine() -> None:
         0.05,
         engine.num_slots,
         dtype=torch.float64,
+        device=device,
     )
     ciphertext = engine.encrypt(engine.encode(message))
 
@@ -178,7 +182,7 @@ def test_eager_key_graphs_match_handwritten_engine() -> None:
 def test_eager_runtime_matches_boundary_and_computation_sequence_on_cpu() -> (
     None
 ):
-    preset = Preset.slots8192_scale40_levels7_int64
+    preset = Preset.slots8192_scale40_depth7_int64
     engine = CkksEngine(
         preset,
         device="cpu",
@@ -257,7 +261,7 @@ def test_eager_runtime_matches_boundary_and_computation_sequence_on_cpu() -> (
     )
     dense_plaintext = Plaintext(
         message=None,
-        level=prepared_plaintext.level,
+        depth=prepared_plaintext.depth,
         scale=prepared_plaintext.scale,
         data=dense_data,
         representation="rns",
@@ -283,12 +287,12 @@ def test_eager_runtime_matches_boundary_and_computation_sequence_on_cpu() -> (
     )
     assert torch.equal(relinearized.data, expected_relinearized.data)
     assert torch.equal(
-        runtime.rescale_to_next_level(relinearized).data,
-        engine.rescale_to_next_level(expected_relinearized).data,
+        runtime.rescale_to_next_depth(relinearized).data,
+        engine.rescale_to_next_depth(expected_relinearized).data,
     )
     assert torch.equal(
-        runtime.mod_switch_to_level(ciphertext_engine, 2).data,
-        engine.mod_switch_to_level(ciphertext_engine, 2).data,
+        runtime.mod_switch_to_depth(ciphertext_engine, 2).data,
+        engine.mod_switch_to_depth(ciphertext_engine, 2).data,
     )
     assert runtime.reinterpret_at_scale(ciphertext_engine, 2.0**39).scale == (
         2.0**39
@@ -321,7 +325,7 @@ def test_eager_runtime_matches_boundary_and_computation_sequence_on_cpu() -> (
 
 @pytest.mark.gpu
 def test_eager_runtime_cuda_exact_differential_sequence() -> None:
-    preset = Preset.slots8192_scale40_levels7_int64
+    preset = Preset.slots8192_scale40_depth7_int64
     engine = CkksEngine(
         preset,
         device="cuda:0",
@@ -348,10 +352,10 @@ def test_eager_runtime_cuda_exact_differential_sequence() -> None:
     product_runtime = runtime.multiply(ntt_runtime, ntt_runtime)
     assert torch.equal(product_runtime.data, product_engine.data)
     key_engine = engine.create_relinearization_key(secret_engine)
-    actual = runtime.rescale_to_next_level(
+    actual = runtime.rescale_to_next_depth(
         runtime.relinearize(product_runtime, key_engine)
     )
-    expected = engine.rescale_to_next_level(
+    expected = engine.rescale_to_next_depth(
         engine.relinearize(product_engine, key_engine)
     )
     assert torch.equal(actual.data, expected.data)
@@ -379,7 +383,7 @@ def test_eager_runtime_cuda_exact_differential_sequence() -> None:
 
 
 def test_eager_key_lifecycle_controls_dependent_operations() -> None:
-    preset = Preset.slots8192_scale40_levels7_int64
+    preset = Preset.slots8192_scale40_depth7_int64
     engine = CkksEngine(preset, device="cpu", rng_seed=41, rng_nonce=13)
     runtime = Engine(
         preset,
@@ -408,7 +412,7 @@ def test_eager_key_lifecycle_controls_dependent_operations() -> None:
 
 
 def test_eager_repeated_calls_and_mutated_key_binding_behavior() -> None:
-    preset = Preset.slots8192_scale40_levels7_int64
+    preset = Preset.slots8192_scale40_depth7_int64
     engine = CkksEngine(preset, device="cpu", rng_seed=43, rng_nonce=17)
     runtime = Engine(preset)
     ciphertext = engine.encrypt_message(
@@ -449,30 +453,30 @@ def test_eager_repeated_calls_and_mutated_key_binding_behavior() -> None:
 def test_eager_boundary_calls_reuse_dynamic_state_and_release_replaced_key() -> (
     None
 ):
-    runtime = Engine(Preset.slots8192_scale40_levels7_int64)
+    runtime = Engine(Preset.slots8192_scale40_depth7_int64)
     message = torch.zeros(runtime.num_slots, dtype=torch.float64)
-    level_zero = runtime.encode(message, level=0)
-    level_one = runtime.encode(message, level=1)
-    assert level_zero.level == 0
-    assert level_one.level == 1
+    depth_zero = runtime.encode(message, depth=0)
+    depth_one = runtime.encode(message, depth=1)
+    assert depth_zero.depth == 0
+    assert depth_one.depth == 1
 
     secret = runtime.create_secret_key()
     first_key = runtime.create_public_key(secret)
-    runtime.encrypt(level_zero, first_key)
+    runtime.encrypt(depth_zero, first_key)
     first_key_reference = weakref.ref(first_key)
     second_key = runtime.create_public_key(secret)
-    runtime.encrypt(level_zero, second_key)
+    runtime.encrypt(depth_zero, second_key)
     del first_key
     gc.collect()
     assert first_key_reference() is None
 
 
 def test_eager_metadata_operations_preserve_payload_and_update_state() -> None:
-    runtime = Engine(Preset.slots8192_scale40_levels7_int64)
+    runtime = Engine(Preset.slots8192_scale40_depth7_int64)
     ciphertext = runtime.encrypt_message(
         torch.full((runtime.num_slots,), 0.01, dtype=torch.float64)
     )
-    switched = runtime.mod_switch_to_next_level(ciphertext)
+    switched = runtime.mod_switch_to_next_depth(ciphertext)
     assert torch.equal(switched.data, ciphertext.data[..., 1:, :])
 
     reinterpreted = runtime.reinterpret_at_scale(

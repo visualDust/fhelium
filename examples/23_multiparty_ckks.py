@@ -45,7 +45,7 @@ def fixed_impulse(
 
     result = torch.zeros(
         engine.config.N,
-        dtype=engine.config.torch_dtype,
+        dtype=engine.dtype,
         device=torch.get_default_device(),
     )
     result[coefficient] = value
@@ -58,7 +58,7 @@ def fixed_ternary(engine, *, shift: int) -> torch.Tensor:
     values = (
         torch.arange(
             engine.config.N,
-            dtype=engine.config.torch_dtype,
+        dtype=engine.dtype,
             device=torch.get_default_device(),
         )
         % 3
@@ -68,7 +68,7 @@ def fixed_ternary(engine, *, shift: int) -> torch.Tensor:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_engine_args(parser, default_preset="slots8192-scale40-levels7-int64")
+    add_engine_args(parser, default_preset="slots8192-scale40-depth7-int64")
     args = parser.parse_args()
 
     engine = make_engine(args)
@@ -237,7 +237,7 @@ def main() -> None:
     source_ntt_left = engine.coefficient_domain_to_ntt_domain(source)
     source_ntt_right = engine.coefficient_domain_to_ntt_domain(source)
     product = engine.multiply(source_ntt_left, source_ntt_right)
-    squared = engine.rescale_to_next_level(
+    squared = engine.rescale_to_next_depth(
         engine.relinearize(product, relinearization_key)
     )
     announce(

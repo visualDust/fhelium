@@ -10,7 +10,7 @@ def _representative_values() -> list[fh.TensorResident]:
     return [
         fh.Ciphertext(
             data=torch.arange(2 * 3 * 8, dtype=torch.int64).reshape(2, 3, 8),
-            level=1,
+            depth=1,
             scale=2.0**40,
             prime_ids=(1, 2, 3),
         ),
@@ -18,7 +18,7 @@ def _representative_values() -> list[fh.TensorResident]:
             data=torch.arange(3 * 4, dtype=torch.int64).reshape(3, 4),
             ring_dimension=16,
             compression_layout="strided_sparse",
-            level=1,
+            depth=1,
             scale=2.0**40,
             polynomial_domain="coefficient",
             modulus_basis="Q",

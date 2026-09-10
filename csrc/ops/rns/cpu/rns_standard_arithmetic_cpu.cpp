@@ -7,6 +7,7 @@
 #include "../../common/cpu/montgomery.h"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
+#include "rns_standard_arithmetic_cpu.h"
 
 namespace {
 
@@ -141,9 +142,9 @@ void standard_binary_into(torch::Tensor out,
   });
 }
 
-torch::Tensor rns_add_standard_cpu(const torch::Tensor lhs,
-                                   const torch::Tensor rhs,
-                                   const torch::Tensor rns_params) {
+torch::Tensor rns_add_standard_cpu_impl(const torch::Tensor lhs,
+                                        const torch::Tensor rhs,
+                                        const torch::Tensor rns_params) {
   auto out = torch::empty_like(lhs);
   standard_binary_into<StandardBinaryOperation::kAdd>(
       out, lhs, rhs, rns_params, "rns_add_standard");
@@ -248,6 +249,12 @@ void rns_sub_standard_inplace_cpu(torch::Tensor lhs,
 }
 
 }  // namespace
+
+torch::Tensor rns_add_standard_cpu(const torch::Tensor lhs,
+                                   const torch::Tensor rhs,
+                                   const torch::Tensor rns_params) {
+  return rns_add_standard_cpu_impl(lhs, rhs, rns_params);
+}
 
 TORCH_LIBRARY_IMPL(fhelium_rns_ops, CPU, m) {
   m.impl("add_standard", &rns_add_standard_cpu);

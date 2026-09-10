@@ -16,7 +16,7 @@ privacy property.
 
 Each call operates against one :class:`~fhelium.eager.Engine`.  Secret shares
 and ephemeral Protocol-2 secrets are ordinary process-local
-:class:`~fhelium.SecretKey` values in the complete level-zero QP basis.
+:class:`~fhelium.SecretKey` values in the complete depth-zero QP basis.
 Common randomness and protocol messages are raw integral tensors on their
 protocol-selected device. The caller owns party membership, all-party participation, freshness,
 delivery, and pairing each aggregate key with the correct additive shares.
@@ -130,7 +130,7 @@ def _p_product_montgomery_q(
     engine: Engine,
     device: torch.device,
 ) -> torch.Tensor:
-    r"""Return $P R \bmod q_i$ in level-zero Q-row order."""
+    r"""Return $P R \bmod q_i$ in depth-zero Q-row order."""
 
     rns_context = engine._rns_context_for(device)
     montgomery = rns_context.montgomery_parameters
@@ -141,7 +141,7 @@ def _p_product_montgomery_q(
             product_with_radix % montgomery.moduli[prime_id]
             for prime_id in rns_context.rns_layout.prime_ids(0)
         ],
-        dtype=engine.config.torch_dtype,
+        dtype=engine.dtype,
         device=device,
     )
 
@@ -159,10 +159,10 @@ def _require_raw_rns(
         )
     if value.layout != torch.strided:
         raise TypeError(f"{value_name} must use dense strided storage")
-    if value.dtype != engine.config.torch_dtype:
+    if value.dtype != engine.dtype:
         raise TypeError(
             f"{value_name} dtype differs from engine: "
-            f"{value.dtype} != {engine.config.torch_dtype}"
+            f"{value.dtype} != {engine.dtype}"
         )
     if tuple(value.shape) != expected_shape:
         raise ValueError(
@@ -226,7 +226,7 @@ def _lift_coefficients(
     engine: Engine,
     coefficients: torch.Tensor,
     *,
-    level: int,
+    depth: int,
     basis: Basis,
     to_ntt: bool,
 ) -> torch.Tensor:
@@ -236,7 +236,7 @@ def _lift_coefficients(
     rns_context = engine._rns_context_for(coefficients.device)
     result = rns_context.lift_integer_coefficients_exact(
         contiguous,
-        level,
+        depth,
         include_p=include_p,
         max_abs=max_abs,
     )
@@ -263,7 +263,7 @@ def _sample_gaussian_rns(
     return _lift_coefficients(
         engine,
         _sample_gaussian_coefficients(engine, count=count, device=device),
-        level=0,
+        depth=0,
         basis=basis,
         to_ntt=True,
     )
@@ -355,7 +355,7 @@ def _embed_p_times_secret_by_digit(
     digit_count = engine.key_digit_count
     embedded = torch.zeros(
         _expected_rns_shape(engine, basis="QP", count=digit_count),
-        dtype=engine.config.torch_dtype,
+        dtype=engine.dtype,
         device=secret_share.device,
     )
     for digit_spec in rns_context.rns_layout.digit_specs(0):
@@ -466,12 +466,11 @@ def _active_q_secret_rows(
     engine: Engine,
     secret_share: SecretKey,
     *,
-    level: int,
+    depth: int,
 ) -> torch.Tensor:
     rns_context = engine._rns_context_for(secret_share.device)
-    return secret_share.data[
-        rns_context.level_row_starts[level] : rns_context.q_row_stop
-    ]
+    basis = rns_context.basis_parameters(depth)
+    return secret_share.data[basis.parameter_row_start : basis.parameter_row_stop]
 
 
 def _ciphertext_secret_product(
@@ -487,7 +486,7 @@ def _ciphertext_secret_product(
         _active_q_secret_rows(
             engine,
             secret_share,
-            level=ciphertext.level,
+            depth=ciphertext.depth,
         ),
     )
     ntt_context.inverse_to_standard_(product)
@@ -499,7 +498,7 @@ def sample_secret_share(
     *,
     device: torch.device | str | None = None,
 ) -> SecretKey:
-    r"""Sample one additive secret share in complete level-zero QP form."""
+    r"""Sample one additive secret share in complete depth-zero QP form."""
 
     return engine.create_secret_key(modulus_basis="QP", device=device)
 
@@ -907,7 +906,7 @@ def unsafe_collective_decryption_share(
     error = _lift_coefficients(
         engine,
         smudging_error_coefficients,
-        level=ciphertext.level,
+        depth=ciphertext.depth,
         basis="Q",
         to_ntt=False,
     )
@@ -938,10 +937,10 @@ def unsafe_fuse_collective_decryption(
     phase = engine._rns_context_for(ciphertext.device).add_standard(
         ciphertext.c0, share_sum
     )
-    coefficients = engine.reconstruct_tail_q_coefficients(phase, ciphertext)
+    coefficients = engine.reconstruct_q_coefficients(phase, ciphertext)
     return Plaintext(
         message=None,
-        level=ciphertext.level,
+        depth=ciphertext.depth,
         scale=ciphertext.scale,
         data=coefficients,
         representation="approximate_coefficients",
@@ -994,15 +993,15 @@ def unsafe_public_key_switch_share(
     ephemeral_rns = _lift_coefficients(
         engine,
         ephemeral_coefficients,
-        level=ciphertext.level,
+        depth=ciphertext.depth,
         basis="Q",
         to_ntt=True,
     )
     rns_context = engine._rns_context_for(ciphertext.device)
     ntt_context = engine._ntt_context_for(ciphertext.device)
-    start = rns_context.level_row_starts[ciphertext.level]
-    destination0 = destination_public_key.k0[start:]
-    destination1 = destination_public_key.k1[start:]
+    basis = rns_context.basis_parameters(ciphertext.depth)
+    destination0 = destination_public_key.k0[basis.parameter_row_start : basis.parameter_row_stop]
+    destination1 = destination_public_key.k1[basis.parameter_row_start : basis.parameter_row_stop]
     encrypted0 = rns_context.montgomery_mul(
         ephemeral_rns,
         destination0,
@@ -1016,14 +1015,14 @@ def unsafe_public_key_switch_share(
     error0 = _lift_coefficients(
         engine,
         smudging_error0_coefficients,
-        level=ciphertext.level,
+        depth=ciphertext.depth,
         basis="Q",
         to_ntt=False,
     )
     error1 = _lift_coefficients(
         engine,
         error1_coefficients,
-        level=ciphertext.level,
+        depth=ciphertext.depth,
         basis="Q",
         to_ntt=False,
     )
@@ -1085,7 +1084,7 @@ def unsafe_fuse_public_key_switch(
     )
     return Ciphertext(
         data=torch.stack((component0, component1), dim=0),
-        level=ciphertext.level,
+        depth=ciphertext.depth,
         scale=ciphertext.scale,
         prime_ids=ciphertext.prime_ids,
         polynomial_domain="coefficient",

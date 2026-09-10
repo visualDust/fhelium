@@ -156,4 +156,4 @@ fhelium benchmark --help
 Running `fhelium benchmark` without a subcommand opens the interactive terminal
 interface. For reproducible automation, use a configured non-interactive
 subcommand and preserve structured JSON output. See
-[Benchmark a workload correctly](benchmark-a-workload.md).
+[Benchmark methodology](/benchmarks/methodology).

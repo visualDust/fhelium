@@ -231,7 +231,7 @@ class _PublicCkksExecutable:
                 )
             elif isinstance(operation, rns.ReinterpretScaleOp):
                 output_scale = float(operation.scale.value.data)
-            elif isinstance(operation, rns.RescaleDropLeadingPrimeOp):
+            elif isinstance(operation, rns.RescaleDropLeadingPrimesOp):
                 plan_owner = operation.plan.owner
                 if not isinstance(plan_owner, core.ResourceRefOp):
                     raise ValueError(
@@ -245,19 +245,16 @@ class _PublicCkksExecutable:
                     rns.RnsBundleType,
                     operation.value.type,
                 ).state.data
-                level_attribute = source_state.get("level")
-                if not isinstance(level_attribute, IntegerAttr):
-                    raise ValueError("JIT rescale requires represented level")
-                level = int(level_attribute.value.data)
-                dropped_prime_id = resource.rns_context.rns_layout.prime_ids(
-                    level
-                )[0]
-                dropped_prime = int(
-                    resource.rns_context.montgomery_parameters.moduli[
-                        dropped_prime_id
-                    ]
-                )
-                output_scale = operand_scales[0] / dropped_prime
+                depth_attribute = source_state.get("depth")
+                if not isinstance(depth_attribute, IntegerAttr):
+                    raise ValueError("JIT rescale requires represented depth")
+                depth = int(depth_attribute.value.data)
+                prime_ids = resource.rns_context.rns_layout.prime_ids(depth)
+                divisor = 1
+                for prime_id in prime_ids[:operation.drop_count.value.data]:
+                    divisor *= int(resource.rns_context.montgomery_parameters.moduli[prime_id])
+                output_scale = operand_scales[0] / divisor
+
             else:
                 output_scale = operand_scales[0]
             for result in operation.results:
@@ -534,7 +531,7 @@ class _PublicBoundaryExecutable:
         if isinstance(operation, ckks.EncodeOp):
             return self.engine.encode(
                 value,  # type: ignore[arg-type]
-                level=int(operation.level.value.data),
+                depth=int(operation.depth.value.data),
                 scale=float(operation.scale.value.data),
                 device=self.device,
             )

@@ -117,6 +117,6 @@ entry point to the storage or native operation that performs the work. Record:
 - source commit and loaded native ABI manifest;
 - smallest correctness oracle and focused tests.
 
-For numerical work, retain the preset, level, scale, NTT backend, and
+For numerical work, retain the preset, depth, scale, NTT backend, and
 first failing stage. Synchronize only around the suspected CUDA stage when
 locating asynchronous failures.

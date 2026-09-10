@@ -11,7 +11,7 @@ from xdsl.ir import Operation
 
 from fhelium.backend.implementation import OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
-from fhelium.backend.rns._operand_state import _active_level, _operand_basis
+from fhelium.backend.rns._operand_state import _active_depth, _operand_basis
 from fhelium.backend.rns.context import RnsContext
 from fhelium.backend.rns.resources import RNS_RESOURCE_KIND
 from fhelium.ir.dialects import ckks
@@ -29,7 +29,7 @@ def _quantized_real_coefficients(
     *,
     scalar: float,
     scalar_scale: float,
-    level: int,
+    depth: int,
     include_p: bool,
 ) -> torch.Tensor:
     """Return one standard-RNS coefficient for a scaled real scalar."""
@@ -44,7 +44,7 @@ def _quantized_real_coefficients(
     )
     return context.lift_integer_coefficients_exact(
         coefficient,
-        level,
+        depth,
         include_p=include_p,
         max_abs=int(math.ceil(abs(scaled))) + 1,
     )
@@ -55,22 +55,17 @@ def _integer_montgomery_rows(
     context: RnsContext,
     *,
     scalar: int,
-    level: int,
+    depth: int,
     include_p: bool,
 ) -> torch.Tensor:
     """Return one Montgomery scalar in every active prime row."""
 
-    prime_ids = context.rns_layout.prime_ids(level, include_p=include_p)
-    moduli = context.montgomery_parameters.moduli
-    radix = context.montgomery_parameters.R
-    return torch.tensor(
-        tuple(
-            ((scalar % moduli[prime_id]) * radix) % moduli[prime_id]
-            for prime_id in prime_ids
-        ),
-        dtype=ciphertext.dtype,
-        device=ciphertext.device,
-    )
+    del ciphertext
+    basis = context.basis_parameters(depth, include_p=include_p)
+    return context.integer_scalar_parameters(scalar)[
+        basis.parameter_row_start:basis.parameter_row_stop
+    ]
+
 
 
 @dataclass(frozen=True)
@@ -115,14 +110,14 @@ class NativeScalarArithmeticImplementation:
         ciphertext = inputs[0]
         context = cast(RnsContext, resources[0].value)
         include_p = _operand_basis(invocation) == "QP"
-        level = _active_level(ciphertext, context, include_p=include_p)
+        depth = _active_depth(ciphertext, context, include_p=include_p)
 
         if invocation.operation_type is ckks.MultiplyIntegerScalarOp:
             row_scalars = _integer_montgomery_rows(
                 ciphertext,
                 context,
                 scalar=int(cast(int, invocation.attributes["scalar"])),
-                level=level,
+                depth=depth,
                 include_p=include_p,
             )
             return (
@@ -142,7 +137,7 @@ class NativeScalarArithmeticImplementation:
             scalar_scale=float(
                 cast(float, invocation.attributes["scalar_scale"])
             ),
-            level=level,
+            depth=depth,
             include_p=include_p,
         )
         if invocation.operation_type is ckks.AddScalarOp:

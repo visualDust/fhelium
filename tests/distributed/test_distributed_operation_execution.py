@@ -252,10 +252,7 @@ def _gloo_ckks_reduction_worker(
         world_size=world_size,
     )
     try:
-        config = CkksConfig.parse(
-            Preset.slots8192_scale40_levels7_int64,
-            num_scale_primes=2,
-        )
+        config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
         rns_context = RnsContext(config, device="cpu")
         rns_resource = BoundResource(
             "rank-local-rns",
@@ -278,7 +275,7 @@ def _gloo_ckks_reduction_worker(
             {
                 "basis": StringAttr("Q"),
                 "components": IntegerAttr(2, 64),
-                "level": IntegerAttr(0, 64),
+                "depth": IntegerAttr(0, 64),
                 "scale": FloatAttr(1.0, Float64Type()),
                 "prime_ids": ArrayAttr(
                     IntegerAttr(index, 64)
@@ -311,11 +308,11 @@ def _gloo_ckks_reduction_worker(
         source = torch.full(
             (2, config.num_q_primes, config.N),
             rank + 1,
-            dtype=config.torch_dtype,
+            dtype=rns_context.dtype,
         )
         source_value = Ciphertext(
             data=source,
-            level=0,
+            depth=0,
             scale=1.0,
             prime_ids=tuple(range(config.num_q_primes)),
             polynomial_domain="coefficient",

@@ -14,7 +14,7 @@ from .program import (
     default_svg_operation_color_key,
 )
 from .ckks import (
-    AssignCkksLevelsPass,
+    AssignCkksDepthsPass,
     AssignCkksScalesPass,
     HoistRotationsPass as HoistRotationsPass,
     InsertMultiplyNttTransitionsPass,
@@ -38,6 +38,7 @@ from .backend import (
     LinkProgramPass,
     MaterializeResourcesPass,
     ResolveBackendOperationsPass,
+    ValidateExecutionRepresentationsPass,
     backend_linking_pipeline,
 )
 from .codegen import EmitBackendPythonPass, EmitEagerPythonPass
@@ -47,7 +48,7 @@ __all__ = [
     "InitializeResourceBindingsPass",
     "AssignImplementationsPass",
     "AssignNttImplementationPass",
-    "AssignCkksLevelsPass",
+    "AssignCkksDepthsPass",
     "AssignCkksScalesPass",
     "EliminateDeadValuesPass",
     "EmitBackendPythonPass",
@@ -67,6 +68,7 @@ __all__ = [
     "LinkProgramPass",
     "MaterializeResourcesPass",
     "ResolveBackendOperationsPass",
+    "ValidateExecutionRepresentationsPass",
     "ResolveRotationKeyOperandsPass",
     "SvgGraphDirection",
     "SvgGraphError",

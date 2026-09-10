@@ -162,6 +162,16 @@ def analyze_evaluation_key_requirements(
                     )
                 if step:
                     rotation_steps.add(step)
+        elif isinstance(operation, ckks.GroupedRotationWeightedSumOp):
+            for key in operation.keys:
+                step = _rotation_key_step(key)
+                if step is None:
+                    raise ValueError(
+                        "fhelium_ckks.grouped_rotation_weighted_sum requires "
+                        "key operands with represented rotation steps"
+                    )
+                if step:
+                    rotation_steps.add(step)
         elif isinstance(operation, logical.RollEncryptedOp):
             step = _integer_attribute(operation, "shift")
             if step is None:

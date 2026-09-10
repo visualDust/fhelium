@@ -121,13 +121,13 @@ How-to guides provide procedures for application, deployment, diagnosis, and per
     href="/how-to/choose-ntt-backend"
   />
   <DocCard
-    title="Benchmark a workload correctly"
-    description="Define the timed work, synchronize CUDA, and retain a correctness oracle."
-    href="/how-to/benchmark-a-workload"
+    title="Run and submit a benchmark"
+    description="Run the complete suite and submit its report for review."
+    href="/benchmarks/run-and-submit"
   />
   <DocCard
     title="Choose a homogeneous batch size"
-    description="Compare unbatched, B1, and larger batches across active levels, latency, and peak memory."
+    description="Compare unbatched, B1, and larger batches across active depths, latency, and peak memory."
     href="/how-to/choose-homogeneous-batch-size"
   />
   <DocCard

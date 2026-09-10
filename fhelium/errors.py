@@ -1,7 +1,7 @@
 """Typed public exceptions raised by FHElium.
 
 The exception hierarchy is intentionally small and centralized. Callers may
-catch :class:`FHEliumError` for package-level failures or a narrower category
+catch :class:`FHEliumError` for package-depth failures or a narrower category
 such as :class:`ConfigurationError` or :class:`StateError`.
 """
 
@@ -47,28 +47,28 @@ class PrimeCatalogResourceError(PrimeCatalogError):
         )
 
 
-class MessagePrimeCatalogEntryNotFoundError(PrimeCatalogError):
-    """No message-prime catalog entry matches the requested parameters."""
+class SpecialPrimeCatalogEntryNotFoundError(PrimeCatalogError):
+    """No special-prime catalog entry matches the requested parameters."""
 
-    def __init__(self, *, coefficient_bits: int, ring_dimension: int) -> None:
-        self.coefficient_bits = int(coefficient_bits)
+    def __init__(self, *, prime_bits: int, ring_dimension: int) -> None:
+        self.prime_bits = int(prime_bits)
         self.ring_dimension = int(ring_dimension)
         super().__init__(
-            "No message-prime catalog entry for "
-            f"coefficient_bits={self.coefficient_bits}, "
+            "No special-prime catalog entry for "
+            f"prime_bits={self.prime_bits}, "
             f"ring_dimension={self.ring_dimension}."
         )
 
 
-class ScalePrimeCatalogEntryNotFoundError(PrimeCatalogError):
-    """No scale-prime catalog entry matches the requested parameters."""
+class ScalingPrimeCatalogEntryNotFoundError(PrimeCatalogError):
+    """No scaling-prime catalog entry matches the requested parameters."""
 
-    def __init__(self, *, scale_bits: int, ring_dimension: int) -> None:
-        self.scale_bits = int(scale_bits)
+    def __init__(self, *, prime_bits: int, ring_dimension: int) -> None:
+        self.prime_bits = int(prime_bits)
         self.ring_dimension = int(ring_dimension)
         super().__init__(
-            "No scale-prime catalog entry for "
-            f"scale_bits={self.scale_bits}, "
+            "No scaling-prime catalog entry for "
+            f"prime_bits={self.prime_bits}, "
             f"ring_dimension={self.ring_dimension}."
         )
 
@@ -79,7 +79,7 @@ class InsufficientPrimeCatalogError(PrimeCatalogError):
     def __init__(
         self,
         *,
-        prime_kind: Literal["message", "scale"],
+        prime_kind: Literal["special", "scaling"],
         ring_dimension: int,
         required_count: int,
         available_count: int,
@@ -102,24 +102,21 @@ class SecurityBudgetExceededError(ConfigurationError):
     def __init__(
         self,
         *,
-        scale_bits: int,
         ring_dimension: int,
-        num_scale_primes: int,
+        max_depth: int,
         maximum_modulus_bits: int,
         requested_modulus_bits: int,
     ) -> None:
-        self.scale_bits = int(scale_bits)
         self.ring_dimension = int(ring_dimension)
-        self.num_scale_primes = int(num_scale_primes)
+        self.max_depth = int(max_depth)
         self.maximum_modulus_bits = int(maximum_modulus_bits)
         self.requested_modulus_bits = int(requested_modulus_bits)
         super().__init__(
             "Requested modulus chain exceeds the security budget: "
             f"requested_modulus_bits={self.requested_modulus_bits}, "
             f"maximum_modulus_bits={self.maximum_modulus_bits}, "
-            f"scale_bits={self.scale_bits}, "
             f"ring_dimension={self.ring_dimension}, "
-            f"num_scale_primes={self.num_scale_primes}."
+            f"max_depth={self.max_depth}."
         )
 
 
@@ -489,15 +486,15 @@ class SecretKeyModulusBasisError(StateError):
         )
 
 
-class MaximumLevelError(StateError):
-    """No further level drop is available for a ciphertext."""
+class MaximumDepthError(StateError):
+    """No further depth drop is available for a ciphertext."""
 
-    def __init__(self, *, level: int, maximum_level: int) -> None:
-        self.level = int(level)
-        self.maximum_level = int(maximum_level)
+    def __init__(self, *, depth: int, maximum_depth: int) -> None:
+        self.depth = int(depth)
+        self.maximum_depth = int(maximum_depth)
         super().__init__(
             "Ciphertext modulus-chain depth is exhausted: "
-            f"level={self.level}, maximum_level={self.maximum_level}."
+            f"depth={self.depth}, maximum_depth={self.maximum_depth}."
         )
 
 
@@ -511,8 +508,8 @@ __all__ = [
     "FHEliumError",
     "InsufficientPrimeCatalogError",
     "InvalidScaleError",
-    "MaximumLevelError",
-    "MessagePrimeCatalogEntryNotFoundError",
+    "MaximumDepthError",
+    "SpecialPrimeCatalogEntryNotFoundError",
     "PolynomialDomainError",
     "PrimeCatalogError",
     "PrimeCatalogResourceError",
@@ -533,7 +530,7 @@ __all__ = [
     "ResidueRepresentationError",
     "ScaleError",
     "ScaleMismatchError",
-    "ScalePrimeCatalogEntryNotFoundError",
+    "ScalingPrimeCatalogEntryNotFoundError",
     "SecretKeyModulusBasisError",
     "SecurityBudgetExceededError",
     "StaleArtifactReferenceError",

@@ -40,9 +40,8 @@ def parse_preset(name: str) -> Preset:
 def add_engine_args(
     parser: argparse.ArgumentParser,
     *,
-    default_preset: str = Preset.slots32768_scale40_levels34_int64.value,
+    default_preset: str = Preset.slots32768_scale40_depth34_int64.value,
     initial_device: str = "cpu",
-    include_num_scale_primes: bool = False,
 ) -> None:
     parser.add_argument(
         "--preset",
@@ -68,26 +67,13 @@ def add_engine_args(
             "use the config default."
         ),
     )
-    if include_num_scale_primes:
-        parser.add_argument(
-            "--num-scale-primes",
-            type=int,
-            default=None,
-            help="Override the preset scale-prime and public-level count.",
-        )
 
 
 def _execution_configuration(
     args: argparse.Namespace,
 ) -> tuple[CkksConfig, torch.device, str | None]:
     preset = parse_preset(args.preset)
-    if getattr(args, "num_scale_primes", None) is not None:
-        cfg = CkksConfig.parse(
-            preset,
-            num_scale_primes=args.num_scale_primes,
-        )
-    else:
-        cfg = CkksConfig.parse(preset)
+    cfg = CkksConfig.parse(preset)
     device = torch.device(args.device)
     ntt_backend = args.ntt_backend
     if args.ntt_backend is not None:

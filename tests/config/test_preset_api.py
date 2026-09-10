@@ -42,7 +42,7 @@ def test_ntt_recommendation_cli_lists_registry_values() -> None:
     assert result.exit_code == 0, result.output
     for preset in Preset:
         assert preset.value in result.output
-    assert "[default: slots32768-scale40-levels34-int64]" in result.output
+    assert "[default: slots32768-scale40-depth34-int64]" in result.output
     assert "logN16" not in result.output
 
 

@@ -61,9 +61,9 @@ def _message_value(value: SSAValue) -> tuple[tuple[Operation, ...], SSAValue]:
 class LowerMessagePlaintextPreparationPass:
     """Expand concrete message preparation into visible CKKS operations.
 
-    Level, scale, ordered prime ids, and modulus basis must already be assigned
+    Depth, scale, ordered prime ids, and modulus basis must already be assigned
     by a caller-selected CKKS scheduling pass. Missing state is an error rather
-    than a request for this pass to choose a level or scale.
+    than a request for this pass to choose a depth or scale.
     """
 
     name: str = "lower-message-plaintext-preparation"
@@ -90,9 +90,9 @@ class LowerMessagePlaintextPreparationPass:
                     "Message preparation result must be CKKS plaintext"
                 )
             operation_name = display_name(operation)
-            level = _state_attribute(
+            depth = _state_attribute(
                 result_type,
-                "level",
+                "depth",
                 IntegerAttr,
                 operation_name=operation_name,
             )
@@ -114,7 +114,7 @@ class LowerMessagePlaintextPreparationPass:
                 StringAttr,
                 operation_name=operation_name,
             )
-            assert isinstance(level, IntegerAttr)
+            assert isinstance(depth, IntegerAttr)
             assert isinstance(scale, FloatAttr)
             assert isinstance(prime_ids, ArrayAttr)
             assert isinstance(basis, StringAttr)
@@ -131,7 +131,7 @@ class LowerMessagePlaintextPreparationPass:
             message_operations, message = _message_value(operation.public)
             coefficient_type = ckks.PlaintextType().with_state(
                 {
-                    "level": level,
+                    "depth": depth,
                     "scale": scale,
                     "representation": StringAttr("integer_coefficients"),
                     "polynomial_domain": StringAttr("coefficient"),
@@ -141,12 +141,12 @@ class LowerMessagePlaintextPreparationPass:
             encode = ckks.EncodeOp.create(
                 operands=(message,),
                 result_types=(coefficient_type,),
-                attributes={"level": level, "scale": scale},
+                attributes={"depth": depth, "scale": scale},
             )
             encode.result.name_hint = f"{operation_name}_coefficients"
 
             rns_state: dict[str, Attribute] = {
-                "level": level,
+                "depth": depth,
                 "scale": scale,
                 "prime_ids": prime_ids,
                 "basis": basis,
@@ -159,7 +159,7 @@ class LowerMessagePlaintextPreparationPass:
             to_rns = ckks.IntegerCoefficientsToRnsOp.create(
                 operands=(encode.result,),
                 result_types=(rns_type,),
-                attributes={"modulus_basis": basis, "level": level},
+                attributes={"modulus_basis": basis, "depth": depth},
             )
             to_rns.result.name_hint = f"{operation_name}_rns"
             replacements: list[Operation] = [

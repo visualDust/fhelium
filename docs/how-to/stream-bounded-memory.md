@@ -79,7 +79,7 @@ Pageable memory may require staging and should not be assumed to provide fully
 asynchronous transfer.
 
 Keep value state stable across host and device materializations. A tile at a
-different level, prime layout, or rotation step must use a different signature
+different depth, prime layout, or rotation step must use a different signature
 or buffer.
 
 ## 5. Build a double-buffer schedule

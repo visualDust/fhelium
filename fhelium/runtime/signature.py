@@ -70,7 +70,7 @@ class TensorSignature:
 class ValueSignature:
     """FHElium value state plus device-independent tensor topology.
 
-    A value signature fixes value state such as level, scale, plaintext
+    A value signature fixes value state such as depth, scale, plaintext
     representation, polynomial domain, modulus basis, residue
     representation, prime identities, schema version, and key identity.
     A value signature is storage-independent metadata. Model, user, request,

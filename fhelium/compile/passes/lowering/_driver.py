@@ -96,7 +96,7 @@ def lower_ckks_program(
                     operation.name,
                     selected="preserve",
                     candidates=candidates,
-                    details=("operation preserved at CKKS level",),
+                    details=("operation preserved at CKKS depth",),
                 )
             )
             continue
@@ -128,7 +128,7 @@ def lower_ckks_program(
                 operation.name,
                 selected=definition.name,
                 candidates=candidates,
-                details=("operation replaced by lower-level IR",),
+                details=("operation replaced by lower-depth IR",),
             )
         )
     return _LoweringResult(

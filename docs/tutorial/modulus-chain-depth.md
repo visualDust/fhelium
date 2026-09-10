@@ -2,135 +2,112 @@
 
 **Example source:** [`examples/04_modulus_chain_depth.py`](https://github.com/VisualDust/fhelium/blob/main/examples/04_modulus_chain_depth.py)
 
-This example builds several modulus-chain depths for one preset and compares
-modulus bits, active RNS rows, security estimates, and value sizes. The
-tutorial connects the evaluator's required rescale/level-transition budget to
-configured chain depth, security budget, and ciphertext memory.
+This example derives several exact Q chains from one preset and compares their
+maximum public depth, modulus size, active RNS rows, selected execution dtype,
+and ciphertext storage.
 
 ## Run the example
 
-Inspect low, middle, and full-depth variants of a preset:
-
 ```bash
-python examples/04_modulus_chain_depth.py --preset slots32768-scale40-levels34-int64
+python examples/04_modulus_chain_depth.py \
+  --preset slots32768-scale40-depth34-int64
 ```
 
-Select depth values:
+Select maximum depths:
 
 ```bash
 python examples/04_modulus_chain_depth.py \
-  --preset slots32768-scale40-levels34-int64 \
-  --depths 16,24,34
+  --preset slots32768-scale40-depth34-int64 \
+  --depths 16,24,33
 ```
 
-## 1. Scale-prime count fixes the public-level interval
+## 1. Maximum depth follows Q-group count
+
+A resolved configuration stores
 
 ```python
-cfg = CkksConfig.parse(preset, num_scale_primes=depth)
+config.q_depth_groups
+config.max_depth
 ```
 
-`num_scale_primes` counts configured scale-prime rows and equals
-`engine.public_level_count`. Public levels are therefore
-`[0, num_scale_primes)`, and the number of ordinary public one-level
-transitions available from level zero is `num_scale_primes - 1`.
-
-The level-zero ordinary modulus contains those scale primes plus one structural
-base Q prime, so
+as exact values. If the groups are
 
 $$
-\mathtt{num\_q\_primes}
-=
-\mathtt{num\_scale\_primes}+1.
+(G_0,G_1,\ldots,G_D),
 $$
 
-The final public level retains the last scale prime and the structural base.
-Bootstrap entry owns the subsequent transition into the base-only state.
+then `max_depth == D`. Public values use depths from zero through $D$, and
+`G_D` is the ordinary terminal Q group.
 
-For the built-in int64 Presets, a useful approximation is:
-
-$$
-\operatorname{bits}(QP)
-\approx
-b_sL + b_b + 60K_P,
-$$
-
-where $L$ is `num_scale_primes`, $b_s$ is `scale_bits`, $b_b$ is the
-structural-base-prime width, and $K_P$ is `num_p_primes`. The built-in
-int64 presets use $b_s\in\{30,40,50\}$ and the default 60-bit structural
-base. Built-in int32 Presets use $b_s=25$ and 28-bit structural/P primes,
-giving the separate approximation
-
-$$
-\operatorname{bits}(QP)\approx25L+28(1+K_P).
-$$
-
-The catalog primes remain authoritative. In particular, every native
-modulus must also satisfy $4q<2^w$, where $w$ is the configured residue buffer
-width; security-budget capacity alone does not establish native arithmetic
-validity.
-
-`total_modulus_bits` is the configured value
-$\lceil\log_2(Q_0P)\rceil$. It covers the ordinary Q-chain primes $q_i$
-and the special-prime product $P$. The configuration requires
-`total_modulus_bits <= maximum_modulus_bits` when
-`enforce_security_budget=True`.
-
-The primes come from the immutable catalog. The configuration validates
-that the selected chain remains within the requested security budget.
-
-## 2. Q and P have different roles
-
-- Q rows form the ordinary ciphertext modulus chain.
-- One leading scale prime is consumed by each rescale.
-- The base Q row remains at the end of the chain.
-- P rows support hybrid key switching outside the ordinary ciphertext chain.
-
-The table printed by the example reports `Q primes`, `P primes`, and their
-combined `total primes` count separately.
-
-## 3. Level-zero values are largest
+The example's `prefix_config` function constructs a shorter exact parameter set
+by retaining the requested public-group prefix and the same terminal Q group:
 
 ```python
-ct0 = engine.encrypt_message([1, 2, 3, 4], level=0)
-print(ct0.data.nbytes)
+CkksConfig(
+    default_scale=source.default_scale,
+    q_depth_groups=(
+        *source.q_depth_groups[:max_depth],
+        source.q_depth_groups[-1],
+    ),
+    p_moduli=source.p_moduli,
+    logN=source.logN,
+)
 ```
 
-At level zero, every Q row is active. A level transition drops leading Q rows,
-so a later-level ciphertext is smaller.
+No count override regenerates an existing configuration. Each constructed
+`CkksConfig` records its complete Q groups and P primes.
 
-For a two-component ciphertext, the approximate payload size is:
+## 2. One depth may contain several RNS rows
+
+One public rescale from depth $d$ removes the complete group $G_d$ and divides
+actual scale by
 
 $$
-B_{\mathrm{ct}}
-\approx
-2L_QN \cdot W\ \text{bytes},
+M_d=\prod_{q\in G_d}q.
 $$
 
-where $L_Q$ is the number of active Q rows, $N$ is the ring dimension, and
-$W$ is four bytes for int32 or eight bytes for int64.
+A one-prime group and a two-prime group both consume one depth. They have
+different active row counts and may select different native execution formats.
+Use `config.rescale_divisor(d)` for the group product and
+`config.active_q_moduli(d)` for the active prime sequence.
 
-Allocator overhead and temporary operation storage are separate from this
-payload calculation.
+## 3. Q and P have different roles
 
-## 4. Compare costs at the same active level
+- Q depth groups form the ciphertext-modulus chain.
+- P contains special primes used temporarily by hybrid key switching.
+- QP appends all P rows to the active Q basis without changing depth.
 
-Initial configured chain depth and current active Q-row count are different
-quantities. Two configurations that have reached the same active Q-row count can have similar
-current ciphertext sizes even if one started with a longer chain.
+`config.total_modulus_bits` is the bit length of the exact complete QP product.
+When security-budget enforcement is enabled, it must not exceed
+`config.maximum_modulus_bits`.
 
-Conversely, comparing only level zero makes a longer initial chain look more
-expensive because it genuinely stores more rows at that point.
+## 4. Depth-zero values are largest
+
+```python
+ciphertext = engine.encrypt_message([1, 2, 3, 4], depth=0)
+print(ciphertext.data.nbytes)
+```
+
+At depth zero, every Q group is active. Later depths contain fewer Q rows. For
+a two-component ciphertext, payload storage is approximately
+
+$$
+2\,L_Q\,N\,W,
+$$
+
+where $L_Q$ is the active Q-row count and $W$ is the residue element size.
+Evaluation keys and operation temporaries have additional axes and lifetimes.
 
 ## 5. Choose depth from the circuit
 
-Count rescale operations in the intended circuit and reserve a small
-engineering margin. Do not always select the largest chain depth simply because it
-fits the security table:
+Count the public rescale transitions on the intended execution path and reserve
+the required margin. Then validate precision, message range, security budget,
+key storage, and latency with the exact groups:
 
-- more initial Q rows increase ciphertext and prepared-plaintext memory;
-- key-switch and relinearization work touches more active rows;
-- key material can dominate serving capacity;
-- unnecessary depth makes early-level operations more expensive.
+- more public groups provide more transitions;
+- more prime rows increase early-depth ciphertext and prepared-plaintext size;
+- key switching and relinearization touch the active QP rows;
+- group products determine the scale removed by each rescale.
 
 ::: details Source
 <<< @/../examples/04_modulus_chain_depth.py
@@ -138,7 +115,7 @@ fits the security table:
 
 ## Related concepts and guides
 
-- [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md)
+- [Scale, depth, and native RNS dispatch](../concepts/ckks/scale-depth-and-execution-format.md)
+- [Scale and depth lifecycle](../concepts/ckks/scale-and-depth-lifecycle.md)
 - [Configuration and modulus chain](../concepts/ckks/context-and-modulus-chain.md)
-- [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)
 - [Choose a preset and chain depth](../how-to/choose-preset-and-depth.md)

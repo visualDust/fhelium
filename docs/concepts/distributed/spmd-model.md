@@ -90,7 +90,7 @@ sequenceDiagram
     participant Dst as Destination rank
     participant Data as Dense payload transport
 
-    Src->>Ctrl: type, shape, level, stored state
+    Src->>Ctrl: type, shape, depth, stored state
     Ctrl->>Dst: fixed-size descriptor
     Dst->>Dst: validate and allocate receiver
     Src->>Data: tensor payload

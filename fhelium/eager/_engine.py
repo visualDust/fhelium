@@ -9,6 +9,7 @@ factory-like calls use CPU unless another device is selected.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import math
 from operator import index as integer_index
 from threading import RLock
 from typing import Literal, cast, overload
@@ -17,6 +18,7 @@ import torch
 from xdsl.ir import Operation
 
 from fhelium.config import CkksConfig, Preset
+from fhelium.backend.rns.format import RnsExecutionFormat
 from fhelium.values import (
     Ciphertext,
     CompressedPlaintext,
@@ -35,13 +37,13 @@ from fhelium.values.state import (
     PolynomialDomain,
     ResidueRepresentation,
 )
-from fhelium.errors import MaximumLevelError, ScaleMismatchError
+from fhelium.errors import MaximumDepthError, ScaleMismatchError
 from fhelium.backend.ckks import (
     CkksKeyGenerator,
     PUBLIC_KEY_RESOURCE_KIND,
     SECRET_KEY_RESOURCE_KIND,
 )
-from fhelium.backend.ckks.crypto import reconstruct_tail_q_coefficients_tensor
+from fhelium.backend.ckks.crypto import reconstruct_q_coefficients_tensor
 from fhelium.backend.resources import (
     BoundResource,
     ResourceBindings,
@@ -80,7 +82,7 @@ def _ciphertext_result(
     source: Ciphertext,
     data: torch.Tensor,
     *,
-    level: int | None = None,
+    depth: int | None = None,
     scale: float | None = None,
     prime_ids: tuple[int, ...] | None = None,
     polynomial_domain: PolynomialDomain | None = None,
@@ -91,7 +93,7 @@ def _ciphertext_result(
 
     return Ciphertext._from_fields(
         data=data,
-        level=source.level if level is None else level,
+        depth=source.depth if depth is None else depth,
         scale=source.scale if scale is None else scale,
         prime_ids=source.prime_ids if prime_ids is None else prime_ids,
         polynomial_domain=(
@@ -121,7 +123,7 @@ def _plaintext_result(
 
     return Plaintext._from_fields(
         message=None,
-        level=source.level,
+        depth=source.depth,
         scale=source.scale,
         data=data,
         representation=source.representation,
@@ -141,7 +143,21 @@ def _plaintext_result(
 
 
 class Engine:
-    """Own eager CKKS configuration and per-device execution resources.
+    r"""Own eager CKKS configuration and per-device execution resources.
+
+    Cheon-Kim-Kim-Song (CKKS) ciphertexts encode approximate complex slot
+    values as polynomials.  A two-component ciphertext (CT2) has phase
+    $c_0+c_1s$; a three-component ciphertext (CT3) has phase
+    $c_0+c_1s+c_2s^2$ for secret polynomial $s$.  The residue
+    number system (RNS) stores a polynomial row modulo each active ciphertext
+    prime in Q.  QP adds the special P primes used by hybrid key switching.
+    The number-theoretic transform (NTT) turns negacyclic polynomial products
+    into pointwise products.  Montgomery representation stores residue
+    $x_i$ as $x_iR_i\bmod q_i$ so modular products avoid division.
+    Hybrid key switching groups Q rows into digits, extends each digit to QP,
+    multiplies it by evaluation-key components, and removes P.  Each plaintext
+    and ciphertext records its own actual scale $\Delta$, which maps
+    encoded integers to approximate slot values.
 
     Source factories use PyTorch's default device when the caller omits
     ``device``.
@@ -158,6 +174,7 @@ class Engine:
         ckks_config: CkksConfig | Preset | dict[str, object] | None = None,
         *,
         ntt_backend: str | None = None,
+        rns_dtype: torch.dtype | None = None,
         rng_seed: int | None = None,
         rng_nonce: int | None = None,
         allow_automatic_key_generation: bool = True,
@@ -166,7 +183,7 @@ class Engine:
         """Construct one CKKS lifecycle with lazily created device resources."""
 
         if ckks_config is None:
-            ckks_config = Preset.slots16384_scale40_levels16_int64
+            ckks_config = Preset.slots16384_scale40_depth16_int64
         if not isinstance(ckks_config, CkksConfig):
             ckks_config = CkksConfig.parse(ckks_config)
         if type(allow_automatic_key_replication) is not bool:
@@ -175,6 +192,9 @@ class Engine:
             ckks_config.validate_security_budget()
 
         self._config = ckks_config
+        self._rns_execution_format = RnsExecutionFormat.select(
+            ckks_config.moduli, rns_dtype
+        )
         self._ntt_backend = ntt_backend
         self._rng_seed = rng_seed
         self._rng_nonce = rng_nonce
@@ -186,14 +206,22 @@ class Engine:
         rns_chain = RnsChain(
             num_q_primes=ckks_config.num_q_primes,
             num_p_primes=ckks_config.num_p_primes,
+            q_depth_group_sizes=tuple(
+                len(group) for group in ckks_config.q_depth_groups
+            ),
         )
         self._rns_layout = RnsLayout(
             rns_chain,
-            HybridRnsDecomposition(rns_chain),
+            HybridRnsDecomposition(
+                rns_chain,
+                self.config.q_moduli,
+                self.config.p_moduli,
+            ),
         )
         self._validator = CkksValidator(
             ckks_config,
             self._rns_layout,
+            self.dtype,
         )
         self._keys = KeyInventory(self._validator)
         self._installed_evaluation_keys: dict[str, KeySwitchKey] = {}
@@ -263,6 +291,7 @@ class Engine:
             ntt_backend=self._ntt_backend,
             rng_seed=self._rng_seed,
             rng_nonce=self._rng_nonce,
+            rns_dtype=self.dtype,
         )
         ntt_context = device_resources.ntt_context
         operation_registry = create_builtin_operation_registry(
@@ -300,8 +329,8 @@ class Engine:
         return self.config.N
 
     @property
-    def level0_qp_prime_ids(self) -> tuple[int, ...]:
-        """Return the level-zero QP prime identifiers."""
+    def depth0_qp_prime_ids(self) -> tuple[int, ...]:
+        """Return the depth-zero QP prime identifiers."""
 
         return self._rns_layout.prime_ids(0, include_p=True)
 
@@ -315,19 +344,20 @@ class Engine:
     def dtype(self) -> torch.dtype:
         """Return the Engine's RNS storage dtype."""
 
-        return self.config.torch_dtype
+        return self._rns_execution_format.dtype
 
     @property
-    def public_level_count(self) -> int:
-        """Return the number of Q-chain levels available to public values."""
+    def max_depth(self) -> int:
+        """Return the greatest public CKKS depth in this Engine."""
 
-        return self.config.num_scale_primes
+        return self.config.max_depth
 
-    @property
-    def final_public_level(self) -> int:
-        """Return the last valid public level index."""
+    def depth_remaining(self, value: Ciphertext | Plaintext | int) -> int:
+        """Return how many public rescale transitions remain."""
 
-        return self.public_level_count - 1
+        depth = value if isinstance(value, int) else value.depth
+        self._validator._validate_depth(depth)
+        return self.max_depth - depth
 
     @property
     def num_slots(self) -> int:
@@ -438,7 +468,12 @@ class Engine:
         modulus_basis: Literal["Q", "QP"] = "QP",
         device: torch.device | str | None = None,
     ) -> SecretKey:
-        """Generate a secret key in NTT/Montgomery representation."""
+        r"""Sample the secret polynomial and materialize its RNS transforms.
+
+        The key generator samples ternary coefficients $s_j\in\{-1,0,1\}$, reduces
+        them modulo every depth-zero Q row and optional P row, and stores
+        $\operatorname{NTT}(s)R$ in Montgomery form.  This factory delegates to
+        ``CkksKeyGenerator.create_secret_key``; it does not issue an IR operation."""
 
         target = torch.get_default_device() if device is None else device
         dispatcher = self._dispatcher_for(target)
@@ -455,7 +490,12 @@ class Engine:
         modulus_basis: Literal["Q", "QP"] = "Q",
         device: torch.device | str | None = None,
     ) -> PublicKey:
-        """Generate public encryption material for `secret_key`."""
+        r"""Generate a public-key pair for a secret polynomial.
+
+        For a sampled uniform polynomial $a$ and error $e$, the returned
+        $(k_0,k_1)=(-as+e,a)$ satisfies $k_0+k_1s=e$ modulo each selected
+        depth-zero Q or QP prime.  Components are stored in NTT/Montgomery form by
+        ``CkksKeyGenerator.create_public_key``."""
 
         self._validator.validate_secret_key(secret_key)
         selected_secret = (
@@ -477,7 +517,13 @@ class Engine:
         uniform_component_by_key_digit: torch.Tensor | None = None,
         device: torch.device | str | None = None,
     ) -> KeySwitchKey:
-        """Generate hybrid material between two secret-key relations."""
+        r"""Generate hybrid-RNS material from one secret relation to another.
+
+        For source and destination secrets $s_{src}$ and $s_{dst}$, key digit
+        $d$ satisfies
+        $k_{d,0}+k_{d,1}s_{dst}=P s_{src}+e_d$ on that digit's embedded source rows,
+        where $P$ is the product of special primes.  The generator returns
+        ``[digit, component=2, QP row, NTT index]`` data in NTT/Montgomery form."""
 
         self._validator.validate_secret_key(source_secret_key)
         self._validator.validate_secret_key(destination_secret_key)
@@ -506,7 +552,11 @@ class Engine:
         *,
         device: torch.device | str | None = None,
     ) -> RelinearizationKey:
-        """Generate CT3-to-CT2 relinearization material."""
+        r"""Generate key-switch material from $s^2$ to $s$.
+
+        This is the evaluation key used to replace the $c_2s^2$ phase term of a CT3
+        product by two CT2 correction components.  The QP key digits are generated by
+        ``CkksKeyGenerator.create_relinearization_key`` in NTT/Montgomery form."""
 
         self._validator.validate_secret_key(secret_key)
         selected = secret_key.to(device) if device is not None else secret_key
@@ -524,7 +574,12 @@ class Engine:
         *,
         device: torch.device | str | None = None,
     ) -> RotationKey:
-        """Generate material for one normalized CKKS slot rotation."""
+        r"""Generate key-switch material from $\sigma_g(s)$ to $s$.
+
+        The signed slot displacement is normalized modulo the slot count and mapped to
+        an odd Galois element $g$.  The ring automorphism
+        $\sigma_g:X\mapsto X^g$ rotates the slots while changing the secret
+        relation; the returned QP key digits restore the original relation."""
 
         self._validator.validate_secret_key(secret_key)
         selected = secret_key.to(device) if device is not None else secret_key
@@ -542,7 +597,11 @@ class Engine:
         *,
         device: torch.device | str | None = None,
     ) -> ConjugationKey:
-        """Generate CKKS slot-conjugation material."""
+        r"""Generate key-switch material from $\sigma_{2N-1}(s)$ to $s$.
+
+        The automorphism $X\mapsto X^{-1}$ gives complex conjugation under the CKKS
+        embedding.  ``CkksKeyGenerator.create_conjugation_key`` returns the QP
+        NTT/Montgomery key digits needed to restore the original secret relation."""
 
         self._validator.validate_secret_key(secret_key)
         selected = secret_key.to(device) if device is not None else secret_key
@@ -676,16 +735,21 @@ class Engine:
         self,
         message: Sequence[object] | torch.Tensor | complex | float | int,
         *,
-        level: int = 0,
+        depth: int = 0,
         scale: float | None = None,
         device: torch.device | str | None = None,
     ) -> Plaintext:
-        """Construct a slots plaintext without coefficient encoding."""
+        r"""Wrap ordered public slots with planned CKKS depth and actual scale.
 
-        if type(level) is not int:
-            raise TypeError("level must be an integer")
-        if not 0 <= level < self.public_level_count:
-            raise ValueError(f"level must be in [0, {self.final_public_level}]")
+        This method stores the message tensor without applying the CKKS embedding.
+        ``encode`` later maps the slots to a polynomial.  ``scale`` defaults to the
+        configuration's planning value but is stored on this plaintext as its own
+        actual scale."""
+
+        if type(depth) is not int:
+            raise TypeError("depth must be an integer")
+        if not 0 <= depth <= self.max_depth:
+            raise ValueError(f"depth must be in [0, {self.max_depth}]")
         actual_scale = coerce_scale(
             self.config.default_scale if scale is None else scale,
             value_name="Plaintext",
@@ -693,7 +757,7 @@ class Engine:
         target = torch.get_default_device() if device is None else device
         return Plaintext(
             message=torch.as_tensor(message, device=target).detach().clone(),
-            level=level,
+            depth=depth,
             scale=actual_scale,
         )
 
@@ -701,18 +765,24 @@ class Engine:
         self,
         message: Sequence[object] | torch.Tensor | complex | float | int,
         *,
-        level: int = 0,
+        depth: int = 0,
         scale: float | None = None,
         device: torch.device | str | None = None,
     ) -> Plaintext:
-        """Encode ordered CKKS slots into integer polynomial coefficients."""
+        r"""Encode ordered CKKS slots as scaled integer coefficients.
+
+        For the configured embedding $\sigma$, message $m$, and this value's actual
+        scale $\Delta$, the returned polynomial is
+        $a=\operatorname{RandRound}(\Delta\sigma^{-1}(m))$.  The method dispatches
+        ``ckks.EncodeOp`` to ``native-ckks-encode`` and returns coefficient-domain
+        ``integer_coefficients`` state at ``depth``; no RNS prime rows exist yet."""
 
         actual_scale = coerce_scale(
             self.config.default_scale if scale is None else scale,
             value_name="encode scale",
         )
-        if type(level) is not int or not 0 <= level <= self.final_public_level:
-            raise ValueError(f"level must be in [0, {self.final_public_level}]")
+        if type(depth) is not int or not 0 <= depth <= self.max_depth:
+            raise ValueError(f"depth must be in [0, {self.max_depth}]")
         target = torch.get_default_device() if device is None else device
         message_tensor = torch.as_tensor(message, device=target)
         coefficients = cast(
@@ -720,12 +790,12 @@ class Engine:
             self._execute(
                 ckks.EncodeOp,
                 message_tensor,
-                attributes={"level": level, "scale": actual_scale},
+                attributes={"depth": depth, "scale": actual_scale},
             ),
         )
         return Plaintext._from_fields(
             message=None,
-            level=level,
+            depth=depth,
             scale=actual_scale,
             data=coefficients,
             representation="integer_coefficients",
@@ -741,14 +811,20 @@ class Engine:
         *,
         modulus_basis: Literal["Q", "QP"] = "Q",
     ) -> Plaintext:
-        """Reduce integer coefficients into coefficient-domain standard RNS."""
+        r"""Reduce an integer plaintext polynomial into active prime rows.
+
+        At plaintext depth $\ell$, every coefficient $a_j$ becomes
+        $a_j\bmod q_i$ in each active Q row and, for ``QP``,
+        $a_j\bmod p_i$ in each special P row.  ``ckks.IntegerCoefficientsToRnsOp``
+        dispatches to ``native-ckks-integer-coefficients-to-rns``.  The result is
+        coefficient-domain standard RNS with unchanged depth and actual scale."""
 
         if plaintext.is_slots:
             if plaintext.message is None:
                 raise ValueError("slots plaintext has no message Tensor")
             plaintext = self.encode(
                 plaintext.message,
-                level=plaintext.level,
+                depth=plaintext.depth,
                 scale=plaintext.scale,
                 device=plaintext.message.device,
             )
@@ -762,14 +838,14 @@ class Engine:
                 ckks.IntegerCoefficientsToRnsOp,
                 plaintext.data,
                 attributes={
-                    "level": plaintext.level,
+                    "depth": plaintext.depth,
                     "modulus_basis": modulus_basis,
                 },
             ),
         )
         return Plaintext._from_fields(
             message=None,
-            level=plaintext.level,
+            depth=plaintext.depth,
             scale=plaintext.scale,
             data=data,
             representation="rns",
@@ -777,7 +853,7 @@ class Engine:
             modulus_basis=modulus_basis,
             residue_representation="standard",
             prime_ids=self._rns_layout.prime_ids(
-                plaintext.level,
+                plaintext.depth,
                 include_p=modulus_basis == "QP",
             ),
         )
@@ -787,14 +863,29 @@ class Engine:
         plaintext: Plaintext,
         *,
         modulus_basis: Literal["Q", "QP"] = "Q",
+        polynomial_domain: PolynomialDomain = "coefficient",
     ) -> Plaintext:
-        """Return coefficient-domain Montgomery RNS for plaintext addition."""
+        r"""Prepare a plaintext for modular addition to component zero.
 
+        The method first issues ``ckks.IntegerCoefficientsToRnsOp`` as needed,
+        then ``rns.StandardToMontgomeryOp``. ``polynomial_domain="ntt"`` also
+        transforms the prepared polynomial for direct addition to an
+        NTT/Montgomery ciphertext. Message, depth, actual scale, and requested
+        Q or QP rows are unchanged."""
+
+        if polynomial_domain not in ("coefficient", "ntt"):
+            raise ValueError("polynomial_domain must be 'coefficient' or 'ntt'")
         standard = self.integer_coefficients_to_rns(
             plaintext,
             modulus_basis=modulus_basis,
         )
-        return self.standard_residues_to_montgomery_residues(standard)
+        prepared = self.standard_residues_to_montgomery_residues(standard)
+        if polynomial_domain == "ntt":
+            return cast(
+                Plaintext,
+                self.coefficient_domain_to_ntt_domain(prepared),
+            )
+        return prepared
 
     def prepare_plaintext_for_multiplication(
         self,
@@ -802,7 +893,12 @@ class Engine:
         *,
         modulus_basis: Literal["Q", "QP"] = "Q",
     ) -> Plaintext:
-        """Return NTT/Montgomery RNS for ciphertext multiplication."""
+        r"""Prepare a plaintext for pointwise NTT ciphertext multiplication.
+
+        After addition preparation, the method dispatches
+        ``ntt.CoefficientMontgomeryToNttMontgomeryOp``.  Every active-prime polynomial
+        is transformed while retaining its Montgomery factor.  Depth and plaintext
+        actual scale remain unchanged for the eventual ``rns.MultiplyPlaintextOp``."""
 
         addition_ready = self.prepare_plaintext_for_addition(
             plaintext,
@@ -826,7 +922,14 @@ class Engine:
             "ciphertext_scale",
         ],
     ) -> Plaintext:
-        """Prepare one typed public value for an eager ciphertext operation."""
+        r"""Prepare a typed public value for encrypted addition or multiplication.
+
+        Addition selects the ciphertext actual scale so the prepared plaintext can be
+        added to component zero.  Multiplication retains a supplied plaintext scale or
+        uses the configured default for a message/static value; its scale later
+        multiplies the ciphertext scale.  This Eager method composes ``ckks.EncodeOp``
+        and registered RNS/NTT transitions rather than emitting the Compile-only
+        ``ckks.Prepare*Op`` classes."""
 
         if type(ciphertext) is not Ciphertext:
             raise TypeError("prepare_public_operand requires Ciphertext")
@@ -870,7 +973,12 @@ class Engine:
         operation: str,
         scale: float,
     ) -> Plaintext:
-        """Execute the public-value preparation selected by a value-operation plan."""
+        r"""Execute encoding and representation changes selected for a public operand.
+
+        The result has the ciphertext's depth, Q or QP rows, and device.  Addition
+        returns coefficient/Montgomery RNS at matching actual scale; multiplication
+        returns NTT/Montgomery RNS at its selected plaintext scale.  Existing prepared
+        RNS payloads are reused when their represented state already fits."""
 
         if operation not in {"add", "multiply"}:
             raise ValueError(
@@ -881,15 +989,15 @@ class Engine:
                 raise ValueError(
                     "approximate_coefficients Plaintext is decode-only"
                 )
-            if public.level != ciphertext.level:
-                raise ValueError("Plaintext and ciphertext levels differ")
+            if public.depth != ciphertext.depth:
+                raise ValueError("Plaintext and ciphertext depths differ")
             if operation == "add" and public.scale != ciphertext.scale:
                 raise ValueError("Plaintext addition requires equal scales")
             if public.is_slots:
                 assert public.message is not None
                 prepared_source = self.encode(
                     public.message,
-                    level=public.level,
+                    depth=public.depth,
                     scale=public.scale,
                     device=ciphertext.device,
                 )
@@ -928,7 +1036,7 @@ class Engine:
                 )
             prepared_source = self.encode(
                 public,
-                level=ciphertext.level,
+                depth=ciphertext.depth,
                 scale=scale,
                 device=ciphertext.device,
             )
@@ -949,7 +1057,13 @@ class Engine:
         is_real: bool = False,
         device: torch.device | str | None = None,
     ) -> torch.Tensor:
-        """Decode coefficient plaintext data on one caller-selected device."""
+        r"""Decode coefficient data into the configured CKKS slot order.
+
+        For coefficient polynomial $a$ at actual scale $\Delta$, the result is
+        $\sigma(a/\Delta)$, restricted to the configured number of slots.
+        ``is_real`` takes the real part after embedding.  The method dispatches
+        ``ckks.DecodeOp`` to ``native-ckks-decode``; RNS plaintexts must first be
+        reconstructed to bounded coefficient data."""
 
         if device is not None:
             plaintext = plaintext.to(device)
@@ -959,7 +1073,7 @@ class Engine:
                 raise ValueError("slots plaintext has no message Tensor")
             plaintext = self.encode(
                 plaintext.message,
-                level=plaintext.level,
+                depth=plaintext.depth,
                 scale=plaintext.scale,
                 device=target,
             )
@@ -990,9 +1104,21 @@ class Engine:
         public_key: PublicKey | None = None,
         *,
         device: torch.device | str | None = None,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> Ciphertext:
-        """Encrypt slots or integer coefficients under a public key."""
+        r"""Encrypt an integer coefficient plaintext under a public key.
 
+        For public key $(k_0,k_1)$, sampled binary $v$, and errors $e_0,e_1$,
+        ``ckks.EncryptOp`` computes
+        $(c_0,c_1)=(k_0v+a+e_0,\ k_1v+e_1)$ modulo each active prime.  The
+        ``native-ckks-encrypt`` implementation returns a CT2 Q or QP
+        ciphertext with the plaintext's depth and actual scale.
+        ``output_domain`` selects coefficient/standard or NTT/Montgomery
+        output. NTT output transforms the error-and-message terms and adds them
+        directly to the public-key products."""
+
+        if output_domain not in ("coefficient", "ntt"):
+            raise ValueError("output_domain must be 'coefficient' or 'ntt'")
         if device is not None:
             plaintext = plaintext.to(device)
         target = plaintext.device
@@ -1011,7 +1137,7 @@ class Engine:
                 raise ValueError("slots plaintext has no message Tensor")
             plaintext = self.encode(
                 plaintext.message,
-                level=plaintext.level,
+                depth=plaintext.depth,
                 scale=plaintext.scale,
                 device=target,
             )
@@ -1024,7 +1150,8 @@ class Engine:
                 plaintext.data,
                 attributes={
                     "key_symbol": symbol,
-                    "level": plaintext.level,
+                    "depth": plaintext.depth,
+                    "output_domain": output_domain,
                 },
                 bindings=self._key_resource(symbol, key),
             ),
@@ -1032,17 +1159,19 @@ class Engine:
         basis = key.modulus_basis
         return Ciphertext._from_fields(
             data=data,
-            level=plaintext.level,
+            depth=plaintext.depth,
             scale=plaintext.scale,
             prime_ids=self._dispatcher_for(
                 target
             ).rns_context.rns_layout.prime_ids(
-                plaintext.level,
+                plaintext.depth,
                 include_p=basis == "QP",
             ),
-            polynomial_domain="coefficient",
+            polynomial_domain=output_domain,
             modulus_basis=basis,
-            residue_representation="standard",
+            residue_representation=(
+                "standard" if output_domain == "coefficient" else "montgomery"
+            ),
         )
 
     def decrypt(
@@ -1052,7 +1181,15 @@ class Engine:
         *,
         device: torch.device | str | None = None,
     ) -> Plaintext:
-        """Decrypt a ciphertext to bounded coefficient plaintext data."""
+        r"""Evaluate the ciphertext phase and reconstruct bounded coefficients.
+
+        For CT2 the phase is $c_0+c_1s$; for CT3 it is
+        $c_0+c_1s+c_2s^2$, evaluated in every active prime. Both component
+        counts may use coefficient/standard or NTT/Montgomery input. NTT input
+        is summed before one inverse transform; coefficient input transforms
+        each nonconstant term for multiplication by the matching secret power.
+        The returned approximate-coefficient plaintext retains depth and actual
+        scale."""
 
         if device is not None:
             ciphertext = ciphertext.to(device)
@@ -1075,15 +1212,16 @@ class Engine:
                 ciphertext.data,
                 attributes={
                     "key_symbol": symbol,
-                    "level": ciphertext.level,
+                    "depth": ciphertext.depth,
                     "modulus_basis": ciphertext.modulus_basis,
+                    "input_domain": ciphertext.polynomial_domain,
                 },
                 bindings=self._key_resource(symbol, key),
             ),
         )
         return Plaintext._from_fields(
             message=None,
-            level=ciphertext.level,
+            depth=ciphertext.depth,
             scale=ciphertext.scale,
             data=coefficients,
             representation="approximate_coefficients",
@@ -1098,16 +1236,24 @@ class Engine:
         message: Sequence[object] | torch.Tensor | complex | float | int,
         public_key: PublicKey | None = None,
         *,
-        level: int = 0,
+        depth: int = 0,
         scale: float | None = None,
         device: torch.device | str | None = None,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> Ciphertext:
-        """Encode and encrypt one ordered CKKS slot message."""
+        r"""Encode slots and encrypt the resulting polynomial.
+
+        This composes ``encode`` and ``encrypt``: it forms
+        $a=\operatorname{RandRound}(\Delta\sigma^{-1}(m))$, then encrypts $a$ as
+        a randomized CT2 value through ``ckks.EncodeOp`` and ``ckks.EncryptOp``.  The
+        output records the selected depth, actual scale, public-key basis, and
+        coefficient/standard representation."""
 
         return self.encrypt(
-            self.encode(message, level=level, scale=scale, device=device),
+            self.encode(message, depth=depth, scale=scale, device=device),
             public_key,
             device=device,
+            output_domain=output_domain,
         )
 
     def decrypt_message(
@@ -1118,7 +1264,12 @@ class Engine:
         is_real: bool = False,
         device: torch.device | str | None = None,
     ) -> torch.Tensor:
-        """Decrypt and decode on the ciphertext or selected boundary device."""
+        r"""Decrypt a ciphertext phase and decode its CKKS slots.
+
+        This composes ``ckks.DecryptOp`` with ``ckks.DecodeOp``.  It reconstructs an
+        approximate coefficient polynomial $a$, then returns
+        $\sigma(a/\Delta)$ using the ciphertext's actual scale $\Delta$.
+        ``is_real`` projects the decoded slots to their real parts."""
 
         return self.decode(
             self.decrypt(ciphertext, secret_key, device=device),
@@ -1127,7 +1278,11 @@ class Engine:
         )
 
     def zero_plaintext_like(self, plaintext: Plaintext) -> Plaintext:
-        """Construct semantic zero with the same plaintext state and shape."""
+        r"""Return the additive identity in the same plaintext representation.
+
+        Every stored slot or polynomial coefficient is set to zero while depth, actual
+        scale, prime rows, polynomial domain, and Montgomery state are copied.  No
+        registered operation is dispatched."""
 
         result = plaintext.clone()
         if result.message is not None:
@@ -1143,7 +1298,12 @@ class Engine:
         ciphertext: Ciphertext,
         public_key: PublicKey | None = None,
     ) -> Ciphertext:
-        """Return a randomized encryption of zero in `ciphertext` state."""
+        r"""Return a randomized encryption of zero in a ciphertext's represented state.
+
+        The method encodes and encrypts a zero slot vector at the reference depth and
+        actual scale, then applies the same registered NTT transition if the reference
+        is in NTT/Montgomery form.  The result decrypts to encryption noise around
+        zero and has matching Q or QP rows and representation."""
 
         self._validator.validate_ciphertext(ciphertext)
         zero = torch.zeros(
@@ -1154,7 +1314,7 @@ class Engine:
         result = self.encrypt_message(
             zero,
             public_key,
-            level=ciphertext.level,
+            depth=ciphertext.depth,
             scale=ciphertext.scale,
             device=ciphertext.device,
         )
@@ -1358,18 +1518,17 @@ class Engine:
 
         self._validator.validate_key_switch_key(key)
 
-    def reconstruct_tail_q_coefficients(
+    def reconstruct_q_coefficients(
         self,
         residues: torch.Tensor,
         ciphertext: Ciphertext,
     ) -> torch.Tensor:
-        """Reconstruct bounded coefficients from a ciphertext phase tensor.
+        r"""Reconstruct centered coefficients from all active Q rows.
 
-        `residues` must have the ciphertext's batch, Q-row, coefficient,
-        dtype, and device layout in coefficient-domain standard form. The
-        returned binary64 tensor is suitable for CKKS decoding but is not a
-        full-Q Chinese-remainder reconstruction.
-        """
+        The active Q basis represents each coefficient modulo its product $M$.
+        Mixed-radix reconstruction returns its centered representative in
+        $(-M/2,M/2]$.  This utility delegates to the decryption reconstruction
+        routine and does not decode slots or divide by the CKKS scale."""
 
         self.validate_ciphertext(ciphertext)
         ciphertext.assert_state(
@@ -1390,9 +1549,9 @@ class Engine:
         if residues.device != ciphertext.data.device:
             raise ValueError("residue device differs from the ciphertext")
         dispatcher = self._dispatcher_for(residues.device)
-        return reconstruct_tail_q_coefficients_tensor(
+        return reconstruct_q_coefficients_tensor(
             residues,
-            level=ciphertext.level,
+            depth=ciphertext.depth,
             includes_p=ciphertext.includes_p,
             rns_context=dispatcher.rns_context,
             reconstruction=dispatcher.decrypt_reconstruction(),
@@ -1451,7 +1610,7 @@ class Engine:
     @staticmethod
     def _replace_plaintext_(target: Plaintext, source: Plaintext) -> Plaintext:
         target.message = source.message
-        target.level = source.level
+        target.depth = source.depth
         target.scale = source.scale
         target.data = source.data
         target.representation = source.representation
@@ -1485,7 +1644,15 @@ class Engine:
         *,
         inplace: bool = False,
     ) -> Ciphertext:
-        """Add ciphertext residues and preserve their eager metadata."""
+        r"""Add ciphertext components modulo every active prime.
+
+        Inputs have matching component, row, polynomial-domain, residue, and scale
+        state, with residues in each prime's standard storage range.  For each
+        component $j$, row $q_i$, and stored position,
+        $c'_j=c^{(lhs)}_j+c^{(rhs)}_j\pmod {q_i}$.  The method dispatches
+        ``rns.AddStandardOp`` to ``native-rns-linear``.  Component count, depth, prime
+        rows, polynomial domain, residue representation, and actual scale are
+        preserved; ``inplace=True`` writes the same result into ``lhs``."""
 
         bases = self._operand_bases(lhs, rhs)
         data = cast(
@@ -1504,7 +1671,10 @@ class Engine:
         return _ciphertext_result(lhs, data)
 
     def add_(self, lhs: Ciphertext, rhs: Ciphertext) -> Ciphertext:
-        """Add `rhs` into `lhs` and return `lhs`."""
+        r"""Add $rhs$ componentwise into $lhs$ and return $lhs$.
+
+        This is the in-place form of ``add`` and dispatches ``rns.AddStandardOp``.
+        All represented state is preserved."""
 
         return self.add(lhs, rhs, inplace=True)
 
@@ -1515,13 +1685,13 @@ class Engine:
         *,
         scalar_scale: float | None = None,
     ) -> Ciphertext:
-        r"""Add a real scalar quantized at `scalar_scale` to component zero.
+        r"""Add a quantized real scalar to the constant coefficient of $c_0$.
 
-        `scalar_scale` selects the integer coefficient used for the scalar;
-        omitting it uses the ciphertext's actual scale. The ciphertext scale,
-        level, and representation metadata are preserved. The ciphertext must
-        use coefficient-domain standard residues.
-        """
+        For scalar $u$ and scalar scale $\delta$, ``ckks.AddScalarOp`` samples
+        $k=\operatorname{RandRound}(u\delta)$ and adds $k\bmod q_i$ to component
+        zero's constant coefficient in every active row.  The ciphertext actual scale
+        $\Delta$ stays unchanged, so its decoded increment is $k/\Delta$;
+        $\delta=\Delta$ approximates addition by $u$."""
 
         if (
             ciphertext.polynomial_domain != "coefficient"
@@ -1552,7 +1722,12 @@ class Engine:
         self,
         ciphertexts: Sequence[Ciphertext],
     ) -> Ciphertext:
-        """Return the sum of a non-empty compatible ciphertext sequence."""
+        r"""Sum a non-empty sequence by repeated modular ciphertext addition.
+
+        The method clones the first value and repeatedly dispatches
+        ``rns.AddStandardOp``.  Mathematically each output component is
+        $\sum_t c^{(t)}_j\pmod {q_i}$.  Compatible depth, rows, representation,
+        component count, and actual scale are preserved."""
 
         if not ciphertexts:
             raise ValueError("sum_ciphertexts requires at least one value")
@@ -1571,7 +1746,12 @@ class Engine:
         *,
         dim: int = 0,
     ) -> Ciphertext:
-        """Reduce one logical ciphertext batch axis by modular addition."""
+        r"""Reduce one batch axis by pairwise modular ciphertext addition.
+
+        A tree of ``rns.AddStandardOp`` calls computes the sum over ``dim`` for every
+        component, prime row, and coefficient.  Pairing changes evaluation order but
+        not modular addition.  The selected batch axis is removed; CKKS depth, actual
+        scale, rows, and representation remain unchanged."""
 
         if not batch.is_batched:
             raise ValueError("sum_ciphertext_batch requires a batched value")
@@ -1619,7 +1799,15 @@ class Engine:
         *,
         inplace: bool = False,
     ) -> Ciphertext:
-        """Subtract ciphertext residues and preserve their eager metadata."""
+        r"""Subtract ciphertext components modulo every active prime.
+
+        Inputs have matching component, row, polynomial-domain, residue, and scale
+        state, with residues in each prime's standard storage range.  For each
+        component $j$ and row $q_i$,
+        $c'_j=c^{(lhs)}_j-c^{(rhs)}_j\pmod {q_i}$.  The method dispatches
+        ``rns.SubtractStandardOp`` to ``native-rns-linear`` and preserves depth, scale,
+        prime rows, component count, polynomial domain, and residue representation.
+        ``inplace=True`` writes into ``lhs``."""
 
         bases = self._operand_bases(lhs, rhs)
         data = cast(
@@ -1638,7 +1826,10 @@ class Engine:
         return _ciphertext_result(lhs, data)
 
     def subtract_(self, lhs: Ciphertext, rhs: Ciphertext) -> Ciphertext:
-        """Subtract `rhs` from `lhs` and return `lhs`."""
+        r"""Subtract $rhs$ componentwise from $lhs$ and return $lhs$.
+
+        This in-place form dispatches ``rns.SubtractStandardOp`` and retains the
+        ciphertext's represented state."""
 
         return self.subtract(lhs, rhs, inplace=True)
 
@@ -1648,7 +1839,14 @@ class Engine:
         *,
         inplace: bool = False,
     ) -> Ciphertext:
-        """Negate ciphertext residues and preserve their eager metadata."""
+        r"""Negate every ciphertext component modulo its active primes.
+
+        Residues may describe coefficient polynomials or NTT values but must be in
+        each prime's standard storage range.  For each component and prime row,
+        ``rns.NegateStandardOp`` computes
+        $c'_j=-c_j\pmod {q_i}$ through ``native-rns-linear``.  The result decrypts to
+        the additive inverse and preserves depth, actual scale, rows, component count,
+        and representation."""
 
         bases = self._operand_bases(value)
         data = cast(
@@ -1666,7 +1864,10 @@ class Engine:
         return _ciphertext_result(value, data)
 
     def negate_(self, value: Ciphertext) -> Ciphertext:
-        """Negate `value` and return the same ciphertext object."""
+        r"""Negate every component of $value$ in place and return it.
+
+        This is the in-place ``rns.NegateStandardOp`` path; all represented state is
+        unchanged."""
 
         return self.negate(value, inplace=True)
 
@@ -1692,7 +1893,14 @@ class Engine:
         *,
         inplace: bool = False,
     ) -> Ciphertext | Plaintext:
-        """Return a coefficient-domain RNS value in NTT/Montgomery form."""
+        r"""Apply the forward negacyclic NTT to every RNS polynomial.
+
+        For ciphertext standard residues, each component dispatches
+        ``ntt.CoefficientStandardToNttMontgomeryOp`` and stores
+        $\operatorname{NTT}(c_j)R$.  For plaintext Montgomery residues, the method
+        dispatches ``ntt.CoefficientMontgomeryToNttMontgomeryOp``.  Depth, prime rows,
+        basis, component shape, and actual scale are preserved; the result state is
+        NTT/Montgomery."""
 
         if value.data is None:
             raise ValueError("NTT execution requires RNS Tensor data")
@@ -1706,14 +1914,13 @@ class Engine:
         bases = self._operand_bases(value)
         if is_ciphertext:
             data = value_data if inplace else value_data.clone()
-            for component in data.unbind(0):
-                self._execute(
-                    operation_type,
-                    component,
-                    resource_kinds=("ntt",),
-                    bases=bases,
-                    in_place=True,
-                )
+            self._execute(
+                operation_type,
+                data,
+                resource_kinds=("ntt",),
+                bases=bases,
+                in_place=True,
+            )
         else:
             data = cast(
                 torch.Tensor,
@@ -1763,7 +1970,11 @@ class Engine:
         self,
         value: Ciphertext | Plaintext,
     ) -> Ciphertext | Plaintext:
-        """Transform `value` to NTT/Montgomery form and return `value`."""
+        r"""Transform $value$ to NTT/Montgomery form in place.
+
+        This dispatches the same registered NTT operation as
+        ``coefficient_domain_to_ntt_domain`` and returns the input object with
+        unchanged depth, prime rows, and actual scale."""
 
         return self.coefficient_domain_to_ntt_domain(value, inplace=True)
 
@@ -1789,7 +2000,12 @@ class Engine:
         *,
         inplace: bool = False,
     ) -> Ciphertext | Plaintext:
-        """Return an NTT-domain RNS value in coefficient form."""
+        r"""Apply the inverse negacyclic NTT to every RNS polynomial.
+
+        Ciphertext components dispatch ``ntt.NttMontgomeryToCoefficientStandardOp``
+        and end in coefficient/standard form.  A plaintext dispatches
+        ``ntt.InverseMontgomeryOp`` and ends in coefficient/Montgomery form.  The ring
+        element, depth, Q or QP rows, component shape, and actual scale are preserved."""
 
         if value.data is None:
             raise ValueError("NTT execution requires RNS Tensor data")
@@ -1804,14 +2020,13 @@ class Engine:
         bases = self._operand_bases(value)
         if is_ciphertext:
             data = value_data if inplace else value_data.clone()
-            for component in data.unbind(0):
-                self._execute(
-                    operation_type,
-                    component,
-                    resource_kinds=("ntt",),
-                    bases=bases,
-                    in_place=True,
-                )
+            self._execute(
+                operation_type,
+                data,
+                resource_kinds=("ntt",),
+                bases=bases,
+                in_place=True,
+            )
         else:
             data = cast(
                 torch.Tensor,
@@ -1861,7 +2076,11 @@ class Engine:
         self,
         value: Ciphertext | Plaintext,
     ) -> Ciphertext | Plaintext:
-        """Transform `value` to coefficient form and return `value`."""
+        r"""Transform $value$ from NTT form in place and return it.
+
+        The method dispatches the ciphertext or plaintext inverse NTT operation used
+        by ``ntt_domain_to_coefficient_domain``; it does not alter depth, rows, or
+        actual scale."""
 
         return self.ntt_domain_to_coefficient_domain(value, inplace=True)
 
@@ -1871,7 +2090,11 @@ class Engine:
         *,
         inplace: bool = False,
     ) -> Plaintext:
-        """Return coefficient-domain plaintext residues in Montgomery form."""
+        r"""Multiply each coefficient residue by its Montgomery radix.
+
+        ``rns.StandardToMontgomeryOp`` maps $x_i$ to $x_iR_i\bmod q_i$ through
+        ``native-rns-transition``.  The plaintext remains in coefficient domain with
+        unchanged polynomial, Q or QP rows, depth, and actual scale."""
 
         if plaintext.data is None:
             raise ValueError("Residue conversion requires RNS Tensor data")
@@ -1901,7 +2124,10 @@ class Engine:
         self,
         plaintext: Plaintext,
     ) -> Plaintext:
-        """Convert `plaintext` to Montgomery residues and return it."""
+        r"""Convert plaintext rows to Montgomery representation in place.
+
+        This dispatches ``rns.StandardToMontgomeryOp`` and returns the input plaintext;
+        its polynomial, depth, prime rows, and actual scale do not change."""
 
         return self.standard_residues_to_montgomery_residues(
             plaintext,
@@ -1914,7 +2140,11 @@ class Engine:
         *,
         inplace: bool = False,
     ) -> Plaintext:
-        """Return coefficient-domain plaintext residues in standard form."""
+        r"""Remove the Montgomery factor from each coefficient residue.
+
+        ``rns.MontgomeryToStandardOp`` maps $x_iR_i$ to $x_i\bmod q_i$ through
+        ``native-rns-transition``.  The plaintext polynomial, coefficient domain,
+        Q or QP rows, depth, and actual scale are preserved."""
 
         if plaintext.data is None:
             raise ValueError("Residue conversion requires RNS Tensor data")
@@ -1944,71 +2174,99 @@ class Engine:
         self,
         plaintext: Plaintext,
     ) -> Plaintext:
-        """Convert `plaintext` to standard residues and return it."""
+        r"""Convert plaintext rows to standard residues in place.
+
+        This dispatches ``rns.MontgomeryToStandardOp`` and returns the input plaintext
+        without changing its polynomial, depth, rows, or actual scale."""
 
         return self.montgomery_residues_to_standard_residues(
             plaintext,
             inplace=True,
         )
 
-    def rescale_to_next_drop_prime(self, *, level: int) -> int:
-        """Return the Q prime removed by rescale at `level`."""
+    def rescale_divisor(self, *, depth: int) -> int:
+        r"""Return the active Q divisor removed at ``depth``.
 
-        if type(level) is not int:
-            raise TypeError("level must be an integer")
-        if level < 0:
-            raise ValueError("level must be non-negative")
-        final_drop_level = self.config.num_q_primes - 2
-        if level > final_drop_level:
-            raise MaximumLevelError(
-                level=level,
-                maximum_level=final_drop_level,
+        ``rescale_to_next_depth`` divides each ciphertext coefficient and its actual
+        scale by the product of the Q rows assigned to this transition."""
+
+        if type(depth) is not int:
+            raise TypeError("depth must be an integer")
+        if depth < 0:
+            raise ValueError("depth must be non-negative")
+        if depth >= self.max_depth:
+            raise MaximumDepthError(
+                depth=depth,
+                maximum_depth=self.max_depth,
             )
-        prime_id = self._rns_layout.prime_ids(level)[0]
-        return int(self.config.moduli[prime_id])
+        return self.config.rescale_divisor(depth)
 
-    def rescale_to_next_output_scale(
+    def rescale_output_scale(
         self,
         input_scale: float,
         *,
-        level: int,
+        depth: int,
     ) -> float:
-        """Return the scale produced by one rescale transition."""
+        r"""Compute the per-value actual scale after one rescale.
+
+        For input scale $\Delta$ and depth-group product $M_d$, the result is
+        $\Delta'=\Delta/M_d$. This helper performs no residue arithmetic."""
 
         scale = coerce_scale(input_scale, value_name="input_scale")
         return coerce_scale(
-            scale / self.rescale_to_next_drop_prime(level=level),
+            scale / self.rescale_divisor(depth=depth),
             value_name="rescale output",
         )
 
-    def rescale_to_next_level(
+    def _rescale_to_next_basis(
         self,
         value: Ciphertext,
         *,
         rounding: Literal["nearest", "floor"] = "nearest",
         inplace: bool = False,
     ) -> Ciphertext:
-        """Drop the leading Q prime and return the next ciphertext level."""
+        r"""Divide-round by the leading Q group and advance one depth.
+
+        The input is Q residue data in coefficient/standard or NTT/Montgomery
+        representation. ``rns.RescaleDropLeadingPrimesOp`` computes the rounded
+        quotient by the complete group product $M_d$ and removes that group's
+        rows. With NTT input, the dropped rows determine one coefficient
+        correction, whose transform is added to the scaled surviving evaluations.
+        Depth advances once and scale becomes $\Delta/M_d$."""
 
         if rounding not in {"nearest", "floor"}:
             raise ValueError("rounding must be 'nearest' or 'floor'")
         if value.data.size(-2) <= 1:
-            raise MaximumLevelError(
-                level=value.level,
-                maximum_level=self.final_public_level,
+            raise MaximumDepthError(
+                depth=value.depth,
+                maximum_depth=self.max_depth,
             )
-        dropped_prime = self.config.moduli[value.prime_ids[0]]
+        next_prime_ids = self._rns_layout.prime_ids(
+            value.depth + 1,
+            include_p=value.modulus_basis == "QP",
+        )
+        drop_count = len(value.prime_ids) - len(next_prime_ids)
+        dropped_modulus = math.prod(
+            int(self.config.moduli[prime_id])
+            for prime_id in value.prime_ids[:drop_count]
+        )
         bases = self._operand_bases(value)
+        input_domain = value.polynomial_domain
         data = cast(
             torch.Tensor,
             self._execute(
-                rns.RescaleDropLeadingPrimeOp,
+                rns.RescaleDropLeadingPrimesOp,
                 value.data,
-                resource_kinds=("rescale",),
+                resource_kinds=(
+                    ("rescale", "rns", "ntt")
+                    if input_domain == "ntt"
+                    else ("rescale",)
+                ),
                 attributes={
-                    "rounding": (
-                        "truncate" if rounding == "floor" else rounding
-                    ),
+                    "drop_count": drop_count,
+                    "rounding": rounding,
+                    "input_domain": input_domain,
+                    "output_domain": input_domain,
                 },
                 bases=bases,
                 in_place=inplace,
@@ -2016,93 +2274,83 @@ class Engine:
         )
         if inplace:
             value.data = data
-            value.level += 1
-            value.prime_ids = value.prime_ids[1:]
-            value.scale /= float(dropped_prime)
+            value.depth += 1
+            value.prime_ids = next_prime_ids
+            value.scale /= float(dropped_modulus)
             return value
         return _ciphertext_result(
             value,
             data,
-            level=value.level + 1,
-            prime_ids=value.prime_ids[1:],
-            scale=value.scale / float(dropped_prime),
+            depth=value.depth + 1,
+            prime_ids=next_prime_ids,
+            scale=value.scale / float(dropped_modulus),
         )
 
-    def rescale_to_next_level_(
+    def rescale_to_next_depth(
+        self,
+        value: Ciphertext,
+        *,
+        rounding: Literal["nearest", "floor"] = "nearest",
+        inplace: bool = False,
+    ) -> Ciphertext:
+        r"""Divide by the current Q depth-group modulus and consume one depth.
+
+        A depth group may contain multiple RNS primes. The operation removes
+        every row in that group, advances ``depth`` once, and divides the
+        value's actual scale by the complete group product.
+        """
+
+        if value.depth >= self.max_depth:
+            raise MaximumDepthError(
+                depth=value.depth,
+                maximum_depth=self.max_depth,
+            )
+        return self._rescale_to_next_basis(
+            value,
+            rounding=rounding,
+            inplace=inplace,
+        )
+
+    def rescale_to_next_depth_(
         self,
         value: Ciphertext,
         *,
         rounding: Literal["nearest", "floor"] = "nearest",
     ) -> Ciphertext:
-        """Rescale `value` to its next level and return `value`."""
+        r"""Rescale $value$ by its leading Q group in place and return it.
 
-        return self.rescale_to_next_level(
+        The underlying row operations remove every prime in the group; the
+        public value advances one depth and divides scale by the group product."""
+
+        return self.rescale_to_next_depth(
             value,
             rounding=rounding,
             inplace=True,
         )
 
-    def rescale_to_structural_base(
+    def mod_switch_to_depth(
         self,
         value: Ciphertext,
-        *,
-        rounding: Literal["nearest", "floor"] = "nearest",
-    ) -> Ciphertext:
-        """Drop the last public Q prime for bootstrap modulus raising.
-
-        The input must be a final-public-level coefficient-domain standard-Q
-        ciphertext. The result uses private level `public_level_count` and the
-        one-prime structural Q basis provided by the configured RNS layout.
-        This transition uses the registered rescale lowering and native
-        implementation; ordinary :meth:`rescale_to_next_level` continues to
-        reject a transition beyond the public level interval.
-        """
-
-        if rounding not in {"nearest", "floor"}:
-            raise ValueError("rounding must be 'nearest' or 'floor'")
-        if value.data.size(-2) <= 1:
-            raise ValueError("structural-base rescale requires another RNS row")
-        dropped_prime = self.config.moduli[value.prime_ids[0]]
-        bases = self._operand_bases(value)
-        data = cast(
-            torch.Tensor,
-            self._execute(
-                rns.RescaleDropLeadingPrimeOp,
-                value.data,
-                resource_kinds=("rescale",),
-                attributes={
-                    "rounding": (
-                        "truncate" if rounding == "floor" else rounding
-                    )
-                },
-                bases=bases,
-            ),
-        )
-        return _ciphertext_result(
-            value,
-            data,
-            level=self.public_level_count,
-            prime_ids=value.prime_ids[1:],
-            scale=value.scale / float(dropped_prime),
-        )
-
-    def mod_switch_to_level(
-        self,
-        value: Ciphertext,
-        target_level: int,
+        target_depth: int,
         *,
         inplace: bool = False,
     ) -> Ciphertext:
-        """Restrict a ciphertext to the RNS rows of `target_level`."""
+        r"""Discard Q rows until ``target_depth`` without quotient scaling.
+
+        If the source rows are $(q_\ell,\ldots,q_L)$, the result retains the suffix
+        $(q_t,\ldots,q_L)$; P rows are retained for QP values.  Surviving residues
+        and actual scale $\Delta$ are unchanged.  Eager performs this tensor-row
+        selection directly, with the same mathematical transition represented in IR
+        by ``rns.RestrictDepthOp``/``ckks.ModSwitchOp``."""
 
         prime_ids = self._rns_layout.prime_ids(
-            target_level,
+            target_depth,
             include_p=value.modulus_basis == "QP",
         )
         result_rows = len(prime_ids)
         source_rows = value.data.size(-2)
         if not 0 < result_rows <= source_rows:
-            raise ValueError("target_level requires unavailable RNS rows")
+            raise ValueError("target_depth requires unavailable RNS rows")
         selected = value.data.narrow(
             -2,
             source_rows - result_rows,
@@ -2111,43 +2359,53 @@ class Engine:
         data = selected if inplace else selected.clone()
         if inplace:
             value.data = data
-            value.level = target_level
+            value.depth = target_depth
             value.prime_ids = prime_ids
             return value
         return _ciphertext_result(
             value,
             data,
-            level=target_level,
+            depth=target_depth,
             prime_ids=prime_ids,
         )
 
-    def mod_switch_to_next_level(
+    def mod_switch_to_next_depth(
         self,
         value: Ciphertext,
         *,
         inplace: bool = False,
     ) -> Ciphertext:
-        """Restrict a ciphertext to the next public RNS level."""
+        r"""Discard the next Q depth group and advance one depth.
 
-        return self.mod_switch_to_level(
+        This calls ``mod_switch_to_depth`` for $\ell+1$.  Unlike rescaling, it does
+        not divide coefficients or actual scale and does not dispatch a Backend
+        operation in Eager."""
+
+        return self.mod_switch_to_depth(
             value,
-            value.level + 1,
+            value.depth + 1,
             inplace=inplace,
         )
 
-    def mod_switch_to_next_level_(self, value: Ciphertext) -> Ciphertext:
-        """Restrict `value` to the next level and return `value`."""
+    def mod_switch_to_next_depth_(self, value: Ciphertext) -> Ciphertext:
+        r"""Discard the next Q depth group in place and return $value$.
 
-        return self.mod_switch_to_next_level(value, inplace=True)
+        The actual scale and surviving residues are unchanged; only depth and row
+        metadata advance."""
 
-    def mod_switch_to_level_(
+        return self.mod_switch_to_next_depth(value, inplace=True)
+
+    def mod_switch_to_depth_(
         self,
         value: Ciphertext,
-        target_level: int,
+        target_depth: int,
     ) -> Ciphertext:
-        """Restrict `value` to `target_level` and return `value`."""
+        r"""Restrict $value$ in place to ``target_depth`` and return it.
 
-        return self.mod_switch_to_level(value, target_level, inplace=True)
+        The method performs direct row selection, preserving actual scale and every
+        surviving residue."""
+
+        return self.mod_switch_to_depth(value, target_depth, inplace=True)
 
     def reinterpret_at_scale(
         self,
@@ -2157,7 +2415,13 @@ class Engine:
         max_relative_change: float | None = None,
         inplace: bool = False,
     ) -> Ciphertext:
-        """Return cloned residues with replacement scale metadata."""
+        r"""Replace actual-scale metadata without arithmetic.
+
+        The payload, depth, prime rows, polynomial domain, and Montgomery state are
+        copied unchanged while scale $\Delta$ becomes ``target_scale``
+        $\Delta'$.  Decoding therefore interprets the same coefficients as
+        $x/\Delta'$.  Eager performs the metadata change directly; IR represents it
+        with ``ckks.ReinterpretScaleOp``/``rns.ReinterpretScaleOp``."""
 
         scale = coerce_scale(target_scale, value_name="target_scale")
         if max_relative_change is not None:
@@ -2185,7 +2449,10 @@ class Engine:
         *,
         max_relative_change: float | None = None,
     ) -> Ciphertext:
-        """Change `value` scale metadata and return `value`."""
+        r"""Replace $value$'s actual-scale metadata in place and return it.
+
+        No residues or rows change.  ``max_relative_change`` limits the permitted
+        ratio between the old and new scale."""
 
         return self.reinterpret_at_scale(
             value,
@@ -2199,7 +2466,15 @@ class Engine:
         lhs: Ciphertext,
         rhs: Ciphertext,
     ) -> Ciphertext:
-        """Multiply CT2 inputs with the eager convolution implementation."""
+        r"""Multiply two CT2 ciphertexts into one CT3 ciphertext.
+
+        Both inputs are two-component NTT/Montgomery ciphertexts with matching depth
+        and active prime rows.  For $a=(a_0,a_1)$ and $b=(b_0,b_1)$,
+        ``ckks.MultiplyOp`` computes
+        $(a_0b_0,\ a_0b_1+a_1b_0,\ a_1b_1)$ in each active-prime negacyclic ring.
+        The ``native-ct2-convolution`` implementation consumes NTT/Montgomery inputs.
+        Depth and rows are retained, and actual scale becomes
+        $\Delta_a\Delta_b$; relinearization and rescaling remain separate calls."""
 
         result_scale = lhs.scale * rhs.scale
         bases = self._operand_bases(lhs, rhs)
@@ -2226,13 +2501,13 @@ class Engine:
         *,
         scalar_scale: float | None = None,
     ) -> Ciphertext:
-        r"""Multiply by a real scalar without rescaling the result.
+        r"""Multiply a ciphertext by a stochastically quantized real scalar.
 
-        `scalar_scale` controls scalar quantization and defaults to the input
-        ciphertext's actual scale. The output actual scale is the product of
-        the ciphertext scale and `scalar_scale`; level and representation are
-        preserved.
-        """
+        For scalar $u$ and scalar scale $\delta$, ``ckks.MultiplyScalarOp`` samples
+        $k=\operatorname{RandRound}(u\delta)$ and multiplies every component by
+        $k$ modulo all active primes.  The result actual scale is
+        $\Delta\delta$, so it represents multiplication by approximately $u$.
+        Depth, rows, component count, and representation are preserved."""
 
         actual_scalar_scale = coerce_scale(
             ciphertext.scale if scalar_scale is None else scalar_scale,
@@ -2261,7 +2536,11 @@ class Engine:
         ciphertext: Ciphertext,
         scalar: int,
     ) -> Ciphertext:
-        """Multiply by an integer without changing scale or level."""
+        r"""Multiply every ciphertext component by an integer $k$.
+
+        ``ckks.MultiplyIntegerScalarOp`` computes $c'_j=kc_j$ modulo each active
+        prime through ``native-ckks-scalar-arithmetic``.  Because $k$ is unscaled,
+        actual scale, depth, rows, component count, and representation do not change."""
 
         data = cast(
             torch.Tensor,
@@ -2281,7 +2560,13 @@ class Engine:
         *,
         inplace: bool = False,
     ) -> Ciphertext:
-        """Add a prepared plaintext to ciphertext component zero."""
+        r"""Add a prepared plaintext polynomial to ciphertext component zero.
+
+        For ordinary RNS plaintext $p$, ``rns.AddPlaintextOp`` computes
+        $(c_0+p,c_1,\ldots)$ through ``native-plaintext-arithmetic``.  Compressed
+        input dispatches ``ckks.AddCompressedPlaintextOp`` and expands the same values
+        logically.  Matching depth, prime rows, and actual scale are required; output
+        state and later components are preserved."""
 
         if isinstance(plaintext, CompressedPlaintext):
             inputs = [ciphertext.data, plaintext.data]
@@ -2309,6 +2594,25 @@ class Engine:
         prepared = plaintext
         if prepared.data is None:
             raise ValueError("Plaintext addition requires RNS Tensor data")
+        if prepared.polynomial_domain != ciphertext.polynomial_domain:
+            raise ValueError(
+                "Plaintext addition requires matching polynomial domains"
+            )
+        if (
+            prepared.residue_representation != "montgomery"
+            or (
+                ciphertext.polynomial_domain == "coefficient"
+                and ciphertext.residue_representation != "standard"
+            )
+            or (
+                ciphertext.polynomial_domain == "ntt"
+                and ciphertext.residue_representation != "montgomery"
+            )
+        ):
+            raise ValueError(
+                "Plaintext addition requires a Montgomery plaintext and a "
+                "coefficient/standard or NTT/Montgomery ciphertext"
+            )
         prepared_data = cast(torch.Tensor, prepared.data)
         bases = self._operand_bases(ciphertext, prepared)
         data = cast(
@@ -2318,6 +2622,7 @@ class Engine:
                 ciphertext.data,
                 prepared_data,
                 resource_kinds=("rns",),
+                attributes={"polynomial_domain": ciphertext.polynomial_domain},
                 bases=bases,
                 in_place=inplace,
             ),
@@ -2331,7 +2636,10 @@ class Engine:
         ciphertext: Ciphertext,
         plaintext: Plaintext | CompressedPlaintext,
     ) -> Ciphertext:
-        """Add `plaintext` into `ciphertext` and return `ciphertext`."""
+        r"""Add prepared plaintext $p$ into ciphertext component zero in place.
+
+        This is the in-place ordinary/compressed plaintext addition path and returns
+        the input ciphertext with unchanged represented state."""
 
         return self.add_plaintext(ciphertext, plaintext, inplace=True)
 
@@ -2342,7 +2650,13 @@ class Engine:
         *,
         inplace: bool = False,
     ) -> Ciphertext:
-        """Multiply a ciphertext by an NTT/Montgomery plaintext."""
+        r"""Multiply each ciphertext component by a prepared plaintext.
+
+        For NTT/Montgomery plaintext $p$, ``rns.MultiplyPlaintextOp`` computes
+        $c'_j=c_jp$ pointwise modulo every active prime.  Compressed input dispatches
+        ``ckks.MultiplyCompressedPlaintextOp`` for the same expanded polynomial.
+        Depth, rows, and component count remain; actual scale becomes
+        $\Delta_c\Delta_p$, with no implicit rescale."""
 
         if isinstance(plaintext, CompressedPlaintext):
             result_scale = ciphertext.scale * plaintext.scale
@@ -2404,193 +2718,241 @@ class Engine:
         ciphertext: Ciphertext,
         plaintext: Plaintext | CompressedPlaintext,
     ) -> Ciphertext:
-        """Replace `ciphertext` by its plaintext product and return it."""
+        r"""Replace a ciphertext by its prepared-plaintext product.
+
+        The method uses the ordinary or compressed registered multiplication path,
+        updates actual scale to $\Delta_c\Delta_p$, and returns the input object."""
 
         return self.multiply_plaintext(ciphertext, plaintext, inplace=True)
 
-    def _extract_component_tensor(
+    def sum_plaintext_products(
         self,
-        data: torch.Tensor,
-        component: int,
-        *,
-        basis: str,
-    ) -> torch.Tensor:
-        return cast(
-            torch.Tensor,
-            self._execute(
-                rns.ExtractComponentOp,
-                data,
-                attributes={"component": component},
-                bases=(basis,),
-            ),
-        )
+        ciphertexts: Sequence[Ciphertext],
+        plaintexts: Sequence[Plaintext],
+    ) -> Ciphertext:
+        r"""Compute a sum of prepared-plaintext products in one operation.
 
-    def _key_switch_corrections(
-        self,
-        source: torch.Tensor,
-        *,
-        level: int,
-        key: KeySwitchKey,
-        key_symbol: str,
-    ) -> torch.Tensor:
-        key = cast(
-            KeySwitchKey,
-            self._key_on_device(
-                key,
-                source.device,
-                operation_name="key switching",
-            ),
-        )
-        key_resource = self._bind_key(key_symbol, key)
-        dispatcher = self._dispatcher_for(source.device)
-        rns_resource = dispatcher.resources(
-            (("active-rns-parameters", RNS_RESOURCE_KIND),)
-        )
-        key_switch_resource = dispatcher.resources(
-            (
-                (
-                    "active-key-switch-plan",
-                    KEY_SWITCH_PLAN_RESOURCE_KIND,
-                ),
+        For equally sized sequences, the result is
+
+        $$
+        y=\sum_{t=0}^{T-1}c_t p_t.
+        $$
+
+        Every ciphertext must have the same NTT/Montgomery Q or QP state,
+        depth, active rows, component shape, and actual scale.  Every prepared
+        plaintext must match those rows and have a common actual scale.  The
+        result preserves the ciphertext state and has scale
+        $\Delta_c\Delta_p$.  The registered RNS implementation may fuse the
+        products and modular accumulation without materializing each product.
+        """
+
+        if not ciphertexts or len(ciphertexts) != len(plaintexts):
+            raise ValueError(
+                "sum_plaintext_products requires equal non-empty sequences"
             )
-        )
-        accumulator: torch.Tensor | None = None
-        for digit_index, digit_spec in enumerate(
-            self._rns_layout.digit_specs(level)
-        ):
-            lifted = cast(
-                torch.Tensor,
-                self._execute(
-                    rns.HybridModUpDigitOp,
-                    source,
-                    resource_kinds=("rns", "key_switch"),
-                    attributes={"digit_index": digit_index},
-                    bases=("Q",),
-                ),
-            )
-            transformed = cast(
-                torch.Tensor,
-                self._execute(
-                    ntt.CoefficientMontgomeryToNttMontgomeryOp,
-                    lifted,
-                    resource_kinds=("ntt",),
-                    bases=("QP",),
-                ),
-            )
-            product = cast(
-                torch.Tensor,
-                self._execute(
-                    rns.KeySwitchDigitProductOp,
-                    transformed,
-                    resources=(
-                        key_resource,
-                        *rns_resource,
-                        *key_switch_resource,
-                    ),
-                    attributes={"key_digit_index": digit_spec.key_digit_index},
-                    bases=("QP",),
-                ),
-            )
-            if accumulator is None:
-                accumulator = product
-            else:
-                accumulator = cast(
-                    torch.Tensor,
-                    self._execute(
-                        rns.AddMontgomeryLazyOp,
-                        accumulator,
-                        product,
-                        resource_kinds=("rns",),
-                        bases=("QP", "QP"),
-                    ),
+        first_ciphertext = ciphertexts[0]
+        first_plaintext = plaintexts[0]
+        plaintext_data: list[torch.Tensor] = []
+        for plaintext in plaintexts:
+            if plaintext.data is None:
+                raise ValueError(
+                    "sum_plaintext_products requires RNS plaintext data"
                 )
-        if accumulator is None:
-            raise ValueError("Key switching requires at least one RNS digit")
-        coefficient = cast(
+            plaintext_data.append(plaintext.data)
+        ciphertext_data = tuple(value.data for value in ciphertexts)
+        data = cast(
             torch.Tensor,
             self._execute(
-                ntt.NttMontgomeryToCoefficientStandardOp,
-                accumulator,
-                resource_kinds=("ntt",),
-                bases=("QP",),
+                rns.MontgomeryWeightedSumOp,
+                *ciphertext_data,
+                *plaintext_data,
+                resource_kinds=("rns",),
+                attributes={"term_count": len(ciphertexts)},
+                bases=self._operand_bases(*ciphertexts, *plaintexts),
             ),
         )
-        return cast(
-            torch.Tensor,
-            self._execute(
-                rns.ModDownQpToQOp,
-                coefficient,
-                resource_kinds=("rns", "key_switch"),
-                bases=("QP",),
-            ),
+        return _ciphertext_result(
+            first_ciphertext,
+            data,
+            scale=first_ciphertext.scale * first_plaintext.scale,
         )
 
-    def _assemble_key_switch(
+    def sum_plaintext_product_groups(
         self,
-        component0: torch.Tensor,
-        switched_component: torch.Tensor,
-        *,
-        value: Ciphertext,
-        key: KeySwitchKey,
-        key_symbol: str,
-        component1: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        corrections = self._key_switch_corrections(
-            switched_component,
-            level=value.level,
-            key=key,
-            key_symbol=key_symbol,
+        ciphertexts: Sequence[Ciphertext],
+        plaintext_groups: Sequence[Sequence[Plaintext]],
+    ) -> Ciphertext:
+        r"""Apply several prepared-plaintext rows to shared ciphertext terms.
+
+        For $T$ ciphertexts and a caller-supplied $G\times T$ matrix of
+        prepared plaintexts, batch result $g$ is
+
+        $$
+        y_g=\sum_{t=0}^{T-1}c_t p_{g,t}.
+        $$
+
+        Every operand follows :meth:`sum_plaintext_products`' matching
+        NTT/Montgomery state, depth, row, shape, and scale requirements. Each
+        result has scale $\Delta_c\Delta_p$ and preserves the ciphertext
+        state. The output inserts the group axis as its first batch axis, so
+        :meth:`Ciphertext.unbind_batch` recovers separate results. The
+        operation executes the supplied rectangular matrix; it
+        does not choose how a caller partitions a linear transform. A Backend
+        implementation may reuse a ciphertext load across plaintext rows
+        without stacking the inputs or materializing individual products.
+        """
+
+        if not ciphertexts or not plaintext_groups:
+            raise ValueError(
+                "sum_plaintext_product_groups requires non-empty terms and groups"
+            )
+        term_count = len(ciphertexts)
+        if any(len(group) != term_count for group in plaintext_groups):
+            raise ValueError(
+                "each plaintext group must contain one term per ciphertext"
+            )
+        first_ciphertext = ciphertexts[0]
+        first_plaintext = plaintext_groups[0][0]
+        plaintexts = tuple(
+            plaintext for group in plaintext_groups for plaintext in group
         )
-        correction0 = self._extract_component_tensor(
-            corrections,
-            0,
-            basis="Q",
-        )
-        correction1 = self._extract_component_tensor(
-            corrections,
-            1,
-            basis="Q",
-        )
-        result0 = cast(
+        plaintext_data: list[torch.Tensor] = []
+        for plaintext in plaintexts:
+            if plaintext.data is None:
+                raise ValueError(
+                    "sum_plaintext_product_groups requires RNS plaintext data"
+                )
+            plaintext_data.append(plaintext.data)
+        data = cast(
             torch.Tensor,
             self._execute(
-                rns.AddStandardOp,
-                component0,
-                correction0,
+                rns.MontgomeryWeightedSumsOp,
+                *(value.data for value in ciphertexts),
+                *plaintext_data,
                 resource_kinds=("rns",),
-                bases=("Q", "Q"),
+                attributes={
+                    "term_count": term_count,
+                    "group_count": len(plaintext_groups),
+                },
+                bases=self._operand_bases(*ciphertexts, *plaintexts),
             ),
         )
-        if component1 is not None:
-            result1 = cast(
-                torch.Tensor,
-                self._execute(
-                    rns.AddStandardOp,
-                    component1,
-                    correction1,
-                    resource_kinds=("rns",),
-                    bases=("Q", "Q"),
+        return _ciphertext_result(
+            first_ciphertext,
+            data,
+            scale=first_ciphertext.scale * first_plaintext.scale,
+        )
+
+    def sum_rotated_plaintext_product_groups(
+        self,
+        ciphertext: Ciphertext,
+        rotation_keys: Sequence[RotationKey | None],
+        plaintext_groups: Sequence[Sequence[Plaintext]],
+    ) -> Ciphertext:
+        r"""Apply prepared-plaintext rows to one direct rotation group.
+
+        A ``None`` key denotes the unrotated input; each other entry supplies
+        its own signed rotation step. For $T$ entries and a caller-supplied
+        $G\times T$ plaintext matrix, output batch $g$ is
+
+        $$
+        y_g=\sum_{t=0}^{T-1}p_{g,t}\operatorname{Rot}_{b_t}(c).
+        $$
+
+        The input is coefficient/standard Q CT2. Every direct rotation
+        completes hybrid key switching and ModDown before its NTT/Montgomery
+        plaintext product. The output inserts a first batch axis of length
+        $G$, remains at the input depth, and has scale $\Delta_c\Delta_p$.
+        The caller supplies the group membership and key inventory; Backend
+        execution may reuse digit preparation and ciphertext loads within
+        these supplied groups.
+        """
+
+        if not rotation_keys or not plaintext_groups:
+            raise ValueError(
+                "sum_rotated_plaintext_product_groups requires non-empty "
+                "rotations and groups"
+            )
+        if sum(key is None for key in rotation_keys) > 1:
+            raise ValueError("the unrotated entry may occur at most once")
+        term_count = len(rotation_keys)
+        if any(len(group) != term_count for group in plaintext_groups):
+            raise ValueError(
+                "each plaintext group must contain one term per rotation"
+            )
+        selected_keys = [
+            cast(
+                RotationKey,
+                self._key_on_device(
+                    key,
+                    ciphertext.device,
+                    operation_name="sum_rotated_plaintext_product_groups",
                 ),
             )
-        else:
-            result1 = correction1
-        return cast(
+            for key in rotation_keys
+            if key is not None
+        ]
+        key_resources = [
+            self._bind_key(f"rotation-key:{key.rotation_step}:{index}", key)
+            for index, key in enumerate(selected_keys)
+        ]
+        plaintexts = tuple(
+            plaintext for group in plaintext_groups for plaintext in group
+        )
+        plaintext_data: list[torch.Tensor] = []
+        for plaintext in plaintexts:
+            if plaintext.data is None:
+                raise ValueError(
+                    "sum_rotated_plaintext_product_groups requires RNS plaintext data"
+                )
+            plaintext_data.append(plaintext.data)
+        first_plaintext = plaintext_groups[0][0]
+        baby_steps = tuple(
+            0 if key is None else key.rotation_step for key in rotation_keys
+        )
+        data = cast(
             torch.Tensor,
             self._execute(
-                rns.PackTwoComponentsOp,
-                result0,
-                result1,
-                bases=("Q", "Q"),
+                ckks.GroupedRotationWeightedSumOp,
+                ciphertext.data,
+                *plaintext_data,
+                resources=key_resources,
+                attributes={
+                    "baby_steps": baby_steps,
+                    "term_count": term_count,
+                    "group_count": len(plaintext_groups),
+                },
+                bases=self._operand_bases(ciphertext, *plaintexts),
+                implementation="native-grouped-rotation-weighted-sum",
             ),
+        )
+        return _ciphertext_result(
+            ciphertext,
+            data,
+            scale=ciphertext.scale * first_plaintext.scale,
+            polynomial_domain="ntt",
+            residue_representation="montgomery",
         )
 
     def relinearize(
         self,
         value: Ciphertext,
         key: RelinearizationKey | None = None,
+        *,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> Ciphertext:
-        """Reduce CT3 to CT2 through registered eager execution."""
+        r"""Map a CT3 product phase back to two components.
 
+        The input is a three-component NTT/Montgomery product.  For phase
+        $c_0+c_1s+c_2s^2$, the relinearization key switches the $c_2s^2$ term into
+        corrections $(d_0,d_1)$.  ``ckks.RelinearizeOp`` dispatches to
+        ``native-relinearize-streaming`` and returns
+        $(c_0+d_0,c_1+d_1)$. ``output_domain="ntt"`` retains $c_0,c_1$
+        and the corrections in NTT/Montgomery form; the default returns
+        coefficient/standard Q rows. Depth and actual scale are unchanged."""
+
+        if output_domain not in ("coefficient", "ntt"):
+            raise ValueError("output_domain must be 'coefficient' or 'ntt'")
         symbol = "relinearization-key"
         selected = key if key is not None else self.relinearization_key
         selected = cast(
@@ -2609,54 +2971,105 @@ class Engine:
                 value.data,
                 bindings=self._key_switch_bindings(value.device, key_resource),
                 bases=("Q",),
+                attributes={"output_domain": output_domain},
                 implementation="native-relinearize-streaming",
             ),
         )
         return _ciphertext_result(
             value,
             data,
-            polynomial_domain="coefficient",
-            residue_representation="standard",
+            polynomial_domain=output_domain,
+            residue_representation=(
+                "standard" if output_domain == "coefficient" else "montgomery"
+            ),
         )
 
-    def switch_key(self, value: Ciphertext, key: KeySwitchKey) -> Ciphertext:
-        """Switch one key relation without storing caller-owned key material."""
+    def switch_key(
+        self,
+        value: Ciphertext,
+        key: KeySwitchKey,
+        *,
+        output_domain: PolynomialDomain = "coefficient",
+    ) -> Ciphertext:
+        r"""Switch a CT2 ciphertext from a source secret to a destination secret.
 
+        The input is a two-component coefficient/standard Q ciphertext.  For
+        $c_0+c_1s_{src}$, hybrid key switching maps the second term to
+        corrections $(d_0,d_1)$ under $s_{dst}$, producing
+        $(c_0+d_0,d_1)$. ``ckks.SwitchKeyOp`` dispatches the whole operation
+        through one streaming hybrid-RNS implementation, which shares its QP
+        accumulator across decomposition digits. ``output_domain="ntt"``
+        combines $c_0$ with its correction before the forward transform.
+        Depth, Q rows, actual scale, and CT2 shape are preserved."""
+
+        if output_domain not in ("coefficient", "ntt"):
+            raise ValueError("output_domain must be 'coefficient' or 'ntt'")
         symbol = "key-switch-key:caller"
-        component0 = self._extract_component_tensor(
-            value.data,
-            0,
-            basis="Q",
+        selected = cast(
+            KeySwitchKey,
+            self._key_on_device(
+                key, value.device, operation_name="key switching"
+            ),
         )
-        component1 = self._extract_component_tensor(
-            value.data,
-            1,
-            basis="Q",
+        key_resource = self._bind_key(symbol, selected)
+        data = cast(
+            torch.Tensor,
+            self._execute(
+                ckks.SwitchKeyOp,
+                value.data,
+                bindings=self._key_switch_bindings(value.device, key_resource),
+                attributes={
+                    "key_symbol": symbol,
+                    "output_domain": output_domain,
+                },
+                bases=("Q",),
+                implementation="native-key-switch-streaming",
+            ),
         )
-        data = self._assemble_key_switch(
-            component0,
-            component1,
-            value=value,
-            key=key,
-            key_symbol=symbol,
+        return _ciphertext_result(
+            value,
+            data,
+            polynomial_domain=output_domain,
+            residue_representation=(
+                "standard" if output_domain == "coefficient" else "montgomery"
+            ),
         )
-        return _ciphertext_result(value, data)
 
     def rotate_with_key(
         self,
         value: Ciphertext,
         key: RotationKey,
+        *,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> Ciphertext:
-        """Rotate CKKS slots with one caller-owned direct rotation key."""
+        r"""Apply the slot displacement carried by a direct rotation key.
 
-        return self._rotate_with_key(value, key)
+        The input is a two-component coefficient/standard or NTT/Montgomery Q
+        ciphertext. The call dispatches ``ckks.RotateOp`` to
+        ``native-rotate-streaming``. Its
+        Galois automorphism $\sigma_g:X\mapsto X^g$ rotates encoded slots and hybrid
+        key switching restores secret $s$ from $\sigma_g(s)$.  CT2 shape, depth,
+        active Q rows and actual scale are preserved. ``output_domain="ntt"``
+        requests NTT/Montgomery output. For NTT input and output, the
+        automorphism and unchanged component-zero contribution remain in NTT
+        form while only component one is inverted for key switching."""
+
+        if output_domain not in ("coefficient", "ntt"):
+            raise ValueError("output_domain must be 'coefficient' or 'ntt'")
+        return self._rotate_with_key(value, key, output_domain=output_domain)
 
     def _rotate_with_key(
         self,
         value: Ciphertext,
         key: RotationKey,
+        *,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> Ciphertext:
-        """Rotate with one key through eager automorphism and key switching."""
+        r"""Execute one ``ckks.RotateOp`` automorphism and key switch.
+
+        The bound rotation key supplies its signed displacement and the corresponding
+        Galois relation.  ``native-rotate-streaming`` returns a CT2 ciphertext in the
+        same depth, Q rows and actual scale, with the selected output representation."""
 
         key = cast(
             RotationKey,
@@ -2674,18 +3087,34 @@ class Engine:
                 ckks.RotateOp,
                 value.data,
                 resources=(key_resource,),
+                attributes={
+                    "input_domain": value.polynomial_domain,
+                    "output_domain": output_domain,
+                },
                 bases=("Q",),
                 implementation="native-rotate-streaming",
             ),
         )
-        return _ciphertext_result(value, data)
+        return _ciphertext_result(
+            value,
+            data,
+            polynomial_domain=output_domain,
+            residue_representation="montgomery"
+            if output_domain == "ntt"
+            else "standard",
+        )
 
     def rotate_by_step(
         self,
         value: Ciphertext,
         rotation_step: int,
     ) -> Ciphertext:
-        """Rotate slots with the installed key for `rotation_step`."""
+        r"""Cyclically rotate CKKS slots by a signed displacement.
+
+        The step is normalized modulo the slot count.  A zero step clones the input;
+        an installed direct key issues one ``ckks.RotateOp`` and a decomposed key path
+        issues successive rotations whose displacements sum modulo the slot count.
+        Each stage preserves CT2 shape, depth, Q rows, and actual scale."""
 
         normalized = RotationKey.normalize_step(
             rotation_step,
@@ -2723,14 +3152,14 @@ class Engine:
         *,
         use_hoisting: bool = True,
     ) -> list[Ciphertext]:
-        """Return caller-scheduled independent or hoisted slot rotations.
+        r"""Return the requested cyclic slot rotations in caller order.
 
-        ``rotation_steps`` determines the requested outputs. Setting
-        ``use_hoisting`` selects one scheduled hoisted group for every direct
-        key in that sequence; setting it to ``False`` executes each direct
-        rotation independently. This method does not search for rotation
-        patterns or choose a group from surrounding operations.
-        """
+        Each normalized step denotes the same mathematical result as
+        ``rotate_by_step``.  Direct single-key rotations may be grouped into one
+        ``ckks.RotateManyOp`` dispatched to ``native-rotate-many-hoisted``; hoisting
+        shares digit decomposition and Q-to-QP basis extension but does not regroup
+        or alter outputs.  Multi-key paths remain successive ``ckks.RotateOp``
+        calls."""
 
         paths: list[tuple[RotationKey, ...]] = []
         for step in rotation_steps:
@@ -2768,26 +3197,50 @@ class Engine:
         keys: Sequence[RotationKey],
         *,
         use_hoisting: bool = True,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> list[Ciphertext]:
-        """Return caller-scheduled independent or hoisted key rotations.
+        r"""Apply each supplied rotation key and preserve its output order.
 
-        Setting ``use_hoisting`` selects one scheduled hoisted group containing
-        the supplied keys. The engine preserves their order and does not add,
-        remove, or regroup offsets.
-        """
+        With hoisting, one ``ckks.RotateManyOp`` shares key-switch preparation while
+        each result equals the corresponding independent ``ckks.RotateOp``.  Without
+        hoisting, keys dispatch separately.  Every output keeps CT2 shape, depth,
+        active Q rows and actual scale. ``output_domain="ntt"`` returns
+        NTT/Montgomery results, equivalent to transforming each coefficient
+        result. The hoisted implementation retains Q evaluations during ModDown;
+        independent rotations combine c0 with the coefficient correction before
+        its forward NTT."""
 
-        return (
-            self._hoisted_rotate_many(value, list(keys))
-            if use_hoisting
-            else [self.rotate_with_key(value, key) for key in keys]
-        )
+        if output_domain not in ("coefficient", "ntt"):
+            raise ValueError("output_domain must be 'coefficient' or 'ntt'")
+        if use_hoisting:
+            return self._hoisted_rotate_many(
+                value, list(keys), output_domain=output_domain
+            )
+        return [
+            self.rotate_with_key(value, key, output_domain=output_domain)
+            for key in keys
+        ]
 
     def _hoisted_rotate_many(
         self,
         value: Ciphertext,
         entries: Sequence[RotationKey | None],
+        *,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> list[Ciphertext]:
-        """Execute one caller-selected hoisted rotation group."""
+        r"""Execute one caller-selected group through ``ckks.RotateManyOp``.
+
+        ``native-rotate-many-hoisted`` shares hybrid decomposition of component one,
+        then applies each key's Galois automorphism and key product independently.
+        Each output is mathematically the requested slot rotation and retains the
+        input's depth, scale and Q rows. The selected output domain determines
+        coefficient/standard or NTT/Montgomery representation."""
+
+        identity = (
+            self.coefficient_domain_to_ntt_domain(value)
+            if output_domain == "ntt" and any(key is None for key in entries)
+            else value
+        )
 
         nonzero = [
             cast(
@@ -2803,7 +3256,8 @@ class Engine:
         ]
         if not nonzero:
             return [
-                _ciphertext_result(value, value.data.clone()) for _ in entries
+                _ciphertext_result(identity, identity.data.clone())
+                for _ in entries
             ]
         key_resources: list[BoundResource] = []
         for index, key in enumerate(nonzero):
@@ -2813,16 +3267,27 @@ class Engine:
             ckks.RotateManyOp,
             value.data,
             resources=key_resources,
+            attributes={"output_domain": output_domain},
             bases=("Q",),
             result_count=len(nonzero),
             implementation="native-rotate-many-hoisted",
         )
         tensors = executed if isinstance(executed, tuple) else (executed,)
-        results = [_ciphertext_result(value, tensor) for tensor in tensors]
+        results = [
+            _ciphertext_result(
+                value,
+                tensor,
+                polynomial_domain=output_domain,
+                residue_representation="montgomery"
+                if output_domain == "ntt"
+                else "standard",
+            )
+            for tensor in tensors
+        ]
         rotated = iter(results)
         output = [
             (
-                _ciphertext_result(value, value.data.clone())
+                _ciphertext_result(identity, identity.data.clone())
                 if key is None
                 else next(rotated)
             )
@@ -2835,7 +3300,10 @@ class Engine:
         value: Ciphertext,
         rotation_step: int,
     ) -> Ciphertext:
-        """Replace `value` with its slot rotation and return `value`."""
+        r"""Replace $value$ with its cyclic slot rotation and return it.
+
+        The method uses ``rotate_by_step`` and therefore dispatches the required
+        ``ckks.RotateOp`` sequence while preserving depth, rows, and actual scale."""
 
         return value.replace_(self.rotate_by_step(value, rotation_step))
 
@@ -2843,40 +3311,50 @@ class Engine:
         self,
         value: Ciphertext,
         key: ConjugationKey | None = None,
+        *,
+        output_domain: PolynomialDomain = "coefficient",
     ) -> Ciphertext:
-        """Conjugate CKKS slots with caller-owned key material."""
+        r"""Apply complex conjugation to every CKKS slot.
 
+        The input is a two-component coefficient/standard Q ciphertext.  The method
+        dispatches ``ckks.ConjugateOp`` to a whole-operation implementation. It
+        applies $g=2N-1$, which substitutes $X\mapsto X^{-1}$, then uses the
+        streaming hybrid-RNS key-switch path to return from $\sigma_g(s)$ to
+        $s$. ``output_domain`` selects coefficient/standard or
+        NTT/Montgomery output. CT2 shape, depth, Q rows, and actual scale remain
+        unchanged."""
+
+        if output_domain not in ("coefficient", "ntt"):
+            raise ValueError("output_domain must be 'coefficient' or 'ntt'")
         selected = (
             key if key is not None else self._keys.require_conjugation_key()
         )
-        transformed = cast(
-            torch.Tensor,
-            self._execute(
-                rns.CoefficientAutomorphismOp,
-                value.data,
-                resource_kinds=("rns",),
-                attributes={"galois_element": 2 * self.ring_dimension - 1},
-                bases=("Q",),
+        selected = cast(
+            ConjugationKey,
+            self._key_on_device(
+                selected, value.device, operation_name="conjugate"
             ),
         )
-        component0 = self._extract_component_tensor(
-            transformed,
-            0,
-            basis="Q",
+        key_resource = self._bind_key("conjugation-key", selected)
+        data = cast(
+            torch.Tensor,
+            self._execute(
+                ckks.ConjugateOp,
+                value.data,
+                bindings=self._key_switch_bindings(value.device, key_resource),
+                bases=("Q",),
+                attributes={"output_domain": output_domain},
+                implementation="native-key-switch-streaming",
+            ),
         )
-        component1 = self._extract_component_tensor(
-            transformed,
-            1,
-            basis="Q",
+        return _ciphertext_result(
+            value,
+            data,
+            polynomial_domain=output_domain,
+            residue_representation=(
+                "standard" if output_domain == "coefficient" else "montgomery"
+            ),
         )
-        data = self._assemble_key_switch(
-            component0,
-            component1,
-            value=value,
-            key=selected,
-            key_symbol="active-conjugation-key",
-        )
-        return _ciphertext_result(value, data)
 
     def __str__(self) -> str:
         """Return the CKKS configuration and initialized resource state."""

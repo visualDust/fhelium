@@ -41,8 +41,8 @@ __global__ void ckks_rescale_drop_leading_prime_kernel(
   const scalar_t dropped_value = dropped[batch][coefficient];
 
   scalar_t quotient = remaining[batch][row][coefficient] - dropped_value;
-  quotient = montgomery_mul(quotient,
-                            inverse[row],
+  quotient = montgomery_mul_split(quotient,
+                                  inverse[row],
                             modulus_lo,
                             modulus_hi,
                             neg_inv_modulus_lo,

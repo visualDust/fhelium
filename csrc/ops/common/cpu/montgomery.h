@@ -13,6 +13,10 @@
 
 namespace fhelium::cpu {
 
+template <typename scalar_t>
+inline constexpr int64_t kMontgomeryRadixBits =
+    sizeof(scalar_t) == sizeof(int32_t) ? 32 : 62;
+
 // Chunk a flat parallel task space into roughly twice the worker count so
 // small single-row transforms still spread work across every worker.
 inline int64_t adaptive_grain(const int64_t elements) {
@@ -111,7 +115,7 @@ C10_ALWAYS_INLINE MontgomeryConstants<scalar_t> load_constants(
 template <typename scalar_t>
 C10_ALWAYS_INLINE uint64_t
 modulus(const MontgomeryConstants<scalar_t>& constants) {
-  constexpr int64_t kHalfRadixBits = sizeof(scalar_t) * 4 - 1;
+  constexpr int64_t kHalfRadixBits = kMontgomeryRadixBits<scalar_t> / 2;
   return static_cast<uint64_t>(constants.modulus_lo) +
          (static_cast<uint64_t>(constants.modulus_hi) << kHalfRadixBits);
 }
@@ -119,7 +123,7 @@ modulus(const MontgomeryConstants<scalar_t>& constants) {
 template <typename scalar_t>
 C10_ALWAYS_INLINE uint64_t
 neg_inverse(const MontgomeryConstants<scalar_t>& constants) {
-  constexpr int64_t kHalfRadixBits = sizeof(scalar_t) * 4 - 1;
+  constexpr int64_t kHalfRadixBits = kMontgomeryRadixBits<scalar_t> / 2;
   return static_cast<uint64_t>(constants.neg_inv_modulus_lo) +
          (static_cast<uint64_t>(constants.neg_inv_modulus_hi)
           << kHalfRadixBits);
@@ -130,7 +134,7 @@ C10_ALWAYS_INLINE scalar_t
 multiply(const scalar_t lhs,
          const scalar_t rhs,
          const MontgomeryConstants<scalar_t>& constants) {
-  constexpr int64_t kRadixBits = sizeof(scalar_t) * 8 - 2;
+  constexpr int64_t kRadixBits = kMontgomeryRadixBits<scalar_t>;
   const uint64_t q = modulus(constants);
 #if defined(_MSC_VER) && defined(_M_X64)
   // MSVC x64 exposes the same modulo-2^128 product and carry operations used

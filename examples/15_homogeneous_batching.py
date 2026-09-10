@@ -9,7 +9,7 @@ to evaluate its members one at a time.
 
 Example:
     python examples/15_homogeneous_batching.py \
-        --preset slots8192-scale40-levels7-int64 --level 0 --batch-sizes 1,4,8
+        --preset slots8192-scale40-depth7-int64 --depth 0 --batch-sizes 1,4,8
 """
 
 from __future__ import annotations
@@ -88,13 +88,13 @@ def prepare_constants(
     engine: Engine,
     matrix: torch.Tensor,
     *,
-    level: int,
+    depth: int,
 ) -> tuple[list[Plaintext], dict[int, RotationKey]]:
     diagonals = [
         engine.prepare_plaintext_for_multiplication(
             engine.encode(
                 cyclic_diagonal_slots(matrix, step, engine.num_slots),
-                level=level,
+                depth=depth,
             )
         )
         for step in range(matrix.size(0))
@@ -143,7 +143,7 @@ def matrix_vector(
         )
         diagonal_batch = Plaintext(
             message=None,
-            level=diagonal_batch.level,
+            depth=diagonal_batch.depth,
             scale=diagonal_batch.scale,
             data=expanded,
             representation=diagonal_batch.representation,
@@ -153,7 +153,7 @@ def matrix_vector(
             prime_ids=diagonal_batch.prime_ids,
         )
     weighted = engine.multiply_plaintext(rotated_ntt, diagonal_batch)
-    return engine.rescale_to_next_level(
+    return engine.rescale_to_next_depth(
         engine.ntt_domain_to_coefficient_domain(
             engine.sum_ciphertext_batch(weighted)
         )
@@ -219,8 +219,8 @@ def peak_allocated_mib(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_engine_args(parser, default_preset="slots8192-scale40-levels7-int64")
-    parser.add_argument("--level", type=int, default=0)
+    add_engine_args(parser, default_preset="slots8192-scale40-depth7-int64")
+    parser.add_argument("--depth", type=int, default=0)
     parser.add_argument("--size", type=int, default=8)
     parser.add_argument(
         "--batch-sizes",
@@ -240,10 +240,10 @@ def main() -> None:
         parser.error(
             f"--size must be positive and divide num_slots={engine.num_slots}"
         )
-    if not 0 <= args.level < engine.config.num_q_primes - 1:
+    if not 0 <= args.depth < engine.config.num_q_primes - 1:
         parser.error(
-            "--level must leave at least one Q prime for the workload's "
-            f"rescale; got {args.level} with "
+            "--depth must leave at least one Q prime for the workload's "
+            f"rescale; got {args.depth} with "
             f"{engine.config.num_q_primes} Q primes"
         )
     if args.warmup < 0 or args.runs <= 0:
@@ -253,15 +253,15 @@ def main() -> None:
     diagonals, rotation_keys = prepare_constants(
         engine,
         matrix,
-        level=args.level,
+        depth=args.depth,
     )
 
-    active_q_rows = engine.config.num_q_primes - args.level
+    active_q_rows = engine.config.num_q_primes - args.depth
     active_qp_rows = active_q_rows + engine.config.num_p_primes
     qp_digit_bytes = active_qp_rows * engine.config.N * torch.int64.itemsize
     print(
         "Homogeneous batching benchmark\n"
-        f"  preset={args.preset}, level={args.level}, "
+        f"  preset={args.preset}, depth={args.depth}, "
         f"device={args.device}\n"
         f"  active rows: Q={active_q_rows}, QP={active_qp_rows}\n"
         "  one extended QP digit per message: "
@@ -278,7 +278,7 @@ def main() -> None:
         )
         source = engine.encrypt_message(
             periodic_slots(vectors, engine.num_slots),
-            level=args.level,
+            depth=args.depth,
         )
         # unbind_batch returns views. Clone here so the loop represents
         # independently owned, ordinary unbatched request values.
@@ -366,7 +366,7 @@ def main() -> None:
     print(
         "\nThe faster column describes only this measured point. FHElium "
         "does not select or cache an execution policy; keep the choice in "
-        "application code and remeasure the deployed preset, level, batch "
+        "application code and remeasure the deployed preset, depth, batch "
         "size, device, and complete workload."
     )
 

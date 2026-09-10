@@ -13,7 +13,7 @@ pinned/CUDA budgets, and ends each managed logical value.
 ```bash
 python examples/13_explicit_residency.py \
   --device cuda:0 \
-  --preset slots8192-scale40-levels7-int64
+  --preset slots8192-scale40-depth7-int64
 ```
 
 CUDA is required. The workload rotates one encrypted message by one slot,
@@ -33,7 +33,7 @@ opaque handles.
 
 ```python
 weight = engine.prepare_plaintext_for_multiplication(
-    engine.encode(weight_message, level=0),
+    engine.encode(weight_message, depth=0),
     modulus_basis="Q",
 ).cpu()
 rotation_key = engine.create_rotation_key(1, engine.secret_key).cpu()
@@ -208,7 +208,7 @@ with scope:
                 engine.coefficient_domain_to_ntt_domain(rotated),
                 resident[weight_handle],
             )
-            output = engine.rescale_to_next_level(
+            output = engine.rescale_to_next_depth(
                 engine.ntt_domain_to_coefficient_domain(output)
             )
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from xdsl.dialects.builtin import IntegerAttr
+from xdsl.dialects.builtin import IntegerAttr, StringAttr
 from xdsl.ir import Block
 
 from fhelium import ir
@@ -12,9 +12,9 @@ builtin.module attributes {
   fhelium.schema_version = "1",
   fhelium.dialect_version = "0.2"
 } {
-  func.func @main(%secret: !fhelium_ckks.ciphertext<{components = 2 : i64, level = 3 : i64}>) -> !fhelium_ckks.ciphertext<{}> {
-    %product = "fhelium_ckks.multiply"(%secret, %secret) : (!fhelium_ckks.ciphertext<{components = 2 : i64, level = 3 : i64}>, !fhelium_ckks.ciphertext<{components = 2 : i64, level = 3 : i64}>) -> !fhelium_ckks.ciphertext<{components = 3 : i64, level = 3 : i64}>
-    %result = "vendor.experimental.refresh"(%product) : (!fhelium_ckks.ciphertext<{components = 3 : i64, level = 3 : i64}>) -> !fhelium_ckks.ciphertext<{}>
+  func.func @main(%secret: !fhelium_ckks.ciphertext<{components = 2 : i64, depth = 3 : i64}>) -> !fhelium_ckks.ciphertext<{}> {
+    %product = "fhelium_ckks.multiply"(%secret, %secret) : (!fhelium_ckks.ciphertext<{components = 2 : i64, depth = 3 : i64}>, !fhelium_ckks.ciphertext<{components = 2 : i64, depth = 3 : i64}>) -> !fhelium_ckks.ciphertext<{components = 3 : i64, depth = 3 : i64}>
+    %result = "vendor.experimental.refresh"(%product) : (!fhelium_ckks.ciphertext<{components = 3 : i64, depth = 3 : i64}>) -> !fhelium_ckks.ciphertext<{}>
     func.return %result : !fhelium_ckks.ciphertext<{}>
   }
 }
@@ -54,3 +54,31 @@ def test_ckks_multiply_rejects_invalid_or_missing_component_state() -> None:
         untyped_block.args[0], untyped_block.args[1], ciphertext_type
     )
     assert specification.diagnostics(missing)
+
+
+def test_ckks_rotation_output_domain_matches_represented_result() -> None:
+    coefficient = ir.dialects.ckks.CiphertextType().with_state(
+        components=IntegerAttr(2, 64),
+        polynomial_domain=StringAttr("coefficient"),
+        residue_representation=StringAttr("standard"),
+    )
+    ntt = coefficient.with_state(
+        polynomial_domain=StringAttr("ntt"),
+        residue_representation=StringAttr("montgomery"),
+    )
+    block = Block(arg_types=(coefficient, ir.dialects.ckks.EvaluationKeyType()))
+    valid = ir.dialects.ckks.RotateOp(
+        block.args[0],
+        block.args[1],
+        ntt,
+        attributes={"output_domain": StringAttr("ntt")},
+    )
+    invalid = ir.dialects.ckks.RotateOp(
+        block.args[0],
+        block.args[1],
+        coefficient,
+        attributes={"output_domain": StringAttr("ntt")},
+    )
+    specification = ir.DEFAULT_OPERATION_SPECS.require(valid.name)
+    assert specification.diagnostics(valid) == ()
+    assert specification.diagnostics(invalid)

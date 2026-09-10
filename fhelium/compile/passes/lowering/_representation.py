@@ -1,8 +1,13 @@
-"""Lower CKKS representation and level transitions into logical operations."""
+"""Lower CKKS representation and depth transitions into logical operations."""
 
 from __future__ import annotations
 
-from xdsl.dialects.builtin import StringAttr
+from typing import Literal, cast
+
+from xdsl.dialects.builtin import (
+    IntegerAttr,
+    StringAttr,
+)
 from xdsl.ir import Operation
 
 from fhelium.config import CkksConfig
@@ -18,6 +23,22 @@ from ._types import (
     _resource_type_state,
     _rns_type,
 )
+
+
+def _represented_string(
+    operation: Operation,
+    value_type: object,
+    name: str,
+    *,
+    value: str,
+) -> str:
+    state = getattr(getattr(value_type, "state", None), "data", {})
+    attribute = state.get(name)
+    if not isinstance(attribute, StringAttr) or attribute.data == "unknown":
+        raise ValueError(
+            f"{operation.name} requires concrete {value} {name!r} state"
+        )
+    return attribute.data
 
 
 def _lower_ntt(
@@ -38,16 +59,64 @@ def _lower_ntt(
         if isinstance(operation.value.type, ckks.CiphertextType)
         else "plaintext"
     )
+    input_domain = _represented_string(
+        operation,
+        operation.value.type,
+        "polynomial_domain",
+        value=f"{value_kind} input",
+    )
+    input_residues = _represented_string(
+        operation,
+        operation.value.type,
+        "residue_representation",
+        value=f"{value_kind} input",
+    )
+    output_domain = _represented_string(
+        operation,
+        operation.result.type,
+        "polynomial_domain",
+        value="result",
+    )
+    output_residues = _represented_string(
+        operation,
+        operation.result.type,
+        "residue_representation",
+        value="result",
+    )
     if isinstance(operation, ckks.ToNttOp):
+        if input_domain != "coefficient" or input_residues not in {
+            "standard",
+            "montgomery",
+        }:
+            raise ValueError(
+                f"{operation.name} requires coefficient-domain standard or "
+                "Montgomery input"
+            )
+        if (output_domain, output_residues) != ("ntt", "montgomery"):
+            raise ValueError(
+                f"{operation.name} requires NTT/Montgomery result state"
+            )
         operation_type: type[Operation] = (
             ntt.CoefficientStandardToNttMontgomeryOp
-            if value_kind == "ciphertext"
+            if input_residues == "standard"
             else ntt.CoefficientMontgomeryToNttMontgomeryOp
         )
     else:
+        if (input_domain, input_residues) != ("ntt", "montgomery"):
+            raise ValueError(
+                f"{operation.name} requires NTT/Montgomery input state"
+            )
+        if output_domain != "coefficient" or output_residues not in {
+            "standard",
+            "montgomery",
+        }:
+            raise ValueError(
+                f"{operation.name} requires coefficient-domain standard or "
+                "Montgomery result"
+            )
         operation_type = (
             ntt.NttMontgomeryToCoefficientStandardOp
-            if value_kind == "ciphertext"
+            if output_residues == "standard"
             else ntt.InverseMontgomeryOp
         )
     logical = operation_type.create(
@@ -79,11 +148,21 @@ def _lower_rescale(
         kind="rescale-plan",
     )
     rounding = operation.rounding or StringAttr("nearest")
-    logical = rns.RescaleDropLeadingPrimeOp(
+    source_rns_type = _rns_type(operation.value.type)
+    depth_attr = source_rns_type.state.data.get("depth")
+    if not isinstance(depth_attr, IntegerAttr):
+        raise ValueError("rescale lowering requires concrete ciphertext depth")
+    depth = int(depth_attr.value.data)
+    drop_count = len(config.q_depth_groups[depth])
+    logical = rns.RescaleDropLeadingPrimesOp(
         value,
         resource,
         _rns_type(operation.result.type),
+        drop_count=drop_count,
         rounding=rounding,
+        polynomial_domain=cast(
+            Literal["coefficient", "ntt"], operation.input_domain.data
+        ),
     )
     result_cast, result = _cast_to_ckks(logical.result, operation.result.type)
     return LoweredCkksOperation(
@@ -145,11 +224,11 @@ def _lower_mod_switch(
         symbol="active-rns-parameters",
         kind="rns-parameters",
     )
-    logical = rns.RestrictLevelOp(
+    logical = rns.RestrictDepthOp(
         value,
         resource,
         _rns_type(operation.result.type),
-        target_level=operation.target_level,
+        target_depth=operation.target_depth,
     )
     result_cast, result = _cast_to_ckks(
         logical.results[0], operation.result.type
@@ -213,7 +292,7 @@ REPRESENTATION_LOWERINGS = (
         is_default=True,
     ),
     CkksLoweringDefinition(
-        "rns-restrict-level",
+        "rns-restrict-depth",
         ckks.ModSwitchOp,
         _lower_mod_switch,
         is_default=True,

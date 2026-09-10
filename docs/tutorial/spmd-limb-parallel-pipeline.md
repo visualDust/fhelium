@@ -56,7 +56,7 @@ full_sum = dist.gather_ciphertext_limbs(local_sum, dst=0)
 prepared_sum = engine.coefficient_domain_to_ntt_domain(full_sum)
 ```
 
-NTT conversion preserves the level and operates independently on each modulus,
+NTT conversion preserves the depth and operates independently on each modulus,
 but the example reconstructs the complete ciphertext before repartitioning so
 rank zero can derive and transmit one active-basis layout.
 
@@ -75,7 +75,7 @@ three-component structure over its own prime interval.
 
 ```python
 full_triplet = dist.gather_ciphertext_limbs(local_triplet, dst=0)
-result = engine.rescale_to_next_level(
+result = engine.rescale_to_next_depth(
     engine.relinearize(full_triplet, relinearization_key)
 )
 ```
@@ -83,9 +83,10 @@ result = engine.rescale_to_next_level(
 Relinearization uses the complete hybrid decomposition/key-switch layout, so it is
 kept on rank zero after structural reconstruction. Worker ranks never receive
 the relinearization key. The product carries the pending $\Delta^2$ scale;
-rescale then drops one leading Q prime using cross-prime information and records
-the actual output scale $\Delta^2/q_{\mathrm{drop}}$; it does not reset the
-value to `default_scale`.
+rescale then drops the complete leading Q depth group using cross-prime
+information and records the actual output scale
+$\Delta^2/M_{\mathrm{drop}}$, where $M_{\mathrm{drop}}$ is that group's prime
+product; it does not reset the value to `default_scale`.
 
 ## Gather reconstructs disjoint limb rows
 

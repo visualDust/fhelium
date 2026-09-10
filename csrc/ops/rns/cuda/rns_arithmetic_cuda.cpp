@@ -10,6 +10,21 @@ torch::Tensor montgomery_mul(const torch::Tensor lhs,
   return rns_montgomery_mul_cuda(lhs, rhs, rns_params);
 }
 
+torch::Tensor montgomery_weighted_sum(at::TensorList ciphertexts,
+                                      at::TensorList plaintexts,
+                                      const torch::Tensor rns_params) {
+  return rns_montgomery_weighted_sum_cuda(
+      ciphertexts, plaintexts, rns_params);
+}
+
+torch::Tensor montgomery_weighted_sums(at::TensorList ciphertexts,
+                                       at::TensorList plaintexts,
+                                       const int64_t group_count,
+                                       const torch::Tensor rns_params) {
+  return rns_montgomery_weighted_sums_cuda(
+      ciphertexts, plaintexts, group_count, rns_params);
+}
+
 torch::Tensor montgomery_mul_cyclic_compressed(
     const torch::Tensor lhs,
     const torch::Tensor compressed_rhs,
@@ -114,6 +129,8 @@ torch::Tensor mixed_radix_basis_extend_to_montgomery(
 
 TORCH_LIBRARY_IMPL(fhelium_rns_ops, CUDA, m) {
   m.impl("montgomery_mul", &montgomery_mul);
+  m.impl("montgomery_weighted_sum", &montgomery_weighted_sum);
+  m.impl("montgomery_weighted_sums", &montgomery_weighted_sums);
   m.impl("montgomery_mul_cyclic_compressed", &montgomery_mul_cyclic_compressed);
   m.impl("montgomery_mul_contiguous_compressed",
          &montgomery_mul_contiguous_compressed);

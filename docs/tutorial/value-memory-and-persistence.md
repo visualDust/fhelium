@@ -2,7 +2,7 @@
 
 **Example source:** [`examples/03_plaintext_ciphertext_memory.py`](https://github.com/VisualDust/fhelium/blob/main/examples/03_plaintext_ciphertext_memory.py)
 
-This example compares level-dependent value sizes, moves live values between
+This example compares depth-dependent value sizes, moves live values between
 devices, and round-trips values through direct files and optional
 artifacts. The tutorial separates three concepts that are easy to conflate:
 
@@ -16,23 +16,23 @@ Use a temporary output directory:
 
 ```bash
 python examples/03_plaintext_ciphertext_memory.py \
-  --preset slots8192-scale40-levels7-int64 \
-  --levels 0,1,2
+  --preset slots8192-scale40-depth7-int64 \
+  --depths 0,1,2
 ```
 
 Keep the generated files for inspection:
 
 ```bash
 python examples/03_plaintext_ciphertext_memory.py \
-  --preset slots8192-scale40-levels7-int64 \
-  --levels 0,1,2 \
+  --preset slots8192-scale40-depth7-int64 \
+  --depths 0,1,2 \
   --output-dir /tmp/fhelium-value-demo
 ```
 
-## 1. Compare level-dependent value size
+## 1. Compare depth-dependent value size
 
 ```python
-plaintext = engine.encode(message, level=level)
+plaintext = engine.encode(message, depth=depth)
 ciphertext = engine.encrypt(plaintext)
 
 print(ciphertext.limb_count)
@@ -42,16 +42,16 @@ print(plaintext.nbytes)
 
 A ciphertext owns one tensor with shape
 `[component, *batch, active Q limb, coefficient]`. This example is unbatched,
-so its `*batch` prefix is empty. As the level increases, active Q rows are
+so its `*batch` prefix is empty. As the depth increases, active Q rows are
 removed and the dense tensor becomes smaller.
 
 An unprepared plaintext can be much smaller than an
 operation-ready RNS plaintext. Compare:
 
 ```python
-encoded = engine.encode(factor_message, level=ciphertext.level)
+encoded = engine.encode(factor_message, depth=ciphertext.depth)
 prepared = engine.prepare_plaintext_for_multiplication(
-    engine.encode(factor_message, level=ciphertext.level)
+    engine.encode(factor_message, depth=ciphertext.depth)
 )
 ```
 
@@ -127,7 +127,7 @@ prepared = store.get(
 )
 if prepared is None:
     prepared = engine.prepare_plaintext_for_multiplication(
-        engine.encode(factor_message, level=ciphertext.level)
+        engine.encode(factor_message, depth=ciphertext.depth)
     )
     store.put("model/example/prepared-factor", prepared)
 
@@ -216,9 +216,9 @@ types and their persisted state are:
 
 | Value type | Tensor payloads | Persisted type-specific state |
 | --- | --- | --- |
-| `Plaintext` | Exactly one of `message` or `data` | Context ID, level, scale, representation, polynomial domain, modulus basis, residue representation, prime IDs, and the corresponding presence flag |
-| `CompressedPlaintext` | `data` and optional `implicit_data` | Context ID, ring dimension, compression layout/version, level, scale, domain/basis/residue state, and prime IDs |
-| `Ciphertext` | `data` | Context ID, level, actual scale, polynomial domain, modulus basis, residue representation, and prime IDs |
+| `Plaintext` | Exactly one of `message` or `data` | Context ID, depth, scale, representation, polynomial domain, modulus basis, residue representation, prime IDs, and the corresponding presence flag |
+| `CompressedPlaintext` | `data` and optional `implicit_data` | Context ID, ring dimension, compression layout/version, depth, scale, domain/basis/residue state, and prime IDs |
+| `Ciphertext` | `data` | Context ID, depth, actual scale, polynomial domain, modulus basis, residue representation, and prime IDs |
 | `PublicKey`, `KeySwitchKey`, `RelinearizationKey`, `ConjugationKey` | `data` | Concrete key type, context ID, prime IDs, and domain/basis/residue state |
 | `RotationKey` | `data` | The common key state plus normalized `rotation_step` |
 | `SecretKey` | `data` | The common key state; persistence requires `allow_secret=True` and remains unencrypted |
@@ -271,7 +271,7 @@ value if appropriate, and call `get(name)` to use the winner.
 ## 5. Prove the restored state is usable
 
 ```python
-result = engine.rescale_to_next_level(
+result = engine.rescale_to_next_depth(
     engine.ntt_domain_to_coefficient_domain(
         engine.multiply_plaintext(
             engine.coefficient_domain_to_ntt_domain(restored_ciphertext),
@@ -283,7 +283,7 @@ decoded = engine.decrypt_message(result)
 ```
 
 Round-trip tests should evaluate a real operation, not only compare bytes.
-That catches lost level, polynomial domain, modulus basis, Montgomery, scale, or prime-ID
+That catches lost depth, polynomial domain, modulus basis, Montgomery, scale, or prime-ID
 metadata that a raw tensor equality check could miss.
 
 ## Lifecycle summary

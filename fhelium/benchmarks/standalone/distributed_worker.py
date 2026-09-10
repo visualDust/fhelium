@@ -302,7 +302,7 @@ def _allocate_rotation_key_buffer(
 ) -> fh.RotationKey:
     """Preallocate a reusable receiver so timing excludes setup transfer."""
 
-    prime_ids = engine.level0_qp_prime_ids
+    prime_ids = engine.depth0_qp_prime_ids
     return fh.RotationKey(
         data=torch.empty(
             (
@@ -312,7 +312,7 @@ def _allocate_rotation_key_buffer(
                 engine.config.N,
             ),
             device=dist.local_device(),
-            dtype=engine.config.torch_dtype,
+            dtype=engine.dtype,
         ),
         prime_ids=prime_ids,
         rotation_step=1,
@@ -350,7 +350,7 @@ def _evaluate_rotation_matvec(
     accumulator = None
     remaining_steps = local_rotation_steps
     if remaining_steps and remaining_steps[0] == 0:
-        accumulator = engine.rescale_to_next_level(
+        accumulator = engine.rescale_to_next_depth(
             engine.ntt_domain_to_coefficient_domain(
                 engine.multiply_plaintext(
                     engine.coefficient_domain_to_ntt_domain(source),
@@ -378,7 +378,7 @@ def _evaluate_rotation_matvec(
                     engine.coefficient_domain_to_ntt_domain(rotated_batch),
                     local_diagonal_batches[term_steps],
                 )
-                term = engine.rescale_to_next_level(
+                term = engine.rescale_to_next_depth(
                     engine.ntt_domain_to_coefficient_domain(
                         engine.sum_ciphertext_batch(product_batch)
                     )
@@ -389,7 +389,7 @@ def _evaluate_rotation_matvec(
                     engine.add_(accumulator, term)
             continue
         for rotation_step, rotated in zip(chunk, rotated_values, strict=True):
-            term = engine.rescale_to_next_level(
+            term = engine.rescale_to_next_depth(
                 engine.ntt_domain_to_coefficient_domain(
                     engine.multiply_plaintext(
                         engine.coefficient_domain_to_ntt_domain(rotated),
@@ -519,7 +519,7 @@ def _ckks_rotation_matvec_benchmark(
         rotation_step: engine.prepare_plaintext_for_multiplication(
             engine.encode(
                 _cyclic_diagonal_slots(matrix, rotation_step, engine.num_slots),
-                level=source.level,
+                depth=source.depth,
                 device=source.device,
             )
         )

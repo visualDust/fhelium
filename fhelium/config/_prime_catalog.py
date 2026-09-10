@@ -1,11 +1,8 @@
 """Load the versioned CKKS prime resources packaged with FHElium.
 
-The module reads ``scale_primes_v1.safetensors`` and
-``message_primes_v1.safetensors`` from :mod:`fhelium.config.resources`.
-Scale-prime entries are keyed by ``(scale_bits, ring_dimension)`` and supply
-ordered public-Q scale rows. Message-prime entries are keyed by
-``(message_bits, ring_dimension)`` and supply the structural Q base followed
-by key-switch P candidates.
+The installed tables supply ordered Q-prime candidates and a separate
+sequence for the special primes in P. Entries are keyed
+by target prime width and ring dimension.
 
 Loading validates the resource format/version metadata, serialized key schema,
 one-dimensional ``int64`` tensors, nonempty unique sequences, and the required
@@ -32,8 +29,8 @@ from fhelium.errors import PrimeCatalogResourceError
 
 _RESOURCE_PACKAGE = "fhelium.config.resources"
 _CATALOG_VERSION = "1"
-_SCALE_RESOURCE = "scale_primes_v1.safetensors"
-_MESSAGE_RESOURCE = "message_primes_v1.safetensors"
+_SCALING_RESOURCE = "scaling_primes_v1.safetensors"
+_SPECIAL_RESOURCE = "special_primes_v1.safetensors"
 
 PrimeKey = tuple[int, int]
 PrimeTable = Mapping[PrimeKey, tuple[int, ...]]
@@ -171,30 +168,31 @@ def _load_table(
 class PrimeCatalog:
     """Process-local view of immutable packaged CKKS prime tables."""
 
-    _scale: PrimeTable
-    _message: PrimeTable
+    _scaling: PrimeTable
+    _special: PrimeTable
 
-    def scale_primes(self, scale_bits: int, degree: int) -> list[int]:
-        """Return a mutable copy of one ordered scale-prime sequence."""
+    def scaling_primes(self, prime_bits: int, degree: int) -> list[int]:
+        """Return a mutable copy of one ordered scaling-prime sequence."""
 
-        return list(self._scale[int(scale_bits), int(degree)])
+        return list(self._scaling[int(prime_bits), int(degree)])
 
-    def message_primes(self, message_bits: int, degree: int) -> list[int]:
-        """Return a mutable copy of one ordered structural-Q/P sequence."""
+    def special_primes(self, prime_bits: int, degree: int) -> list[int]:
+        """Return a mutable copy of one ordered special-prime sequence."""
 
-        return list(self._message[int(message_bits), int(degree)])
+        return list(self._special[int(prime_bits), int(degree)])
 
-    @property
-    def scale_keys(self) -> tuple[PrimeKey, ...]:
-        """Return supported ``(scale_bits, ring_dimension)`` keys."""
-
-        return tuple(self._scale)
 
     @property
-    def message_keys(self) -> tuple[PrimeKey, ...]:
-        """Return supported ``(message_bits, ring_dimension)`` keys."""
+    def scaling_keys(self) -> tuple[PrimeKey, ...]:
+        """Return supported scaling-prime catalog keys."""
 
-        return tuple(self._message)
+        return tuple(self._scaling)
+
+    @property
+    def special_keys(self) -> tuple[PrimeKey, ...]:
+        """Return supported terminal/special-prime catalog keys."""
+
+        return tuple(self._special)
 
 
 @lru_cache(maxsize=1)
@@ -202,12 +200,12 @@ def get_prime_catalog() -> PrimeCatalog:
     """Load and validate the installed catalog once per process."""
 
     return PrimeCatalog(
-        _scale=_load_table(
-            _SCALE_RESOURCE,
-            expected_format="ckks-scale-primes",
+        _scaling=_load_table(
+            _SCALING_RESOURCE,
+            expected_format="ckks-scaling-primes",
         ),
-        _message=_load_table(
-            _MESSAGE_RESOURCE,
-            expected_format="ckks-message-primes",
+        _special=_load_table(
+            _SPECIAL_RESOURCE,
+            expected_format="ckks-special-primes",
         ),
     )

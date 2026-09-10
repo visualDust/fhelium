@@ -20,6 +20,7 @@ from fhelium.config import CkksConfig
 from fhelium.ir import Program, value_role
 from fhelium.ir.dialects import ckks
 from fhelium.ir.dialects._common import OpenStateType
+from ._transition_state import is_same_dialect_ckks_cast
 
 
 _PREPARE_ADD_TYPES = (
@@ -92,12 +93,12 @@ def _represented_scale(value: SSAValue) -> float | None:
     return _positive_scale(attribute.value.data, label="represented CKKS scale")
 
 
-def _represented_level(value: SSAValue, *, operation: str) -> int:
+def _represented_depth(value: SSAValue, *, operation: str) -> int:
     state = getattr(getattr(value.type, "state", None), "data", {})
-    attribute = state.get("level")
+    attribute = state.get("depth")
     if not isinstance(attribute, IntegerAttr):
         raise ValueError(
-            f"{operation} requires a scheduled level before scale assignment"
+            f"{operation} requires a scheduled depth before scale assignment"
         )
     return int(attribute.value.data)
 
@@ -108,7 +109,7 @@ class AssignCkksScalesPass:
 
     The pass never inserts arithmetic or metadata reinterpretation operations.
     Add/sub joins require exact binary64 scale equality. Rescale divides by the
-    actual Q prime selected by its input level.
+    actual Q prime selected by its input depth.
     """
 
     entry_scale: float
@@ -205,14 +206,29 @@ class AssignCkksScalesPass:
                             "encrypted conversion cast lacks an assigned scale"
                         )
                     continue
-                copied = dict(
+                source_state = dict(
                     getattr(
                         getattr(operation.inputs[0].type, "state", None),
                         "data",
                         {},
                     )
                 )
-                record(operation.outputs[0], source_scale, copied_state=copied)
+                target_state = dict(
+                    getattr(
+                        getattr(operation.outputs[0].type, "state", None),
+                        "data",
+                        {},
+                    )
+                )
+                record(
+                    operation.outputs[0],
+                    source_scale,
+                    copied_state=(
+                        target_state
+                        if is_same_dialect_ckks_cast(operation)
+                        else {**source_state, **target_state}
+                    ),
+                )
                 matched += 1
                 continue
             if not operation.results:
@@ -248,6 +264,19 @@ class AssignCkksScalesPass:
                     operation.ciphertext,
                     operation=operation.name,
                 ) * require(operation.plaintext, operation=operation.name)
+            elif isinstance(operation, ckks.GroupedRotationWeightedSumOp):
+                ciphertext_scale = require(
+                    operation.value, operation=operation.name
+                )
+                plaintext_scales = {
+                    require(plaintext, operation=operation.name)
+                    for plaintext in operation.plaintexts
+                }
+                if len(plaintext_scales) != 1:
+                    raise ValueError(
+                        f"{operation.name} requires one plaintext scale"
+                    )
+                scale = ciphertext_scale * plaintext_scales.pop()
             elif isinstance(operation, ckks.MultiplyOp):
                 scale = require(
                     operation.lhs, operation=operation.name
@@ -290,8 +319,8 @@ class AssignCkksScalesPass:
             elif isinstance(operation, ckks.RescaleOp):
                 source = operation.value
                 source_scale = require(source, operation=operation.name)
-                level = _represented_level(source, operation=operation.name)
-                scale = source_scale / float(config.q_moduli[level])
+                depth = _represented_depth(source, operation=operation.name)
+                scale = source_scale / float(config.rescale_divisor(depth))
             elif isinstance(operation, ckks.ReinterpretScaleOp):
                 scale = _positive_scale(
                     operation.scale.value.data,

@@ -3,7 +3,7 @@
 The package carries one Program, caller-extensible `CompileWorkspace`, and
 ordered pass reports in a `Compilation`. The `passes.lowering` package maps CKKS
 operations to logical RNS/NTT composition for compile, eager, and JIT callers.
-Frontend, CKKS, and lowering passes can stop at any represented IR level;
+Frontend, CKKS, and lowering passes can stop at any represented IR abstraction level;
 callers may inspect or export that Program, continue through an external
 xDSL/MLIR pipeline, or bind backend resources. Compilation does not require
 eager execution or a JIT session.
@@ -58,7 +58,7 @@ from .passes import (
     InitializeResourceBindingsPass,
     AssignImplementationsPass,
     AssignNttImplementationPass,
-    AssignCkksLevelsPass,
+    AssignCkksDepthsPass,
     AssignCkksScalesPass,
     EliminateDeadValuesPass,
     EmitBackendPythonPass,
@@ -77,6 +77,7 @@ from .passes import (
     LinkProgramPass,
     MaterializeResourcesPass,
     ResolveBackendOperationsPass,
+    ValidateExecutionRepresentationsPass,
     ResolveRotationKeyOperandsPass,
     SvgGraphVisualizationPass,
     SvgGraphOutput,
@@ -96,7 +97,7 @@ __all__ = [
     "InitializeResourceBindingsPass",
     "AssignImplementationsPass",
     "AssignNttImplementationPass",
-    "AssignCkksLevelsPass",
+    "AssignCkksDepthsPass",
     "AssignCkksScalesPass",
     "BatchMode",
     "CaptureError",
@@ -139,6 +140,7 @@ __all__ = [
     "PythonCodegenError",
     "MaterializeResourcesPass",
     "ResolveBackendOperationsPass",
+    "ValidateExecutionRepresentationsPass",
     "ResolveRotationKeyOperandsPass",
     "SlotExtent",
     "StaticValue",

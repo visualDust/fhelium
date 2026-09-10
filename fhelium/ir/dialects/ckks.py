@@ -1,13 +1,23 @@
-"""CKKS evaluator semantics with representation-bearing value types."""
+r"""Cheon-Kim-Kim-Song (CKKS) evaluator operations and value state.
+
+A two-component ciphertext (CT2) has phase $c_0+c_1s$; a
+three-component ciphertext (CT3) has phase $c_0+c_1s+c_2s^2$ for secret
+polynomial $s$.  The residue number system (RNS) stores each polynomial
+modulo active ciphertext primes Q; QP appends special P primes used during key
+switching.  The number-theoretic transform (NTT) changes negacyclic polynomial
+multiplication into pointwise multiplication.  Every plaintext and ciphertext
+may carry its own actual scale $\Delta$.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import ClassVar
+from typing import ClassVar, Literal, cast
 
-from xdsl.dialects.builtin import FloatAttr, IntegerAttr, StringAttr
+from xdsl.dialects.builtin import ArrayAttr, FloatAttr, IntegerAttr, StringAttr
 from xdsl.ir import Attribute, Dialect, Operation, SSAValue
 from xdsl.irdl import (
+    AttrSizedOperandSegments,
     IRDLOperation,
     attr_def,
     irdl_attr_definition,
@@ -37,7 +47,7 @@ from .core import MessageType
 
 @irdl_attr_definition
 class CiphertextType(OpenStateType):
-    """CKKS ciphertext with partial level, scale, basis, and domain state."""
+    """CKKS ciphertext with partial depth, scale, basis, and domain state."""
 
     name = "fhelium_ckks.ciphertext"
     ROLE: ClassVar[ValueRole] = "encrypted"
@@ -71,18 +81,32 @@ class CompressedPlaintextType(OpenStateType):
 
 @irdl_op_definition
 class EncodeOp(IRDLOperation):
-    """Encode one public CKKS slot message as integer coefficients."""
+    r"""Encode ordered complex slots as a scaled integer polynomial.
+
+    For ring $R=\mathbb{Z}[X]/(X^N+1)$, let $\sigma$ be the configured CKKS
+    embedding in the configured generator's slot order.  Given slots $m$ and
+    actual scale $\Delta$, the operation returns
+    $a=\operatorname{RandRound}(\Delta\,\sigma^{-1}(m))\in R$.
+    ``depth`` records the later modulus-chain placement but does not reduce the
+    integer coefficients.  The registered ``native-ckks-encode`` implementation
+    performs the embedding and stochastic rounding."""
 
     name = "fhelium_ckks.encode"
     message = operand_def(MessageType)
     result = result_def(PlaintextType)
-    level = attr_def(IntegerAttr)
+    depth = attr_def(IntegerAttr)
     scale = attr_def(FloatAttr)
 
 
 @irdl_op_definition
 class DecodeOp(IRDLOperation):
-    """Decode one coefficient plaintext into ordered CKKS slots."""
+    r"""Decode a scaled coefficient polynomial into ordered CKKS slots.
+
+    For coefficient data $a$ with actual scale $\Delta$, the operation returns
+    $m'=\sigma(a/\Delta)$, truncated to the configured slot count and ordered by
+    the configured Galois generator.  ``is_real`` selects the real part after the
+    complex embedding.  The input may be freshly encoded integers or bounded
+    approximate coefficients reconstructed by decryption."""
 
     name = "fhelium_ckks.decode"
     plaintext = operand_def(PlaintextType)
@@ -93,34 +117,61 @@ class DecodeOp(IRDLOperation):
 
 @irdl_op_definition
 class IntegerCoefficientsToRnsOp(IRDLOperation):
-    """Reduce integer coefficients into standard RNS rows."""
+    r"""Reduce integer polynomial coefficients into active RNS rows.
+
+    RNS means residue number system.  At ``depth`` $\ell$, every coefficient
+    $a_j$ is mapped to $a_j\bmod q_i$ for each active Q prime and, for basis
+    ``QP``, to $a_j\bmod p_i$ for each special P prime.  The result is
+    coefficient-domain standard-residue data.  Scale and polynomial meaning do
+    not change."""
 
     name = "fhelium_ckks.integer_coefficients_to_rns"
     plaintext = operand_def(PlaintextType)
     result = result_def(PlaintextType)
     modulus_basis = attr_def(StringAttr)
-    level = attr_def(IntegerAttr)
+    depth = attr_def(IntegerAttr)
     traits = traits_def(Pure())
 
 
 @irdl_op_definition
 class EncryptOp(IRDLOperation):
-    """Encrypt slots or integer coefficients with a named public key."""
+    r"""Encrypt an integer plaintext polynomial as a CT2 ciphertext.
+
+    Let the public key be $(k_0,k_1)$, satisfying
+    $k_0+k_1s\approx0$, let $v$ be a sampled binary polynomial, and let
+    $e_0,e_1$ be sampled error polynomials.  For plaintext $a$, the result is
+    $c_0=k_0v+a+e_0$ and $c_1=k_1v+e_1$ modulo every active prime.  The output
+    has two components and keeps the plaintext depth and actual scale.
+    ``output_domain`` selects coefficient/standard or NTT/Montgomery Q or QP
+    residues. ``key_symbol`` identifies the bound public-key resource."""
 
     name = "fhelium_ckks.encrypt"
     plaintext = operand_def(PlaintextType)
     result = result_def(CiphertextType)
     key_symbol = attr_def(StringAttr)
+    output_domain = attr_def(
+        StringAttr, default_value=StringAttr("coefficient")
+    )
 
 
 @irdl_op_definition
 class DecryptOp(IRDLOperation):
-    """Decrypt a ciphertext with a named secret key."""
+    r"""Evaluate a ciphertext phase and reconstruct coefficient data.
+
+    For CT2 $(c_0,c_1)$, the phase is $c_0+c_1s$; for CT3 it is
+    $c_0+c_1s+c_2s^2$, computed modulo each active prime.  The registered
+    decryption implementation converts products to coefficient-domain standard
+    RNS, then reconstructs the centered integer class from all active Q
+    rows.  The result is an approximate coefficient plaintext at the ciphertext's
+    depth and actual scale. ``input_domain`` records whether the ciphertext
+    payload arrives in coefficient/standard or NTT/Montgomery form, and
+    ``key_symbol`` selects the secret key."""
 
     name = "fhelium_ckks.decrypt"
     ciphertext = operand_def(CiphertextType)
     result = result_def(PlaintextType)
     key_symbol = attr_def(StringAttr)
+    input_domain = attr_def(StringAttr)
     traits = traits_def(Pure())
 
 
@@ -166,19 +217,38 @@ class _BinaryCiphertextOp(IRDLOperation):
 
 @irdl_op_definition
 class NegateOp(_UnaryCiphertextOp):
-    """Negate a CKKS ciphertext without changing its represented state."""
+    r"""Negate every component of a CKKS ciphertext.
+
+    For $c=(c_0,\ldots,c_{k-1})$, the result is
+    $(-c_0,\ldots,-c_{k-1})$ modulo each active prime and therefore decrypts to
+    the negated message.  Component count, depth, actual scale, prime rows,
+    polynomial domain, and Montgomery state are unchanged."""
 
     name = "fhelium_ckks.negate"
 
 
 @irdl_op_definition
 class RotateOp(IRDLOperation):
-    """Apply the slot rotation carried by one evaluation-key operand."""
+    r"""Rotate CKKS slots through a Galois automorphism and key switch.
+
+    The input is a CT2 ciphertext in coefficient/standard or NTT/Montgomery
+    Q state. A rotation key records a signed slot displacement $r$ and its odd
+    Galois element $g$.
+    Applying $\sigma_g:X\mapsto X^g$ rotates the encoded slots and changes the
+    secret relation from $s$ to $\sigma_g(s)$; the key-switch stage returns
+    that relation to $s$.  The result is a CT2 ciphertext
+    with depth, actual scale, and active Q rows preserved. ``output_domain``
+    selects coefficient/standard or NTT/Montgomery output; the NTT choice
+    equals a coefficient rotation followed by ``ToNttOp``."""
 
     name = "fhelium_ckks.rotate"
     value = operand_def(CiphertextType)
     key = operand_def(EvaluationKeyType)
     result = result_def(CiphertextType)
+    output_domain = attr_def(
+        StringAttr, default_value=StringAttr("coefficient")
+    )
+    input_domain = attr_def(StringAttr, default_value=StringAttr("coefficient"))
     traits = traits_def(Pure())
 
     def __init__(
@@ -189,21 +259,56 @@ class RotateOp(IRDLOperation):
         *,
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
+        attrs = dict(attributes or {})
+        if "input_domain" not in attrs:
+            source_type = cast(CiphertextType, SSAValue.get(value).type)
+            represented = source_type.state.data.get("polynomial_domain")
+            attrs["input_domain"] = (
+                represented
+                if isinstance(represented, StringAttr)
+                else StringAttr("coefficient")
+            )
+        if result_type is None:
+            source_type = cast(CiphertextType, SSAValue.get(value).type)
+            domain = attrs.get("output_domain", StringAttr("coefficient"))
+            result_type = source_type.with_state(
+                {
+                    "polynomial_domain": domain,
+                    "residue_representation": StringAttr(
+                        "montgomery"
+                        if domain == StringAttr("ntt")
+                        else "standard"
+                    ),
+                }
+            )
         super().__init__(
             operands=[value, key],
-            result_types=[result_type or SSAValue.get(value).type],
-            attributes=attributes,
+            result_types=[result_type],
+            attributes=attrs,
         )
 
 
 @irdl_op_definition
 class RotateManyOp(IRDLOperation):
-    """Apply a scheduled group of rotations with shared key-switch preparation."""
+    r"""Produce several slot rotations from one shared key-switch preparation.
+
+    The input is a coefficient-domain standard-Q CT2 ciphertext.  Each key operand
+    defines one Galois automorphism and signed slot displacement.  For every key
+    the mathematical result equals an independent ``RotateOp`` of the same input.
+    Hoisting shares hybrid digit decomposition and Q-to-QP basis-extension work
+    across outputs but does not change their order or values.  Every result
+    preserves the input depth, actual scale, and active Q rows.
+    ``output_domain`` selects coefficient/standard (the default) or
+    NTT/Montgomery output. The latter equals applying ``ToNttOp`` to each
+    coefficient result and permits ModDown to retain Q evaluations."""
 
     name = "fhelium_ckks.hoisted_rotate_many"
     value = operand_def(CiphertextType)
     keys = var_operand_def(EvaluationKeyType)
     outputs = var_result_def(CiphertextType)
+    output_domain = attr_def(
+        StringAttr, default_value=StringAttr("coefficient")
+    )
     traits = traits_def(Pure())
 
     def __init__(
@@ -211,10 +316,13 @@ class RotateManyOp(IRDLOperation):
         value: SSAValue | Operation,
         keys: tuple[SSAValue | Operation, ...],
         result_types: tuple[CiphertextType, ...],
+        *,
+        output_domain: Literal["coefficient", "ntt"] = "coefficient",
     ) -> None:
         super().__init__(
             operands=(value, keys),
             result_types=(result_types,),
+            attributes={"output_domain": StringAttr(output_domain)},
         )
 
     def verify_(self) -> None:
@@ -230,6 +338,83 @@ class RotateManyOp(IRDLOperation):
             )
 
 
+@irdl_op_definition
+class GroupedRotationWeightedSumOp(IRDLOperation):
+    r"""Apply plaintext rows to one caller-supplied direct rotation group.
+
+    For baby steps $b_t$, ciphertext $c$, and a group-major matrix of prepared
+    plaintexts $p_{g,t}$, the result batch is
+
+    $$
+    y_g=\sum_{t=0}^{T-1}p_{g,t}\operatorname{Rot}_{b_t}(c).
+    $$
+
+    ``baby_steps`` lists $T$ distinct steps including at most one zero. Each
+    nonzero step has one matching key operand; zero denotes the unrotated
+    ciphertext. ``group_count`` and ``term_count`` describe the plaintext
+    matrix. Every rotation completes its own hybrid ModDown before plaintext
+    multiplication, preserving ordinary key-switch rounding. The output adds
+    the group as the first batch axis and is NTT/Montgomery Q at the input
+    depth with scale $\Delta_c\Delta_p$.
+    """
+
+    name = "fhelium_ckks.grouped_rotation_weighted_sum"
+    value = operand_def(CiphertextType)
+    keys = var_operand_def(EvaluationKeyType)
+    plaintexts = var_operand_def(PlaintextType)
+    result = result_def(CiphertextType)
+    baby_steps = attr_def(ArrayAttr[IntegerAttr])
+    term_count = attr_def(IntegerAttr)
+    group_count = attr_def(IntegerAttr)
+    traits = traits_def(Pure())
+    irdl_options = (AttrSizedOperandSegments(as_property=True),)
+
+    def __init__(
+        self,
+        value: SSAValue | Operation,
+        keys: tuple[SSAValue | Operation, ...],
+        plaintexts: tuple[SSAValue | Operation, ...],
+        result_type: CiphertextType,
+        *,
+        baby_steps: tuple[int, ...],
+        group_count: int,
+    ) -> None:
+        super().__init__(
+            operands=(value, keys, plaintexts),
+            result_types=[result_type],
+            attributes={
+                "baby_steps": ArrayAttr(
+                    IntegerAttr(step, 64) for step in baby_steps
+                ),
+                "term_count": IntegerAttr(len(baby_steps), 64),
+                "group_count": IntegerAttr(group_count, 64),
+            },
+        )
+
+    def verify_(self) -> None:
+        term_count = int(self.term_count.value.data)
+        group_count = int(self.group_count.value.data)
+        steps = tuple(int(step.value.data) for step in self.baby_steps)
+        if term_count <= 0 or group_count <= 0 or len(steps) != term_count:
+            raise VerifyException(
+                "CKKS grouped rotation weighted sum requires positive counts "
+                "and one baby step per term"
+            )
+        if len(set(steps)) != len(steps) or steps.count(0) > 1:
+            raise VerifyException(
+                "CKKS grouped rotation weighted sum requires distinct baby steps"
+            )
+        if len(self.keys) != term_count - steps.count(0):
+            raise VerifyException(
+                "CKKS grouped rotation weighted sum requires one key per "
+                "nonzero baby step"
+            )
+        if len(self.plaintexts) != term_count * group_count:
+            raise VerifyException(
+                "CKKS grouped rotation weighted sum plaintext matrix size differs"
+            )
+
+
 class _RepresentationOp(IRDLOperation):
     value = operand_def()
     result = result_def()
@@ -242,9 +427,32 @@ class _RepresentationOp(IRDLOperation):
         *,
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
+        source_type = SSAValue.get(value).type
+        if result_type is None and isinstance(source_type, OpenStateType):
+            updates: dict[str, Attribute] = {}
+            if self.name == "fhelium_ckks.to_ntt":
+                updates = {
+                    "polynomial_domain": StringAttr("ntt"),
+                    "residue_representation": StringAttr("montgomery"),
+                }
+            elif self.name == "fhelium_ckks.from_ntt":
+                updates = {
+                    "polynomial_domain": StringAttr("coefficient"),
+                    "residue_representation": StringAttr(
+                        "standard"
+                        if isinstance(source_type, CiphertextType)
+                        else "montgomery"
+                    ),
+                }
+            elif self.name == "fhelium_ckks.to_montgomery_residues":
+                updates = {"residue_representation": StringAttr("montgomery")}
+            elif self.name == "fhelium_ckks.to_standard_residues":
+                updates = {"residue_representation": StringAttr("standard")}
+            if updates:
+                result_type = source_type.with_state(updates)
         super().__init__(
             operands=[value],
-            result_types=[result_type or SSAValue.get(value).type],
+            result_types=[result_type or source_type],
             attributes=attributes,
         )
 
@@ -263,49 +471,86 @@ class _RepresentationOp(IRDLOperation):
 
 @irdl_op_definition
 class ToNttOp(_RepresentationOp):
-    """Map coefficient-domain CKKS residues to NTT/Montgomery form."""
+    r"""Transform CKKS residue polynomials to NTT/Montgomery form.
+
+    For each component and active prime $q_i$, coefficient residues are mapped
+    to $\operatorname{NTT}_{q_i}(c_j)R_i\bmod q_i$.  The represented ring
+    element, component count, prime rows, depth, basis, and actual scale remain
+    unchanged.  Lowering selects the corresponding operation from the NTT
+    dialect according to the input residue representation."""
 
     name = "fhelium_ckks.to_ntt"
 
 
 @irdl_op_definition
 class FromNttOp(_RepresentationOp):
-    """Map NTT/Montgomery CKKS residues to coefficient-domain form."""
+    r"""Transform CKKS NTT/Montgomery polynomials to coefficient form.
+
+    An inverse negacyclic transform is applied independently to every component
+    and prime row.  Ciphertexts end in standard residues; plaintext lowering may
+    retain Montgomery residues.  The represented ring element, component count,
+    prime rows, depth, basis, and actual scale are unchanged."""
 
     name = "fhelium_ckks.from_ntt"
 
 
 @irdl_op_definition
 class ToMontgomeryResiduesOp(_RepresentationOp):
-    """Convert coefficient-domain plaintext residues to Montgomery form."""
+    r"""Multiply coefficient-domain plaintext residues by the Montgomery radix.
+
+    For each active prime $q_i$, the stored row changes from $x_i$ to
+    $x_iR_i\bmod q_i$.  This representation transition preserves the
+    plaintext polynomial, Q or QP rows, depth, and actual scale."""
 
     name = "fhelium_ckks.to_montgomery_residues"
 
 
 @irdl_op_definition
 class ToStandardResiduesOp(_RepresentationOp):
-    """Convert coefficient-domain plaintext residues to standard form."""
+    r"""Remove the Montgomery factor from coefficient-domain plaintext rows.
+
+    For each active prime $q_i$, Montgomery reduction maps $x_iR_i$ to
+    $x_i\bmod q_i$.  The plaintext polynomial, Q or QP rows, depth, and actual
+    scale are preserved."""
 
     name = "fhelium_ckks.to_standard_residues"
 
 
 @irdl_op_definition
 class AddOp(_BinaryCiphertextOp):
-    """Add two state-compatible CKKS ciphertexts."""
+    r"""Add two state-compatible ciphertexts component by component.
+
+    For each component $j$, active prime $q_i$, and coefficient, the operation
+    computes $c'_j=c^{(a)}_j+c^{(b)}_j\pmod {q_i}$.  Inputs have the same
+    component count, depth, prime rows, polynomial domain, residue representation,
+    and actual scale.  The result retains that state and represents the sum of the
+    decoded slot values."""
 
     name = "fhelium_ckks.add"
 
 
 @irdl_op_definition
 class SubtractOp(_BinaryCiphertextOp):
-    """Subtract one state-compatible CKKS ciphertext from another."""
+    r"""Subtract ciphertexts component by component.
+
+    For each component $j$ and active prime $q_i$, the operation computes
+    $c'_j=c^{(a)}_j-c^{(b)}_j\pmod {q_i}$.  Compatible depth, prime rows,
+    representation, component count, and actual scale are preserved, and the
+    result represents the slotwise difference."""
 
     name = "fhelium_ckks.subtract"
 
 
 @irdl_op_definition
 class MultiplyOp(_BinaryCiphertextOp):
-    """Multiply two CT2 NTT ciphertexts and produce a CT3 ciphertext."""
+    r"""Multiply two CT2 ciphertexts by polynomial convolution.
+
+    For $a=(a_0,a_1)$ and $b=(b_0,b_1)$, the CT3 result is
+    $(a_0b_0,\ a_0b_1+a_1b_0,\ a_1b_1)$.  Products are computed pointwise in
+    NTT/Montgomery form modulo every active prime and correspond to negacyclic
+    polynomial products.  If input actual scales are $\Delta_a$ and
+    $\Delta_b$, the result scale is $\Delta_a\Delta_b$; no rescale or
+    relinearization is implicit."""
 
     name = "fhelium_ckks.multiply"
 
@@ -338,21 +583,41 @@ class _RealScalarCiphertextOp(IRDLOperation):
 
 @irdl_op_definition
 class AddScalarOp(_RealScalarCiphertextOp):
-    r"""Add a real scalar encoded at a caller-selected scale."""
+    r"""Add a stochastically quantized real constant to component zero.
+
+    The input uses coefficient-domain standard residues.  For scalar $u$ and
+    ``scalar_scale`` $\delta$, the implementation samples
+    $k=\operatorname{RandRound}(u\delta)$, reduces $k$ into each active prime,
+    and adds it to the constant coefficient of $c_0$.  Other coefficients and
+    components do not change.  The ciphertext actual scale $\Delta$ is retained,
+    so the decoded increment is approximately $k/\Delta$; choosing
+    $\delta=\Delta$ represents addition by $u$."""
 
     name = "fhelium_ckks.add_scalar"
 
 
 @irdl_op_definition
 class MultiplyScalarOp(_RealScalarCiphertextOp):
-    r"""Multiply by a real scalar encoded at a caller-selected scale."""
+    r"""Multiply all ciphertext components by a quantized real constant.
+
+    For scalar $u$ at scalar scale $\delta$, the implementation samples
+    $k=\operatorname{RandRound}(u\delta)$ and computes $c'_j=kc_j$ modulo
+    every active prime.  The output actual scale is $\Delta\delta$ for input
+    scale $\Delta$, so it represents multiplication by approximately $u$.
+    Depth, component count, prime rows, and polynomial representation are
+    preserved; rescaling is separate."""
 
     name = "fhelium_ckks.multiply_scalar"
 
 
 @irdl_op_definition
 class MultiplyIntegerScalarOp(IRDLOperation):
-    """Multiply by an integer without changing the ciphertext scale."""
+    r"""Multiply every ciphertext component by an integer scalar.
+
+    For integer $k$, each polynomial becomes $c'_j=kc_j$ modulo every active
+    prime.  Because $k$ is not a newly scaled encoding, the ciphertext actual
+    scale, depth, component count, prime rows, polynomial domain, and Montgomery
+    state remain unchanged."""
 
     name = "fhelium_ckks.multiply_integer_scalar"
     ciphertext = operand_def(CiphertextType)
@@ -401,14 +666,25 @@ class _CiphertextPlaintextOp(IRDLOperation):
 
 @irdl_op_definition
 class AddPlaintextOp(_CiphertextPlaintextOp):
-    """Add an operation-ready CKKS plaintext to a ciphertext."""
+    r"""Add a prepared plaintext polynomial to ciphertext component zero.
+
+    For ciphertext $(c_0,\ldots,c_{k-1})$ and plaintext $p$, the result is
+    $(c_0+p,c_1,\ldots,c_{k-1})$ modulo each active prime.  Matching depth,
+    prime rows, and actual scale make this a slotwise message addition.  Component
+    count and ciphertext representation remain unchanged."""
 
     name = "fhelium_ckks.add_plaintext"
 
 
 @irdl_op_definition
 class MultiplyPlaintextOp(_CiphertextPlaintextOp):
-    """Multiply a CKKS ciphertext by an operation-ready plaintext."""
+    r"""Multiply each ciphertext component by a prepared plaintext polynomial.
+
+    For ciphertext components $c_j$ and plaintext $p$, the result components
+    are $c'_j=c_jp$ in every active-prime negacyclic ring.  Operands use
+    NTT/Montgomery form so execution is pointwise.  The depth and component count
+    remain unchanged, while output actual scale is $\Delta_c\Delta_p$; no
+    rescale is implicit."""
 
     name = "fhelium_ckks.multiply_plaintext"
 
@@ -422,28 +698,95 @@ class _CiphertextCompressedPlaintextOp(IRDLOperation):
 
 @irdl_op_definition
 class AddCompressedPlaintextOp(_CiphertextCompressedPlaintextOp):
-    """Add an operation-ready compressed plaintext to ciphertext component zero."""
+    r"""Add a compressed plaintext to ciphertext component zero.
+
+    The compressed layout supplies selected or repeated prepared plaintext values
+    without materializing a full polynomial bundle.  The implementation computes
+    the same active-prime modular addition as ``AddPlaintextOp`` for $c_0$ and
+    leaves later components unchanged.  Depth, actual scale, domain, and residue
+    representation are preserved."""
 
     name = "fhelium_ckks.add_compressed_plaintext"
 
 
 @irdl_op_definition
 class MultiplyCompressedPlaintextOp(_CiphertextCompressedPlaintextOp):
-    """Multiply NTT ciphertext components by compressed NTT plaintext data."""
+    r"""Multiply ciphertext components by compressed NTT plaintext data.
+
+    The compressed layout expands logically to a prepared NTT/Montgomery
+    plaintext $p$.  Each result component represents $c_jp$ modulo every
+    active prime, computed without materializing that expansion.  Component count
+    and depth remain; output actual scale is $\Delta_c\Delta_p$."""
 
     name = "fhelium_ckks.multiply_compressed_plaintext"
 
 
+class _OutputDomainCiphertextOp(_UnaryCiphertextOp):
+    output_domain = attr_def(
+        StringAttr, default_value=StringAttr("coefficient")
+    )
+
+    def __init__(
+        self,
+        value: SSAValue | Operation,
+        result_type: Attribute | None = None,
+        *,
+        output_domain: Literal["coefficient", "ntt"] = "coefficient",
+        attributes: Mapping[str, Attribute] | None = None,
+    ) -> None:
+        attrs = dict(attributes or {})
+        domain_attr = attrs.get("output_domain", StringAttr(output_domain))
+        if not isinstance(domain_attr, StringAttr):
+            raise TypeError("output_domain must be a StringAttr")
+        attrs["output_domain"] = domain_attr
+        output_domain = cast(Literal["coefficient", "ntt"], domain_attr.data)
+        if result_type is None:
+            source_type = cast(CiphertextType, SSAValue.get(value).type)
+            result_type = source_type.with_state(
+                {
+                    "polynomial_domain": StringAttr(output_domain),
+                    "residue_representation": StringAttr(
+                        "standard"
+                        if output_domain == "coefficient"
+                        else "montgomery"
+                    ),
+                }
+            )
+        super().__init__(value, result_type, attributes=attrs)
+
+    def verify_(self) -> None:
+        if self.output_domain.data not in {"coefficient", "ntt"}:
+            raise VerifyException(
+                "CKKS key-switch output_domain must be 'coefficient' or 'ntt'"
+            )
+
+
 @irdl_op_definition
-class RelinearizeOp(_UnaryCiphertextOp):
-    """Key-switch a CT3 product back to a CT2 CKKS ciphertext."""
+class RelinearizeOp(_OutputDomainCiphertextOp):
+    r"""Convert a three-component product ciphertext to two components.
+
+    The input is an NTT/Montgomery CT3 product.  For phase
+    $c_0+c_1s+c_2s^2$, hybrid key switching maps the $c_2s^2$ term to
+    correction polynomials $(d_0,d_1)$ under secret $s$.  The result
+    $(c_0+d_0,c_1+d_1)$ preserves the phase up to key-switch error.  Depth,
+    actual scale, and active Q rows remain unchanged. ``output_domain`` selects
+    coefficient/standard or NTT/Montgomery output."""
 
     name = "fhelium_ckks.relinearize"
 
 
 @irdl_op_definition
-class SwitchKeyOp(_UnaryCiphertextOp):
-    """Switch a CT2 ciphertext through caller-identified evaluation material."""
+class SwitchKeyOp(_OutputDomainCiphertextOp):
+    r"""Change the secret-key relation of a CT2 ciphertext.
+
+    The input is a coefficient-domain standard-Q CT2 ciphertext.  For phase
+    $c_0+c_1s_{\mathrm{src}}$, the key named by ``key_symbol`` maps
+    the $c_1s_{\mathrm{src}}$ term to corrections $(d_0,d_1)$ satisfying the
+    destination relation.  The result $(c_0+d_0,d_1)$ decrypts under
+    $s_{\mathrm{dst}}$ to the same approximate message, apart from key-switch
+    error. ``output_domain`` selects coefficient/standard or NTT/Montgomery
+    output. Depth, actual scale, active Q rows, and component count are
+    preserved."""
 
     name = "fhelium_ckks.switch_key"
     key_symbol = attr_def(StringAttr)
@@ -454,6 +797,7 @@ class SwitchKeyOp(_UnaryCiphertextOp):
         result_type: Attribute | None = None,
         *,
         key_symbol: str | StringAttr,
+        output_domain: Literal["coefficient", "ntt"] = "coefficient",
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         attrs = dict(attributes or {})
@@ -462,29 +806,54 @@ class SwitchKeyOp(_UnaryCiphertextOp):
             if isinstance(key_symbol, str)
             else key_symbol
         )
-        super().__init__(value, result_type, attributes=attrs)
+        super().__init__(
+            value,
+            result_type,
+            output_domain=output_domain,
+            attributes=attrs,
+        )
 
     def verify_(self) -> None:
+        super().verify_()
         if not self.key_symbol.data:
             raise VerifyException("CKKS switch-key symbol must be non-empty")
 
 
 @irdl_op_definition
-class ConjugateOp(_UnaryCiphertextOp):
-    """Apply complex conjugation with the context's conjugation key."""
+class ConjugateOp(_OutputDomainCiphertextOp):
+    r"""Apply complex conjugation to every encoded CKKS slot.
+
+    The input is a coefficient-domain standard-Q CT2 ciphertext.  The ring
+    automorphism $\sigma_{2N-1}:X\mapsto X^{-1}$ maps the CKKS
+    embedding to slotwise complex conjugation.  It also changes the secret
+    relation to $\sigma_{2N-1}(s)$, so a conjugation key switches the result back
+    to $s$. ``output_domain`` selects coefficient/standard or NTT/Montgomery
+    output. CT2 shape, depth, actual scale, and active Q rows are preserved."""
 
     name = "fhelium_ckks.conjugate"
 
 
 @irdl_op_definition
 class RescaleOp(IRDLOperation):
-    """Drop the leading Q prime and advance one public CKKS level."""
+    r"""Divide a ciphertext by its leading Q depth-group product.
+
+    For group $G_d$, every component coefficient is quotient-rounded by
+    $M_d=\prod_{q\in G_d}q$ and represented on the surviving Q rows. All rows
+    in $G_d$ are removed, depth advances once, and actual scale changes from
+    $\Delta$ to $\Delta/M_d$. Component count is unchanged.
+    Coefficient/standard input uses coefficient quotient arithmetic;
+    NTT/Montgomery input retains surviving evaluations by transforming only the
+    rounding correction. ``rounding`` selects the quotient rule."""
 
     name = "fhelium_ckks.rescale"
 
     value = operand_def(CiphertextType)
     result = result_def(CiphertextType)
     rounding = opt_attr_def(StringAttr)
+    input_domain = attr_def(StringAttr, default_value=StringAttr("coefficient"))
+    output_domain = attr_def(
+        StringAttr, default_value=StringAttr("coefficient")
+    )
     traits = traits_def(Pure())
 
     def __init__(
@@ -493,15 +862,30 @@ class RescaleOp(IRDLOperation):
         result_type: Attribute | None = None,
         *,
         rounding: str | StringAttr = "nearest",
+        polynomial_domain: Literal["coefficient", "ntt"] = "coefficient",
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         attrs: dict[str, Attribute | None] = dict(attributes or {})
         attrs["rounding"] = (
             StringAttr(rounding) if isinstance(rounding, str) else rounding
         )
+        attrs["input_domain"] = StringAttr(polynomial_domain)
+        attrs["output_domain"] = StringAttr(polynomial_domain)
+        if result_type is None:
+            source_type = cast(CiphertextType, SSAValue.get(value).type)
+            result_type = source_type.with_state(
+                {
+                    "polynomial_domain": StringAttr(polynomial_domain),
+                    "residue_representation": StringAttr(
+                        "standard"
+                        if polynomial_domain == "coefficient"
+                        else "montgomery"
+                    ),
+                }
+            )
         super().__init__(
             operands=[value],
-            result_types=[result_type or SSAValue.get(value).type],
+            result_types=[result_type],
             attributes=attrs,
         )
 
@@ -515,19 +899,38 @@ class RescaleOp(IRDLOperation):
             raise VerifyException(
                 "CKKS rescale rounding must be 'nearest' or 'floor'"
             )
+        if (
+            self.input_domain.data not in {"coefficient", "ntt"}
+            or self.output_domain != self.input_domain
+        ):
+            raise VerifyException(
+                "CKKS rescale must preserve coefficient or NTT domain"
+            )
 
 
 @irdl_op_definition
 class ModSwitchOp(_UnaryCiphertextOp):
-    """Restrict a ciphertext to a later Q-chain level without scale change."""
+    r"""Restrict a ciphertext to the Q rows at ``target_depth``.
+
+    Rows removed before the target depth are discarded without dividing or
+    rounding any coefficient.  Surviving residue values and the ciphertext actual
+    scale are unchanged.  The operation therefore changes the modulus and depth,
+    not the scale; component count, polynomial domain, and residue representation
+    are preserved."""
 
     name = "fhelium_ckks.mod_switch"
-    target_level = attr_def(IntegerAttr)
+    target_depth = attr_def(IntegerAttr)
 
 
 @irdl_op_definition
 class ReinterpretScaleOp(_UnaryCiphertextOp):
-    """Change ciphertext scale metadata without changing RNS residues."""
+    r"""Replace ciphertext scale metadata while preserving all residues.
+
+    The recorded actual scale becomes the supplied $\Delta'$, but ciphertext
+    components, prime rows, depth, polynomial domain, and Montgomery state do not
+    change.  The represented decoded value is consequently interpreted relative
+    to $\Delta'$.  This operation performs no multiplication, rescaling, or
+    modulus switch."""
 
     name = "fhelium_ckks.reinterpret_scale"
     scale = attr_def(FloatAttr)
@@ -544,42 +947,71 @@ class _PrepareOp(IRDLOperation):
 
 @irdl_op_definition
 class PrepareAddMessageOp(_PrepareOp):
-    """Encode and prepare a public message for ciphertext addition."""
+    r"""Encode a public message for ciphertext addition.
+
+    The message is encoded at the ciphertext depth and actual scale, reduced into
+    the ciphertext's Q or QP rows, and converted to coefficient-domain Montgomery
+    residues.  The prepared polynomial can then be added to component zero by
+    ``AddPlaintextOp`` without changing ciphertext depth or scale."""
 
     name = "fhelium_ckks.prepare.add.message"
 
 
 @irdl_op_definition
 class PrepareAddPlaintextOp(_PrepareOp):
-    """Prepare a caller-owned plaintext for ciphertext addition."""
+    r"""Convert a caller-owned plaintext to addition-ready RNS state.
+
+    The plaintext already supplies its actual scale and depth; both must match the
+    ciphertext.  Encoding or residue conversion as needed produces
+    coefficient-domain Montgomery rows in the ciphertext's Q or QP basis.  No
+    message arithmetic is performed before ``AddPlaintextOp``."""
 
     name = "fhelium_ckks.prepare.add.plaintext"
 
 
 @irdl_op_definition
 class PrepareAddStaticOp(_PrepareOp):
-    """Encode and prepare a specialized scalar for ciphertext addition."""
+    r"""Encode a statically known public value for ciphertext addition.
+
+    The value is encoded at the ciphertext actual scale and depth, reduced to the
+    same Q or QP rows, and converted to coefficient-domain Montgomery form.  The
+    result has the state required by ``AddPlaintextOp``."""
 
     name = "fhelium_ckks.prepare.add.static"
 
 
 @irdl_op_definition
 class PrepareMultiplyMessageOp(_PrepareOp):
-    """Encode and prepare a public message for ciphertext multiplication."""
+    r"""Encode a public message for ciphertext multiplication.
+
+    The message is encoded at the selected default actual scale, placed at the
+    ciphertext depth, reduced into matching Q or QP rows, and transformed to
+    NTT/Montgomery form.  ``MultiplyPlaintextOp`` then produces scale
+    $\Delta_c\Delta_p$."""
 
     name = "fhelium_ckks.prepare.multiply.message"
 
 
 @irdl_op_definition
 class PrepareMultiplyPlaintextOp(_PrepareOp):
-    """Prepare a caller-owned plaintext for ciphertext multiplication."""
+    r"""Convert a caller-owned plaintext to multiplication-ready state.
+
+    The plaintext retains its own actual scale and must share the ciphertext depth
+    and Q or QP rows.  Encoding, residue conversion, and a forward NTT as needed
+    produce NTT/Montgomery data for ``MultiplyPlaintextOp``.  Preparation itself
+    does not multiply or rescale."""
 
     name = "fhelium_ckks.prepare.multiply.plaintext"
 
 
 @irdl_op_definition
 class PrepareMultiplyStaticOp(_PrepareOp):
-    """Encode and prepare a specialized scalar for ciphertext multiplication."""
+    r"""Encode a statically known public value for ciphertext multiplication.
+
+    The value is encoded at the selected default actual scale and ciphertext
+    depth, reduced into matching Q or QP rows, and transformed to NTT/Montgomery
+    form.  Its scale later multiplies the ciphertext scale in
+    ``MultiplyPlaintextOp``."""
 
     name = "fhelium_ckks.prepare.multiply.static"
 
@@ -651,9 +1083,17 @@ def _with_ciphertext_components(
 
 def _rotate_specification(operation: Operation) -> tuple[str, ...]:
     diagnostics = list(flat_operation(operation))
-    unsupported = unsupported_attributes(operation, ())
+    unsupported = unsupported_attributes(
+        operation, ("input_domain", "output_domain")
+    )
     if unsupported:
         diagnostics.append(f"unsupported attributes {list(unsupported)}")
+    if isinstance(operation, RotateOp):
+        if operation.input_domain.data not in ("coefficient", "ntt"):
+            diagnostics.append("input_domain must be 'coefficient' or 'ntt'")
+        if operation.output_domain.data not in ("coefficient", "ntt"):
+            diagnostics.append("output_domain must be 'coefficient' or 'ntt'")
+        diagnostics.extend(_rotation_output_state_diagnostics(operation))
     return tuple(diagnostics)
 
 
@@ -661,13 +1101,55 @@ def _hoisted_rotate_many_specification(
     operation: Operation,
 ) -> tuple[str, ...]:
     diagnostics = list(flat_operation(operation))
-    unsupported = unsupported_attributes(operation, ())
+    unsupported = unsupported_attributes(operation, ("output_domain",))
     if unsupported:
         diagnostics.append(f"unsupported attributes {list(unsupported)}")
     if not isinstance(operation, RotateManyOp):
         diagnostics.append(
             "requires the registered CKKS hoisted-rotation operation"
         )
+    elif operation.output_domain.data not in ("coefficient", "ntt"):
+        diagnostics.append("output_domain must be 'coefficient' or 'ntt'")
+    else:
+        diagnostics.extend(_rotation_output_state_diagnostics(operation))
+    return tuple(diagnostics)
+
+
+def _rotation_output_state_diagnostics(
+    operation: (
+        RotateOp
+        | RotateManyOp
+        | EncryptOp
+        | RescaleOp
+        | _OutputDomainCiphertextOp
+    ),
+) -> tuple[str, ...]:
+    """Check represented result domains against execution output."""
+
+    domain = operation.output_domain.data
+    if domain not in {"coefficient", "ntt"}:
+        return ("output_domain must be 'coefficient' or 'ntt'",)
+    expected = {
+        "polynomial_domain": domain,
+        "residue_representation": "montgomery"
+        if domain == "ntt"
+        else "standard",
+    }
+    diagnostics: list[str] = []
+    for index, result in enumerate(operation.results):
+        if not isinstance(result.type, CiphertextType):
+            continue
+        for name, value in expected.items():
+            represented = result.type.state.data.get(name)
+            if represented is None:
+                continue
+            if (
+                not isinstance(represented, StringAttr)
+                or represented.data != value
+            ):
+                diagnostics.append(
+                    f"result {index} {name} must be {value!r} for output_domain={domain!r}"
+                )
     return tuple(diagnostics)
 
 
@@ -706,7 +1188,9 @@ def _prepare_specification(
 
 def _rescale_specification(operation: Operation) -> tuple[str, ...]:
     diagnostics = list(flat_operation(operation))
-    unsupported = unsupported_attributes(operation, ("rounding",))
+    unsupported = unsupported_attributes(
+        operation, ("rounding", "input_domain", "output_domain")
+    )
     if unsupported:
         diagnostics.append(f"unsupported attributes {list(unsupported)}")
     rounding = required_string_attribute(operation, "rounding")
@@ -714,6 +1198,12 @@ def _rescale_specification(operation: Operation) -> tuple[str, ...]:
         diagnostics.append(
             "rescale requires represented rounding='nearest' or 'floor'"
         )
+    if isinstance(operation, RescaleOp):
+        if operation.input_domain.data not in {"coefficient", "ntt"}:
+            diagnostics.append("input_domain must be 'coefficient' or 'ntt'")
+        if operation.output_domain != operation.input_domain:
+            diagnostics.append("rescale must preserve its polynomial domain")
+        diagnostics.extend(_rotation_output_state_diagnostics(operation))
     expected_roles = ("encrypted",)
     actual_roles = tuple(
         (
@@ -732,12 +1222,25 @@ def _rescale_specification(operation: Operation) -> tuple[str, ...]:
     return tuple(diagnostics)
 
 
+def _decrypt_specification(operation: Operation) -> tuple[str, ...]:
+    diagnostics = list(flat_operation(operation))
+    unsupported = unsupported_attributes(
+        operation, ("key_symbol", "input_domain")
+    )
+    if unsupported:
+        diagnostics.append(f"unsupported attributes {list(unsupported)}")
+    domain = required_string_attribute(operation, "input_domain")
+    if domain not in {"coefficient", "ntt"}:
+        diagnostics.append("input_domain must be 'coefficient' or 'ntt'")
+    return tuple(diagnostics)
+
+
 OPERATION_SPECS: tuple[OperationSpec, ...] = (
     registered_operation_spec(
         EncodeOp,
         "ckks",
         effect="rng-write",
-        validator=flat_with_attributes("level", "scale"),
+        validator=flat_with_attributes("depth", "scale"),
     ),
     registered_operation_spec(
         DecodeOp,
@@ -747,18 +1250,21 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
     registered_operation_spec(
         IntegerCoefficientsToRnsOp,
         "ckks",
-        validator=flat_with_attributes("modulus_basis", "level"),
+        validator=flat_with_attributes("modulus_basis", "depth"),
     ),
     registered_operation_spec(
         EncryptOp,
         "ckks",
         effect="rng-write",
-        validator=flat_with_attributes("key_symbol"),
+        validator=lambda operation: (
+            *flat_with_attributes("key_symbol", "output_domain")(operation),
+            *_rotation_output_state_diagnostics(cast(EncryptOp, operation)),
+        ),
     ),
     registered_operation_spec(
         DecryptOp,
         "ckks",
-        validator=flat_with_attributes("key_symbol"),
+        validator=_decrypt_specification,
     ),
     *(
         registered_operation_spec(op, "ckks", validator=flat_operation)
@@ -793,6 +1299,15 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         ),
     ),
     registered_operation_spec(
+        GroupedRotationWeightedSumOp,
+        "ckks",
+        validator=_with_ciphertext_components(
+            flat_with_attributes("baby_steps", "term_count", "group_count"),
+            operands=((0, 2),),
+            results=((0, 2),),
+        ),
+    ),
+    registered_operation_spec(
         MultiplyOp,
         "ckks",
         validator=_with_ciphertext_components(
@@ -815,7 +1330,12 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         RelinearizeOp,
         "ckks",
         validator=_with_ciphertext_components(
-            flat_operation,
+            lambda operation: (
+                *flat_with_attributes("output_domain")(operation),
+                *_rotation_output_state_diagnostics(
+                    cast(RelinearizeOp, operation)
+                ),
+            ),
             operands=((0, 3),),
             results=((0, 2),),
         ),
@@ -824,7 +1344,12 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         SwitchKeyOp,
         "ckks",
         validator=_with_ciphertext_components(
-            flat_with_attributes("key_symbol"),
+            lambda operation: (
+                *flat_with_attributes("key_symbol", "output_domain")(operation),
+                *_rotation_output_state_diagnostics(
+                    cast(SwitchKeyOp, operation)
+                ),
+            ),
             operands=((0, 2),),
             results=((0, 2),),
         ),
@@ -833,7 +1358,12 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         ConjugateOp,
         "ckks",
         validator=_with_ciphertext_components(
-            flat_operation,
+            lambda operation: (
+                *flat_with_attributes("output_domain")(operation),
+                *_rotation_output_state_diagnostics(
+                    cast(ConjugateOp, operation)
+                ),
+            ),
             operands=((0, 2),),
             results=((0, 2),),
         ),
@@ -846,7 +1376,7 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
     registered_operation_spec(
         ModSwitchOp,
         "ckks",
-        validator=flat_with_attributes("target_level"),
+        validator=flat_with_attributes("target_depth"),
     ),
     registered_operation_spec(
         ReinterpretScaleOp,
@@ -897,6 +1427,7 @@ FHEliumCkks = Dialect(
         NegateOp,
         RotateOp,
         RotateManyOp,
+        GroupedRotationWeightedSumOp,
         ToNttOp,
         FromNttOp,
         ToMontgomeryResiduesOp,
@@ -949,6 +1480,7 @@ __all__ = [
     "EvaluationKeyType",
     "FHEliumCkks",
     "FromNttOp",
+    "GroupedRotationWeightedSumOp",
     "ModSwitchOp",
     "MultiplyOp",
     "MultiplyIntegerScalarOp",

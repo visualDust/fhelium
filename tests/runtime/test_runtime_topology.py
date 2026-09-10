@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from fhelium.benchmarks.v1 import collect_platform
+from fhelium.benchmarks.suite.runner import collect_platform
 from fhelium.runtime import (
     CpuTopology,
     CudaDeviceInfo,
@@ -86,13 +86,9 @@ def test_cuda_topology_observes_visible_devices() -> None:
         )
 
 
-def test_benchmark_platform_uses_runtime_observation_shapes() -> None:
-    snapshot = collect_platform(invocation=("benchmark",), environ={})
-
-    assert snapshot.cpu["logical_processor_count"] > 0
-    assert snapshot.memory["device"] == "cpu"
-    assert snapshot.memory["capacity_bytes"] > 0
-    assert snapshot.memory["available_bytes"] >= 0
-    if torch.cuda.is_available():
-        assert len(snapshot.cuda["devices"]) == torch.cuda.device_count()
-        assert len(snapshot.cuda["peer_access"]) == torch.cuda.device_count()
+def test_benchmark_platform_observes_selected_execution_device() -> None:
+    snapshot = collect_platform(torch.device("cpu"))
+    assert snapshot["logical_processors"] > 0
+    assert snapshot["name"]
+    assert snapshot["device"] == "cpu"
+    assert snapshot["compute_capability"] is None

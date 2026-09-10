@@ -14,8 +14,8 @@ __pycache__/
 *$py.class
 *.pkl
 *.safetensors
-!fhelium/config/resources/scale_primes_v1.safetensors
-!fhelium/config/resources/message_primes_v1.safetensors
+!fhelium/config/resources/scaling_primes_v1.safetensors
+!fhelium/config/resources/special_primes_v1.safetensors
 
 # C extensions
 *.so

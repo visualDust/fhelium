@@ -1,4 +1,4 @@
-"""Registered CKKS decryption and bounded coefficient reconstruction."""
+"""Registered CKKS decryption and centered Q-basis reconstruction."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from fhelium.backend.ntt.context import NttContext
 from fhelium.backend.ntt.resources import NTT_RESOURCE_KIND
 from fhelium.backend.rns.context import RnsContext
 from fhelium.backend.rns.resources import RNS_RESOURCE_KIND
-from fhelium.values import ModulusBasis, SecretKey
+from fhelium.values import ModulusBasis, PolynomialDomain, SecretKey
 from fhelium.ir.dialects import ckks
 from fhelium.native.wrapper import rns_ops
 
@@ -29,57 +29,70 @@ def _decrypt_tensor_to_coefficient_standard_rns(
     ciphertext_data: torch.Tensor,
     secret_key_data: torch.Tensor,
     *,
-    level: int,
+    depth: int,
     includes_p: bool,
     secret_key_basis: ModulusBasis,
+    input_domain: PolynomialDomain,
     rns_context: RnsContext,
     ntt_context: NttContext,
 ) -> torch.Tensor:
-    """Evaluate a ciphertext Tensor phase in coefficient standard RNS."""
+    r"""Evaluate $\sum_j c_js^j$ and return coefficient standard RNS.
 
-    secret_data = secret_key_data[rns_context.level_row_starts[level] :]
-    if not includes_p and secret_key_basis == "QP":
-        secret_data = secret_data[: -rns_context.config.num_p_primes]
-    if ciphertext_data.size(0) == 3:
-        d0 = ciphertext_data[0].clone()
-        ntt_context.inverse_to_standard_(d0, include_p=includes_p)
-        d1_s = rns_context.montgomery_mul(
-            ciphertext_data[1],
-            secret_data,
-            include_p=includes_p,
-        )
-        s2 = rns_context.montgomery_mul(
-            secret_data,
-            secret_data,
-            include_p=includes_p,
-        )
-        d2_s2 = rns_context.montgomery_mul(
-            ciphertext_data[2],
-            s2,
-            include_p=includes_p,
-        )
-        ntt_context.inverse_to_standard_lazy_(d1_s, include_p=includes_p)
-        ntt_context.inverse_to_standard_lazy_(d2_s2, include_p=includes_p)
-        plaintext_rns = rns_context.add_lazy(
-            d0,
-            d1_s,
-            include_p=includes_p,
-        )
-        return rns_context.add_standard(
-            plaintext_rns,
-            d2_s2,
-            include_p=includes_p,
+    NTT inputs form the complete phase before one inverse transform.
+    Coefficient inputs transform each nonconstant component for multiplication
+    by its NTT/Montgomery secret-key power and return that product before the
+    coefficient-domain sum.
+    """
+
+    basis = rns_context.basis_parameters(depth, include_p=includes_p)
+    secret_data = secret_key_data[basis.parameter_row_start : basis.parameter_row_stop]
+    if ciphertext_data.size(0) not in (2, 3):
+        raise ValueError("Decryption requires a CT2 or CT3 payload")
+    if input_domain not in ("coefficient", "ntt"):
+        raise ValueError(
+            "Decryption input_domain must be 'coefficient' or 'ntt'"
         )
 
-    a = ciphertext_data[1].clone()
-    ntt_context.forward_to_montgomery_(a, include_p=includes_p)
-    sa = rns_context.montgomery_mul(a, secret_data, include_p=includes_p)
-    ntt_context.inverse_to_standard_lazy_(sa, include_p=includes_p)
-    return rns_context.add_standard(
-        ciphertext_data[0],
-        sa,
-        include_p=includes_p,
-    )
+    phase = ciphertext_data[0].clone()
+    secret_power = secret_data
+    for component in range(1, ciphertext_data.size(0)):
+        value = ciphertext_data[component]
+        if input_domain == "coefficient":
+            value = value.clone()
+            ntt_context.forward_to_montgomery_(
+                value,
+                include_p=includes_p,
+            )
+        product = rns_context.montgomery_mul(
+            value,
+            secret_power,
+            include_p=includes_p,
+        )
+        if input_domain == "coefficient":
+            ntt_context.inverse_to_standard_(
+                product,
+                include_p=includes_p,
+            )
+            phase = rns_context.add_standard(
+                phase,
+                product,
+                include_p=includes_p,
+            )
+        else:
+            phase = rns_context.add_lazy(
+                phase,
+                product,
+                include_p=includes_p,
+            )
+        if component + 1 < ciphertext_data.size(0):
+            secret_power = rns_context.montgomery_mul(
+                secret_power,
+                secret_data,
+                include_p=includes_p,
+            )
+    if input_domain == "ntt":
+        ntt_context.inverse_to_standard_(phase, include_p=includes_p)
+    return phase
 
 
 def _mixed_radix_is_above_half(
@@ -104,18 +117,18 @@ def _mixed_radix_is_above_half(
     return above
 
 
-def reconstruct_tail_q_coefficients_tensor(
+def reconstruct_q_coefficients_tensor(
     plaintext_rns: torch.Tensor,
     *,
-    level: int,
+    depth: int,
     includes_p: bool,
     rns_context: RnsContext,
     reconstruction: DecryptReconstructionResource,
 ) -> torch.Tensor:
-    """Reconstruct the centered trailing-Q class on the rns_context device."""
+    """Reconstruct the centered class modulo the complete active Q product."""
 
-    q_prime_ids = rns_context.rns_layout.prime_ids(level)
-    source_prime_ids = tuple(q_prime_ids[-2:])
+    q_prime_ids = rns_context.rns_layout.prime_ids(depth)
+    source_prime_ids = reconstruction.source_prime_ids_by_depth[depth]
     del includes_p
     source = plaintext_rns.narrow(
         -2,
@@ -139,12 +152,8 @@ def reconstruct_tail_q_coefficients_tensor(
             centered,
         ).to(torch.float64)
 
-    if source_prime_ids != reconstruction.source_prime_ids:
-        raise ValueError(
-            "Decryption reconstruction table differs from active trailing Q"
-        )
-    normalizers = reconstruction.normalizers
-    propagation = reconstruction.propagation
+    normalizers = reconstruction.normalizers_by_depth[depth]
+    propagation = reconstruction.propagation_by_depth[depth]
     lo, hi, neg_lo, neg_hi = source_params[1:5]
 
     def decompose(residues: torch.Tensor) -> torch.Tensor:
@@ -185,9 +194,10 @@ def decrypt_tensor(
     ciphertext_data: torch.Tensor,
     secret_key_data: torch.Tensor,
     *,
-    level: int,
+    depth: int,
     ciphertext_basis: ModulusBasis,
     secret_key_basis: ModulusBasis,
+    input_domain: PolynomialDomain,
     rns_context: RnsContext,
     ntt_context: NttContext,
     reconstruction: DecryptReconstructionResource,
@@ -198,15 +208,16 @@ def decrypt_tensor(
     plaintext_rns = _decrypt_tensor_to_coefficient_standard_rns(
         ciphertext_data,
         secret_key_data,
-        level=level,
+        depth=depth,
         includes_p=includes_p,
         secret_key_basis=secret_key_basis,
+        input_domain=input_domain,
         rns_context=rns_context,
         ntt_context=ntt_context,
     )
-    return reconstruct_tail_q_coefficients_tensor(
+    return reconstruct_q_coefficients_tensor(
         plaintext_rns,
-        level=level,
+        depth=depth,
         includes_p=includes_p,
         rns_context=rns_context,
         reconstruction=reconstruction,
@@ -260,12 +271,16 @@ class NativeDecryptImplementation:
             decrypt_tensor(
                 inputs[0],
                 key.data,
-                level=int(cast(int, invocation.attributes["level"])),
+                depth=int(cast(int, invocation.attributes["depth"])),
                 ciphertext_basis=cast(
                     ModulusBasis,
                     invocation.attributes["modulus_basis"],
                 ),
                 secret_key_basis=key.modulus_basis,
+                input_domain=cast(
+                    PolynomialDomain,
+                    invocation.attributes["input_domain"],
+                ),
                 rns_context=rns_context,
                 ntt_context=ntt_context,
                 reconstruction=reconstruction,
@@ -276,5 +291,5 @@ class NativeDecryptImplementation:
 __all__ = [
     "NativeDecryptImplementation",
     "decrypt_tensor",
-    "reconstruct_tail_q_coefficients_tensor",
+    "reconstruct_q_coefficients_tensor",
 ]

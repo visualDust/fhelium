@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from fhelium.config import CkksConfig
+from fhelium.backend.rns.format import RnsExecutionFormat
 from fhelium.backend.ntt.plans.twiddles import (
     build_compact_twiddles,
     expand_stage_twiddles,
@@ -27,6 +28,7 @@ class IndexedRadix2NttPlan:
         ckks_config: CkksConfig,
         *,
         device: str | int | torch.device | None = None,
+        dtype: torch.dtype | None = None,
     ) -> None:
         self.cfg = ckks_config
         self.device = (
@@ -45,7 +47,7 @@ class IndexedRadix2NttPlan:
         compact_forward, compact_inverse = build_compact_twiddles(
             self.cfg.moduli,
             self.cfg.logN,
-            self.cfg.torch_dtype,
+            RnsExecutionFormat.select(self.cfg.moduli, dtype).dtype,
             device=self.device,
         )
         self.forward_twiddles = expand_stage_twiddles(

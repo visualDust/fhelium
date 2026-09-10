@@ -114,7 +114,7 @@ LaTeX rather than raw UTF-8 mathematical glyphs.
 An arithmetic-operation docstring states:
 
 - the mathematical operation and input preconditions;
-- the output level, actual scale, component count, polynomial domain, modulus
+- the output depth, actual scale, component count, polynomial domain, modulus
   basis, residue representation, and `prime_ids` effect;
 - functional or mutating behavior and storage aliasing; and
 - caller-visible approximation, rounding, range, or no-wrap requirements.

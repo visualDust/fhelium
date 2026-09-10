@@ -67,7 +67,7 @@ flowchart TB
 
 A public `Ciphertext`, `Plaintext`, or key combines a Tensor payload with the
 state needed to interpret that payload. Depending on the value type, this state
-includes level, actual scale, active prime identities, polynomial domain,
+includes depth, actual scale, active prime identities, polynomial domain,
 modulus basis, residue representation, component count, batch shape, key role,
 and device placement.
 

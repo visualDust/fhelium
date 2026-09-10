@@ -20,7 +20,7 @@ def _dense_plaintext(
 ) -> fh.Plaintext:
     return fh.Plaintext(
         message=None,
-        level=0,
+        depth=0,
         scale=2.0**40,
         data=data,
         representation="rns",
@@ -77,7 +77,7 @@ def test_compressed_plaintext_rejects_unknown_physical_layout() -> None:
             data=torch.tensor([[11, 13], [17, 19]], dtype=torch.int64),
             ring_dimension=8,
             compression_layout="diagonal",  # type: ignore[arg-type]
-            level=0,
+            depth=0,
             scale=2.0**40,
             polynomial_domain="ntt",
             modulus_basis="Q",
@@ -115,7 +115,7 @@ def test_compressed_plaintext_rejects_unknown_format_version() -> None:
             ring_dimension=8,
             compression_layout="cyclic",
             compression_format_version=2,
-            level=0,
+            depth=0,
             scale=2.0**40,
             polynomial_domain="ntt",
             modulus_basis="Q",
@@ -137,7 +137,7 @@ def engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
         pytest.skip("CUDA is not available")
     previous_device = torch.get_default_device()
     torch.set_default_device(device)
-    instance = Engine(fh.Preset.slots8192_scale40_levels7_int64)
+    instance = Engine(fh.Preset.slots8192_scale40_depth7_int64)
     yield instance
     torch.set_default_device(previous_device)
     del instance
@@ -166,7 +166,7 @@ def _with_repeated_encoded_axis(
         )
     dense = fh.Plaintext(
         message=None,
-        level=plaintext.level,
+        depth=plaintext.depth,
         scale=plaintext.scale,
         data=dense_data,
         representation="rns",
@@ -264,7 +264,7 @@ def test_strided_sparse_compressed_plaintext_is_not_a_multiply_operand(
     dense_data[..., :: prepared.data.size(-1) // unique_count] = compact
     dense = fh.Plaintext(
         message=None,
-        level=prepared.level,
+        depth=prepared.depth,
         scale=prepared.scale,
         data=dense_data,
         representation="rns",
@@ -383,7 +383,7 @@ def test_strided_add_consumes_exact_nonzero_implicit_values(
     modified_data[..., ~support] += 1
     dense = fh.Plaintext(
         message=None,
-        level=encoded.level,
+        depth=encoded.depth,
         scale=encoded.scale,
         data=modified_data,
         representation="rns",
@@ -402,7 +402,7 @@ def test_strided_add_consumes_exact_nonzero_implicit_values(
     ciphertext = engine.encrypt_message(0.01 * torch.sin(index * 0.013))
     rns_context = RnsContext(engine.config, device=torch.get_default_device())
     moduli = torch.tensor(
-        rns_context.moduli_for_basis(ciphertext.level),
+        rns_context.moduli_for_basis(ciphertext.depth),
         dtype=ciphertext.data.dtype,
         device=torch.get_default_device(),
     )

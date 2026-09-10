@@ -534,7 +534,7 @@ def _ciphertext_state(
 ) -> tuple[int, float, tuple[int, ...], str, str, str, int | None]:
     state = _state(value_type, label=label)
     return (
-        _integer_state(state, "level", label=label),
+        _integer_state(state, "depth", label=label),
         _float_state(state, "scale", label=label),
         _prime_ids_state(state, label=label, required=True),
         _string_state(state, "polynomial_domain", label=label),
@@ -558,7 +558,7 @@ def _plaintext_state(
     tuple[int, ...],
 ]:
     state = _state(value_type, label=label)
-    level = _integer_state(state, "level", label=label)
+    depth = _integer_state(state, "depth", label=label)
     scale = _float_state(state, "scale", label=label)
     representation = _string_state(state, "representation", label=label)
     domain = _optional_string_state(state, "polynomial_domain", label=label)
@@ -597,7 +597,7 @@ def _plaintext_state(
             f"{label} has prime IDs for non-RNS plaintext representation"
         )
     return (
-        level,
+        depth,
         scale,
         representation,
         domain,
@@ -635,7 +635,7 @@ def _boundary_input(
             raise TypeError(f"{label} requires a Ciphertext")
         state = _state(value_type, label=label)
         represented: tuple[tuple[str, object, object], ...] = (
-            ("level", state.get("level"), value.level),
+            ("depth", state.get("depth"), value.depth),
             ("scale", state.get("scale"), value.scale),
             ("prime_ids", state.get("prime_ids"), value.prime_ids),
             (
@@ -710,7 +710,7 @@ def _boundary_output(
     if not isinstance(value, torch.Tensor):
         raise TypeError(f"{label} requires a Tensor payload")
     if kind == "ciphertext":
-        level, scale, prime_ids, domain, basis, residues, components = (
+        depth, scale, prime_ids, domain, basis, residues, components = (
             _ciphertext_state(value_type, label=label)
         )
         if components is not None:
@@ -723,7 +723,7 @@ def _boundary_output(
             )
         return Ciphertext(
             data=value,
-            level=level,
+            depth=depth,
             scale=scale,
             prime_ids=prime_ids,
             polynomial_domain=cast(PolynomialDomain, domain),
@@ -731,12 +731,12 @@ def _boundary_output(
             residue_representation=cast(ResidueRepresentation, residues),
         )
 
-    level, scale, representation, domain, basis, residues, prime_ids = (
+    depth, scale, representation, domain, basis, residues, prime_ids = (
         _plaintext_state(value_type, label=label)
     )
     return Plaintext(
         message=value if representation == "slots" else None,
-        level=level,
+        depth=depth,
         scale=scale,
         data=None if representation == "slots" else value,
         representation=cast(PlaintextRepresentation, representation),

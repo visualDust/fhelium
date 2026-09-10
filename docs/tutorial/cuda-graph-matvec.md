@@ -11,7 +11,7 @@ steady-state measured region.
 ```bash
 python examples/11_cuda_graph_matrix_vector.py \
   --device cuda:0 \
-  --preset slots8192-scale40-levels7-int64 \
+  --preset slots8192-scale40-depth7-int64 \
   --size 8 \
   --capture-warmup 3 \
   --benchmark-warmup 10 \
@@ -39,7 +39,7 @@ diagonals = [
     engine.prepare_plaintext_for_multiplication(
         engine.encode(
             cyclic_diagonal_slots(matrix, step, engine.num_slots),
-            level=0,
+            depth=0,
         )
     )
     for step in range(matrix.size(0))
@@ -51,7 +51,7 @@ rotation_keys = {
 ```
 
 These values are captured as callable state. Changing their object identity,
-storage address, level, or shape after capture would invalidate the captured
+storage address, depth, or shape after capture would invalidate the captured
 schedule.
 
 ## 3. Bind static state
@@ -90,7 +90,7 @@ The prototype determines structure, including:
 - value-tree shape;
 - value type;
 - tensor shape and dtype;
-- CKKS level and caller-recorded parameter provenance;
+- CKKS depth and caller-recorded parameter provenance;
 - polynomial domain, modulus basis, residue representation, scale, and prime IDs.
 
 ## 5. Replay with changing ciphertexts
@@ -103,7 +103,7 @@ result = program.replay(
 ```
 
 Replay validates the new value before staging its payload into the fixed
-input allocation. A mismatched level or representation is rejected rather
+input allocation. A mismatched depth or representation is rejected rather
 than silently converted inside the graph wrapper.
 
 The example uses three different encrypted vectors and verifies all three

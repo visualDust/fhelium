@@ -126,6 +126,20 @@ def _fake_fhelium_ckks_ops_keyswitch__accumulate__digit__products__(
     key_switch_key_digit: torch.Tensor,
     rns_params: torch.Tensor,
     key_digit_row_start: int,
+    source_indices: torch.Tensor | None = None,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_ckks_ops::keyswitch_accumulate_products_")
+def _fake_fhelium_ckks_ops_keyswitch__accumulate__products__(
+    accumulator0_qp: torch.Tensor,
+    accumulator1_qp: torch.Tensor,
+    extended_digits_ntt_qp: list[torch.Tensor],
+    key_switch_key: torch.Tensor,
+    rns_params: torch.Tensor,
+    key_digit_row_start: int,
+    source_indices: torch.Tensor | None = None,
 ) -> None:
     pass
 
@@ -263,6 +277,7 @@ def _fake_fhelium_ntt_ops_forward__ntt__montgomery__compact__keyswitch__accumula
     accumulator0_qp: torch.Tensor,
     accumulator1_qp: torch.Tensor,
     key_row_start: int,
+    grouped_stage_count: int = 4,
 ) -> None:
     pass
 
@@ -286,6 +301,20 @@ def _fake_fhelium_ntt_ops_forward__ntt__montgomery__power__of__two__radix__compa
     outer_twiddles: torch.Tensor,
     radix_root_powers: torch.Tensor,
     rns_params: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake(
+    "fhelium_ntt_ops::forward_ntt_to_montgomery_compact_add_scaled_"
+)
+def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__compact__add__scaled__(
+    source: torch.Tensor,
+    addend: torch.Tensor,
+    multiplier: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+    grouped_stage_count: int,
 ) -> None:
     pass
 
@@ -635,6 +664,27 @@ def _fake_fhelium_rns_ops_montgomery__mul__row__scalars__standard(
     residues: torch.Tensor, row_scalars: torch.Tensor, rns_params: torch.Tensor
 ) -> torch.Tensor:
     return torch.empty_like(residues)
+
+
+@torch.library.register_fake("fhelium_rns_ops::montgomery_weighted_sum")
+def _fake_fhelium_rns_ops_montgomery__weighted__sum(
+    ciphertexts: list[torch.Tensor],
+    plaintexts: list[torch.Tensor],
+    rns_params: torch.Tensor,
+) -> torch.Tensor:
+    return ciphertexts[0].new_empty(ciphertexts[0].shape)
+
+
+@torch.library.register_fake("fhelium_rns_ops::montgomery_weighted_sums")
+def _fake_fhelium_rns_ops_montgomery__weighted__sums(
+    ciphertexts: list[torch.Tensor],
+    plaintexts: list[torch.Tensor],
+    group_count: int,
+    rns_params: torch.Tensor,
+) -> torch.Tensor:
+    return ciphertexts[0].new_empty(
+        (ciphertexts[0].size(0), group_count, *ciphertexts[0].shape[1:])
+    )
 
 
 @torch.library.register_fake("fhelium_rns_ops::reduce_to_standard_")

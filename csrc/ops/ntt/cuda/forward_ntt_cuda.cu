@@ -1,4 +1,6 @@
 #include "forward_ntt_cuda.h"
+#include <ATen/MemoryOverlap.h>
+#include "../ntt_validation.h"
 #include "../../common/cuda/kernel_support.cuh"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
@@ -15,6 +17,7 @@
 // Device kernels and launch helpers must be declared before entry points.
 #include "forward_ntt_compact_detail.cuh"
 #include "forward_ntt_compact_keyswitch_fused.inc.cuh"
+#include "forward_ntt_compact_add_scaled.inc.cuh"
 #include "forward_ntt_indexed_detail.cuh"
 #include "forward_ntt_power_of_two_radix_detail.cuh"
 

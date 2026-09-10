@@ -78,7 +78,7 @@ Pipeline composition preserves the listed execution order. The analysis pass rec
 
 The remaining pipeline lowers semantic roll, addition, and mixed multiplication through logical operations into CKKS operations. The resulting Program contains the representation transitions and plaintext preparation selected by those passes.
 
-The example also derives evaluation-key requirements from the transformed IR. This operation-level analysis remains separate from key creation and runtime resource binding.
+The example also derives evaluation-key requirements from the transformed IR. This operation-depth analysis remains separate from key creation and runtime resource binding.
 
 ## Why use textual IR
 

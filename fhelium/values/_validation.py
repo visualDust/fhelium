@@ -8,16 +8,16 @@ from typing import cast
 import torch
 
 
-def validate_nonnegative_level(level: object, *, value_name: str) -> int:
-    """Require a non-bool, non-negative Python integer level."""
+def validate_nonnegative_depth(depth: object, *, value_name: str) -> int:
+    """Require a non-bool, non-negative Python integer depth."""
 
-    if type(level) is not int:
+    if type(depth) is not int:
         raise TypeError(
-            f"{value_name} level must be an integer, got {type(level).__name__}"
+            f"{value_name} depth must be an integer, got {type(depth).__name__}"
         )
-    if level < 0:
-        raise ValueError(f"{value_name} level must be non-negative: {level}")
-    return level
+    if depth < 0:
+        raise ValueError(f"{value_name} depth must be non-negative: {depth}")
+    return depth
 
 
 def validate_prime_ids(
@@ -71,6 +71,6 @@ def validate_integral_tensor(
 
 __all__ = [
     "validate_integral_tensor",
-    "validate_nonnegative_level",
+    "validate_nonnegative_depth",
     "validate_prime_ids",
 ]

@@ -54,10 +54,9 @@ compact support tensor or the per-row implicit tensor; it never materializes a
 dense plaintext. This preserves the encoded behavior for arbitrary implicit values
 and does not assume that ciphertext residues outside the support are already
 reduced to $[0,q_i)$. The compact value carries a frozen compression-format version,
-`N`, the compression layout, level, scale, polynomial domain, modulus basis,
-residue representation, and ordered prime IDs. It is therefore serializable,
-transferable, residency-managed, execution-signatured, and
-CUDA-Graph-compatible when resident on CUDA, without an engine reference.
+`N`, the compression layout, depth, scale, polynomial domain, modulus basis,
+residue representation, and ordered prime IDs. These fields describe how to
+interpret the stored data without an Engine reference.
 
 Repeated layout selection happens in Python before native execution. Cyclic
 and contiguous arithmetic have distinct Torch operator schemas with CPU and

@@ -10,16 +10,20 @@ from ..._pipeline import (
 from dataclasses import dataclass
 
 from xdsl.dialects.builtin import StringAttr, UnrealizedConversionCastOp
+from xdsl.ir import Operation, SSAValue
+from xdsl.rewriter import Rewriter
 
 from fhelium.ir import Program
 
 from fhelium.ir.dialects import ckks, logical
+from fhelium.ir.dialects._common import OpenStateType
 from .._operation_transforms import (
     cast_before,
     ciphertext_type,
     display_name,
     program_operations,
 )
+from ._transition_state import representation_pair
 
 _MULTIPLY_ENCRYPTED_INDICES: dict[type[object], tuple[int, ...]] = {
     logical.MultiplyEncryptedEncryptedOp: (0, 1),
@@ -27,17 +31,94 @@ _MULTIPLY_ENCRYPTED_INDICES: dict[type[object], tuple[int, ...]] = {
     logical.MultiplyPublicEncryptedOp: (1,),
 }
 
+_PRESERVE_ENCRYPTED_TYPES = (
+    logical.AddEncryptedEncryptedOp,
+    logical.AddEncryptedPublicOp,
+    logical.AddPublicEncryptedOp,
+    logical.SubtractEncryptedEncryptedOp,
+    logical.SubtractEncryptedPublicOp,
+    logical.SubtractPublicEncryptedOp,
+    logical.NegateEncryptedOp,
+)
+_MULTIPLY_TYPES = tuple(_MULTIPLY_ENCRYPTED_INDICES)
 
-def _is_ntt_montgomery(value_type: object) -> bool:
-    state = getattr(getattr(value_type, "state", None), "data", {})
-    domain = state.get("polynomial_domain")
-    residues = state.get("residue_representation")
-    return (
-        isinstance(domain, StringAttr)
-        and domain.data == "ntt"
-        and isinstance(residues, StringAttr)
-        and residues.data == "montgomery"
-    )
+
+def _infer_logical_representation(
+    value: SSAValue,
+    memo: dict[SSAValue, tuple[str, str]],
+) -> tuple[str, str]:
+    """Infer the representation selected by the logical CKKS route."""
+
+    cached = memo.get(value)
+    if cached is not None:
+        return cached
+    try:
+        representation = representation_pair(
+            value, operation="logical representation assignment"
+        )
+    except ValueError:
+        representation = None
+    if representation is not None:
+        memo[value] = representation
+        return representation
+    owner = value.owner
+    if not isinstance(owner, Operation):
+        raise ValueError(
+            "Logical encrypted input representation remains unassigned"
+        )
+    if isinstance(owner, UnrealizedConversionCastOp):
+        representation = _infer_logical_representation(owner.inputs[0], memo)
+    elif isinstance(owner, logical.RollEncryptedOp):
+        representation = ("coefficient", "standard")
+    elif isinstance(owner, _PRESERVE_ENCRYPTED_TYPES):
+        encrypted = tuple(
+            operand
+            for operand in owner.operands
+            if isinstance(operand.type, logical.EncryptedType)
+        )
+        representations = tuple(
+            _infer_logical_representation(operand, memo)
+            for operand in encrypted
+        )
+        distinct = set(representations)
+        if not representations:
+            raise ValueError(
+                f"{display_name(owner)} lacks one matching encrypted "
+                "representation"
+            )
+        if len(distinct) == 1:
+            representation = representations[0]
+        elif distinct == {
+            ("coefficient", "standard"),
+            ("ntt", "montgomery"),
+        }:
+            representation = ("coefficient", "standard")
+        else:
+            raise ValueError(
+                f"{display_name(owner)} has incompatible encrypted "
+                "representations"
+            )
+    elif isinstance(owner, _MULTIPLY_TYPES):
+        representation = ("ntt", "montgomery")
+    else:
+        raise ValueError(
+            f"{display_name(owner)} does not define an encrypted representation"
+        )
+    if isinstance(value.type, OpenStateType):
+        state = dict(value.type.state.data)
+        state.update(
+            {
+                "polynomial_domain": StringAttr(representation[0]),
+                "residue_representation": StringAttr(representation[1]),
+            }
+        )
+        updated = Rewriter.replace_value_with_new_type(
+            value,
+            value.type.with_state(state),  # type: ignore[arg-type]
+        )
+        memo[updated] = representation
+    memo[value] = representation
+    return representation
 
 
 @dataclass(frozen=True)
@@ -61,14 +142,46 @@ class InsertMultiplyNttTransitionsPass:
         del workspace
         matched = transformed = inserted = skipped = 0
         diagnostics: list[str] = []
+        converted_operands: dict[SSAValue, SSAValue] = {}
+        inferred_representations: dict[SSAValue, tuple[str, str]] = {}
         for operation in program_operations(program):
             encrypted_indices = _MULTIPLY_ENCRYPTED_INDICES.get(type(operation))
             if encrypted_indices is None:
                 continue
+            invalid: list[tuple[int, str]] = []
+            representations: dict[int, tuple[str, str]] = {}
+            for index in encrypted_indices:
+                try:
+                    representation = _infer_logical_representation(
+                        operation.operands[index],
+                        inferred_representations,
+                    )
+                except ValueError as error:
+                    invalid.append((index, str(error)))
+                    continue
+                representations[index] = representation
+                if representation not in {
+                    ("coefficient", "standard"),
+                    ("ntt", "montgomery"),
+                }:
+                    invalid.append(
+                        (
+                            index,
+                            f"unsupported representation {representation!r}",
+                        )
+                    )
+            if invalid:
+                matched += 1
+                skipped += 1
+                details = "; ".join(
+                    f"operand {index}: {message}" for index, message in invalid
+                )
+                diagnostics.append(f"{display_name(operation)}: {details}")
+                continue
             pending = tuple(
                 index
                 for index in encrypted_indices
-                if not _is_ntt_montgomery(operation.operands[index].type)
+                if representations[index] == ("coefficient", "standard")
             )
             if not pending:
                 continue
@@ -87,11 +200,15 @@ class InsertMultiplyNttTransitionsPass:
                 )
             for index in pending:
                 operand = operation.operands[index]
+                cached = converted_operands.get(operand)
+                if cached is not None:
+                    operation.operands[index] = cached
+                    continue
                 side = "lhs" if index == 0 else "rhs"
                 coefficient_type = ciphertext_type(
                     operand,
-                    domain="coefficient",
-                    residues="standard",
+                    domain=representations[index][0],
+                    residues=representations[index][1],
                     components=2,
                 )
                 typed_operand = cast_before(
@@ -129,6 +246,7 @@ class InsertMultiplyNttTransitionsPass:
                 logical_result.name_hint = transition.results[0].name_hint
                 block.insert_op_before(cast, operation)
                 operation.operands[index] = logical_result
+                converted_operands[operand] = logical_result
                 inserted += 2
             transformed += 1
         if transformed == 0:

@@ -10,6 +10,7 @@
 #include "../../common/cpu/montgomery.h"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
+#include "rns_standard_arithmetic_cpu.h"
 
 namespace {
 
@@ -143,6 +144,87 @@ torch::Tensor binary_cpu(const torch::Tensor lhs,
     binary_loop<scalar_t, operation>(output, left, right, params);
   });
   return out;
+}
+
+template <UnaryOperation operation>
+void unary_cpu(torch::Tensor residues,
+               const torch::Tensor params,
+               const char* operation_name);
+
+torch::Tensor montgomery_weighted_sum_cpu(
+    const at::TensorList ciphertexts,
+    const at::TensorList plaintexts,
+    const torch::Tensor rns_params) {
+  constexpr const char* operation = "rns_montgomery_weighted_sum";
+  TORCH_CHECK(!ciphertexts.empty(), operation, " requires at least one term");
+  TORCH_CHECK(ciphertexts.size() == plaintexts.size(),
+              operation,
+              " ciphertext and plaintext term counts differ");
+  TORCH_CHECK(plaintexts[0].dim() >= 2 &&
+                  ciphertexts[0].dim() == plaintexts[0].dim() + 1,
+              operation,
+              " expects RNS tensors with a ciphertext component axis before "
+              "plaintext batch axes");
+
+  const int64_t component_count = ciphertexts[0].size(0);
+  auto multiply_term = [&](int64_t term) {
+    TORCH_CHECK(ciphertexts[term].sizes() == ciphertexts[0].sizes() &&
+                    plaintexts[term].sizes() == plaintexts[0].sizes(),
+                operation,
+                " term shapes differ");
+    if (plaintexts[term].numel() ==
+        plaintexts[term].size(-2) * plaintexts[term].size(-1)) {
+      return binary_cpu<BinaryOperation::kMontgomeryMul>(
+          ciphertexts[term], plaintexts[term], rns_params, operation);
+    }
+    std::vector<torch::Tensor> products;
+    products.reserve(component_count);
+    for (int64_t component = 0; component < component_count; ++component) {
+      products.push_back(binary_cpu<BinaryOperation::kMontgomeryMul>(
+          ciphertexts[term][component],
+          plaintexts[term],
+          rns_params,
+          operation));
+    }
+    return torch::stack(products, 0);
+  };
+
+  torch::Tensor out = multiply_term(0);
+  for (int64_t term = 1; term < ciphertexts.size(); ++term) {
+    out = rns_add_standard_cpu(out, multiply_term(term), rns_params);
+  }
+  if (ciphertexts.size() == 1) {
+    unary_cpu<UnaryOperation::kReduceToStandard>(
+        out, rns_params, "rns_montgomery_weighted_sum");
+  }
+  return out;
+}
+
+torch::Tensor montgomery_weighted_sums_cpu(
+    const at::TensorList ciphertexts,
+    const at::TensorList plaintexts,
+    const int64_t group_count,
+    const torch::Tensor rns_params) {
+  constexpr const char* operation = "rns_montgomery_weighted_sums";
+  TORCH_CHECK(group_count > 0, operation, " requires at least one group");
+  TORCH_CHECK(!ciphertexts.empty(), operation, " requires at least one term");
+  TORCH_CHECK(plaintexts.size() == group_count * ciphertexts.size(),
+              operation,
+              " plaintext matrix must have group_count * term_count entries");
+  std::vector<torch::Tensor> outputs;
+  std::vector<torch::Tensor> group_plaintexts;
+  outputs.reserve(group_count);
+  group_plaintexts.reserve(ciphertexts.size());
+  for (int64_t group = 0; group < group_count; ++group) {
+    group_plaintexts.clear();
+    const int64_t first = group * ciphertexts.size();
+    for (int64_t term = 0; term < ciphertexts.size(); ++term) {
+      group_plaintexts.push_back(plaintexts[first + term]);
+    }
+    outputs.push_back(montgomery_weighted_sum_cpu(
+        ciphertexts, group_plaintexts, rns_params));
+  }
+  return torch::stack(outputs, 1);
 }
 
 template <typename scalar_t, UnaryOperation operation>
@@ -491,7 +573,6 @@ torch::Tensor mixed_radix_decompose_cpu(
   constexpr const char* operation = "mixed_radix_decompose";
   const auto source = view_rns_batch_3d(source_residues, "source_residues");
   TORCH_CHECK(source.device().is_cpu(), operation, " requires CPU tensors");
-  TORCH_CHECK(source.size(1) <= 8, operation, " supports at most 8 rows");
   check_rns_row_vector(
       normalizers, source.size(1) - 1, operation, "normalizers");
   TORCH_CHECK(propagation.dim() == 2 &&
@@ -585,19 +666,26 @@ torch::Tensor mixed_radix_decompose_cpu(
                     constants);
                 digits[row] = digit;
                 for (int64_t target = row + 1; target < row_count; ++target) {
-                  digits[target] += fhelium::cpu::multiply(
+                  const auto target_constants = fhelium::cpu::load_constants(
+                      lo, modulus_lo_stride, hi, modulus_hi_stride,
+                      inv_lo, neg_inv_modulus_lo_stride, inv_hi, neg_inv_modulus_hi_stride, target);
+                  if (row_count <= 16) {
+                    digits[target] += fhelium::cpu::multiply(
+                        digit,
+                        prop[step * propagation_row_stride +
+                             target * propagation_limb_stride],
+                        target_constants);
+                    continue;
+                  }
+                  const scalar_t term = fhelium::cpu::multiply_split(
                       digit,
                       prop[step * propagation_row_stride +
                            target * propagation_limb_stride],
-                      fhelium::cpu::load_constants(lo,
-                                                   modulus_lo_stride,
-                                                   hi,
-                                                   modulus_hi_stride,
-                                                   inv_lo,
-                                                   neg_inv_modulus_lo_stride,
-                                                   inv_hi,
-                                                   neg_inv_modulus_hi_stride,
-                                                   target));
+                      target_constants);
+                  digits[target] = fhelium::cpu::reduce_operand_mod_q(
+                      digits[target], target_constants);
+                  digits[target] = fhelium::cpu::reduce_lazy_operand(
+                      static_cast<scalar_t>(digits[target] + term), target_constants);
                 }
               }
               for (int64_t row = 0; row < row_count; ++row) {
@@ -705,6 +793,8 @@ TORCH_LIBRARY_IMPL(fhelium_rns_ops, CPU, m) {
         return binary_cpu<BinaryOperation::kMontgomeryMul>(
             a, b, p, "rns_montgomery_mul");
       });
+  m.impl("montgomery_weighted_sum", &montgomery_weighted_sum_cpu);
+  m.impl("montgomery_weighted_sums", &montgomery_weighted_sums_cpu);
   m.impl(
       "montgomery_mul_cyclic_compressed",
       [](const torch::Tensor a, const torch::Tensor b, const torch::Tensor p) {

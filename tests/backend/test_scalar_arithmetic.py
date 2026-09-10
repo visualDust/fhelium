@@ -24,7 +24,7 @@ class _ScalarFixture:
 @pytest.fixture(scope="module")
 def scalar_fixture() -> _ScalarFixture:
     engine = Engine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         rng_seed=611,
         rng_nonce=29,
     )
@@ -58,7 +58,7 @@ def _decode(fixture: _ScalarFixture, value: Ciphertext) -> torch.Tensor:
 
 def test_scalar_arithmetic_supports_int32_residues() -> None:
     engine = Engine(
-        Preset.slots8192_scale25_levels14_int32,
+        Preset.slots8192_scale25_depth14_int32,
         rng_seed=431,
     )
     secret_key = engine.create_secret_key()
@@ -123,7 +123,7 @@ def test_add_scalar_uses_the_caller_selected_scale(
         rtol=0.0,
     )
     assert result.scale == source.scale
-    assert result.level == source.level
+    assert result.depth == source.depth
     assert result.polynomial_domain == source.polynomial_domain
     assert result.residue_representation == source.residue_representation
     assert result.data.data_ptr() != source.data.data_ptr()
@@ -151,7 +151,7 @@ def test_multiply_scalar_records_product_scale_without_rescaling(
     result = fixture.engine.multiply_scalar(source, scalar)
 
     assert result.scale == source.scale * scalar_scale
-    assert result.level == source.level
+    assert result.depth == source.depth
     assert result.prime_ids == source.prime_ids
     torch.testing.assert_close(
         _decode(fixture, result),
@@ -161,8 +161,8 @@ def test_multiply_scalar_records_product_scale_without_rescaling(
     )
 
     dropped_prime = fixture.engine.config.moduli[source.prime_ids[0]]
-    rescaled = fixture.engine.rescale_to_next_level(result)
-    assert rescaled.level == source.level + 1
+    rescaled = fixture.engine.rescale_to_next_depth(result)
+    assert rescaled.depth == source.depth + 1
     assert rescaled.scale == result.scale / dropped_prime
     torch.testing.assert_close(
         _decode(fixture, rescaled),
@@ -190,7 +190,7 @@ def test_integer_scalar_multiplication_is_exact_and_preserves_scale(
         ).to(source.data.dtype)
     assert torch.equal(result.data, expected)
     assert result.scale == source.scale
-    assert result.level == source.level
+    assert result.depth == source.depth
     assert result.prime_ids == source.prime_ids
     assert result.data.data_ptr() != source.data.data_ptr()
 
@@ -203,7 +203,7 @@ def test_integer_scalar_multiplication_is_exact_and_preserves_scale(
     )
     assert torch.equal(congruent.data, result.data)
 
-    later = fixture.engine.mod_switch_to_level(source, 2)
+    later = fixture.engine.mod_switch_to_depth(source, 2)
     later_result = fixture.engine.multiply_integer_scalar(later, scalar)
     later_expected = torch.empty_like(later.data)
     for row, prime_id in enumerate(later.prime_ids):
@@ -213,7 +213,7 @@ def test_integer_scalar_multiplication_is_exact_and_preserves_scale(
             modulus,
         ).to(later.data.dtype)
     assert torch.equal(later_result.data, later_expected)
-    assert later_result.level == 2
+    assert later_result.depth == 2
     assert later_result.prime_ids == later.prime_ids
 
 

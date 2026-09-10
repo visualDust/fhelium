@@ -109,6 +109,55 @@ class CompactRadix2NttBackend:
             self.grouped_radix2_stage_count,
         )
 
+    def forward_to_montgomery_add_scaled_(
+        self,
+        operand: torch.Tensor,
+        addend: torch.Tensor,
+        multiplier: torch.Tensor,
+        parameter_row_start: int,
+    ) -> None:
+        """Write NTT(standard operand) + addend * row multiplier in Montgomery form."""
+
+        twiddles, params = self._active_native_inputs(
+            operand, self.forward_twiddles, parameter_row_start
+        )
+        ntt_ops.forward_ntt_to_montgomery_compact_add_scaled_(
+            operand,
+            addend,
+            multiplier,
+            twiddles,
+            params,
+            self.grouped_radix2_stage_count,
+        )
+
+    def forward_montgomery_accumulate_key_(
+        self,
+        scratch: torch.Tensor,
+        key_digit: torch.Tensor,
+        accumulators: torch.Tensor,
+        parameter_row_start: int,
+    ) -> None:
+        """Consume one digit's NTT inside the tail and add both key products.
+
+        Scratch enters in coefficient/Montgomery form and is disposable on
+        return; its final NTT evaluations are never written to global memory.
+        The accumulators retain QP NTT/Montgomery representation.
+        """
+
+        twiddles, params = self._active_native_inputs(
+            scratch, self.forward_twiddles, parameter_row_start
+        )
+        ntt_ops.forward_ntt_montgomery_compact_keyswitch_accumulate_(
+            scratch,
+            twiddles,
+            params,
+            key_digit,
+            accumulators[0],
+            accumulators[1],
+            parameter_row_start,
+            self.grouped_radix2_stage_count,
+        )
+
     def inverse_montgomery_(
         self, operand: torch.Tensor, parameter_row_start: int
     ) -> None:

@@ -212,11 +212,11 @@ register_benchmark(
         ),
         profiles=(
             BenchmarkProfile(
-                "slots8192-scale40-levels7-int64-matvec128",
-                "128x128 8,192-slot/40-bit-scale/7-level packed matvec across every visible GPU.",
+                "slots8192-scale40-depth7-int64-matvec128",
+                "128x128 8,192-slot/40-bit-scale/7-depth packed matvec across every visible GPU.",
                 {
                     "world_size": "visible",
-                    "preset": Preset.slots8192_scale40_levels7_int64.value,
+                    "preset": Preset.slots8192_scale40_depth7_int64.value,
                     "ntt_backend": "radix2_compact_group8_smem8",
                     "matrix_size": 128,
                     "hoist_chunk_size": 64,
@@ -230,11 +230,11 @@ register_benchmark(
                 },
             ),
             BenchmarkProfile(
-                "slots16384-scale40-levels16-int64-matvec128",
-                "128x128 16,384-slot/40-bit-scale/16-level packed matvec across every visible GPU.",
+                "slots16384-scale40-depth16-int64-matvec128",
+                "128x128 16,384-slot/40-bit-scale/16-depth packed matvec across every visible GPU.",
                 {
                     "world_size": "visible",
-                    "preset": Preset.slots16384_scale40_levels16_int64.value,
+                    "preset": Preset.slots16384_scale40_depth16_int64.value,
                     "ntt_backend": "radix2_compact_group16_smem8",
                     "matrix_size": 128,
                     "hoist_chunk_size": 64,
@@ -248,11 +248,11 @@ register_benchmark(
                 },
             ),
             BenchmarkProfile(
-                "slots32768-scale40-levels34-int64-matvec128",
-                "128x128 32,768-slot/40-bit-scale/34-level packed matvec across every visible GPU.",
+                "slots32768-scale40-depth34-int64-matvec128",
+                "128x128 32,768-slot/40-bit-scale/34-depth packed matvec across every visible GPU.",
                 {
                     "world_size": "visible",
-                    "preset": Preset.slots32768_scale40_levels34_int64.value,
+                    "preset": Preset.slots32768_scale40_depth34_int64.value,
                     "ntt_backend": "radix2_compact_group16_smem8",
                     "matrix_size": 128,
                     "hoist_chunk_size": 64,
@@ -265,11 +265,11 @@ register_benchmark(
                 },
             ),
             BenchmarkProfile(
-                "slots32768-scale40-levels34-int64-matvec64",
-                "64x64 32,768-slot/40-bit-scale/34-level packed matvec across every visible GPU.",
+                "slots32768-scale40-depth34-int64-matvec64",
+                "64x64 32,768-slot/40-bit-scale/34-depth packed matvec across every visible GPU.",
                 {
                     "world_size": "visible",
-                    "preset": Preset.slots32768_scale40_levels34_int64.value,
+                    "preset": Preset.slots32768_scale40_depth34_int64.value,
                     "ntt_backend": "radix2_compact_group8_smem8",
                     "matrix_size": 64,
                     "hoist_chunk_size": 16,
@@ -281,11 +281,11 @@ register_benchmark(
                 },
             ),
             BenchmarkProfile(
-                "slots32768-scale40-levels34-int64-matvec256",
-                "256x256 32,768-slot/40-bit-scale/34-level packed matvec; two or more GPUs recommended.",
+                "slots32768-scale40-depth34-int64-matvec256",
+                "256x256 32,768-slot/40-bit-scale/34-depth packed matvec; two or more GPUs recommended.",
                 {
                     "world_size": "visible",
-                    "preset": Preset.slots32768_scale40_levels34_int64.value,
+                    "preset": Preset.slots32768_scale40_depth34_int64.value,
                     "ntt_backend": "radix2_compact_group8_smem8",
                     "matrix_size": 256,
                     "minimum_world_size": 2,
@@ -298,11 +298,11 @@ register_benchmark(
                 },
             ),
             BenchmarkProfile(
-                "slots8192-scale40-levels7-int64-matvec16",
-                "16x16 8,192-slot/40-bit-scale/7-level packed matvec correctness and launch smoke.",
+                "slots8192-scale40-depth7-int64-matvec16",
+                "16x16 8,192-slot/40-bit-scale/7-depth packed matvec correctness and launch smoke.",
                 {
                     "world_size": "visible",
-                    "preset": Preset.slots8192_scale40_levels7_int64.value,
+                    "preset": Preset.slots8192_scale40_depth7_int64.value,
                     "ntt_backend": "radix2_compact_group8_smem8",
                     "matrix_size": 16,
                     "hoist_chunk_size": 8,

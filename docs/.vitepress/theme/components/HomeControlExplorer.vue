@@ -139,7 +139,7 @@ const caption = computed(() => {
           <g class="node eager-node" style="--delay: 180ms" transform="translate(220 125)">
             <rect width="156" height="80" rx="8" />
             <text x="78" y="34" text-anchor="middle">Value transition</text>
-            <text class="detail" x="78" y="57" text-anchor="middle">level · scale · domain</text>
+            <text class="detail" x="78" y="57" text-anchor="middle">depth · scale · domain</text>
           </g>
           <g class="node eager-node" style="--delay: 360ms" transform="translate(420 125)">
             <rect width="156" height="80" rx="8" />

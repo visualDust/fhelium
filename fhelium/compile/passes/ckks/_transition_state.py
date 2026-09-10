@@ -113,6 +113,25 @@ def represented_state(value: SSAValue) -> dict[str, Attribute] | None:
     return dict(state) if isinstance(state, Mapping) else None
 
 
+def representation_pair(value: SSAValue, *, operation: str) -> tuple[str, str]:
+    """Return one concrete polynomial-domain and residue-representation pair."""
+
+    state = represented_state(value) or {}
+    domain = state.get("polynomial_domain")
+    residues = state.get("residue_representation")
+    if (
+        not isinstance(domain, StringAttr)
+        or domain.data == "unknown"
+        or not isinstance(residues, StringAttr)
+        or residues.data == "unknown"
+    ):
+        raise ValueError(
+            f"{operation} requires concrete polynomial-domain and residue "
+            "representation state"
+        )
+    return domain.data, residues.data
+
+
 def compatible_states(
     lhs: dict[str, Attribute], rhs: dict[str, Attribute]
 ) -> bool:
@@ -126,7 +145,7 @@ def compatible_states(
     )
     if any(lhs.get(field) != rhs.get(field) for field in represented):
         return False
-    for field in ("level", "scale", "prime_ids"):
+    for field in ("depth", "scale", "prime_ids"):
         if field in lhs and field in rhs and lhs[field] != rhs[field]:
             return False
     return True
@@ -180,6 +199,11 @@ _PATH_OPERATION_TYPES = (
     ckks.SubtractOp,
     ckks.NegateOp,
     ckks.RelinearizeOp,
+    ckks.SwitchKeyOp,
+    ckks.ConjugateOp,
+    ckks.RotateOp,
+    ckks.RotateManyOp,
+    ckks.GroupedRotationWeightedSumOp,
     ckks.RescaleOp,
     ckks.ToNttOp,
     ckks.FromNttOp,
@@ -247,11 +271,26 @@ def _refresh_reachable_states(
         elif isinstance(operation, ckks.RelinearizeOp):
             state = represented_state(operation.value)
             if state is not None:
+                domain = operation.output_domain.data
                 state.update(
                     {
                         "components": IntegerAttr(2, 64),
-                        "polynomial_domain": StringAttr("coefficient"),
-                        "residue_representation": StringAttr("standard"),
+                        "polynomial_domain": StringAttr(domain),
+                        "residue_representation": StringAttr(
+                            "montgomery" if domain == "ntt" else "standard"
+                        ),
+                    }
+                )
+        elif isinstance(operation, (ckks.SwitchKeyOp, ckks.ConjugateOp)):
+            state = represented_state(operation.value)
+            if state is not None:
+                domain = operation.output_domain.data
+                state.update(
+                    {
+                        "polynomial_domain": StringAttr(domain),
+                        "residue_representation": StringAttr(
+                            "montgomery" if domain == "ntt" else "standard"
+                        ),
                     }
                 )
         elif isinstance(operation, ckks.RescaleOp):
@@ -259,14 +298,17 @@ def _refresh_reachable_states(
             result_state = represented_state(operation.result)
             if source_state is not None:
                 state = dict(source_state)
+                domain = operation.output_domain.data
                 if result_state is not None:
-                    for field in ("level", "scale", "prime_ids"):
+                    for field in ("depth", "scale", "prime_ids"):
                         if field in result_state:
                             state[field] = result_state[field]
                 state.update(
                     {
-                        "polynomial_domain": StringAttr("coefficient"),
-                        "residue_representation": StringAttr("standard"),
+                        "polynomial_domain": StringAttr(domain),
+                        "residue_representation": StringAttr(
+                            "montgomery" if domain == "ntt" else "standard"
+                        ),
                     }
                 )
         elif isinstance(operation, ckks.ToNttOp):
@@ -281,10 +323,23 @@ def _refresh_reachable_states(
         elif isinstance(operation, ckks.FromNttOp):
             state = represented_state(operation.value)
             if state is not None:
+                represented_result = represented_state(operation.result) or {}
+                represented_residues = represented_result.get(
+                    "residue_representation"
+                )
+                residues = "standard"
+                if isinstance(operation.result.type, ckks.PlaintextType):
+                    residues = (
+                        represented_residues.data
+                        if isinstance(represented_residues, StringAttr)
+                        and represented_residues.data
+                        in {"standard", "montgomery"}
+                        else "montgomery"
+                    )
                 state.update(
                     {
                         "polynomial_domain": StringAttr("coefficient"),
-                        "residue_representation": StringAttr("standard"),
+                        "residue_representation": StringAttr(residues),
                     }
                 )
         elif isinstance(operation, ckks.ToMontgomeryResiduesOp):
@@ -311,27 +366,106 @@ def _normalize_reachable_inputs(
     for operation in tuple(block.ops):
         if operation not in reachable:
             continue
-        needs_ntt = isinstance(operation, (ckks.RelinearizeOp, ckks.FromNttOp))
-        if not needs_ntt:
+        if isinstance(operation, (ckks.AddOp, ckks.SubtractOp)):
+            representations = tuple(
+                representation_pair(operand, operation=operation.name)
+                for operand in operation.operands
+            )
+            if len(set(representations)) == 1:
+                continue
+            if set(representations) != {
+                ("coefficient", "standard"),
+                ("ntt", "montgomery"),
+            }:
+                raise ValueError(
+                    f"{operation.name} cannot align representations "
+                    f"{representations!r}"
+                )
+            for index, (operand, representation) in enumerate(
+                zip(operation.operands, representations, strict=True)
+            ):
+                if representation == ("coefficient", "standard"):
+                    continue
+                state = represented_state(operand) or {}
+                if not isinstance(operand.type, OpenStateType):
+                    raise TypeError("CKKS addition input must carry open state")
+                converted = ckks.FromNttOp(
+                    operand,
+                    operand.type.with_state(
+                        {
+                            **state,
+                            "polynomial_domain": StringAttr("coefficient"),
+                            "residue_representation": StringAttr("standard"),
+                        }
+                    ),
+                )
+                converted.result.name_hint = "addition_input_coefficient"
+                block.insert_op_before(converted, operation)
+                operation.operands[index] = converted.result
+                inserted += 1
+            continue
+        needs_ntt = isinstance(
+            operation, (ckks.RelinearizeOp, ckks.FromNttOp)
+        ) or (
+            isinstance(operation, ckks.RotateOp)
+            and operation.input_domain.data == "ntt"
+        )
+        needs_coefficient = isinstance(
+            operation,
+            (
+                ckks.RotateManyOp,
+                ckks.GroupedRotationWeightedSumOp,
+                ckks.SwitchKeyOp,
+                ckks.ConjugateOp,
+            ),
+        ) or (
+            isinstance(operation, ckks.RotateOp)
+            and operation.input_domain.data == "coefficient"
+        )
+        if not needs_ntt and not needs_coefficient:
             continue
         source = operation.operands[0]
         state = represented_state(source) or {}
-        domain = state.get("polynomial_domain")
-        if isinstance(domain, StringAttr) and domain.data == "ntt":
+        representation = representation_pair(source, operation=operation.name)
+        required = (
+            ("ntt", "montgomery") if needs_ntt else ("coefficient", "standard")
+        )
+        if representation == required:
             continue
+        convertible = (
+            ("coefficient", "standard") if needs_ntt else ("ntt", "montgomery")
+        )
+        if representation != convertible:
+            raise ValueError(
+                f"{operation.name} cannot consume representation "
+                f"{representation!r}"
+            )
         if not isinstance(source.type, OpenStateType):
             raise TypeError("CKKS transition input must carry open state")
-        converted = ckks.ToNttOp(
-            source,
-            source.type.with_state(
-                {
-                    **state,
-                    "polynomial_domain": StringAttr("ntt"),
-                    "residue_representation": StringAttr("montgomery"),
-                }
-            ),
-        )
-        converted.result.name_hint = "transition_input_ntt"
+        if needs_ntt:
+            converted = ckks.ToNttOp(
+                source,
+                source.type.with_state(
+                    {
+                        **state,
+                        "polynomial_domain": StringAttr("ntt"),
+                        "residue_representation": StringAttr("montgomery"),
+                    }
+                ),
+            )
+            converted.result.name_hint = "transition_input_ntt"
+        else:
+            converted = ckks.FromNttOp(
+                source,
+                source.type.with_state(
+                    {
+                        **state,
+                        "polynomial_domain": StringAttr("coefficient"),
+                        "residue_representation": StringAttr("standard"),
+                    }
+                ),
+            )
+            converted.result.name_hint = "transition_input_coefficient"
         block.insert_op_before(converted, operation)
         operation.operands[0] = converted.result
         inserted += 1

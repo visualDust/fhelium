@@ -16,7 +16,7 @@ from fhelium.compile.passes import (
     LowerCkksToRnsNttPass,
     LowerSpecializedCollectivesPass,
 )
-from fhelium.config import CkksConfig
+from fhelium.config import CkksConfig, Preset
 from fhelium.ir import EXECUTION_IMPLEMENTATION_ATTRIBUTE, Program
 from fhelium.ir.dialects import ckks, distributed, rns
 
@@ -45,7 +45,7 @@ def test_ckks_lowering_enters_known_scf_region() -> None:
 
     result = LowerCkksToRnsNttPass().run(
         program,
-        {CkksConfig: CkksConfig(enforce_security_budget=False)},
+        {CkksConfig: CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)},
     )
 
     assert result.stats.matched == 1
@@ -135,7 +135,7 @@ def test_ckks_lowering_enters_collective_combine_region() -> None:
 
     result = LowerCkksToRnsNttPass().run(
         program,
-        {CkksConfig: CkksConfig(enforce_security_budget=False)},
+        {CkksConfig: CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)},
     )
 
     assert result.stats.transformed == 1

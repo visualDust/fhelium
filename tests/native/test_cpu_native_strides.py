@@ -34,13 +34,26 @@ def _transpose_layout(tensor: torch.Tensor) -> torch.Tensor:
 
 
 def _cpu_engine(*, p_count: int = 2) -> CkksEngine:
+    config = _small_config(p_count=p_count, max_depth=0)
+    return CkksEngine(config, device="cpu", allow_sk_gen=False)
+
+
+def _small_config(
+    *, p_count: int, max_depth: int, narrow: bool = False
+) -> CkksConfig:
+    source = CkksConfig.parse(
+        Preset.slots65536_scale25_depth14_int32
+        if narrow
+        else Preset.slots65536_scale30_depth95_int64
+    )
     config = CkksConfig(
+        default_scale=source.default_scale,
+        q_depth_groups=source.q_depth_groups[: max_depth + 2],
+        p_moduli=source.p_moduli[:p_count],
         logN=12,
-        num_scale_primes=1,
-        num_p_primes=p_count,
         enforce_security_budget=False,
     )
-    return CkksEngine(config, device="cpu", allow_sk_gen=False)
+    return config
 
 
 def test_cpu_rns_and_ckks_vector_and_parameter_strides() -> None:
@@ -57,14 +70,14 @@ def test_cpu_rns_and_ckks_vector_and_parameter_strides() -> None:
                 0,
                 modulus,
                 (2, 64),
-                dtype=engine.config.torch_dtype,
+                dtype=engine.rns_runtime.dtype,
                 generator=generator,
             )
             for modulus in moduli
         ],
         dim=1,
     )
-    row_scalars = torch.tensor([17, 19, 23], dtype=engine.config.torch_dtype)
+    row_scalars = torch.tensor([17, 19, 23], dtype=engine.rns_runtime.dtype)
 
     expected = rns_ops.montgomery_mul_row_scalars_standard(
         residues, row_scalars, parameters
@@ -132,7 +145,7 @@ def test_cpu_rns_and_ckks_vector_and_parameter_strides() -> None:
     )
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
-    inverse = torch.tensor([29, 31, 37], dtype=engine.config.torch_dtype)
+    inverse = torch.tensor([29, 31, 37], dtype=engine.rns_runtime.dtype)
     dropped = torch.remainder(residues[:, 0], moduli[0])
     expected = ckks_ops.rescale_drop_leading_prime_truncate(
         residues, inverse, dropped, parameters
@@ -158,16 +171,16 @@ def test_cpu_mixed_radix_auxiliary_strides() -> None:
                 0,
                 modulus,
                 (2, 32),
-                dtype=engine.config.torch_dtype,
+                dtype=engine.rns_runtime.dtype,
                 generator=generator,
             )
             for modulus in engine.config.moduli[:3]
         ],
         dim=1,
     )
-    normalizers = torch.tensor([41, 43], dtype=engine.config.torch_dtype)
+    normalizers = torch.tensor([41, 43], dtype=engine.rns_runtime.dtype)
     propagation = torch.tensor(
-        [[0, 47, 53], [0, 0, 59]], dtype=engine.config.torch_dtype
+        [[0, 47, 53], [0, 0, 59]], dtype=engine.rns_runtime.dtype
     )
     reduction_vectors = tuple(parameters[row] for row in (1, 2, 3, 4))
 
@@ -186,7 +199,7 @@ def test_cpu_mixed_radix_auxiliary_strides() -> None:
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
     extension_coefficients = torch.tensor(
-        [[61, 67, 71], [73, 79, 83]], dtype=engine.config.torch_dtype
+        [[61, 67, 71], [73, 79, 83]], dtype=engine.rns_runtime.dtype
     )
     expected_extended = rns_ops.mixed_radix_basis_extend_to_montgomery(
         expected,
@@ -215,7 +228,7 @@ def test_cpu_indexed_ntt_auxiliary_strides() -> None:
                 0,
                 modulus,
                 (engine.config.N,),
-                dtype=engine.config.torch_dtype,
+                dtype=engine.rns_runtime.dtype,
                 generator=generator,
             )
             for modulus in engine.config.moduli
@@ -253,7 +266,7 @@ def test_transpose_strides_preserve_cpu_cuda_native_semantics() -> None:
                 0,
                 modulus,
                 (engine.config.N,),
-                dtype=engine.config.torch_dtype,
+                dtype=engine.rns_runtime.dtype,
                 generator=generator,
             )
             for modulus in engine.config.moduli
@@ -298,7 +311,7 @@ def test_cpu_created_values_remain_valid_after_cuda_transfer() -> None:
         pytest.skip("CUDA is not available")
 
     cpu_engine = CkksEngine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         device="cpu",
         rng_seed=911,
         rng_nonce=4,
@@ -312,7 +325,7 @@ def test_cpu_created_values_remain_valid_after_cuda_transfer() -> None:
     cpu_plaintext = cpu_engine.decrypt(ciphertext, secret_key)
 
     cuda_engine = CkksEngine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         device="cuda:0",
         allow_sk_gen=False,
     )
@@ -408,7 +421,7 @@ def test_cpu_keyswitch_moddown_supports_more_than_eight_p_rows_and_strides() -> 
                 0,
                 modulus,
                 (7,),
-                dtype=engine.config.torch_dtype,
+                dtype=engine.rns_runtime.dtype,
                 generator=generator,
             )
             for modulus in q_moduli
@@ -420,13 +433,13 @@ def test_cpu_keyswitch_moddown_supports_more_than_eight_p_rows_and_strides() -> 
                 0,
                 modulus,
                 (7,),
-                dtype=engine.config.torch_dtype,
+                dtype=engine.rns_runtime.dtype,
                 generator=generator,
             )
             for modulus in p_moduli
         ]
     ).unsqueeze(0)
-    inverse = engine.moddown_p_drop_inverses_montgomery_by_level[0]
+    inverse = engine.moddown_p_drop_inverses_montgomery_by_depth[0]
     parameters = engine.rns_runtime.basis_parameters(
         0, include_p=True
     ).native_parameters
@@ -451,33 +464,11 @@ def test_cpu_keyswitch_moddown_supports_more_than_eight_p_rows_and_strides() -> 
 @pytest.mark.parametrize(
     "configuration",
     [
-        CkksConfig(
-            logN=12,
-            num_scale_primes=3,
-            num_p_primes=1,
-            enforce_security_budget=False,
-        ),
-        Preset.slots16384_scale30_levels21_int64,
-        CkksConfig(
-            buffer_bit_length=30,
-            scale_bits=25,
-            logN=12,
-            num_scale_primes=3,
-            num_p_primes=2,
-            enforce_security_budget=False,
-        ),
-        CkksConfig(
-            logN=12,
-            num_scale_primes=3,
-            num_p_primes=4,
-            enforce_security_budget=False,
-        ),
-        CkksConfig(
-            logN=12,
-            num_scale_primes=3,
-            num_p_primes=6,
-            enforce_security_budget=False,
-        ),
+        _small_config(p_count=1, max_depth=2),
+        Preset.slots16384_scale30_depth21_int64,
+        _small_config(p_count=2, max_depth=2, narrow=True),
+        _small_config(p_count=4, max_depth=2),
+        _small_config(p_count=6, max_depth=2),
     ],
     ids=[
         "custom-p1",
@@ -494,16 +485,16 @@ def test_cuda_multistep_moddown_matches_integer_reference(
         pytest.skip("CUDA is not available")
 
     engine = CkksEngine(configuration, device="cpu", allow_sk_gen=False)
-    key_switch_level_count = len(
-        engine.moddown_p_drop_inverses_montgomery_by_level
+    key_switch_depth_count = len(
+        engine.moddown_p_drop_inverses_montgomery_by_depth
     )
-    levels = sorted(
-        {0, key_switch_level_count // 2, key_switch_level_count - 1}
+    depths = sorted(
+        {0, key_switch_depth_count // 2, key_switch_depth_count - 1}
     )
     p_count = engine.config.num_p_primes
-    for level in levels:
-        generator = torch.Generator().manual_seed(20260819 + level)
-        basis = engine.rns_runtime.basis_parameters(level, include_p=True)
+    for depth in depths:
+        generator = torch.Generator().manual_seed(20260819 + depth)
+        basis = engine.rns_runtime.basis_parameters(depth, include_p=True)
         q_moduli = basis.moduli[:-p_count]
         p_moduli = basis.moduli[-p_count:]
         q_residues = torch.stack(
@@ -512,7 +503,7 @@ def test_cuda_multistep_moddown_matches_integer_reference(
                     0,
                     modulus,
                     (2, 11),
-                    dtype=engine.config.torch_dtype,
+                    dtype=engine.rns_runtime.dtype,
                     generator=generator,
                 )
                 for modulus in q_moduli
@@ -525,14 +516,14 @@ def test_cuda_multistep_moddown_matches_integer_reference(
                     0,
                     modulus,
                     (2, 11),
-                    dtype=engine.config.torch_dtype,
+                    dtype=engine.rns_runtime.dtype,
                     generator=generator,
                 )
                 for modulus in p_moduli
             ],
             dim=1,
         )
-        inverse = engine.moddown_p_drop_inverses_montgomery_by_level[level]
+        inverse = engine.moddown_p_drop_inverses_montgomery_by_depth[depth]
         parameters = basis.native_parameters
         expected = _moddown_reference(
             q_residues,
@@ -570,3 +561,74 @@ def test_cuda_multistep_moddown_matches_integer_reference(
         torch.testing.assert_close(
             parameters_cuda, parameter_snapshot, rtol=0, atol=0
         )
+
+
+@pytest.mark.gpu
+def test_cuda_moddown_accepts_unequal_dropped_prime_widths() -> None:
+    """Match CPU when a reverse mixed-radix digit exceeds a later prime."""
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    q_moduli = (11272193, 2752513)
+    p_moduli = (10223617, 82444289)
+    moduli = (*q_moduli, *p_moduli)
+    radix = 1 << 32
+    half_word_mask = (1 << 16) - 1
+    parameters = torch.tensor(
+        [
+            [2 * modulus for modulus in moduli],
+            [modulus & half_word_mask for modulus in moduli],
+            [modulus >> 16 for modulus in moduli],
+            [
+                (-pow(modulus, -1, radix) % radix) & half_word_mask
+                for modulus in moduli
+            ],
+            [(-pow(modulus, -1, radix) % radix) >> 16 for modulus in moduli],
+            [pow(radix, 2, modulus) for modulus in moduli],
+            [pow(radix, 2, modulus) for modulus in moduli],
+            [pow(4096, -1, modulus) * radix % modulus for modulus in moduli],
+        ],
+        dtype=torch.int32,
+    )
+    inverse = torch.empty((2, 3), dtype=torch.int32)
+    for drop_step, dropped in enumerate(reversed(p_moduli)):
+        values = [
+            pow(dropped, -1, modulus) * radix % modulus
+            for modulus in moduli[: -drop_step - 1]
+        ]
+        inverse[drop_step, : len(values)] = torch.tensor(
+            values, dtype=torch.int32
+        )
+    generator = torch.Generator().manual_seed(20260906)
+    q_residues = torch.stack(
+        [
+            torch.randint(
+                0, modulus, (2, 37), dtype=torch.int32, generator=generator
+            )
+            for modulus in q_moduli
+        ],
+        dim=1,
+    )
+    p_residues = torch.stack(
+        [
+            torch.randint(
+                0, modulus, (2, 37), dtype=torch.int32, generator=generator
+            )
+            for modulus in p_moduli
+        ],
+        dim=1,
+    )
+    expected = _moddown_reference(
+        q_residues,
+        p_residues,
+        inverse,
+        moduli,
+        montgomery_radix=radix,
+    )
+    actual = ckks_ops.keyswitch_moddown_qp_to_q(
+        q_residues.cuda(),
+        p_residues.cuda(),
+        inverse.cuda(),
+        parameters.cuda(),
+    ).cpu()
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)

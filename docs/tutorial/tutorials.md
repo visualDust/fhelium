@@ -10,7 +10,7 @@ import torch
 import fhelium as fh
 from fhelium.eager import Engine
 
-engine = Engine(fh.Preset.slots8192_scale40_levels7_int64)
+engine = Engine(fh.Preset.slots8192_scale40_depth7_int64)
 
 x = torch.linspace(-0.05, 0.05, 32, dtype=torch.float64)
 y = torch.linspace(0.02, -0.02, 32, dtype=torch.float64)
@@ -18,7 +18,7 @@ y = torch.linspace(0.02, -0.02, 32, dtype=torch.float64)
 ct_x = engine.encrypt_message(x)
 ct_y = engine.encrypt_message(y)
 
-# Addition preserves level and scale.
+# Addition preserves depth and scale.
 ct_sum = engine.add(ct_x, ct_y)
 
 # Multiplication exposes representation conversion, relinearization, and a
@@ -26,7 +26,7 @@ ct_sum = engine.add(ct_x, ct_y)
 x_ntt = engine.coefficient_domain_to_ntt_domain(ct_x)
 y_ntt = engine.coefficient_domain_to_ntt_domain(ct_y)
 triplet = engine.multiply(x_ntt, y_ntt)
-ct_product = engine.rescale_to_next_level(engine.relinearize(triplet))
+ct_product = engine.rescale_to_next_depth(engine.relinearize(triplet))
 
 sum_clear = engine.decrypt_message(ct_sum, is_real=True)[: x.numel()]
 product_clear = engine.decrypt_message(ct_product, is_real=True)[: x.numel()]
@@ -43,11 +43,11 @@ The separate operations are intentional:
 3. `multiply` accepts two two-component NTT ciphertexts and returns a
    three-component NTT ciphertext;
 4. `relinearize` returns the ordinary two-component form, and
-   `rescale_to_next_level` then consumes one Q prime and records the product scale
-   divided by that prime.
+   `rescale_to_next_depth` then consumes one complete Q depth group and records
+   the product scale divided by that group's prime product.
 
-See [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md)
-for the level/scale laws,
+See [Scale and depth lifecycle](../concepts/ckks/scale-and-depth-lifecycle.md)
+for the depth/scale laws,
 [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)
 for the broader state machine, and
 [`fhelium.eager.Engine`](../api/fhelium/eager.md) for the generated
@@ -71,8 +71,8 @@ mandatory reading order.
 | --- | --- | --- |
 | [01](https://github.com/VisualDust/fhelium/blob/main/examples/01_basic_ckks_flow.py) | [Basic CKKS workflow](basic-ckks-workflow.md) | How do encryption, three-component multiplication state, rotation, and decryption fit together? |
 | [02](https://github.com/VisualDust/fhelium/blob/main/examples/02_key_materials.py) | [Key material lifecycle](key-materials.md) | What state does each key store, and which cryptographic relations remain application-owned? |
-| [04](https://github.com/VisualDust/fhelium/blob/main/examples/04_modulus_chain_depth.py) | [Modulus-chain depth](modulus-chain-depth.md) | How do the level-transition budget, configured chain depth, security budget, and ciphertext size relate? |
-| [05](https://github.com/VisualDust/fhelium/blob/main/examples/05_explicit_scale_management.py) | [Explicit scale management](explicit-scale-management.md) | How does a program track the actual dropped prime and keep level alignment separate from scale policy? |
+| [04](https://github.com/VisualDust/fhelium/blob/main/examples/04_modulus_chain_depth.py) | [Modulus-chain depth](modulus-chain-depth.md) | How do the depth-transition budget, configured chain depth, security budget, and ciphertext size relate? |
+| [05](https://github.com/VisualDust/fhelium/blob/main/examples/05_explicit_scale_management.py) | [Explicit scale management](explicit-scale-management.md) | How does a program track the actual dropped-group product and keep depth alignment separate from scale policy? |
 | [06](https://github.com/VisualDust/fhelium/blob/main/examples/06_explicit_state_late_relinearization_ntt.py) | [Late relinearization and NTT reuse](late-relinearization-and-ntt-reuse.md) | When can products remain three-component and operands remain in NTT form? |
 
 ## Performance

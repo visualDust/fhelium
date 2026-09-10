@@ -1,13 +1,16 @@
 from functools import cached_property
 
+import torch
+
 from fhelium.config import CkksConfig
+from .format import RnsExecutionFormat
 
 
 class MontgomeryParameters:
     r"""Host-side constants for per-prime Montgomery arithmetic.
 
     Let $R=2^w$, where $w=\mathtt{buffer\_bit\_length}$. For every odd modulus $q_i$
-    in level-zero ``[Q | P]`` order, standard residue $x_i$ is stored
+    in depth-zero ``[Q | P]`` order, standard residue $x_i$ is stored
     in Montgomery representation as $x_iR\bmod q_i$. The native reduction
 
     $$
@@ -21,23 +24,26 @@ class MontgomeryParameters:
     integers only; ``RnsContext`` materializes integral row tables.
     """
 
-    def __init__(self, ckks_config: CkksConfig):
-        buffer_bit_length = ckks_config.buffer_bit_length
+    def __init__(
+        self,
+        ckks_config: CkksConfig,
+        execution_format: RnsExecutionFormat,
+    ):
+        radix_bits = execution_format.radix_bits
         moduli = ckks_config.moduli
         # Montgomery reduction with R=2^w requires every modulus to be odd.
         if any((qi % 2 == 0) for qi in moduli):
             raise ValueError(
                 "All qi in q must be odd for Montgomery with R=2^w."
             )
-        radix = 1 << buffer_bit_length
-        if any(4 * qi >= radix for qi in moduli):
+        radix = 1 << radix_bits
+        maximum_modulus = 1 << (30 if execution_format.dtype == torch.int32 else 60)
+        if any(qi >= maximum_modulus for qi in moduli):
             raise ValueError(
-                "Every modulus must satisfy 4 * modulus < "
-                "2**buffer_bit_length for signed-word lazy Montgomery "
-                "arithmetic"
+                "Every modulus must fit the configured Montgomery and lazy-residue representation"
             )
 
-        self._buffer_bit_length = buffer_bit_length
+        self._radix_bits = radix_bits
         self._moduli = list(moduli)
 
     @property
@@ -51,29 +57,29 @@ class MontgomeryParameters:
         return [qi << 1 for qi in self.moduli]
 
     @property
-    def buffer_bit_length(self) -> int:
+    def radix_bits(self) -> int:
         """Bit-length of the buffer type (30 or 62)."""
-        return self._buffer_bit_length
+        return self._radix_bits
 
     @cached_property
-    def half_buffer_bit_length(self) -> int:
+    def half_radix_bits(self) -> int:
         r"""Return $w/2$ for the native split-word implementation."""
-        return self._buffer_bit_length // 2
+        return self._radix_bits // 2
 
     @cached_property
     def lower_bits_mask(self) -> int:
         r"""Return the lower-half mask $2^{w/2}-1$."""
-        return (1 << self.half_buffer_bit_length) - 1
+        return (1 << self.half_radix_bits) - 1
 
     @cached_property
     def full_bits_mask(self) -> int:
         r"""Return the radix mask $R-1=2^w-1$."""
-        return (1 << self._buffer_bit_length) - 1
+        return (1 << self._radix_bits) - 1
 
     @cached_property
     def R(self) -> int:
         r"""Return Montgomery radix $R=2^w$."""
-        return 1 << self._buffer_bit_length
+        return 1 << self._radix_bits
 
     @cached_property
     def montgomery_r2(self) -> list[int]:
@@ -100,7 +106,7 @@ class MontgomeryParameters:
     def neg_inv_modulus_higher_bits(self) -> list[int]:
         r"""Return the higher $w/2$ bits of $-q_i^{-1}\bmod R$."""
         return [
-            ki >> self.half_buffer_bit_length for ki in self.neg_inv_modulus
+            ki >> self.half_radix_bits for ki in self.neg_inv_modulus
         ]
 
     @cached_property
@@ -111,7 +117,7 @@ class MontgomeryParameters:
     @cached_property
     def modulus_higher_bits(self) -> list[int]:
         r"""Return the higher $w/2$ bits of each $q_i$."""
-        return [qi >> self.half_buffer_bit_length for qi in self.moduli]
+        return [qi >> self.half_radix_bits for qi in self.moduli]
 
     # -------------------------------------------------------------------------
     # Printing / representation
@@ -119,7 +125,7 @@ class MontgomeryParameters:
     def __repr__(self) -> str:
         return (
             f"MontgomeryParameters("
-            f"buffer_bit_length={self._buffer_bit_length}, "
+            f"radix_bits={self._radix_bits}, "
             f"modulus_count={len(self.moduli)})"
         )
 
@@ -128,9 +134,9 @@ class MontgomeryParameters:
         suffix = "..." if len(self.moduli) > 8 else ""
         return (
             f"MontgomeryParameters("
-            f"buffer_bit_length={self._buffer_bit_length}, "
-            f"R=2^{self._buffer_bit_length}, "
-            f"half_buffer_bit_length={self.half_buffer_bit_length}, "
+            f"radix_bits={self._radix_bits}, "
+            f"R=2^{self._radix_bits}, "
+            f"half_radix_bits={self.half_radix_bits}, "
             f"modulus_count={len(self.moduli)}, "
             f"modulus_bit_lengths={q_bits_preview}{suffix}"
             f")"

@@ -6,6 +6,17 @@ torch::Tensor rns_montgomery_mul_cuda(const torch::Tensor lhs,
                                       const torch::Tensor rhs,
                                       const torch::Tensor rns_params);
 
+torch::Tensor rns_montgomery_weighted_sum_cuda(
+    at::TensorList ciphertexts,
+    at::TensorList plaintexts,
+    const torch::Tensor rns_params);
+
+torch::Tensor rns_montgomery_weighted_sums_cuda(
+    at::TensorList ciphertexts,
+    at::TensorList plaintexts,
+    int64_t group_count,
+    const torch::Tensor rns_params);
+
 torch::Tensor rns_montgomery_mul_cyclic_compressed_cuda(
     const torch::Tensor lhs,
     const torch::Tensor compressed_rhs,

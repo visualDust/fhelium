@@ -42,11 +42,11 @@ def benchmark_group(ctx, benchmark_file: str | None) -> None:
 
     from pathlib import Path
 
-    if ctx.invoked_subcommand == "v1":
+    if ctx.invoked_subcommand == "run":
         if benchmark_file is not None:
             raise click.UsageError(
                 "--file applies only to independent benchmark workloads, not "
-                "the fixed Benchmark v1 specification"
+                "the complete benchmark suite"
             )
         ctx.ensure_object(dict)
         return
@@ -85,7 +85,7 @@ def benchmark_list(ctx) -> None:
     console.print(table)
 
 
-@benchmark_group.command(name="run")
+@benchmark_group.command(name="workload")
 @click.argument("benchmark_name")
 @click.option("--profile", "profile_name", help="Named benchmark profile.")
 @click.option(
@@ -141,85 +141,39 @@ def benchmark_run(
         console.print(f"[green]Saved {path.resolve()}[/green]")
 
 
-@benchmark_group.group(name="v1")
-def benchmark_v1_group() -> None:
-    """Run the immutable FHElium Benchmark v1 specification."""
-
-
-@benchmark_v1_group.command(name="run")
+@benchmark_group.command(name="run")
 @click.option(
     "--device",
     default="cpu",
     show_default=True,
-    help="Execute every fixed v1 case on cpu or an indexed cuda:N device.",
+    help="Run the full suite on cpu or cuda:N.",
 )
 @click.option(
-    "--output",
-    type=click.Path(dir_okay=False, path_type=str),
-    help="Write the checkpointed Benchmark v1 report to this JSON file.",
+    "--threads",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Set PyTorch host threads only when supplied; otherwise preserve the environment setting.",
 )
-def benchmark_v1_run(device: str, output: str | None) -> None:
-    """Run every fixed Benchmark v1 case on one selected local device."""
-
-    import sys
-    from datetime import UTC, datetime
+@click.option(
+    "--output", required=True, type=click.Path(dir_okay=False, path_type=str)
+)
+def benchmark_suite_run(device: str, threads: int | None, output: str) -> None:
+    """Execute every configuration, workload and planned state in the suite."""
     from pathlib import Path
+    import torch
+    from fhelium.benchmarks.suite import run_suite
 
-    from fhelium.benchmarks.v1 import BenchmarkExecution, BenchmarkRunner
-    from fhelium.benchmarks.v1.model import ExecutionBackend
-
-    try:
-        execution = BenchmarkExecution(
-            backend=(
-                ExecutionBackend.CPU
-                if device == "cpu"
-                else ExecutionBackend.CUDA
-            ),
-            device=device,
-        )
-    except (TypeError, ValueError) as error:
-        raise click.UsageError(str(error)) from error
-
-    if output is None:
-        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        output_path = Path(f"fhelium-benchmark-v1-{timestamp}.json")
-    else:
-        output_path = Path(output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    def progress(case_id: str, message: str) -> None:
-        console.print(f"[dim][{case_id}] {message}[/dim]")
-
-    try:
-        report = BenchmarkRunner().run(
-            execution=execution,
-            output_path=output_path,
-            invocation=tuple(sys.argv),
-            progress=progress,
-        )
-    except Exception as error:
+    if threads is not None:
+        torch.set_num_threads(threads)
+    report = run_suite(
+        device,
+        Path(output),
+        progress=lambda line: console.print(line, markup=False),
+    )
+    console.print(f"Saved {output}: {report['counts']}")
+    if report["status"] != "completed":
         raise click.ClickException(
-            f"{type(error).__name__}: {error}"
-        ) from error
-
-    summary = Table(title=f"FHElium Benchmark v1 — {report.status.value}")
-    summary.add_column("case")
-    summary.add_column("category")
-    summary.add_column("status")
-    summary.add_column("detail")
-    for case in report.cases:
-        detail = ""
-        if case.unavailable is not None:
-            detail = case.unavailable.reason
-        elif case.failure is not None:
-            detail = case.failure.message
-        summary.add_row(case.title, case.category, case.status.value, detail)
-    console.print(summary)
-    console.print(f"[green]Saved {output_path.resolve()}[/green]")
-    if report.suggested_exit_code:
-        raise click.ClickException(
-            "The report was written, but one or more Benchmark v1 cases "
-            "failed or were interrupted."
+            f"Suite {report['status']}; checkpoint retained at {output}"
         )
 
 
@@ -240,7 +194,7 @@ def benchmark_recommend_group() -> None:
     "--preset",
     "preset_name",
     type=click.Choice(tuple(preset.value for preset in Preset)),
-    default=Preset.slots32768_scale40_levels34_int64.value,
+    default=Preset.slots32768_scale40_depth34_int64.value,
     show_default=True,
 )
 @click.option("--device", default="cuda:0", show_default=True)

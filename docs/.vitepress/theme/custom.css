@@ -358,6 +358,21 @@ body {
   }
 }
 
+/* Keep tablet navigation within the available width without hiding links. */
+@media (min-width: 768px) and (max-width: 959px) {
+  .Layout .VPNav .VPNavBarMenuLink { padding: 0 8px; font-size: 12px; }
+  .Layout .VPNav .VPNavBarSearch { padding-left: 8px; }
+  .Layout .VPNav .DocSearch-Button {
+    width: 36px;
+    padding: 0;
+    justify-content: center;
+    background: transparent;
+  }
+  .Layout .VPNav .DocSearch-Button-Placeholder,
+  .Layout .VPNav .DocSearch-Button-Keys { display: none; }
+  .Layout .VPNav .DocSearch-Search-Icon { margin-right: 0; }
+}
+
 /* Benchmark browse, result, and compare routes use VitePress's `page` layout
  * as an application shell: global navigation remains, while the portal owns
  * the complete viewport below it instead of inheriting the prose column. */
@@ -375,37 +390,6 @@ body {
 
 .benchmark-portal-page .VPPage .vp-doc > * {
   margin-block: 0;
-}
-
-/* Benchmark methodology remains inside the same product shell as Results and
- * Compare. Its prose uses a bounded reading measure without reintroducing the
- * VitePress documentation sidebar or constraining the shared product header. */
-.benchmark-methodology-page .VPPage,
-.benchmark-methodology-page .VPPage > .container,
-.benchmark-methodology-page .VPPage .content,
-.benchmark-methodology-page .VPPage .content-container,
-.benchmark-methodology-page .VPPage .main,
-.benchmark-methodology-page .VPPage .vp-doc {
-  width: 100%;
-  max-width: none;
-  margin: 0;
-  padding: 0;
-}
-
-.benchmark-methodology-page .VPPage .vp-doc {
-  padding: 32px 0 80px;
-}
-
-.benchmark-methodology-page .VPPage .vp-doc > :not(.portal-shared-head) {
-  width: min(960px, calc(100% - 48px));
-  margin-right: auto;
-  margin-left: auto;
-}
-
-@media (max-width: 640px) {
-  .benchmark-methodology-page .VPPage .vp-doc > :not(.portal-shared-head) {
-    width: calc(100% - 32px);
-  }
 }
 
 .custom-block {

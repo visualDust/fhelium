@@ -24,7 +24,7 @@ relations, ownership, and restoration.
 
 ```bash
 python examples/02_key_materials.py \
-  --preset slots8192-scale40-levels7-int64 \
+  --preset slots8192-scale40-depth7-int64 \
   --rotations=-4,-1,1,2,4
 ```
 
@@ -32,7 +32,7 @@ To retain selected artifacts in a local store:
 
 ```bash
 python examples/02_key_materials.py \
-  --preset slots8192-scale40-levels7-int64 \
+  --preset slots8192-scale40-depth7-int64 \
   --rotations=1,2,4 \
   --store /tmp/fhelium-key-demo
 ```

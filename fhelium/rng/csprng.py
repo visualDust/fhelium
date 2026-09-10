@@ -233,5 +233,8 @@ class Csprng:
             )
         ]
 
-    def randround(self, coef: torch.Tensor) -> torch.Tensor:
-        return self._round_stream.stochastic_round(coef).to(self.torch_dtype)
+    def randround(
+        self, coef: torch.Tensor, *, dtype: torch.dtype | None = None
+    ) -> torch.Tensor:
+        target_dtype = self.torch_dtype if dtype is None else dtype
+        return self._round_stream.stochastic_round(coef).to(target_dtype)

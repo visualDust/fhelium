@@ -33,7 +33,7 @@ def _ciphertext() -> Ciphertext:
             3,
             8,
         ),
-        level=2,
+        depth=2,
         scale=2.0**40,
         prime_ids=(2, 3, 4),
         polynomial_domain="coefficient",
@@ -47,7 +47,7 @@ def _sparse_plaintext() -> CompressedPlaintext:
         data=torch.arange(2 * 3 * 2, dtype=torch.int64).reshape(2, 3, 2),
         ring_dimension=8,
         compression_layout="strided_sparse",
-        level=2,
+        depth=2,
         scale=2.0**40,
         polynomial_domain="coefficient",
         modulus_basis="Q",
@@ -102,7 +102,7 @@ def test_transfer_protocol_reuses_exact_value_schema() -> None:
     assert "context_id" not in descriptor
     assert descriptor["metadata"] == envelope.metadata
     assert descriptor["tensors"].keys() == envelope.tensors.keys()
-    assert "level" not in descriptor
+    assert "depth" not in descriptor
 
     invalid = dict(descriptor)
     invalid["metadata"] = {

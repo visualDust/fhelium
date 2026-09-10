@@ -2,14 +2,14 @@
 """Generate the versioned CKKS prime resources shipped with FHElium.
 
 This offline development/release tool enumerates the scale widths represented
-by the versioned catalog, message-prime widths, and power-of-two ring
+by the versioned catalog, special-prime widths, and power-of-two ring
 dimensions. It searches the
 required residue class ``q = 1 mod 2N``, applies deterministic 64-bit
 Miller--Rabin primality testing, preserves the historical alternating
-scale-prime ordering, and validates every completed sequence.
+scaling-prime ordering, and validates every completed sequence.
 
-The output is ``scale_primes_v1.safetensors`` for public Q scale rows and
-``message_primes_v1.safetensors`` for the structural Q base and key-switch P
+The output is ``scaling_primes_v1.safetensors`` for public Q scale rows and
+``special_primes_v1.safetensors`` for the structural Q base and key-switch P
 rows. Resource keys have the schema ``sb=<bits>;N=<ring_dimension>``. Writes
 use deterministic safetensors headers and atomic replacement so equal logical
 catalogs have equal file hashes and readers never observe a partial resource.
@@ -34,9 +34,9 @@ import torch
 from safetensors.torch import save_file
 
 _MILLER_RABIN_BASES_64 = (2, 325, 9375, 28178, 450775, 9780504, 1795265022)
-_SCALE_BITS = tuple(range(20, 55, 5))
+_SCALING_BITS = tuple(range(20, 55, 5))
 _LOG_DEGREES = tuple(range(12, 18))
-_MESSAGE_BITS = (28, 60)
+_SPECIAL_BITS = (28, 60)
 _CATALOG_VERSION = "1"
 
 PrimeKey = tuple[int, int]
@@ -112,13 +112,13 @@ def find_next_prime(start: int, degree: int, *, upward: bool) -> int:
 
 def generate_alternating_prime_sequence(
     *,
-    scale_bits: int,
+    scaling_bits: int,
     degree: int,
     count: int,
 ) -> list[int]:
-    """Generate the historical balanced scale-prime sequence deterministically."""
+    """Generate the historical balanced scaling-prime sequence deterministically."""
 
-    scale = 1 << scale_bits
+    scale = 1 << scaling_bits
     upward_start = scale + 1
     downward_start = scale - 1
 
@@ -154,8 +154,8 @@ def generate_alternating_prime_sequence(
     return output
 
 
-def generate_scale_sequence(
-    scale_bits: int,
+def generate_scaling_sequence(
+    scaling_bits: int,
     degree: int,
     requested_count: int,
 ) -> list[int] | None:
@@ -169,7 +169,7 @@ def generate_scale_sequence(
     while attempt >= 2:
         try:
             return generate_alternating_prime_sequence(
-                scale_bits=scale_bits,
+                scaling_bits=scaling_bits,
                 degree=degree,
                 count=attempt,
             )
@@ -178,22 +178,22 @@ def generate_scale_sequence(
     return None
 
 
-def generate_scale_catalog() -> PrimeTable:
+def generate_scaling_catalog() -> PrimeTable:
     """Generate every supported scale-width and ring-dimension sequence."""
 
     inputs: list[tuple[int, int, int]] = []
     for log_degree in _LOG_DEGREES:
         degree = 1 << log_degree
         count = 64 if log_degree < 16 else 128
-        inputs.extend((bits, degree, count) for bits in _SCALE_BITS)
+        inputs.extend((bits, degree, count) for bits in _SCALING_BITS)
 
     catalog: PrimeTable = {}
-    for completed, (scale_bits, degree, count) in enumerate(inputs, start=1):
-        primes = generate_scale_sequence(scale_bits, degree, count)
+    for completed, (scaling_bits, degree, count) in enumerate(inputs, start=1):
+        primes = generate_scaling_sequence(scaling_bits, degree, count)
         if primes:
-            catalog[scale_bits, degree] = primes
+            catalog[scaling_bits, degree] = primes
         if completed % 5 == 0 or completed == len(inputs):
-            print(f"Generated scale-prime candidates {completed}/{len(inputs)}")
+            print(f"Generated scaling-prime candidates {completed}/{len(inputs)}")
 
     failures = sorted(
         (bits, degree)
@@ -201,21 +201,21 @@ def generate_scale_catalog() -> PrimeTable:
         if (bits, degree) not in catalog
     )
     print(
-        f"Generated {len(catalog)}/{len(inputs)} scale-prime sequences; "
+        f"Generated {len(catalog)}/{len(inputs)} scaling-prime sequences; "
         f"unsupported={failures}"
     )
     return catalog
 
 
-def generate_message_catalog(*, count: int = 11) -> PrimeTable:
-    """Generate descending structural-Q/P prime sequences for every ring."""
+def generate_special_catalog(*, count: int = 11) -> PrimeTable:
+    """Generate descending special-prime sequences for every ring."""
 
     catalog: PrimeTable = {}
-    for message_bits in _MESSAGE_BITS:
+    for special_bits in _SPECIAL_BITS:
         for log_degree in _LOG_DEGREES:
             degree = 1 << log_degree
             candidate = align_ntt_candidate(
-                (1 << message_bits) - 1,
+                (1 << special_bits) - 1,
                 degree,
                 upward=False,
             )
@@ -224,8 +224,8 @@ def generate_message_catalog(*, count: int = 11) -> PrimeTable:
                 if is_prime_64(candidate):
                     primes.append(candidate)
                 candidate -= 2 * degree
-            catalog[message_bits, degree] = primes
-        print(f"Generated message-prime candidates for {message_bits} bits")
+            catalog[special_bits, degree] = primes
+        print(f"Generated special-prime candidates for {special_bits} bits")
     return catalog
 
 
@@ -333,9 +333,9 @@ def main() -> None:
     """Generate, validate, and atomically install both version-1 catalogs."""
 
     args = parse_args()
-    scale_path = args.output_dir / "scale_primes_v1.safetensors"
-    message_path = args.output_dir / "message_primes_v1.safetensors"
-    existing = [path for path in (scale_path, message_path) if path.exists()]
+    scaling_path = args.output_dir / "scaling_primes_v1.safetensors"
+    special_path = args.output_dir / "special_primes_v1.safetensors"
+    existing = [path for path in (scaling_path, special_path) if path.exists()]
     if existing and not args.force:
         formatted = ", ".join(str(path) for path in existing)
         raise FileExistsError(
@@ -343,23 +343,23 @@ def main() -> None:
             "Pass --force after reviewing the generator change."
         )
 
-    scale_catalog = generate_scale_catalog()
-    message_catalog = generate_message_catalog()
-    validate_catalog(scale_catalog)
-    validate_catalog(message_catalog)
+    scaling_catalog = generate_scaling_catalog()
+    special_catalog = generate_special_catalog()
+    validate_catalog(scaling_catalog)
+    validate_catalog(special_catalog)
 
     atomic_save(
-        scale_path,
-        scale_catalog,
-        format_name="ckks-scale-primes",
+        scaling_path,
+        scaling_catalog,
+        format_name="ckks-scaling-primes",
     )
     atomic_save(
-        message_path,
-        message_catalog,
-        format_name="ckks-message-primes",
+        special_path,
+        special_catalog,
+        format_name="ckks-special-primes",
     )
 
-    for path in (scale_path, message_path):
+    for path in (scaling_path, special_path):
         print(f"Wrote {path} sha256={file_digest(path)}")
 
 

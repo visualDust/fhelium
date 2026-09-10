@@ -174,7 +174,7 @@ def _eager_expression(
     if isinstance(operation, ckks.EncodeOp):
         return (
             "engine.encode("
-            f"{operands[0]}, level={integer(operation.level, label='encode level')}, "
+            f"{operands[0]}, depth={integer(operation.depth, label='encode depth')}, "
             f"scale={floating(operation.scale, label='encode scale')!r})",
             resources,
         )
@@ -191,7 +191,8 @@ def _eager_expression(
     if isinstance(operation, ckks.EncryptOp):
         symbol = string(operation.key_symbol, label="public-key symbol")
         return (
-            f"engine.encrypt({operands[0]}, resources[{symbol!r}])",
+            f"engine.encrypt({operands[0]}, resources[{symbol!r}], "
+            f"output_domain={operation.output_domain.data!r})",
             (symbol,),
         )
     if isinstance(operation, ckks.DecryptOp):
@@ -210,14 +211,33 @@ def _eager_expression(
         return f"engine.multiply({operands[0]}, {operands[1]})", resources
     if isinstance(operation, ckks.RotateOp):
         return (
-            f"engine.rotate_with_key({operands[0]}, {operands[1]})",
+            f"engine.rotate_with_key({operands[0]}, {operands[1]}, output_domain={operation.output_domain.data!r})",
             resources,
         )
     if isinstance(operation, ckks.RotateManyOp):
         keys = ", ".join(operands[1:])
         return (
             f"engine.rotate_many_with_keys({operands[0]}, ({keys},), "
-            "use_hoisting=True)",
+            f"use_hoisting=True, output_domain={operation.output_domain.data!r})",
+            resources,
+        )
+    if isinstance(operation, ckks.GroupedRotationWeightedSumOp):
+        steps = tuple(int(step.value.data) for step in operation.baby_steps)
+        key_operands = iter(operands[1 : 1 + len(operation.keys)])
+        entries = [
+            "None" if step == 0 else next(key_operands) for step in steps
+        ]
+        plaintext_operands = operands[1 + len(operation.keys) :]
+        term_count = int(operation.term_count.value.data)
+        groups = [
+            "("
+            + ", ".join(plaintext_operands[first : first + term_count])
+            + ",)"
+            for first in range(0, len(plaintext_operands), term_count)
+        ]
+        return (
+            f"engine.sum_rotated_plaintext_product_groups({operands[0]}, "
+            f"({', '.join(entries)},), ({', '.join(groups)},))",
             resources,
         )
     if isinstance(operation, ckks.ToNttOp):
@@ -278,19 +298,22 @@ def _eager_expression(
     if isinstance(operation, ckks.RelinearizeOp):
         symbol = "relinearization-key"
         return (
-            f"engine.relinearize({operands[0]}, resources[{symbol!r}])",
+            f"engine.relinearize({operands[0]}, resources[{symbol!r}], "
+            f"output_domain={operation.output_domain.data!r})",
             (symbol,),
         )
     if isinstance(operation, ckks.SwitchKeyOp):
         symbol = string(operation.key_symbol, label="switch-key symbol")
         return (
-            f"engine.switch_key({operands[0]}, resources[{symbol!r}])",
+            f"engine.switch_key({operands[0]}, resources[{symbol!r}], "
+            f"output_domain={operation.output_domain.data!r})",
             (symbol,),
         )
     if isinstance(operation, ckks.ConjugateOp):
         symbol = "conjugation-key"
         return (
-            f"engine.conjugate({operands[0]}, resources[{symbol!r}])",
+            f"engine.conjugate({operands[0]}, resources[{symbol!r}], "
+            f"output_domain={operation.output_domain.data!r})",
             (symbol,),
         )
     if isinstance(operation, ckks.RescaleOp):
@@ -300,14 +323,14 @@ def _eager_expression(
             else string(operation.rounding, label="rescale rounding")
         )
         return (
-            f"engine.rescale_to_next_level({operands[0]}, rounding={rounding!r})",
+            f"engine.rescale_to_next_depth({operands[0]}, rounding={rounding!r})",
             resources,
         )
     if isinstance(operation, ckks.ModSwitchOp):
         target = integer(
-            operation.target_level, label="mod-switch target level"
+            operation.target_depth, label="mod-switch target depth"
         )
-        return f"engine.mod_switch_to_level({operands[0]}, {target})", resources
+        return f"engine.mod_switch_to_depth({operands[0]}, {target})", resources
     if isinstance(operation, ckks.ReinterpretScaleOp):
         scale = floating(operation.scale, label="reinterpret scale")
         return (

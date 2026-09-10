@@ -37,7 +37,7 @@ class CkksEncryptor:
         montgomery_parameters: MontgomeryParameters,
         plaintext_codec: CkksPlaintextCodec,
         engine_id: str,
-        validate_public_level: Callable[[object], int],
+        validate_public_depth: Callable[[object], int],
         ciphertext_from_components: Callable[..., Ciphertext],
     ) -> None:
         self.config = config
@@ -48,7 +48,7 @@ class CkksEncryptor:
         self.montgomery_parameters = montgomery_parameters
         self.plaintext_codec = plaintext_codec
         self.engine_id = engine_id
-        self._validate_public_level = validate_public_level
+        self._validate_public_depth = validate_public_depth
         self._ciphertext_from_components = ciphertext_from_components
 
     def __str__(self) -> str:
@@ -78,7 +78,7 @@ class CkksEncryptor:
         extent $N$. The new output has
         ``[component=2, *batch, limb, coefficient]`` layout, coefficient
         domain, standard residues in $[0,q_i)$, Q or QP basis selected by the
-        public key, active ``prime_ids``, unchanged level, and
+        public key, active ``prime_ids``, unchanged depth, and
         $\Delta(c)=\Delta(p)$. Inputs are not mutated and output storage is
         independent.
         """
@@ -88,28 +88,28 @@ class CkksEncryptor:
                 f"encrypt expects Plaintext, got {type(plaintext).__name__}"
             )
         plaintext = self.plaintext_codec._ensure_integer_plaintext(plaintext)
-        self._validate_public_level(plaintext.level)
+        self._validate_public_depth(plaintext.depth)
         if plaintext.data is None:
             raise RuntimeError(
                 "Coefficient Plaintext data was not materialized"
             )
         include_p = public_key.modulus_basis == "QP"
         max_abs = int(torch.max(torch.abs(plaintext.data)).item())
-        self._check_direct_decode_range(max_abs, plaintext.level)
+        self._check_direct_decode_range(max_abs, plaintext.depth)
         plaintext_rns = self.rns_runtime.lift_integer_coefficients_exact(
             plaintext.data,
-            plaintext.level,
+            plaintext.depth,
             include_p=include_p,
             max_abs=max_abs,
         )
         return self._encrypt_rns_plaintext(
             plaintext_rns,
             public_key=public_key,
-            level=plaintext.level,
+            depth=plaintext.depth,
             scale=plaintext.scale,
         )
 
-    def _check_direct_decode_range(self, max_abs: int, level: int) -> None:
+    def _check_direct_decode_range(self, max_abs: int, depth: int) -> None:
         r"""Require coefficients inside the bounded direct-decode interval.
 
         If $D_\ell$ is the product of the trailing one or two active Q primes,
@@ -119,7 +119,7 @@ class CkksEncryptor:
         key-switch noise. No tensor or engine state is mutated.
         """
 
-        q_prime_ids = self.rns_layout.prime_ids(level)
+        q_prime_ids = self.rns_layout.prime_ids(depth)
         decode_prime_ids = q_prime_ids[-2:]
         decode_product = math.prod(
             int(self.montgomery_parameters.moduli[index])
@@ -131,8 +131,8 @@ class CkksEncryptor:
         if max_abs >= supported_max:
             raise OverflowError(
                 "Encoded coefficient exceeds the direct decoder range: "
-                f"max_abs={max_abs}, supported_max={supported_max} at level "
-                f"{level}"
+                f"max_abs={max_abs}, supported_max={supported_max} at depth "
+                f"{depth}"
             )
 
     def _encrypt_rns_plaintext(
@@ -140,16 +140,16 @@ class CkksEncryptor:
         plaintext_rns: torch.Tensor,
         *,
         public_key: PublicKey,
-        level: int,
+        depth: int,
         scale: float,
     ) -> Ciphertext:
         r"""Encrypt one coefficient-domain standard RNS plaintext tensor.
 
         ``plaintext_rns`` has layout ``[*batch, limb, coefficient]``, engine
         integral dtype/device, final extent $N$, and limb row $i$ modulo the
-        active ``prime_ids[i]`` selected by ``level`` and the public-key
+        active ``prime_ids[i]`` selected by ``depth`` and the public-key
         Q/QP basis. ``public_key`` is
-        ``[key_component=2, level_zero_limb, ntt_index]`` in NTT-domain
+        ``[key_component=2, depth_zero_limb, ntt_index]`` in NTT-domain
         Montgomery form. Sampling $v,e_0,e_1$ yields
 
         $$
@@ -160,12 +160,12 @@ class CkksEncryptor:
         $c_0(X)+c_1(X)s(X)=p(X)+e(X)\pmod{B_\ell}$. Output is newly allocated
         ``[component=2, *batch, limb, coefficient]`` with standard
         residues, engine dtype/device, active ``prime_ids``, and supplied
-        level/actual scale. Inputs do not alias the output.
+        depth/actual scale. Inputs do not alias the output.
         """
 
         include_p = public_key.modulus_basis == "QP"
         expected_prime_ids = self.rns_layout.prime_ids(
-            level,
+            depth,
             include_p=include_p,
         )
         if plaintext_rns.ndim < 2 or plaintext_rns.size(-2) != len(
@@ -184,10 +184,10 @@ class CkksEncryptor:
             2, *batch_shape, self.config.N
         )
         e0_tiled = self.rns_runtime.lift_centered_coefficients(
-            e0e1[0], level, include_p=include_p
+            e0e1[0], depth, include_p=include_p
         )
         e1_tiled = self.rns_runtime.lift_centered_coefficients(
-            e0e1[1], level, include_p=include_p
+            e0e1[1], depth, include_p=include_p
         )
 
         pte0 = self.rns_runtime.add_lazy(
@@ -196,7 +196,7 @@ class CkksEncryptor:
             include_p=include_p,
         )
 
-        start = self.rns_runtime.level_row_starts[level]
+        start = self.rns_runtime.depth_row_starts[depth]
         pk0 = public_key.k0[start:]
         pk1 = public_key.k1[start:]
         v = self._rng.randint(amax=2, shift=0, repeats=batch_size)[0].view(
@@ -204,7 +204,7 @@ class CkksEncryptor:
         )
         v = self.rns_runtime.lift_centered_coefficients(
             v,
-            level,
+            depth,
             include_p=include_p,
         )
         self.rns_runtime.forward_to_montgomery_(v, include_p=include_p)
@@ -233,7 +233,7 @@ class CkksEncryptor:
         )
         return self._ciphertext_from_components(
             [ct0, ct1],
-            level=level,
+            depth=depth,
             scale=scale,
             polynomial_domain="coefficient",
             modulus_basis="QP" if include_p else "Q",
@@ -245,7 +245,7 @@ class CkksEncryptor:
         message,
         public_key: PublicKey,
         *,
-        level: int = 0,
+        depth: int = 0,
         scale=None,
     ) -> Ciphertext:
         r"""Encode and encrypt one CKKS message at the provided per-value scale.
@@ -269,12 +269,12 @@ class CkksEncryptor:
         the same semantic ciphertext representation. Output has layout
         ``[component=2, *batch, limb, coefficient]``, engine integral
         dtype/device, coefficient domain, standard residues in $[0,q_i)$, Q
-        or QP ``prime_ids`` selected by the key, requested level, and actual
+        or QP ``prime_ids`` selected by the key, requested depth, and actual
         scale $\Delta$. It owns independent storage; message/key inputs are not
         mutated.
         """
 
-        self._validate_public_level(level)
+        self._validate_public_depth(depth)
         scale = coerce_scale(
             self.config.default_scale if scale is None else scale,
             value_name="Ciphertext",
@@ -282,13 +282,13 @@ class CkksEncryptor:
         include_p = public_key.modulus_basis == "QP"
         unscaled = self.plaintext_codec._inverse_embed_slots(message)
         prime_ids = self.rns_layout.prime_ids(
-            level,
+            depth,
             include_p=include_p,
         )
         scaled = unscaled * scale
         max_abs_scaled = float(torch.max(torch.abs(scaled)).item())
-        self._check_direct_decode_range(math.ceil(max_abs_scaled), level)
-        dtype_info = torch.iinfo(self.config.torch_dtype)
+        self._check_direct_decode_range(math.ceil(max_abs_scaled), depth)
+        dtype_info = torch.iinfo(self.rns_runtime.dtype)
         fits_integer_dtype = bool(
             torch.all(
                 (scaled >= dtype_info.min) & (scaled < dtype_info.max)
@@ -298,7 +298,7 @@ class CkksEncryptor:
             coefficients = self._rng.randround(scaled)
             plaintext_rns = self.rns_runtime.lift_integer_coefficients_exact(
                 coefficients,
-                level,
+                depth,
                 include_p=include_p,
                 max_abs=math.ceil(max_abs_scaled),
             )
@@ -352,12 +352,12 @@ class CkksEncryptor:
                     ]
                     for row_index, row in enumerate(flat_scaled)
                 ],
-                dtype=self.config.torch_dtype,
+                dtype=self.rns_runtime.dtype,
                 device=self.device,
             ).reshape(*unscaled.shape[:-1], len(prime_ids), unscaled.size(-1))
         return self._encrypt_rns_plaintext(
             plaintext_rns,
             public_key=public_key,
-            level=level,
+            depth=depth,
             scale=scale,
         )

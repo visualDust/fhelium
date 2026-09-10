@@ -13,6 +13,19 @@
 // operands as read-only.
 //
 // `montgomery_mul` computes $a_i b_i R^{-1}\bmod q_i$ in lazy [0, 2q_i).
+// `montgomery_weighted_sum` accepts equal non-empty ciphertext/plaintext
+// Tensor lists and computes $sum_t c_t p_t mod q_i$ for every ciphertext
+// component, batch element, limb, and final index. Ciphertexts have
+// [component, *batch, limb, index] shape; each plaintext has
+// [*batch, limb, index] shape and broadcasts over components. It returns one
+// canonical [0, q_i) Tensor with the first ciphertext's shape and does not
+// alias or mutate an operand. Implementations may fuse the term loop but do
+// not select the caller's term grouping.
+// `montgomery_weighted_sums` applies a caller-supplied dense plaintext matrix:
+// `group_count` consecutive groups of one plaintext per ciphertext. It returns
+// `[component, group, *batch, limb, index]`, with
+// `out[g] = sum_t ciphertexts[t] * plaintexts[g*T+t] mod q_i`. The operation
+// executes the supplied matrix and does not choose its groups.
 // The cyclic/contiguous compressed variants apply the same product after
 // expanding [*compressed_batch, limb, unique_index] to the lhs final extent;
 // compact batch count must be one or equal to lhs after *batch is collapsed.
@@ -34,6 +47,12 @@
 
 TORCH_LIBRARY_FRAGMENT(fhelium_rns_ops, m) {
   m.def("montgomery_mul(Tensor lhs, Tensor rhs, Tensor rns_params) -> Tensor");
+  m.def(
+      "montgomery_weighted_sum(Tensor[] ciphertexts, Tensor[] plaintexts, "
+      "Tensor rns_params) -> Tensor");
+  m.def(
+      "montgomery_weighted_sums(Tensor[] ciphertexts, Tensor[] plaintexts, "
+      "int group_count, Tensor rns_params) -> Tensor");
   m.def(
       "montgomery_mul_cyclic_compressed(Tensor lhs, Tensor compressed_rhs, "
       "Tensor rns_params) -> Tensor");

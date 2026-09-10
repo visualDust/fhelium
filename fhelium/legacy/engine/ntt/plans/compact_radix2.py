@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from fhelium.config import CkksConfig
+from fhelium.backend.rns.format import RnsExecutionFormat
 from fhelium.legacy.engine.ntt.plans.twiddles import build_compact_twiddles
 
 
@@ -31,7 +32,7 @@ class CompactRadix2NttPlan:
         self.forward_twiddles, self.inverse_twiddles = build_compact_twiddles(
             self.cfg.moduli,
             self.cfg.logN,
-            self.cfg.torch_dtype,
+            RnsExecutionFormat.select(self.cfg.moduli).dtype,
             device=self.device,
         )
 

@@ -3,7 +3,7 @@
 """Benchmark grouped rotation hoisting against independent rotations.
 
 Example:
-    python examples/07_rotation_hoisting_benchmark.py --preset slots32768-scale40-levels34-int64 --counts 4,8,16
+    python examples/07_rotation_hoisting_benchmark.py --preset slots32768-scale40-depth34-int64 --counts 4,8,16
 """
 
 from __future__ import annotations
@@ -73,11 +73,11 @@ def _parse_counts(text: str) -> list[int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_engine_args(parser, default_preset="slots32768-scale40-levels34-int64")
+    add_engine_args(parser, default_preset="slots32768-scale40-depth34-int64")
     parser.add_argument("--counts", type=_parse_counts, default=[4, 8, 16])
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--runs", type=int, default=20)
-    parser.add_argument("--level", type=int, default=0)
+    parser.add_argument("--depth", type=int, default=0)
     args = parser.parse_args()
 
     engine = make_engine(args)
@@ -93,7 +93,7 @@ def main() -> None:
     message = (
         0.01 * torch.sin(idx * 0.001) + 0.005 * torch.cos(idx * 0.003)
     ).to(torch.complex128)
-    ct = engine.encrypt_message(message, level=args.level)
+    ct = engine.encrypt_message(message, depth=args.depth)
     sync_if_cuda(torch.get_default_device())
 
     rows = []
@@ -135,7 +135,7 @@ def main() -> None:
         torch.cuda.empty_cache()
 
     print(
-        f"Engine: preset={args.preset}, level={args.level}, device={args.device}, runs={args.runs}, warmup={args.warmup}"
+        f"Engine: preset={args.preset}, depth={args.depth}, device={args.device}, runs={args.runs}, warmup={args.warmup}"
     )
     print_table(
         [

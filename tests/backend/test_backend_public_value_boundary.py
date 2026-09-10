@@ -39,12 +39,12 @@ def _array(values: tuple[int, ...]) -> ArrayAttr[IntegerAttr]:
 
 def _ciphertext_state(
     *,
-    level: int,
+    depth: int,
     scale: float,
     prime_ids: tuple[int, ...],
 ) -> dict[str, Attribute]:
     return {
-        "level": IntegerAttr(level, 64),
+        "depth": IntegerAttr(depth, 64),
         "scale": FloatAttr(scale, f64),
         "prime_ids": _array(prime_ids),
         "polynomial_domain": StringAttr("coefficient"),
@@ -96,12 +96,12 @@ def test_encrypted_role_boundary_unwraps_and_reconstructs_from_result_ir() -> (
     None
 ):
     input_state = _ciphertext_state(
-        level=0,
+        depth=0,
         scale=32.0,
         prime_ids=(0, 1),
     )
     result_state = _ciphertext_state(
-        level=1,
+        depth=1,
         scale=32.0,
         prime_ids=(1,),
     )
@@ -124,7 +124,7 @@ def test_encrypted_role_boundary_unwraps_and_reconstructs_from_result_ir() -> (
     data = torch.arange(16, dtype=torch.int64).reshape(2, 2, 4)
     source = Ciphertext(
         data=data,
-        level=0,
+        depth=0,
         scale=32.0,
         prime_ids=(0, 1),
     )
@@ -133,7 +133,7 @@ def test_encrypted_role_boundary_unwraps_and_reconstructs_from_result_ir() -> (
 
     assert implementation.inputs == [source.data]
     assert isinstance(result, Ciphertext)
-    assert result.level == 1
+    assert result.depth == 1
     assert result.scale == 32.0
     assert result.prime_ids == (1,)
     assert result.polynomial_domain == "coefficient"
@@ -153,27 +153,27 @@ def _identity_program(value_type: Attribute) -> Program:
     (
         (
             {
-                "level": IntegerAttr(0, 64),
+                "depth": IntegerAttr(0, 64),
                 "scale": FloatAttr(8.0, f64),
                 "representation": StringAttr("slots"),
             },
             Plaintext(
                 message=torch.tensor([0.25, -0.5]),
-                level=0,
+                depth=0,
                 scale=8.0,
             ),
             "message",
         ),
         (
             {
-                "level": IntegerAttr(1, 64),
+                "depth": IntegerAttr(1, 64),
                 "scale": FloatAttr(16.0, f64),
                 "representation": StringAttr("integer_coefficients"),
                 "polynomial_domain": StringAttr("coefficient"),
             },
             Plaintext(
                 message=None,
-                level=1,
+                depth=1,
                 scale=16.0,
                 data=torch.tensor([1, -2, 3, -4], dtype=torch.int64),
                 representation="integer_coefficients",
@@ -183,7 +183,7 @@ def _identity_program(value_type: Attribute) -> Program:
         ),
         (
             {
-                "level": IntegerAttr(0, 64),
+                "depth": IntegerAttr(0, 64),
                 "scale": FloatAttr(4.0, f64),
                 "representation": StringAttr("rns"),
                 "polynomial_domain": StringAttr("coefficient"),
@@ -193,7 +193,7 @@ def _identity_program(value_type: Attribute) -> Program:
             },
             Plaintext(
                 message=None,
-                level=0,
+                depth=0,
                 scale=4.0,
                 data=torch.arange(8, dtype=torch.int64).reshape(2, 4),
                 representation="rns",
@@ -216,7 +216,7 @@ def test_plaintext_role_boundary_uses_the_declared_representation(
 
     assert isinstance(result, Plaintext)
     assert result is not value
-    assert result.level == value.level
+    assert result.depth == value.depth
     assert result.scale == value.scale
     assert result.representation == value.representation
     assert result.polynomial_domain == value.polynomial_domain
@@ -228,7 +228,7 @@ def test_plaintext_role_boundary_uses_the_declared_representation(
 
 def test_ckks_input_rejects_raw_tensor_and_state_disagreement() -> None:
     value_type = ckks.CiphertextType().with_state(
-        _ciphertext_state(level=0, scale=32.0, prime_ids=(0, 1))
+        _ciphertext_state(depth=0, scale=32.0, prime_ids=(0, 1))
     )
     executable = _build(_identity_program(value_type))
     data = torch.zeros((2, 2, 4), dtype=torch.int64)
@@ -240,7 +240,7 @@ def test_ckks_input_rejects_raw_tensor_and_state_disagreement() -> None:
 
     mismatched = Ciphertext(
         data=data,
-        level=0,
+        depth=0,
         scale=64.0,
         prime_ids=(0, 1),
     )
@@ -259,7 +259,7 @@ def test_missing_concrete_result_state_fails_without_input_inference() -> None:
 
     with pytest.raises(
         ValueError,
-        match="Program result 0 lacks concrete 'level' state",
+        match="Program result 0 lacks concrete 'depth' state",
     ):
         executable.run(torch.zeros((2, 2, 4), dtype=torch.int64))
 

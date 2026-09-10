@@ -49,7 +49,7 @@ def _plaintext(
 ) -> Plaintext:
     return Plaintext(
         message=torch.tensor(values, dtype=torch.float64, device=device),
-        level=0,
+        depth=0,
         scale=16.0,
     )
 
@@ -275,7 +275,7 @@ def test_adopt_preserves_typed_identity_and_accounts_logical_and_storage_bytes()
     None
 ):
     backing = torch.arange(8, dtype=torch.float64)
-    value = Plaintext(message=backing[::2], level=0, scale=16.0)
+    value = Plaintext(message=backing[::2], depth=0, scale=16.0)
     assert value.nbytes == 4 * backing.element_size()
     assert value.storage_nbytes == backing.numel() * backing.element_size()
 
@@ -551,7 +551,7 @@ def test_source_return_type_bytes_storage_and_location_are_validated() -> None:
     expected_spec = _spec(expected)
     larger_backing = torch.arange(8, dtype=torch.float64)
     storage_mismatch = Plaintext(
-        message=larger_backing[::2], level=0, scale=16.0
+        message=larger_backing[::2], depth=0, scale=16.0
     )
     wrong_type = _PairResident(
         torch.arange(2, dtype=torch.float64),
@@ -1254,7 +1254,7 @@ def test_view_backed_value_transitions_use_a_fixed_conservative_charge() -> (
     None
 ):
     backing = torch.arange(8, dtype=torch.float64)
-    value = Plaintext(message=backing[::2], level=0, scale=16.0)
+    value = Plaintext(message=backing[::2], depth=0, scale=16.0)
     charge = value.storage_nbytes
     manager = ResidencyManager(
         {PAGEABLE_HOST: 2 * charge, PINNED_HOST: 2 * charge}

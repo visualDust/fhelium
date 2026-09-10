@@ -28,7 +28,7 @@ three-to-two-component relinearization.
 
 | Protocol value | Representation |
 | --- | --- |
-| Party share and RKG ephemeral | Level-zero QP `SecretKey`, NTT/Montgomery, `[L_QP, N]` |
+| Party share and RKG ephemeral | Depth-zero QP `SecretKey`, NTT/Montgomery, `[L_QP, N]` |
 | CKG common tensor and share | Contiguous Q NTT/Montgomery tensor `[L_Q, N]` |
 | RKG/Galois common tensor | Contiguous QP tensor `[D, L_QP, N]` |
 | Each RKG family or Galois share | QP NTT/Montgomery tensor `[D, L_QP, N]` |
@@ -45,7 +45,7 @@ transport, coordinator, or persistent protocol object.
 Run the example from the repository root:
 
 ```bash
-python examples/23_multiparty_ckks.py --preset slots8192-scale40-levels7-int64
+python examples/23_multiparty_ckks.py --preset slots8192-scale40-depth7-int64
 ```
 
 ## Follow the application-owned states
@@ -190,7 +190,7 @@ conjugation_key = mpc.aggregate_conjugation_key(
 ```
 
 Each request uses fresh QP common material with shape `[D, L_QP, N]`. The
-results are core key types with FHElium's complete level-zero key-digit layout.
+results are core key types with FHElium's complete depth-zero key-digit layout.
 
 ## 5. Encrypt and evaluate normally
 
@@ -213,7 +213,7 @@ product = engine.multiply(
     engine.coefficient_domain_to_ntt_domain(source),
     engine.coefficient_domain_to_ntt_domain(source),
 )
-squared = engine.rescale_to_next_level(
+squared = engine.rescale_to_next_depth(
     engine.relinearize(product, relinearization_key)
 )
 ```

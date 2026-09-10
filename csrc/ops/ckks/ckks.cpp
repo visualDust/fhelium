@@ -92,6 +92,12 @@ TORCH_LIBRARY_FRAGMENT(fhelium_ckks_ops, m) {
   m.def(
       "keyswitch_accumulate_digit_products_(Tensor(a!) accumulator0_qp, "
       "Tensor(b!) accumulator1_qp, Tensor extended_digit_ntt_qp, Tensor "
-      "key_switch_key_digit, Tensor rns_params, int key_digit_row_start) -> "
+      "key_switch_key_digit, Tensor rns_params, int key_digit_row_start, "
+      "Tensor? source_indices=None) -> "
       "()");
+  m.def(
+      "keyswitch_accumulate_products_(Tensor(a!) accumulator0_qp, "
+      "Tensor(b!) accumulator1_qp, Tensor[] extended_digits_ntt_qp, Tensor "
+      "key_switch_key, Tensor rns_params, int key_digit_row_start, "
+      "Tensor? source_indices=None) -> ()");
 }

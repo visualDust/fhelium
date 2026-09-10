@@ -18,7 +18,7 @@ from .._contracts import CoverageDiagnostic, Executable
 class ValueRequirement:
     """Describe state a provider needs or produces for one SSA value.
 
-    ``fields`` contains known or symbolic state properties such as level,
+    ``fields`` contains known or symbolic state properties such as depth,
     scale, basis, polynomial domain, residue representation, component count,
     dtype, device, shape, and layout. ``runtime_guards`` names properties that
     must be checked against live objects before execution.

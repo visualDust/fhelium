@@ -1,4 +1,11 @@
-"""Logical number-theoretic-transform operations used below CKKS lowering.
+r"""Logical number-theoretic-transform operations used below CKKS lowering.
+
+The number-theoretic transform (NTT) evaluates a polynomial in
+$\mathbb{Z}_{q_i}[X]/(X^N+1)$ at roots of unity modulo each active prime
+$q_i$, turning negacyclic multiplication into pointwise multiplication.
+Residue number system (RNS) rows hold those per-prime polynomials.  Montgomery
+representation stores a residue $x_i$ as
+$x_iR_i\bmod q_i$ for radix $R_i$.
 
 The four operations distinguish the complete source and destination residue
 representations needed by ciphertext and plaintext transitions. Their plan
@@ -60,28 +67,51 @@ class _NttOp(IRDLOperation):
 
 @irdl_op_definition
 class CoefficientStandardToNttMontgomeryOp(_NttOp):
-    """Map coefficient/standard residues to NTT/Montgomery residues."""
+    r"""Compute the forward negacyclic NTT from standard residues.
+
+    For every active prime $q_i$, the input row contains coefficient residues
+    $a_j \bmod q_i$ for a polynomial in
+    $R_{q_i}=\mathbb{Z}_{q_i}[X]/(X^N+1)$.  The result contains its
+    number-theoretic transform $\operatorname{NTT}_{q_i}(a)$, multiplied by the
+    Montgomery radix $R_i$ modulo $q_i$.  Prime rows, CKKS depth, component
+    axes, and scale do not change."""
 
     name = "fhelium_ntt.coefficient_standard_to_ntt_montgomery"
 
 
 @irdl_op_definition
 class CoefficientMontgomeryToNttMontgomeryOp(_NttOp):
-    """Map coefficient/Montgomery residues to NTT/Montgomery residues."""
+    r"""Compute the forward negacyclic NTT of Montgomery coefficients.
+
+    Each input coefficient row represents $a_j R_i \bmod q_i$.  The transform
+    is applied independently for every active prime and returns
+    $\operatorname{NTT}_{q_i}(a)R_i \bmod q_i$.  The operation preserves prime
+    rows, depth, component axes, and CKKS scale."""
 
     name = "fhelium_ntt.coefficient_montgomery_to_ntt_montgomery"
 
 
 @irdl_op_definition
 class NttMontgomeryToCoefficientStandardOp(_NttOp):
-    """Map NTT/Montgomery residues to coefficient/standard residues."""
+    r"""Compute the inverse negacyclic NTT and leave standard residues.
+
+    For each active prime $q_i$, an NTT/Montgomery row
+    $\operatorname{NTT}_{q_i}(a)R_i$ is mapped to coefficient residues
+    $a_j \bmod q_i$.  The inverse transform includes the Montgomery and
+    transform normalization factors.  Prime rows, depth, components, and scale
+    are preserved."""
 
     name = "fhelium_ntt.ntt_montgomery_to_coefficient_standard"
 
 
 @irdl_op_definition
 class InverseMontgomeryOp(_NttOp):
-    """Map NTT/Montgomery residues to coefficient/Montgomery residues."""
+    r"""Compute the inverse negacyclic NTT and retain Montgomery residues.
+
+    For every active prime $q_i$, the input
+    $\operatorname{NTT}_{q_i}(a)R_i$ becomes coefficient data
+    $a_jR_i \bmod q_i$.  The prime-row set, depth, component axes, and CKKS
+    scale remain unchanged."""
 
     name = "fhelium_ntt.inverse_montgomery"
 

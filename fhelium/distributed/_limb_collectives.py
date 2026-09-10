@@ -136,7 +136,7 @@ def _validate_limb_shards(
 
     first = shards[0]
     common_fields = (
-        "level",
+        "depth",
         "scale",
         "polynomial_domain",
         "modulus_basis",
@@ -190,7 +190,7 @@ def _concatenate_limb_shards(
     first = shards[0]
     return Ciphertext(
         data=torch.cat([shard.data for shard in shards], dim=-2),
-        level=first.level,
+        depth=first.depth,
         scale=first.scale,
         prime_ids=tuple(
             prime_id for shard in shards for prime_id in shard.prime_ids

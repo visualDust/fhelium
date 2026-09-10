@@ -1,8 +1,8 @@
 r"""Preconfigured full-slot callables using exponential-squaring reduction.
 
 The versioned profile is documented for a configuration derived from
-`Preset.slots32768_scale50_levels27_int64` with `base_prime_bits=50` and requires
-an engine whose configuration uses `galois_generator=5`. The factory composes public components; it does not
+`Preset.slots32768_scale50_depth27_int64` with `galois_generator=5`.
+The factory composes public components; it does not
 certify encrypted range or application error.
 """
 
@@ -28,14 +28,14 @@ def exponential_depth_refresh_logn16_d16_v1(
     squaring for raw input bound $B=1024$, fused normalization $x=r/B$, and sine
     extraction by conjugation.
 
-    The measured configuration is derived from
-    `Preset.slots32768_scale50_levels27_int64` with `base_prime_bits=50` and requires
-    an engine whose configuration uses `galois_generator=5`. It accepts a final-public-level
-    input near default scale with both raw branch coordinates in
-    $[-1024,1024]$. The function does not enforce the deployment identity or
+    The documented configuration is derived from
+    `Preset.slots32768_scale50_depth27_int64` with `galois_generator=5`.
+    The input occupies ``bootstrap.input_depth = engine.max_depth - 1``.
+    Entry preparation uses its actual scale; both resulting raw branch
+    coordinates must lie in $[-1024,1024]$. The function does not enforce the deployment identity or
     encrypted range; `FullSlotBootstrap` checks structural-scale proximity,
     transform shape, and depth. Application tests must establish numerical
-    suitability and level budget. Online execution requires rotation,
+    suitability and depth budget. Online execution requires rotation,
     relinearization, and conjugation keys.
 
     Args:
@@ -62,7 +62,9 @@ def exponential_depth_refresh_logn16_d16_v1(
         ),
         slots_to_coeffs_compiler=compiler,
         slots_to_coeffs_evaluator=evaluator,
-        modulus_raise_target_level=0,
+        modulus_raise_target_depth=0,
+        retain_diagonals=True,
+        retain_constants=True,
     )
 
 

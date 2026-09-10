@@ -2,6 +2,14 @@
 
 #include <torch/torch.h>
 
+void forward_ntt_to_montgomery_compact_add_scaled_inplace_cuda(
+    torch::Tensor source,
+    const torch::Tensor addend,
+    const torch::Tensor multiplier,
+    const torch::Tensor forward_twiddles,
+    const torch::Tensor rns_params,
+    int64_t grouped_stage_count);
+
 void forward_ntt_montgomery_indexed_inplace_cuda(
     torch::Tensor montgomery_residues,
     const torch::Tensor even_indices,
@@ -51,7 +59,8 @@ void forward_ntt_montgomery_compact_keyswitch_accumulate_inplace_cuda(
     const torch::Tensor key_digit_qp,
     torch::Tensor accumulator0_qp,
     torch::Tensor accumulator1_qp,
-    int64_t key_row_start);
+    int64_t key_row_start,
+    int64_t grouped_stage_count);
 
 void forward_ntt_montgomery_power_of_two_radix_compact_inplace_cuda(
     torch::Tensor montgomery_residues,

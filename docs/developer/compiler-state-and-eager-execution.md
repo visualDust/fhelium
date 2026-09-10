@@ -7,7 +7,7 @@ FHElium provides two ways to evaluate homomorphic programs:
   Passes may analyze the graph, assign CKKS state, and choose a schedule before
   execution.
 - **Eager** executes each operation when the caller invokes an `Engine` method.
-  The caller chooses when level-changing operations occur, so no graph
+  The caller chooses when depth-changing operations occur, so no graph
   scheduler is involved.
 
 Both paths use registered Backend implementations. They differ in who reasons
@@ -18,9 +18,9 @@ about CKKS state and when that reasoning occurs.
 CKKS state describes the mathematical representation of a value. Important
 fields include:
 
-- **depth**: the modulus-chain capacity available to a computation;
-- **level**: a value's position in that chain after zero or more primes have
-  been removed;
+- **depth**: the index of the first active Q depth group;
+- **depth remaining**: `max_depth - depth`, the number of further public
+  rescale transitions available;
 - **scale**: the per-value factor that relates encoded integers to approximate
   real or complex values;
 - ordered prime identities, modulus basis, polynomial domain, residue form,
@@ -34,7 +34,7 @@ relinearization should occur. A later sequence of passes may:
 2. estimate depth and resource costs;
 3. choose relinearization and rescale positions;
 4. insert polynomial-representation transitions;
-5. assign or propagate level and scale information;
+5. assign or propagate depth and scale information;
 6. form rotation-hoisting groups or other schedules.
 
 A pass can record state in SSA types, operation attributes, analyses, or data
@@ -59,19 +59,22 @@ construct the public result
 
 For example, ciphertext multiplication preserves the current prime rows,
 multiplies the input scales, and produces three ciphertext components. Rescale
-removes the leading active Q prime, advances the level, divides the scale by
-the removed prime, and returns coefficient-domain standard residues.
+removes the next complete Q group, advances depth once, divides scale by
+the group's modulus product, and preserves either coefficient/standard or
+NTT/Montgomery arithmetic state.
 
 Conceptually, an Eager implementation expresses rescale as:
 
 ```python
-dropped_prime = rescale_parameters.dropped_q_prime
+dropped_group = config.q_depth_groups[ciphertext.depth]
+drop_count = len(dropped_group)
+dropped_group_modulus = math.prod(dropped_group)
 result_data = implementation.run(ciphertext.data, resources)
 result = Ciphertext(
     data=result_data,
-    level=ciphertext.level + 1,
-    scale=ciphertext.scale / dropped_prime,
-    prime_ids=ciphertext.prime_ids[1:],
+    depth=ciphertext.depth + 1,
+    scale=ciphertext.scale / dropped_group_modulus,
+    prime_ids=ciphertext.prime_ids[drop_count:],
     polynomial_domain="coefficient",
     modulus_basis="Q",
     residue_representation="standard",
@@ -80,10 +83,10 @@ result = Ciphertext(
 
 The metadata update is part of the Eager method's CKKS semantics. Registered
 Backend implementations return Tensor payloads to the owner of the result
-level and scale. A linked `ProgramExecutable` may expose a public CKKS function
+depth and scale. A linked `ProgramExecutable` may expose a public CKKS function
 boundary: it unwraps declared `Ciphertext` or `Plaintext` inputs and rebuilds
 declared outputs from concrete Program result state after Tensor execution.
-Linking checks that output level, scale, prime identities, basis, and
+Linking checks that output depth, scale, prime identities, basis, and
 representation are concrete enough to rebuild each public result.
 
 Eager placement follows PyTorch value placement. Factory-like boundary calls
@@ -113,7 +116,7 @@ ring dimension
 ```
 
 They consume the parameter, key, table, or index Tensors supplied for those
-rows. CKKS depth, scale, and level guide resource selection before the kernel
+rows. CKKS depth, scale, and depth guide resource selection before the kernel
 call.
 
 For a complete active Q or QP basis, the configured modulus layout and Tensor
@@ -135,7 +138,7 @@ Compile may use concrete state to create a specialized executable. For
 example, a pass can statically expand the active hybrid key-switch digits or
 preselect modulus rows. This is an optimization and scheduling choice.
 
-Eager may use one implementation across multiple levels. The implementation
+Eager may use one implementation across multiple depths. The implementation
 can select active rows from runtime Tensor dimensions and configured resources,
 then invoke the same shape-dispatched torch operation. Rotation steps can
 similarly share an implementation while supplying different Galois elements,
@@ -179,7 +182,7 @@ Backend execution consumes Tensor operations and their arithmetic resources.
 | Layer | Responsibility |
 | --- | --- |
 | Compile frontend and passes | Represent partial state, analyze depth and scale, choose schedules, and insert or preserve operations |
-| Eager `Engine` methods | Check public inputs, apply one called operation's metadata transition, and construct public results |
+| Eager `Engine` methods | Apply each operation's documented input handling, metadata transition, and public-result construction |
 | Backend build and resource owners | Select registered implementations and provide the parameter, key, table, and index Tensors required for execution |
 | Backend execution | Enforce the execution interface and invoke Tensor implementations |
 | CPU/CUDA torch operations | Dispatch from Tensor dimensions and perform native arithmetic |

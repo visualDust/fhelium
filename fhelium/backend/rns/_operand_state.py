@@ -13,7 +13,7 @@ def _operand_basis(invocation: OperationInvocation, index: int = 0) -> str:
     return "Q" if represented is None else represented
 
 
-def _active_level(
+def _active_depth(
     tensor: torch.Tensor,
     context: RnsContext,
     *,
@@ -21,7 +21,7 @@ def _active_level(
 ) -> int:
     """Map a complete context Q or QP tensor to resource-table position."""
 
-    return context.rns_layout.level_for_active_row_count(
+    return context.rns_layout.depth_for_active_row_count(
         tensor.size(-2),
         include_p=include_p,
     )

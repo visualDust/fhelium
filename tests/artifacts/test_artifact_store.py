@@ -33,7 +33,7 @@ def _ciphertext(fill: int | None = None) -> Ciphertext:
         data = torch.full_like(data, fill)
     return Ciphertext(
         data=data,
-        level=1,
+        depth=1,
         scale=2.0**40,
         prime_ids=(1, 2, 3),
     )

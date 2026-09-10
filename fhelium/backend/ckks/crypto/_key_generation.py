@@ -60,7 +60,7 @@ class KeyGenerationResource:
             raise ValueError(
                 "Key-generation P-product table is on another device"
             )
-        if table.dtype != self.config.torch_dtype:
+        if table.dtype != self.rns_context.dtype:
             raise TypeError("Key-generation P-product table has another dtype")
 
     @classmethod
@@ -87,7 +87,7 @@ class KeyGenerationResource:
                     pr % montgomery.moduli[prime_id]
                     for prime_id in rns_context.rns_layout.prime_ids(0)
                 ],
-                dtype=config.torch_dtype,
+                dtype=rns_context.dtype,
                 device=rns_context.device,
             ),
         )
@@ -106,7 +106,7 @@ class CkksKeyGenerator:
     data is ``[limb, ntt_index]``; public keys are
     ``[key_component, limb, ntt_index]``; key-switch keys are
     ``[key_digit, key_component, limb, ntt_index]``. Returned keys are always
-    NTT/Montgomery/lazy at level zero in the stated Q or QP basis and own their
+    NTT/Montgomery/lazy at depth zero in the stated Q or QP basis and own their
     payload storage. Local ``digit_index`` is resolved to stable
     ``key_digit_index`` before key tensor indexing.
     """
@@ -178,7 +178,7 @@ class CkksKeyGenerator:
         *,
         modulus_basis: ModulusBasis = "QP",
     ) -> SecretKey:
-        r"""Sample ternary $s(X)$ and return its level-zero NTT/Montgomery RNS.
+        r"""Sample ternary $s(X)$ and return its depth-zero NTT/Montgomery RNS.
 
         Output shape is ``[limb, ntt_index]`` with Q or QP ``prime_ids``
         selected by ``modulus_basis``. Sampling and all temporary transitions
@@ -192,7 +192,7 @@ class CkksKeyGenerator:
             0
         ]
         unsigned_ternary = resources.rns_context.lift_centered_coefficients(
-            uniform_ternary, level=0, include_p=include_p
+            uniform_ternary, depth=0, include_p=include_p
         )
         resources.ntt_context.forward_to_montgomery_(
             unsigned_ternary, include_p=include_p
@@ -213,13 +213,15 @@ class CkksKeyGenerator:
         *,
         modulus_basis: ModulusBasis = "Q",
         uniform_component: torch.Tensor | None = None,
+        error_coefficients: torch.Tensor | None = None,
     ) -> PublicKey:
         r"""Generate ``(k_0,k_1)`` satisfying $k_0+k_1s=e$ modulo the basis.
 
         Output is integral ``[key_component=2, limb, ntt_index]`` in
-        level-zero NTT/Montgomery form with Q or QP rows. ``secret_key``
-        and optional ``uniform_component`` are read-only and never alias the
-        returned stacked tensor.
+        depth-zero NTT/Montgomery form with Q or QP rows. ``secret_key``
+        and optional sampled uniform/error coefficients are read-only and
+        never alias the returned stacked tensor. When error coefficients are
+        omitted, the generator samples its configured discrete Gaussian.
         """
 
         if modulus_basis not in ("Q", "QP"):
@@ -238,23 +240,38 @@ class CkksKeyGenerator:
                 operation="Public-key generation",
             )
 
-        level = 0
-        error = resources.rng.discrete_gaussian(repeats=1)[0][0]
+        depth = 0
+        error = (
+            resources.rng.discrete_gaussian(repeats=1)[0][0]
+            if error_coefficients is None
+            else error_coefficients
+        )
+        if error.shape != (resources.config.N,):
+            raise ValueError(
+                "Public-key error coefficients must have shape "
+                f"[{resources.config.N}]"
+            )
+        if error.dtype != resources.rns_context.dtype:
+            raise TypeError("Public-key error coefficients have another dtype")
+        if error.device != resources.device:
+            raise ValueError(
+                "Public-key error coefficients are on another device"
+            )
         error = resources.rns_context.lift_centered_coefficients(
-            error, level, include_p=include_p
+            error, depth, include_p=include_p
         )
         resources.ntt_context.forward_to_montgomery_(error, include_p=include_p)
 
         if uniform_component is None:
             repeats = (
                 resources.config.num_p_primes
-                if secret_key.modulus_basis == "QP"
+                if include_p
                 else 0
             )
             uniform_component_data = resources.rng.randint(
                 [
                     resources.rns_context.moduli_for_basis(
-                        level, include_p=include_p
+                        depth, include_p=include_p
                     )
                 ],
                 repeats=repeats,
@@ -291,6 +308,7 @@ class CkksKeyGenerator:
         destination_secret_key: SecretKey,
         *,
         uniform_component_by_key_digit: torch.Tensor | None = None,
+        error_coefficients_by_key_digit: torch.Tensor | None = None,
     ) -> KeySwitchKey:
         r"""Create a hybrid-RNS key from source to destination secret relation.
 
@@ -302,8 +320,8 @@ class CkksKeyGenerator:
         $k_{d,0}+k_{d,1}s_{\mathrm{dst}}=P s_{\mathrm{src}}+e_d$.
         Output is integral
         ``[key_digit, key_component=2, QP_limb, ntt_index]`` in
-        NTT/Montgomery lazy form and level-zero QP order. Input keys and
-        optional uniform components are not mutated or aliased.
+        NTT/Montgomery lazy form and depth-zero QP order. Input keys and
+        optional sampled uniform/error coefficients are not mutated or aliased.
         """
 
         self._require_qp_secret_key(
@@ -316,7 +334,7 @@ class CkksKeyGenerator:
             destination_secret_key,
             operation="Hybrid key-switch key generation (destination key)",
         )
-        level = 0
+        depth = 0
 
         source_secret_q = source_secret_key.data[
             : resources.rns_context.q_row_stop
@@ -325,7 +343,16 @@ class CkksKeyGenerator:
             source_secret_q, resources.p_product_montgomery_q
         )
 
-        digit_specs = resources.rns_context.rns_layout.digit_specs(level)
+        digit_specs = resources.rns_context.rns_layout.digit_specs(depth)
+        if (
+            error_coefficients_by_key_digit is not None
+            and error_coefficients_by_key_digit.shape
+            != (len(digit_specs), resources.config.N)
+        ):
+            raise ValueError(
+                "Key-switch error coefficients must have shape "
+                f"[{len(digit_specs)}, {resources.config.N}]"
+            )
         key_digits: list[torch.Tensor | None] = [None] * len(digit_specs)
         for digit_spec in digit_specs:
             source_prime_ids = digit_spec.prime_ids
@@ -340,6 +367,11 @@ class CkksKeyGenerator:
                 destination_secret_key,
                 modulus_basis="QP",
                 uniform_component=uniform_component,
+                error_coefficients=(
+                    error_coefficients_by_key_digit[key_digit_index]
+                    if error_coefficients_by_key_digit is not None
+                    else None
+                ),
             )
 
             source_digit_key = tuple(source_prime_ids)

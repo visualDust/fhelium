@@ -24,12 +24,12 @@ class RnsRowParameters:
     Mixed-radix tables exist only for multi-row source digits. Normalizers have
     shape ``[digit - 1]``; propagation coefficients have shape
     ``[digit - 1, digit]``; basis-extension coefficients have shape
-    ``[digit - 1, destination_limb]`` in level-zero QP destination
+    ``[digit - 1, destination_limb]`` in depth-zero QP destination
     order. Their entries include the Montgomery factors required by their
     native consumers.
 
     ``parameter_row_start`` identifies the first row in the engine's
-    level-zero QP order. ``native_parameters`` is the cached zero-copy
+    depth-zero QP order. ``native_parameters`` is the cached zero-copy
     ``[parameter, limb]`` view consumed by native RNS kernels.
     """
 
@@ -52,8 +52,8 @@ class RnsParameterStore:
     r"""Build engine-owned parameter views for RNS basis extension.
 
     A process owns one device and one dense ``[Q | P]`` prime order.
-    Level $\ell$ selects the contiguous interval beginning at Q prime id
-    ``level``; a Q basis ends before P and a QP basis includes the fixed P
+    Depth $\ell$ selects the contiguous interval beginning at Q prime id
+    ``depth``; a Q basis ends before P and a QP basis includes the fixed P
     suffix. Views preserve this order and do not allocate or mutate the
     source tables. The store contains no device fanout or communication policy.
     """
@@ -65,8 +65,8 @@ class RnsParameterStore:
         montgomery_parameters: MontgomeryParameters,
         device: torch.device,
         torch_dtype: torch.dtype,
-        rns_basis_level_count: int,
-        level_row_starts: list[int],
+        rns_basis_depth_count: int,
+        depth_row_starts: list[int],
         basis_row_stops: tuple[int, int],
         montgomery_reduction_parameter_tables: tuple[
             torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
@@ -81,8 +81,8 @@ class RnsParameterStore:
         self.montgomery_parameters = montgomery_parameters
         self.device = device
         self.torch_dtype = torch_dtype
-        self.rns_basis_level_count = rns_basis_level_count
-        self.level_row_starts = level_row_starts
+        self.rns_basis_depth_count = rns_basis_depth_count
+        self.depth_row_starts = depth_row_starts
         self.qp_row_stop, self.q_row_stop = basis_row_stops
         self.montgomery_reduction_parameter_tables = (
             montgomery_reduction_parameter_tables
@@ -99,29 +99,29 @@ class RnsParameterStore:
         }
         self._attach_basis_extension_coefficients()
 
-    def _active_range(self, level: int, include_p: bool) -> tuple[int, int]:
+    def _active_range(self, depth: int, include_p: bool) -> tuple[int, int]:
         stop = self.qp_row_stop if include_p else self.q_row_stop
-        return self.level_row_starts[level], stop
+        return self.depth_row_starts[depth], stop
 
     def row_parameters(self, key) -> RnsRowParameters:
         return self._row_parameters[tuple(key)]
 
     def basis_parameters(
-        self, level: int, *, include_p: bool = False
+        self, depth: int, *, include_p: bool = False
     ) -> RnsRowParameters:
         return self.row_parameters(
-            self._active_basis_key(level, include_p=include_p)
+            self._active_basis_key(depth, include_p=include_p)
         )
 
     def twice_modulus_for_basis(
-        self, level: int, *, include_p: bool = False
+        self, depth: int, *, include_p: bool = False
     ) -> torch.Tensor:
-        return self.basis_parameters(level, include_p=include_p).twice_modulus
+        return self.basis_parameters(depth, include_p=include_p).twice_modulus
 
     def moduli_for_basis(
-        self, level: int, *, include_p: bool = False
+        self, depth: int, *, include_p: bool = False
     ) -> list[int]:
-        return list(self.basis_parameters(level, include_p=include_p).moduli)
+        return list(self.basis_parameters(depth, include_p=include_p).moduli)
 
     def _build_row_parameters(
         self, row_start: int, row_stop: int
@@ -148,23 +148,23 @@ class RnsParameterStore:
         )
 
     def _active_basis_key(
-        self, level: int, *, include_p: bool
+        self, depth: int, *, include_p: bool
     ) -> tuple[int, ...]:
-        start, stop = self._active_range(level, include_p)
+        start, stop = self._active_range(depth, include_p)
         return tuple(range(start, stop))
 
     def _required_row_keys(self) -> list[tuple[int, ...]]:
         full_rows = len(self.rns_layout.prime_ids(0, include_p=True))
         keys: list[tuple[int, ...]] = [(row_id,) for row_id in range(full_rows)]
         keys.extend(
-            self._active_basis_key(level, include_p=include_p)
-            for level in range(self.rns_basis_level_count)
+            self._active_basis_key(depth, include_p=include_p)
+            for depth in range(self.rns_basis_depth_count)
             for include_p in (False, True)
         )
         keys.extend(
             digit_spec.prime_ids
-            for level in range(self.rns_basis_level_count)
-            for digit_spec in self.rns_layout.digit_specs(level)
+            for depth in range(self.rns_basis_depth_count)
+            for digit_spec in self.rns_layout.digit_specs(depth)
         )
         keys.append(self.rns_layout.chain.p_prime_ids)
         return list(dict.fromkeys(key for key in keys if key))
@@ -180,8 +180,8 @@ class RnsParameterStore:
             for index in destination_prime_ids
         ]
 
-        for level in range(self.rns_basis_level_count):
-            for digit_spec in self.rns_layout.digit_specs(level):
+        for depth in range(self.rns_basis_depth_count):
+            for digit_spec in self.rns_layout.digit_specs(depth):
                 source_prime_ids = digit_spec.prime_ids
                 row_parameters = self.row_parameters(source_prime_ids)
                 if row_parameters.mixed_radix_normalizers is not None:

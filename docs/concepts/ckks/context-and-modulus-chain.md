@@ -1,30 +1,153 @@
 # Configuration and modulus chain
 
-`CkksConfig` fixes the ring, default scale, ordinary Q moduli, special P
-moduli, Galois generator, sampler parameters, and security-budget selection
-used to construct one CKKS execution environment. The caller tracks
-configuration provenance and supplies values and keys produced with
-mathematically compatible parameters.
+`CkksConfig` fixes the mathematical CKKS parameter set used by an execution
+context: the polynomial ring, default scale, ordered ciphertext-modulus groups,
+special modulus, Galois generator, error distribution, and security-budget
+selection. It contains exact prime values rather than device or machine-word
+policy.
 
-Construction proceeds through distinct owners:
+## Ownership
 
 | Object | Responsibility |
 | --- | --- |
-| `Preset` | Named baseline for slot capacity, default scale width, public levels, and P-prime count |
-| `CkksConfig` | Resolved mathematical/security parameters, Q/P chains, and Galois generator |
-| `fhelium.eager.Engine` | Eager lifecycle, lazily created per-device resources, installed keys, and evaluator operations |
+| `Preset` | Select a reviewed, named parameter baseline and resolve it to exact primes |
+| `CkksConfig` | Store the placement-independent CKKS and security parameters |
+| `fhelium.eager.Engine` | Select an RNS execution format and lazily create device-local arithmetic, random, and key resources |
 
-A benchmark profile and an experimental bootstrap factory are separate
-objects; neither defines CKKS parameters.
+A benchmark profile and a Bootstrap circuit are separate objects. Neither
+redefines CKKS parameters.
 
-## Configuration ownership
+## Ring and slots
 
-`CkksConfig` is placement-independent:
+For `logN = k`,
+
+$$
+N=2^k, \qquad S=N/2.
+$$
+
+$N$ is the degree of the polynomial ring
+$\mathbb Z[X]/(X^N+1)$, and $S$ is the number of complex CKKS slots. Increasing
+$N$ increases slot capacity and the available security/noise budget, but also
+increases every polynomial, key, transform, and residue tensor.
+
+## Q depth groups and P special primes
+
+FHElium writes the ciphertext modulus as an ordered sequence of **Q depth
+groups**:
+
+$$
+(G_0,G_1,\ldots,G_D),
+\qquad G_d=(q_{d,0},\ldots,q_{d,k_d-1}).
+$$
+
+Each $q_{d,i}$ is an NTT-compatible Q prime. `config.q_depth_groups` stores
+these groups and their order. `config.max_depth` is $D$. The final group $G_D$
+is the terminal basis: it remains available for arithmetic, but there is no
+following group to which a rescale can advance.
+
+At public depth $d$, the active ciphertext modulus is
+
+$$
+Q_d=\prod_{r=d}^{D}\prod_{q\in G_r}q.
+$$
+
+The special modulus is
+
+$$
+P=\prod_j p_j,
+$$
+
+where the $p_j$ are **special primes** stored in `config.p_moduli`. Hybrid key
+switching temporarily extends a Q value to the QP basis and then removes P by
+ModDown. P is not part of the public depth sequence.
+
+For a dense RNS tensor, the limb axis is ordered as
+
+```text
+[active Q rows, all P rows]
+```
+
+when `modulus_basis="QP"`, and contains only the first region when
+`modulus_basis="Q"`. `prime_ids` records which configured prime each compact
+local row represents.
+
+## Depth and depth remaining
+
+**Depth** identifies the first active Q group. At depth zero, all Q groups are
+active. For $d<D$, a rescale from depth $d$ to $d+1$ removes the complete group
+$G_d$:
+
+```mermaid
+stateDiagram-v2
+    [*] --> D0: depth 0 / all Q groups
+    D0 --> D1: remove G0
+    D1 --> D2: remove G1
+    D2 --> D3: remove G2
+```
+
+The public interval is `0 <= depth <= max_depth`. FHElium reports
+
+```text
+depth_remaining = max_depth - depth
+```
+
+as the number of further rescale transitions in this chain. At `max_depth`,
+the active Q basis contains only $G_D$. Depth records a basis position, not
+the number of multiplications or rescale calls already executed. A caller may
+create a value at a selected depth, switch its basis, or accumulate several
+multiplications before one rescale when the remaining modulus and precision
+permit that schedule.
+
+A Bootstrap composition declares its own entry requirements. The supplied
+full-slot composition uses `bootstrap.input_depth`, one step before the
+terminal basis; an ordinary rescale then reaches the basis it uses for
+centered ModRaise. This does not remove a depth from the general CKKS chain.
+
+`mod_switch_to_depth(value, target_depth)` removes complete leading groups
+without quotient scaling. It preserves actual scale. `rescale_to_next_depth`
+removes one complete group and divides the actual scale by that group's product.
+No intermediate CKKS depth is created when a group contains several primes.
+
+## Scale is independent of prime width
+
+`config.default_scale` supplies a creation and planning default. Every
+plaintext and ciphertext carries its own positive finite actual scale
+$\Delta(v)$. For multiplication and rescaling,
+
+$$
+\Delta(ab)=\Delta(a)\Delta(b),
+\qquad
+\Delta(\operatorname{Rescale}_d(a))
+=\frac{\Delta(a)}{\prod_{q\in G_d}q}.
+$$
+
+A default scale near $2^{50}$ does not require one approximately 50-bit Q
+prime per depth. A depth group may contain several smaller primes whose product
+is near the desired divisor. Prime grouping, actual scale, and tensor dtype are
+therefore separate concepts.
+
+## RNS execution format
+
+Encoding first produces signed `int64` integer coefficients. The
+`integer_coefficients_to_rns` transition reduces those coefficients modulo each
+active prime and materializes the Engine's RNS dtype. Ciphertexts and live keys
+then retain that dtype.
+
+The Engine selects the narrowest supported execution format for the exact QP
+prime set. `rns_dtype=` is an expert override and is validated against every
+configured modulus. Montgomery radix, lazy-reduction bounds, and native table
+layout belong to the device-local `RnsContext`, not `CkksConfig`. This keeps one
+Ciphertext, Engine, operation set, and Backend model across supported execution
+formats.
+
+## Exact configuration and serialization
+
+A resolved configuration contains:
 
 ```text
 logN
 default_scale
-q_moduli
+q_depth_groups
 p_moduli
 galois_generator
 sigma
@@ -32,184 +155,33 @@ security_bits
 enforce_security_budget
 ```
 
-Device, rank, process-group, cache, and storage choices belong to their
-execution or application owners.
-`CkksConfig.dumps()` records the selected Q/P moduli, Galois generator, and
-FHElium package version; `CkksConfig.parse()` reconstructs that configuration
-only when the installed package and prime catalog reproduce those moduli.
+`CkksConfig.dumps()` serializes these values and the FHElium package version.
+`CkksConfig.parse()` reconstructs that exact parameter set. Runtime placement,
+process groups, caches, NTT implementation choice, and RNS dtype do not enter
+configuration identity.
 
-`CkksConfig()` and the default `fhelium.eager.Engine()` baseline use a 40-bit default
-scale with int64 tensors. Built-in int64 Presets provide 30-, 40-, and
-50-bit scale families; built-in int32 Presets use a 25-bit scale family.
-The dtype suffix, residue buffer width, and scale width are separate
-configuration properties.
-`config.default_scale` supplies the value-creation scale when an encode or
-encryption scale is omitted. Every plaintext and ciphertext carries its own
-positive finite binary64 actual scale, and arithmetic uses that per-value
-state. `scale_bits` selects the scale-prime catalog and default. Equal tensor
-shape compatibility must be accompanied by caller-established ring and modulus
-chain compatibility. The
-complete built-in Preset matrix is specified in
-[Choose a preset and chain depth](../../how-to/choose-preset-and-depth.md).
+## Cost and security consequences
 
-## Ring dimension and slots
-
-For `logN = k`:
+A two-component ciphertext at depth $d$ stores approximately
 
 $$
-N = 2^k, \qquad \text{CKKS slots} = N/2.
+2\,|Q_d|\,N\,W
 $$
 
-`N` is the polynomial-ring dimension. CKKS packs complex values into `N/2`
-slots. A larger ring offers more slots and a larger security/noise budget, but
-also increases every polynomial, key, NTT, and residue tensor.
+bytes, where $W$ is the selected residue element size. Evaluation keys add key
+digit, component, and QP axes and commonly dominate memory. More Q rows provide
+additional modulus capacity but increase transforms, key products, and storage.
 
-## Q and P occupy distinct limb-axis regions
-
-For one RNS polynomial, the dense payload has shape
-``[..., limb, coefficient_or_ntt_index]``. Each box below is one full
-length-$N$ tensor row; the diagram shows how the limb index is partitioned.
-
-```mermaid
-flowchart LR
-    subgraph Tensor["QP RNS tensor limb axis"]
-        direction LR
-        subgraph QRows["Q_l rows — ordinary active basis"]
-            direction LR
-            QL["row 0<br/>q_l"] ~~~ QN["row 1<br/>q_(l+1)"]
-            QN ~~~ QN2["row 2<br/>q_(l+2)"] ~~~ QMore["..."]
-            QMore ~~~ QLast["row |Q_l|-2<br/>q_(C-1)"]
-            QLast ~~~ QB["row |Q_l|-1<br/>q_base"]
-        end
-        subgraph PRows["P rows — auxiliary tail"]
-            direction LR
-            P0["row |Q_l|<br/>p_0"] ~~~ PMore["..."]
-            PMore ~~~ PK["row |Q_l|+|P|-1<br/>p_(|P|-1)"]
-        end
-        QB ~~~ P0
-    end
-
-    classDef qrow fill:#e8efff,stroke:#4569b3,color:#1f2a44
-    classDef prow fill:#fff1d6,stroke:#a66a18,color:#3d2a0d
-    class QL,QN,QN2,QMore,QLast,QB qrow
-    class P0,PMore,PK prow
-```
-
-The expanded Q region is illustrated for $\ell\leq C-4$. At later levels,
-unavailable intermediate Q rows are simply absent; the P tail remains the
-same auxiliary region.
-
-- **Q** is the ordinary ciphertext modulus chain. Ciphertexts normally live in
-  basis `"Q"`.
-- **P** contains special auxiliary moduli used by hybrid key switching. A
-  key-switch stage may temporarily extend data to basis `"QP"` and then return
-  to Q through ModDown.
-
-QP is the auxiliary extension of Q at the same level. Basis and level are
-independent state dimensions. In the dense tensor model, the limb axis is
-ordered as
-
-```text
-[q_l, q_(l+1), ..., q_base, p_0, ..., p_(|P|-1)].
-```
-
-A Q value stores only the leading Q region. A QP value at the same level
-retains those rows and appends the usually smaller P region. Hybrid key
-switching temporarily extends the limb axis with this P tail and ModDown
-returns to the leading Q region; neither operation interprets P rows as later
-levels.
-
-## Level means consumed leading Q primes
-
-At level zero, a ciphertext uses the complete ordinary Q chain. Each
-`rescale_to_next_level` or `mod_switch_to_next_level` transition drops one
-leading scale prime:
-
-```mermaid
-stateDiagram-v2
-    [*] --> L0: level 0 / all Q rows
-    L0 --> L1: rescale or mod switch / drop q0
-    L1 --> L2: rescale or mod switch / drop q1
-    L2 --> L3: rescale or mod switch / drop q2
-```
-
-`mod_switch_to_level(ciphertext, target_level)` may apply the same basis
-restriction across several levels in one call, dropping
-`target_level - ciphertext.level` leading Q rows.
-
-Therefore:
-
-- a larger level means fewer active Q rows;
-- `prime_ids` identifies the rows represented by the dense tensor;
-- the tensor's limb dimension shrinks after rescale or modulus switch;
-- a final legal level cannot be rescaled again;
-- operation compatibility requires more than comparing integer `level` values.
-
-FHElium stores prime IDs with each local tensor row because a compact local tensor row must still
-map to the correct configured modulus and arithmetic parameters.
-
-## Level and scale are independent state coordinates
-
-Each plaintext and ciphertext carries a positive finite binary64 actual scale
-$\Delta(v)$. Multiplication preserves level and records the product of operand
-scales. At public level $\ell$, rescale advances to $\ell+1$ and records
-
-$$
-\Delta(c')=\frac{\Delta(c)}{q_{\mathrm{drop}}},
-$$
-
-where $q_{\mathrm{drop}}$ is the actual leading active Q prime. Modulus switch
-advances or restricts the level while preserving scale. The complete public
-level interval, transition equations, compatibility requirements, and transition
-queries are specified in
-[Scale and level lifecycle](scale-and-level-lifecycle.md). The
-[explicit scale-management tutorial](../../tutorial/explicit-scale-management.md)
-applies the rescale equation in a runnable operand-scale plan.
-
-## Depth, precision, and range
-
-A parameter plan must account for three interacting limits:
-
-1. **Depth:** each rescale consumes a scale prime.
-2. **Precision:** scale and modulus budget determine usable approximate
-   precision.
-3. **Range:** input amplitude, multiplication, and wide summation must not wrap
-   modulo the active Q product.
-
-Increasing scale can improve fractional precision while reducing headroom for
-large intermediate values. Adding more Q primes increases value/key size and
-operation cost. Parameter selection balances workload depth, precision, range,
-memory, and operation cost.
-
-## Memory scales with active rows
-
-For a dense two-component ciphertext, payload storage is approximately:
-
-$$
-2 \times |Q_\ell| \times N \times \text{element size}.
-$$
-
-Evaluation keys additionally include digit and key-component axes and often a
-QP basis, so they can dominate ciphertext memory. Moving to a later level
-reduces ordinary active rows while key and temporary storage follow their own
-layouts and lifetimes.
-
-## Invariants to remember
-
-- The caller-selected configuration includes every modulus value and its order.
-- Level zero contains all ordinary Q rows.
-- Level increases as leading scale primes are dropped.
-- Q and QP identify modulus bases; level identifies the active Q suffix.
-- `prime_ids` is part of value identity.
-- Ring size, active rows, and component/digit axes all contribute to memory.
-- Precision claims must be validated at realistic amplitude and summation
-  width.
+The built-in security assessment applies to the exact complete QP product. A
+parameter plan must also validate numerical precision, message range, error
+growth, and native arithmetic bounds for its workload.
 
 ## Continue
 
-- [Scale and level lifecycle](scale-and-level-lifecycle.md)
+- [Scale and depth lifecycle](scale-and-depth-lifecycle.md)
+- [Scale, depth, and RNS execution format](scale-depth-and-execution-format.md)
 - [Value model and identity](value-model-and-identity.md)
 - [State transitions and orthogonality](state-transitions-and-orthogonality.md)
 - [Evaluator operation transitions](evaluator-operation-transitions.md)
-- [Modulus chain and depth tutorial](../../tutorial/modulus-chain-depth.md)
+- [Modulus-chain depth tutorial](../../tutorial/modulus-chain-depth.md)
 - [Choose a preset and chain depth](../../how-to/choose-preset-and-depth.md)

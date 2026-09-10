@@ -72,7 +72,7 @@ class _ArtifactPlaintextSource:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
 def test_ckks_values_follow_plan_and_lease_through_real_operation() -> None:
     engine = Engine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
     )
     manager = ResidencyManager()
     device_location = cuda_location("cuda:0")
@@ -83,7 +83,7 @@ def test_ckks_values_follow_plan_and_lease_through_real_operation() -> None:
 
         ciphertext_value = engine.encrypt_message(message).cpu()
         plaintext_value = engine.prepare_plaintext_for_addition(
-            engine.encode(addend_message, level=ciphertext_value.level)
+            engine.encode(addend_message, depth=ciphertext_value.depth)
         ).cpu()
         rotation_key_value = engine.create_rotation_key(
             1,
@@ -223,7 +223,7 @@ def test_artifact_source_reconstructs_exact_value_and_obeys_lifetimes(
     store_root = tmp_path / "artifacts"
     original = Plaintext(
         message=None,
-        level=2,
+        depth=2,
         scale=2.0**30,
         data=torch.arange(16, dtype=torch.int64),
         representation="integer_coefficients",
@@ -261,7 +261,7 @@ def test_artifact_source_reconstructs_exact_value_and_obeys_lifetimes(
         try:
             restored = borrowed[handle]
             assert isinstance(restored, Plaintext)
-            assert restored.level == 2
+            assert restored.depth == 2
             assert restored.scale == 2.0**30
             assert restored.representation == "integer_coefficients"
             assert restored.polynomial_domain == "coefficient"
