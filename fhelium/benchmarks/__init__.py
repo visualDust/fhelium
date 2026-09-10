@@ -1,4 +1,4 @@
-"""Public benchmark definitions, registry, and custom-workload interfaces."""
+"""Complete device benchmark suites and independently runnable workloads."""
 
 from fhelium.benchmarks.model import (
     BenchmarkCheck,

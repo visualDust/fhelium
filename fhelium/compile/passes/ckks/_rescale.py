@@ -76,7 +76,7 @@ def _classify_rescale_use(use: Use) -> tuple[bool, tuple[Use, ...]]:
         assert isinstance(operation, UnrealizedConversionCastOp)
         if not _cast_preserves_rescale_state(operation):
             raise ValueError(
-                "rescale cannot cross a same-dialect cast that changes level, "
+                "rescale cannot cross a same-dialect cast that changes depth, "
                 "prime IDs, or scale"
             )
         output = operation.outputs[0]
@@ -109,7 +109,7 @@ def _classify_rescale_use(use: Use) -> tuple[bool, tuple[Use, ...]]:
 def _cast_preserves_rescale_state(cast: UnrealizedConversionCastOp) -> bool:
     source = represented_state(cast.inputs[0]) or {}
     result = represented_state(cast.outputs[0]) or {}
-    for field in ("level", "prime_ids", "scale"):
+    for field in ("depth", "prime_ids", "scale"):
         if source.get(field) != result.get(field):
             return False
     return True
@@ -142,7 +142,7 @@ def _materialize_rescale(
             source
         ) is None or not _cast_preserves_rescale_state(opaque_cast):
             raise ValueError(
-                "rescale cannot cross a same-dialect cast that changes level, "
+                "rescale cannot cross a same-dialect cast that changes depth, "
                 "prime IDs, or scale"
             )
     else:
@@ -188,17 +188,28 @@ def _materialize_rescale(
         residues=representation[1],
     )
     result_state = dict(source_type.state.data)
-    level = result_state.get("level")
-    if isinstance(level, IntegerAttr):
-        source_level = int(level.value.data)
-        result_state["level"] = IntegerAttr(level.value.data + 1, 64)
+    depth = result_state.get("depth")
+    if isinstance(depth, IntegerAttr):
+        source_depth = int(depth.value.data)
+        result_state["depth"] = IntegerAttr(depth.value.data + 1, 64)
         prime_ids = result_state.get("prime_ids")
         if isinstance(prime_ids, ArrayAttr):
-            result_state["prime_ids"] = ArrayAttr(prime_ids.data[1:])
+            drop_count = (
+                len(config.q_depth_groups[source_depth])
+                if config is not None
+                else None
+            )
+            if drop_count is None:
+                result_state.pop("prime_ids")
+            else:
+                result_state["prime_ids"] = ArrayAttr(
+                    prime_ids.data[drop_count:]
+                )
         scale = result_state.get("scale")
         if isinstance(scale, FloatAttr) and config is not None:
             result_state["scale"] = FloatAttr(
-                float(scale.value.data) / float(config.q_moduli[source_level]),
+                float(scale.value.data)
+                / float(config.rescale_divisor(source_depth)),
                 Float64Type(),
             )
         elif scale is not None:

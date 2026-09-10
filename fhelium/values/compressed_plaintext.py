@@ -17,7 +17,7 @@ from fhelium.values.state import (
 from fhelium.values.tensor_resident import TensorResident
 from fhelium.values._validation import (
     validate_integral_tensor,
-    validate_nonnegative_level,
+    validate_nonnegative_depth,
     validate_prime_ids,
 )
 
@@ -62,7 +62,7 @@ class CompressedPlaintext(TensorResident):
     layout ``[*batch, limb]`` and the same integral dtype and device as
     ``data``. Direct construction retains supplied storage. :meth:`clone` and
     decompression allocate independent storage; batch selection and unbinding
-    return storage-sharing views. All batch entries share level, actual scale
+    return storage-sharing views. All batch entries share depth, actual scale
     $\Delta(p)$, domain, basis, residue form, and ``prime_ids``. The value
     has no engine, cache, placement, or persistence policy.
     """
@@ -70,7 +70,7 @@ class CompressedPlaintext(TensorResident):
     data: torch.Tensor
     ring_dimension: int
     compression_layout: CompressedPlaintextLayout
-    level: int
+    depth: int
     scale: float
     polynomial_domain: PolynomialDomain
     modulus_basis: ModulusBasis
@@ -84,8 +84,8 @@ class CompressedPlaintext(TensorResident):
             self.scale,
             value_name="CompressedPlaintext",
         )
-        self.level = validate_nonnegative_level(
-            self.level, value_name="CompressedPlaintext"
+        self.depth = validate_nonnegative_depth(
+            self.depth, value_name="CompressedPlaintext"
         )
         self.data = validate_integral_tensor(
             self.data, value_name="CompressedPlaintext"
@@ -246,7 +246,7 @@ class CompressedPlaintext(TensorResident):
         """Losslessly compress one operation-ready dense RNS plaintext.
 
         The encoded last axis is checked bit-for-bit. The compact tensor is
-        cloned so it does not retain the dense input's backing storage. Level,
+        cloned so it does not retain the dense input's backing storage. Depth,
         actual scale, domain, basis, residue form, dtype, device, and
         ``prime_ids`` are preserved.
         """
@@ -315,7 +315,7 @@ class CompressedPlaintext(TensorResident):
             data=compact.clone(),
             ring_dimension=ring_dimension,
             compression_layout=compression_layout,
-            level=plaintext.level,
+            depth=plaintext.depth,
             scale=plaintext.scale,
             polynomial_domain=plaintext.polynomial_domain,
             modulus_basis=plaintext.modulus_basis,
@@ -364,7 +364,7 @@ class CompressedPlaintext(TensorResident):
 
         return Plaintext(
             message=None,
-            level=self.level,
+            depth=self.depth,
             scale=self.scale,
             data=self.decompress_data(),
             representation="rns",
@@ -414,7 +414,7 @@ class CompressedPlaintext(TensorResident):
         metadata = (
             "ring_dimension",
             "compression_layout",
-            "level",
+            "depth",
             "scale",
             "polynomial_domain",
             "modulus_basis",
@@ -525,7 +525,7 @@ class CompressedPlaintext(TensorResident):
             data=tensors[0],
             ring_dimension=self.ring_dimension,
             compression_layout=self.compression_layout,
-            level=self.level,
+            depth=self.depth,
             scale=self.scale,
             polynomial_domain=self.polynomial_domain,
             modulus_basis=self.modulus_basis,
@@ -538,7 +538,7 @@ class CompressedPlaintext(TensorResident):
     def __str__(self) -> str:
         return (
             "CompressedPlaintext("
-            f"level={self.level}, scale={self.scale}, "
+            f"depth={self.depth}, scale={self.scale}, "
             f"polynomial_domain={self.polynomial_domain!r}, modulus_basis={self.modulus_basis!r}, "
             f"residue_representation={self.residue_representation}, prime_ids={self.prime_ids}, "
             f"ring_dimension={self.ring_dimension}, "

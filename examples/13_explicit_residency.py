@@ -87,7 +87,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_engine_args(
         parser,
-        default_preset="slots8192-scale40-levels7-int64",
+        default_preset="slots8192-scale40-depth7-int64",
     )
     args = parser.parse_args()
 
@@ -107,7 +107,7 @@ def main() -> None:
     # Construct live FHElium values before transferring their logical
     # ownership to the manager.
     weight = engine.prepare_plaintext_for_multiplication(
-        engine.encode(weight_message, level=0),
+        engine.encode(weight_message, depth=0),
         modulus_basis="Q",
     ).cpu()
     rotation_key = engine.create_rotation_key(1, engine.secret_key).cpu()
@@ -218,7 +218,7 @@ def main() -> None:
                 engine.coefficient_domain_to_ntt_domain(rotated),
                 resident[weight_handle],
             )
-            output = engine.rescale_to_next_level(
+            output = engine.rescale_to_next_depth(
                 engine.ntt_domain_to_coefficient_domain(output)
             )
 

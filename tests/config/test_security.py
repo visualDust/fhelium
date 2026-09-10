@@ -17,6 +17,18 @@ from fhelium.errors import (
     SecurityParametersUnsupportedError,
 )
 
+
+def _config(**overrides: object) -> CkksConfig:
+    base = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    parameters: dict[str, object] = {
+        "default_scale": base.default_scale,
+        "q_depth_groups": base.q_depth_groups,
+        "p_moduli": base.p_moduli,
+        "logN": base.logN,
+    }
+    parameters.update(overrides)
+    return CkksConfig(**parameters)  # type: ignore[arg-type]
+
 _TABLE_ROWS = {
     "ternary": {
         128: {
@@ -187,11 +199,11 @@ def test_invalid_raw_modulus_inputs_raise_clear_errors(
 @pytest.mark.parametrize("sigma", [0.0, -1.0, float("inf"), float("nan")])
 def test_config_rejects_nonpositive_or_nonfinite_sigma(sigma: float) -> None:
     with pytest.raises(ValueError, match="positive and finite"):
-        CkksConfig(sigma=sigma)
+        _config(sigma=sigma)
 
 
 def test_disabled_enforcement_keeps_unsupported_config_printable() -> None:
-    config = CkksConfig(
+    config = _config(
         sigma=3.2,
         security_bits=129,
         enforce_security_budget=False,
@@ -202,7 +214,7 @@ def test_disabled_enforcement_keeps_unsupported_config_printable() -> None:
 
 
 def test_config_security_state_and_modulus_sequences_are_immutable() -> None:
-    config = CkksConfig()
+    config = _config()
     assessment = config.security_assessment
 
     with pytest.raises(AttributeError, match="CkksConfig is immutable"):
@@ -222,7 +234,7 @@ def test_removed_false_security_choices_are_rejected(
     removed_field: str,
 ) -> None:
     with pytest.raises(TypeError, match="unexpected keyword"):
-        CkksConfig(**{removed_field: True})  # type: ignore[arg-type]
+        _config(**{removed_field: True})
 
 
 def test_assessment_is_immutable() -> None:
@@ -235,7 +247,7 @@ def test_assessment_is_immutable() -> None:
 
 
 def test_config_convenience_assesses_the_exact_complete_qp_product() -> None:
-    config = CkksConfig.parse(Preset.slots8192_scale40_levels7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
 
     assessment = assess_config_security(config)
 
@@ -253,11 +265,12 @@ def test_engine_enforces_over_budget_before_rns_initialization(
             raise AssertionError("RNS initialization must not run")
 
     monkeypatch.setattr(ckks_engine_module, "RnsRuntime", UnexpectedRnsRuntime)
+    source = CkksConfig.parse(Preset.slots32768_scale30_depth45_int64)
     config = CkksConfig(
+        default_scale=source.default_scale,
+        q_depth_groups=source.q_depth_groups[:13],
+        p_moduli=source.p_moduli[:1],
         logN=14,
-        scale_bits=50,
-        num_scale_primes=7,
-        num_p_primes=1,
     )
     assert config.security_assessment.status == "exceeds"
 
@@ -273,7 +286,7 @@ def test_engine_rejects_unsupported_sigma_before_rns_initialization(
             raise AssertionError("RNS initialization must not run")
 
     monkeypatch.setattr(ckks_engine_module, "RnsRuntime", UnexpectedRnsRuntime)
-    config = CkksConfig(sigma=3.2)
+    config = _config(sigma=3.2)
 
     with pytest.raises(SecurityParametersUnsupportedError):
         CkksEngine(config, device="cpu")

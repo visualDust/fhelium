@@ -601,8 +601,8 @@ register_benchmark(
         profiles=(
             _profile(
                 "quick",
-                "8,192-slot/40-bit-scale/7-level smoke profile with short timing loops.",
-                preset=Preset.slots8192_scale40_levels7_int64,
+                "8,192-slot/40-bit-scale/7-depth smoke profile with short timing loops.",
+                preset=Preset.slots8192_scale40_depth7_int64,
                 counts_or_steps=[1, 2, 4, 8],
                 warmup=2,
                 runs=5,
@@ -610,15 +610,15 @@ register_benchmark(
             _profile(
                 "core",
                 "Versioned 8,192-slot core operator measurement with raw samples.",
-                preset=Preset.slots8192_scale40_levels7_int64,
+                preset=Preset.slots8192_scale40_depth7_int64,
                 counts_or_steps=[1, 2, 4, 8],
                 warmup=5,
                 runs=20,
             ),
             _profile(
                 "standard",
-                "32,768-slot/40-bit-scale/34-level profile for stable operator comparisons.",
-                preset=Preset.slots32768_scale40_levels34_int64,
+                "32,768-slot/40-bit-scale/34-depth profile for stable operator comparisons.",
+                preset=Preset.slots32768_scale40_depth34_int64,
                 counts_or_steps=[1, 2, 4, 8],
                 warmup=5,
                 runs=20,
@@ -641,8 +641,8 @@ register_benchmark(
         profiles=(
             _profile(
                 "quick",
-                "Short 8,192-slot/40-bit-scale/7-level paired rotation sweep.",
-                preset=Preset.slots8192_scale40_levels7_int64,
+                "Short 8,192-slot/40-bit-scale/7-depth paired rotation sweep.",
+                preset=Preset.slots8192_scale40_depth7_int64,
                 counts_or_steps=[2, 4, 8],
                 warmup=2,
                 runs=3,
@@ -651,7 +651,7 @@ register_benchmark(
             _profile(
                 "core",
                 "Versioned 8,192-slot paired sweep with repeated A/B measurements.",
-                preset=Preset.slots8192_scale40_levels7_int64,
+                preset=Preset.slots8192_scale40_depth7_int64,
                 counts_or_steps=[2, 4, 8],
                 warmup=4,
                 runs=5,
@@ -659,8 +659,8 @@ register_benchmark(
             ),
             _profile(
                 "standard",
-                "Longer 32,768-slot/40-bit-scale/34-level rotation sweep.",
-                preset=Preset.slots32768_scale40_levels34_int64,
+                "Longer 32,768-slot/40-bit-scale/34-depth rotation sweep.",
+                preset=Preset.slots32768_scale40_depth34_int64,
                 counts_or_steps=[4, 8, 16],
                 warmup=5,
                 runs=10,

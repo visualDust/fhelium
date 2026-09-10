@@ -174,6 +174,17 @@ def _validate_ckks(operation: Operation) -> bool:
         _require(
             operation.result, {ciphertext}, label=f"{operation.name} result"
         )
+    elif isinstance(operation, ckks.GroupedRotationWeightedSumOp):
+        _require(
+            operation.value,
+            {_COEFFICIENT_STANDARD},
+            label=f"{operation.name} input",
+        )
+        _require_values(
+            operation,
+            (*operation.plaintexts, operation.result),
+            {_NTT_MONTGOMERY},
+        )
     elif isinstance(operation, (ckks.RotateOp, ckks.RotateManyOp)):
         input_domain = (
             operation.input_domain.data
@@ -261,7 +272,16 @@ def _validate_rns(operation: Operation) -> bool:
         rns.CoefficientAutomorphismOp: (1, _COEFFICIENT_STANDARD),
     }
     fixed = fixed_same.get(type(operation))
-    if fixed is not None:
+    if isinstance(
+        operation,
+        (rns.MontgomeryWeightedSumOp, rns.MontgomeryWeightedSumsOp),
+    ):
+        _require_values(
+            operation,
+            (*operation.terms, *operation.results),
+            {_NTT_MONTGOMERY},
+        )
+    elif fixed is not None:
         value_operands, representation = fixed
         _require_values(
             operation,
@@ -289,7 +309,7 @@ def _validate_rns(operation: Operation) -> bool:
         _require(
             operation.result, {ciphertext}, label=f"{operation.name} result"
         )
-    elif isinstance(operation, rns.RescaleDropLeadingPrimeOp):
+    elif isinstance(operation, rns.RescaleDropLeadingPrimesOp):
         domain = operation.input_domain.data
         if operation.output_domain.data != domain:
             raise ValueError(f"{operation.name} must preserve its domain")

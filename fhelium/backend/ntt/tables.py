@@ -108,23 +108,24 @@ def prepare_ntt_tables(
     *,
     materialize_parameter_rows: MaterializeParameterRows,
     device: torch.device,
+    dtype: torch.dtype,
 ) -> NttTables:
     """Build a plan and return separately allocated backend table tensors.
 
-    Prime rows follow the config's level-zero QP order.
-    Returned tensors use ``ckks_config.torch_dtype`` on ``device`` and remain
-    in standard representation until ``RnsContext`` converts them in place.
+    Prime rows follow the config's depth-zero QP order.
+    Returned tensors use the selected execution ``dtype`` on ``device`` and
+    remain in standard representation until ``RnsContext`` converts them in place.
     """
 
     if isinstance(policy, CompactRadix2Policy):
-        plan = CompactRadix2NttPlan(ckks_config, device="cpu")
+        plan = CompactRadix2NttPlan(ckks_config, device="cpu", dtype=dtype)
         return CompactRadix2Tables(
             forward_twiddles=materialize_parameter_rows(plan.forward_twiddles),
             inverse_twiddles=materialize_parameter_rows(plan.inverse_twiddles),
         )
 
     if isinstance(policy, IndexedRadix2Policy):
-        plan = IndexedRadix2NttPlan(ckks_config, device="cpu")
+        plan = IndexedRadix2NttPlan(ckks_config, device="cpu", dtype=dtype)
         return IndexedRadix2Tables(
             forward_even_indices=_copy_indices_to_device(
                 plan.forward_indices[0], device=device
@@ -143,7 +144,9 @@ def prepare_ntt_tables(
         )
 
     if isinstance(policy, CompactFixedRadixPolicy):
-        plan = CompactPowerOfTwoRadixNttPlan(ckks_config, policy, device="cpu")
+        plan = CompactPowerOfTwoRadixNttPlan(
+            ckks_config, policy, device="cpu", dtype=dtype
+        )
         return CompactPowerOfTwoRadixTables(
             forward_outer_twiddles=materialize_parameter_rows(
                 plan.forward_outer_twiddles

@@ -42,7 +42,7 @@ pipeline = fh_compile.Pipeline(
         fh_compile.ResolveRotationKeyOperandsPass(),
         fh_compile.InsertRelinearizationPass(),
         fh_compile.InsertRescalePass(),
-        fh_compile.AssignCkksLevelsPass(entry_level=0),
+        fh_compile.AssignCkksDepthsPass(entry_depth=0),
         fh_compile.AssignCkksScalesPass(
             entry_scale=config.default_scale,
         ),
@@ -58,7 +58,7 @@ This sequence records the following caller-selected pipeline choices:
 
 - it retains rotation as a registered whole CKKS operation;
 - it inserts immediate relinearization and rescale operations for the ciphertext product;
-- it assigns concrete levels and per-value actual scales after transition placement;
+- it assigns concrete depths and per-value actual scales after transition placement;
 - it lowers the remaining CKKS arithmetic into RNS and NTT operations.
 
 Another caller may choose late transition placement, additional analyses, a different lowering route, or a pipeline that intentionally stops at an intermediate Program.

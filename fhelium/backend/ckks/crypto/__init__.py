@@ -3,7 +3,7 @@
 from ._decryption import (
     NativeDecryptImplementation,
     decrypt_tensor,
-    reconstruct_tail_q_coefficients_tensor,
+    reconstruct_q_coefficients_tensor,
 )
 from ._encryption import NativeEncryptImplementation, encrypt_tensor
 from ._key_generation import CkksKeyGenerator, KeyGenerationResource
@@ -27,5 +27,5 @@ __all__ = [
     "KeyGenerationResource",
     "decrypt_tensor",
     "encrypt_tensor",
-    "reconstruct_tail_q_coefficients_tensor",
+    "reconstruct_q_coefficients_tensor",
 ]

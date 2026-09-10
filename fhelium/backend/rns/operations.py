@@ -13,7 +13,7 @@ from fhelium.ir.dialects import rns
 from fhelium.native.wrapper import ckks_ops, rns_ops
 
 from fhelium.backend.rns._operand_state import (
-    _active_level,
+    _active_depth,
     _operand_basis,
 )
 from fhelium.backend.rns.context import RnsContext
@@ -55,13 +55,14 @@ class NativeRnsLinearImplementation(_OperandResourceImplementation):
         if invocation.operation_type is rns.NegateStandardOp:
             output_data = lhs if in_place else lhs.clone()
             output_data.neg_()
-            level = _active_level(
+            depth = _active_depth(
                 lhs,
                 resource,
                 include_p=include_p,
             )
-            stop = resource.qp_row_stop if include_p else resource.q_row_stop
-            active_moduli = resource.moduli[level:stop]
+            active_moduli = resource.basis_parameters(
+                depth, include_p=include_p
+            ).modulus_tensor
             output_data.remainder_(
                 active_moduli.view(
                     *([1] * (output_data.ndim - 2)),
@@ -133,14 +134,14 @@ class NativeRnsLinearImplementation(_OperandResourceImplementation):
 
 @dataclass(frozen=True)
 class NativeRnsTransitionImplementation(_OperandResourceImplementation):
-    """Execute residue conversion, level restriction, and scale metadata ops."""
+    """Execute residue conversion, depth restriction, and scale metadata ops."""
 
     name: str = "native-rns-transition"
     supports_in_place: bool = True
     operation_types: tuple[type[Operation], ...] = (
         rns.StandardToMontgomeryOp,
         rns.MontgomeryToStandardOp,
-        rns.RestrictLevelOp,
+        rns.RestrictDepthOp,
         rns.ReinterpretScaleOp,
     )
 
@@ -175,13 +176,13 @@ class NativeRnsTransitionImplementation(_OperandResourceImplementation):
             expected_prime_ids = invocation.result_prime_ids[0]
             if expected_prime_ids is None:
                 raise ValueError(
-                    "Level restriction requires a physical result row count"
+                    "Depth restriction requires a physical result row count"
                 )
             result_rows = len(expected_prime_ids)
             source_rows = source.size(-2)
             if not 0 < result_rows <= source_rows:
                 raise ValueError(
-                    "Level restriction result rows must be within the source "
+                    "Depth restriction result rows must be within the source "
                     "Tensor extent"
                 )
             selected = source.narrow(
@@ -268,6 +269,52 @@ class NativePlaintextArithmeticImplementation(_OperandResourceImplementation):
             for component in range(ciphertext.size(0))
         ]
         return (torch.stack(products, dim=0),)
+
+
+@dataclass(frozen=True)
+class NativeMontgomeryWeightedSumImplementation(_OperandResourceImplementation):
+    r"""Compute one or more $\sum_t c_t p_t$ results without term products."""
+
+    name: str = "native-montgomery-weighted-sum"
+    supports_in_place: bool = False
+    operation_types: tuple[type[Operation], ...] = (
+        rns.MontgomeryWeightedSumOp,
+        rns.MontgomeryWeightedSumsOp,
+    )
+
+    def execute(
+        self,
+        invocation: OperationInvocation,
+        values: tuple[torch.Tensor, ...],
+        resources: tuple[BoundResource, ...],
+        *,
+        in_place: bool,
+    ) -> tuple[torch.Tensor, ...]:
+        del in_place
+        count = cast(int, invocation.attributes["term_count"])
+        ciphertexts = values[:count]
+        plaintexts = values[count:]
+        resource = cast(RnsContext, resources[0].value)
+        parameters = resource.rns_parameters_for(
+            ciphertexts[0],
+            include_p=_operand_basis(invocation) == "QP",
+        )
+        if invocation.operation_type is rns.MontgomeryWeightedSumsOp:
+            group_count = cast(int, invocation.attributes["group_count"])
+            grouped = rns_ops.montgomery_weighted_sums(
+                list(ciphertexts),
+                list(plaintexts),
+                group_count,
+                parameters,
+            )
+            return (grouped,)
+        return (
+            rns_ops.montgomery_weighted_sum(
+                list(ciphertexts),
+                list(plaintexts),
+                parameters,
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -369,8 +416,8 @@ class NativeHybridModUpImplementation(_OperandResourceImplementation):
             raise ValueError("Hybrid ModUp requires one source polynomial")
         source = values[0]
         resource = _rns_resource(resources)
-        level = _active_level(source, resource, include_p=False)
-        digit_specs = resource.rns_layout.digit_specs(level)
+        depth = _active_depth(source, resource, include_p=False)
+        digit_specs = resource.rns_layout.digit_specs(depth)
         digit_index = int(invocation.attributes["digit_index"])  # type: ignore[arg-type]
         if digit_index >= len(digit_specs):
             raise IndexError(
@@ -404,7 +451,7 @@ class NativeHybridModUpImplementation(_OperandResourceImplementation):
                 neg_inv_lo.contiguous(),
                 neg_inv_hi.contiguous(),
             )
-        active_basis = resource.basis_parameters(level, include_p=True)
+        active_basis = resource.basis_parameters(depth, include_p=True)
         basis_extension = resource.row_parameters(
             digit_spec.prime_ids
         ).basis_extension_coefficients
@@ -500,7 +547,7 @@ class NativeCoefficientAutomorphismImplementation(
         )
         source_sign[destination] = sign
         twice_modulus = resource.twice_modulus_for_basis(
-            _active_level(
+            _active_depth(
                 source,
                 resource,
                 include_p=_operand_basis(invocation) == "QP",
@@ -522,6 +569,7 @@ __all__ = [
     "NativeHybridModUpImplementation",
     "NativeMontgomeryAccumulateImplementation",
     "NativeMontgomeryMultiplyImplementation",
+    "NativeMontgomeryWeightedSumImplementation",
     "NativePlaintextArithmeticImplementation",
     "NativeRnsLinearImplementation",
     "NativeRnsStructureImplementation",

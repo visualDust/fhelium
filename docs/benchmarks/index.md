@@ -1,10 +1,14 @@
 ---
-title: FHElium Benchmark v1 results
-description: Browse curated FHElium Benchmark v1 runs with separate latency, throughput, memory, and correctness measurements.
+title: Benchmarks
+description: Workload performance across hardware, parameters and execution plans.
 layout: page
 pageClass: benchmark-portal-page
 sidebar: false
 aside: false
 ---
 
-<BenchmarkV1Portal />
+<script setup>
+import WorkloadBenchmarks from '../.vitepress/theme/benchmarks/workloads/WorkloadBenchmarks.vue'
+</script>
+
+<WorkloadBenchmarks />

@@ -6,9 +6,9 @@ expose multiplicative depth, actual scale, key use, and optimization
 opportunities.
 
 This page defines the state effects of addition, multiplication,
-relinearization, rescale, key switching, and rotation. Scale and level
+relinearization, rescale, key switching, and rotation. Scale and depth
 equations are defined in
-[Scale and level lifecycle](scale-and-level-lifecycle.md). Primitive
+[Scale and depth lifecycle](scale-and-depth-lifecycle.md). Primitive
 representation, domain, and residue conversions are defined in
 [State transitions and orthogonality](state-transitions-and-orthogonality.md).
 
@@ -16,16 +16,16 @@ representation, domain, and residue conversions are defined in
 
 ```mermaid
 flowchart LR
-    A[Ciphertext A<br/>level l, scale s]
+    A[Ciphertext A<br/>depth l, scale s]
     B[Ciphertext B<br/>matching value layout]
     ADD[add]
-    C[Ciphertext<br/>level l, scale s]
+    C[Ciphertext<br/>depth l, scale s]
     A --> ADD
     B --> ADD
     ADD --> C
 ```
 
-Addition preserves level and scale. Inputs agree on active rows, polynomial
+Addition preserves depth and scale. Inputs agree on active rows, polynomial
 domain, modulus basis, residue representation, component count, and binary64
 scale. The caller ensures that both inputs use compatible CKKS parameters.
 
@@ -51,7 +51,7 @@ the ciphertext scale metadata.
 
 `multiply_scalar(ciphertext, scalar, scalar_scale=...)` quantizes the real
 scalar at $\Delta_s$ and applies one Montgomery scalar per active RNS row to
-every ciphertext component and coefficient. It preserves the level and
+every ciphertext component and coefficient. It preserves the depth and
 records
 
 $$
@@ -61,24 +61,24 @@ $$
 Eager execution again defaults $\Delta_s$ to the input ciphertext scale.
 `multiply_integer_scalar(ciphertext, integer)` instead performs modular
 integer multiplication without an encoding scale, so it preserves both
-$\Delta_c$ and the level. Neither multiplication operation rescales. A caller
-invokes `rescale_to_next_level` separately when its schedule requires the
+$\Delta_c$ and the depth. Neither multiplication operation rescales. A caller
+invokes `rescale_to_next_depth` separately when its schedule requires the
 divide-round-drop transition.
 
 These shortcuts apply to real scalars. A non-real complex slot value uses
 ordinary message encoding and plaintext preparation.
 
-## Plaintext multiplication preserves level and multiplies scale
+## Plaintext multiplication preserves depth and multiplies scale
 
 ```mermaid
 flowchart LR
-    CT[Coefficient ciphertext<br/>level l, scale s_ct]
+    CT[Coefficient ciphertext<br/>depth l, scale s_ct]
     NTT[coefficient_domain_to_ntt_domain]
     PT[Prepared plaintext<br/>NTT/Montgomery, scale s_pt]
     PM[multiply_plaintext]
-    OUT[NTT ciphertext<br/>level l, scale s_ct * s_pt]
-    RS[rescale_to_next_level]
-    NEXT[NTT ciphertext<br/>level l + 1, scale s_ct * s_pt / q_l]
+    OUT[NTT ciphertext<br/>depth l, scale s_ct * s_pt]
+    RS[rescale_to_next_depth]
+    NEXT[NTT ciphertext<br/>depth l + 1, scale s_ct * s_pt / M_l]
     CT --> NTT --> PM
     PT --> PM
     PM --> OUT --> RS --> NEXT
@@ -87,7 +87,7 @@ flowchart LR
 `multiply_plaintext` accepts an operation-ready plaintext constructed with
 `engine.prepare_plaintext_for_multiplication(engine.encode(...))` and a
 two-component NTT/Montgomery ciphertext. The result remains NTT/Montgomery,
-stays at the input level, and records the product of the operand scales. This
+stays at the input depth, and records the product of the operand scales. This
 matches ciphertext-ciphertext `multiply`: multiplication regions own their
 NTT-domain transition calls, and compatible terms can be accumulated and
 rescaled without an intermediate inverse transition.
@@ -96,11 +96,11 @@ rescaled without an intermediate inverse transition.
 source_ntt = engine.coefficient_domain_to_ntt_domain(source)
 term_ntt = engine.multiply_plaintext(source_ntt, prepared_weight)
 sum_ntt = engine.add(sum_ntt, term_ntt)
-result = engine.rescale_to_next_level(sum_ntt)
+result = engine.rescale_to_next_depth(sum_ntt)
 ```
 
 For repeated model weights, encode and prepare operation-ready plaintexts at
-the levels used by the evaluator instead of repeating preparation per
+the depths used by the evaluator instead of repeating preparation per
 request.
 
 ## Ciphertext multiplication produces three components
@@ -123,8 +123,8 @@ flowchart LR
     MUL[multiply]
     T[3-component<br/>NTT/Montgomery, scale Delta squared]
     RELIN[relinearize]
-    R[rescale_to_next_level]
-    O[2-component<br/>coefficient ciphertext, scale Delta squared / q_l]
+    R[rescale_to_next_depth]
+    O[2-component<br/>coefficient ciphertext, scale Delta squared / M_l]
     A --> NA --> MUL
     B --> NB --> MUL
     MUL --> T --> RELIN --> R --> O
@@ -139,7 +139,7 @@ The public `multiply` operation has these preconditions:
 - Q modulus basis.
 
 It returns a three-component NTT ciphertext at the product scale.
-Relinearization and `rescale_to_next_level` are subsequent operations.
+Relinearization and `rescale_to_next_depth` are subsequent operations.
 Rescale accepts any valid pre-rescale actual scale supported by the active
 modulus state.
 
@@ -213,23 +213,24 @@ different approximate schedule, but it changes the active-Q key-switch work,
 rounding, and noise and is therefore not selected silently.
 
 When a caller chooses transition placement, it runs those passes before
-`AssignCkksLevelsPass` and `AssignCkksScalesPass`. The level pass reads the
+`AssignCkksDepthsPass` and `AssignCkksScalesPass`. The depth pass reads the
 represented rescale and modulus-switch nodes. The scale pass propagates
 per-value actual scales and never
 inserts arithmetic or metadata reinterpretation operations. A Program may
 therefore retain an unrescaled scale or a three-component result when its
 caller and eventual consumer support that state.
 
-## Scale and level transitions
+## Scale and depth transitions
 
-`rescale_to_next_level` accepts a complete coefficient-domain, standard-residue Q or
-QP ciphertext with two or three components. It advances one level, removes the
-leading Q row, and divides the actual scale by that Q prime.
-`mod_switch_to_next_level` and `mod_switch_to_level` restrict the active Q basis while
+`rescale_to_next_depth` accepts a complete coefficient-domain, standard-residue Q or
+QP ciphertext with two or three components. It advances one depth, removes the
+leading Q depth group, and divides the actual scale by that group's prime
+product.
+`mod_switch_to_next_depth` and `mod_switch_to_depth` restrict the active Q basis while
 preserving scale. `reinterpret_at_scale` preserves residues and records a new
 scale, changing the decoded message by the old-to-new scale ratio. The
 equations, public bounds, and compatibility requirements are specified in
-[Scale and level lifecycle](scale-and-level-lifecycle.md).
+[Scale and depth lifecycle](scale-and-depth-lifecycle.md).
 
 ## Rotation is automorphism plus key switching
 
@@ -271,7 +272,7 @@ asynchronous readers if ownership is unclear.
 
 Record the following state before each operation:
 
-- current level and active rows;
+- current depth and active rows;
 - current scale;
 - coefficient or NTT domain;
 - Q or QP basis;
@@ -283,7 +284,7 @@ Record the following state before each operation:
 ## Continue
 
 - [State transitions and orthogonality](state-transitions-and-orthogonality.md)
-- [Scale and level lifecycle](scale-and-level-lifecycle.md)
+- [Scale and depth lifecycle](scale-and-depth-lifecycle.md)
 - [Late relinearization and NTT reuse tutorial](../../tutorial/late-relinearization-and-ntt-reuse.md)
 - [Rotation hoisting tutorial](../../tutorial/rotation-hoisting.md)
 - [Key lifecycle](key-lifecycle.md)

@@ -1,4 +1,4 @@
-"""Registered dialect modules for FHElium's multi-level IR."""
+"""Registered dialect modules for FHElium's multi-depth IR."""
 
 from . import (
     ckks,

@@ -14,7 +14,7 @@ package initializers and modules that publish interfaces through ``__all__``.
 | Configure CKKS parameters | [`fhelium.config.ckks`](fhelium/config/ckks.md) and [`fhelium.config.ntt`](fhelium/config/ntt.md) | [Choose a preset and depth](../how-to/choose-preset-and-depth.md) |
 | Assess a supported security-table row | [`fhelium.config.security`](fhelium/config/security.md) | [Security scope](../tutorial/support-and-security.md) |
 | Create and use an eager engine | [`fhelium.eager`](fhelium/eager.md) | [Quickstart](../tutorial/tutorials.md) |
-| Control scale and level with separate operations | [`fhelium.eager`](fhelium/eager.md) | [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md) |
+| Control scale and depth with separate operations | [`fhelium.eager`](fhelium/eager.md) | [Scale and depth lifecycle](../concepts/ckks/scale-and-depth-lifecycle.md) |
 | Inspect typed values and keys | [`fhelium.values.ciphertext`](fhelium/values/ciphertext.md), [`fhelium.values.plaintext`](fhelium/values/plaintext.md), and [`fhelium.values.keys`](fhelium/values/keys.md) | [Value model and identity](../concepts/ckks/value-model-and-identity.md) |
 | Persist a value | [`fhelium.serialization.value`](fhelium/serialization/value.md) | [Serialization and artifacts](../concepts/execution/serialization-and-artifacts.md) |
 | Capture or reuse repeated work | [`fhelium.runtime.cuda_graph`](fhelium/runtime/cuda_graph.md) and [`fhelium.runtime.buffer`](fhelium/runtime/buffer.md) | [Execution concepts](../concepts/execution/cuda-graph-model.md) |

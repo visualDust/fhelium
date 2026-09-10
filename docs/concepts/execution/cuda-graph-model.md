@@ -138,7 +138,7 @@ graph LR
     Outside --> Inside
 ```
 
-Randomized key generation/encryption, dynamic shapes or levels, variable
+Randomized key generation/encryption, dynamic shapes or depths, variable
 communication topology, storage I/O, and cache miss paths are poor capture
 candidates.
 
@@ -162,7 +162,7 @@ baseline with the same correctness and memory accounting.
 ## Common failures
 
 - Capturing key generation or fresh-randomness encryption.
-- Changing level, scale, or key step between replays.
+- Changing depth, scale, or key step between replays.
 - Retaining a borrowed output across another replay.
 - Concurrent replay through one program instance.
 - Assuming graph capture automatically includes distributed collectives.

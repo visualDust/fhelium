@@ -51,7 +51,7 @@ _RNS_NTT_OPERATION_TYPES = (
     rns.AddStandardOp,
     rns.SubtractStandardOp,
     rns.NegateStandardOp,
-    rns.RescaleDropLeadingPrimeOp,
+    rns.RescaleDropLeadingPrimesOp,
     rns.ExtractComponentOp,
     rns.PackTwoComponentsOp,
     rns.HybridModUpDigitOp,

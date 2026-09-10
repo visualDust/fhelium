@@ -12,7 +12,7 @@ from fhelium.native.wrapper import ckks_ops
 def moddown_ntt_qp_to_q(
     source: torch.Tensor,
     plan: KeySwitchExecutionResource,
-    level: int,
+    depth: int,
     *,
     coefficient_c0: torch.Tensor | None = None,
 ) -> torch.Tensor:
@@ -37,11 +37,11 @@ def moddown_ntt_qp_to_q(
         p_rows, parameter_row_start=rns_context.config.num_q_primes
     )
     q_rows = source[..., :-p_count, :]
-    parameters = rns_context.basis_parameters(level, include_p=True)
+    parameters = rns_context.basis_parameters(depth, include_p=True)
     correction = ckks_ops.keyswitch_moddown_qp_to_q(
         torch.zeros_like(q_rows),
         p_rows,
-        plan.moddown_tables[level],
+        plan.moddown_tables[depth],
         parameters.native_parameters,
     )
     if coefficient_c0 is not None:
@@ -49,12 +49,21 @@ def moddown_ntt_qp_to_q(
     backend = ntt_context.ntt_backend
     if isinstance(backend, CompactRadix2NttBackend):
         backend.forward_to_montgomery_add_scaled_(
-            correction, q_rows, plan.p_inverse_montgomery[level:], level
+            correction,
+            q_rows,
+            plan.p_inverse_montgomery[
+                plan.rns_context.basis_parameters(depth).parameter_row_start :
+            ],
+            plan.rns_context.basis_parameters(depth).parameter_row_start,
         )
         return correction
-    ntt_context.forward_to_montgomery_(correction, parameter_row_start=level)
+    ntt_context.forward_to_montgomery_(
+        correction,
+        parameter_row_start=rns_context.basis_parameters(depth).parameter_row_start,
+    )
     q_rows = q_rows.clone()
     rns_context.montgomery_mul_row_scalars_(
-        q_rows, plan.p_inverse_montgomery[level:]
+        q_rows,
+        plan.p_inverse_montgomery[plan.rns_context.basis_parameters(depth).parameter_row_start :],
     )
     return rns_context.add_lazy(q_rows, correction)

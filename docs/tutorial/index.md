@@ -25,7 +25,7 @@ the native CPU backend rather than PyTorch MPS. The
 | --- | --- |
 | Build a correct evaluator | [01 Basic workflow](basic-ckks-workflow.md) → [02 Key lifecycle](key-materials.md) → [04 Chain depth](modulus-chain-depth.md) → [05 Actual scales](explicit-scale-management.md) → [06 Explicit reuse](late-relinearization-and-ntt-reuse.md) |
 | Understand value layout and storage | [03 Memory and persistence](value-memory-and-persistence.md) → [15 Homogeneous batching](homogeneous-batching.md) → [16 Compressed plaintexts](compressed-plaintext.md) |
-| Reduce rotation cost | [07 Rotation hoisting](rotation-hoisting.md) → [Benchmark a workload](../how-to/benchmark-a-workload.md) |
+| Reduce rotation cost | [07 Rotation hoisting](rotation-hoisting.md) → [Benchmark methodology](/benchmarks/methodology) |
 | Use multiple GPUs | [08 Independent ciphertexts](spmd-independent-ciphertexts.md) → [09 Additive rotation terms](spmd-rotation-parallel-matvec.md) → [10 RNS-limb pipeline](spmd-limb-parallel-pipeline.md) |
 | Repeat work within bounded memory | [11 CUDA Graph](cuda-graph-matvec.md) → [12 Reusable buffers](reusable-value-buffer.md) → [13 Residency](explicit-residency.md) |
 | Work with Compile and IR | [17 Compose and execute built-in Compile passes](compose-and-execute-compile-pipeline.md) → [18 Textual Program IR](ir-textual-program.md) → [19 Custom Compile pass](customize-compile-pass-and-pipeline.md) → [20 Generate editable Python](generate-python.md) → [21 Rank-local collective IR](rank-local-collective-ir.md) |

@@ -305,6 +305,45 @@ def keyswitch_accumulate_digit_products_(
     )
 
 
+def keyswitch_accumulate_products_(
+    accumulator0_qp: torch.Tensor,
+    accumulator1_qp: torch.Tensor,
+    extended_digits_ntt_qp: list[torch.Tensor],
+    key_switch_key: torch.Tensor,
+    rns_params: torch.Tensor,
+    key_digit_row_start: int,
+    source_indices: torch.Tensor | None = None,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_ckks_ops::keyswitch_accumulate_products_``.
+
+    Torch schema::
+
+        fhelium_ckks_ops::keyswitch_accumulate_products_(Tensor(a!) accumulator0_qp, Tensor(b!) accumulator1_qp, Tensor[] extended_digits_ntt_qp, Tensor key_switch_key, Tensor rns_params, int key_digit_row_start, Tensor? source_indices=None) -> ()
+
+    Args:
+        accumulator0_qp: torch.Tensor (modified in-place).
+        accumulator1_qp: torch.Tensor (modified in-place).
+        extended_digits_ntt_qp: list[torch.Tensor].
+        key_switch_key: torch.Tensor.
+        rns_params: torch.Tensor.
+        key_digit_row_start: int.
+        source_indices: torch.Tensor | None.
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_ckks_ops.keyswitch_accumulate_products_(
+        accumulator0_qp,
+        accumulator1_qp,
+        extended_digits_ntt_qp,
+        key_switch_key,
+        rns_params,
+        key_digit_row_start,
+        source_indices,
+    )
+
+
 def keyswitch_moddown_qp_to_q(
     q_residues: torch.Tensor,
     p_residues: torch.Tensor,

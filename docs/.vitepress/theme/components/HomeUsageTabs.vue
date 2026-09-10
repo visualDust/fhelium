@@ -29,7 +29,7 @@ from fhelium.eager import Engine
 
 torch.set_default_device("cuda:0")
 engine = Engine(
-    fh.Preset.slots8192_scale40_levels7_int64
+    fh.Preset.slots8192_scale40_depth7_int64
 )
 
 ciphertext = engine.encrypt_message(message)
@@ -40,7 +40,7 @@ triplet = engine.multiply(
     engine.coefficient_domain_to_ntt_domain(ciphertext),
     engine.coefficient_domain_to_ntt_domain(rotated),
 )
-result = engine.rescale_to_next_level(
+result = engine.rescale_to_next_depth(
     engine.relinearize(triplet)
 )`,
   },
@@ -150,8 +150,8 @@ function startRotation(): void {
 }
 
 function selectTab(id: UsageId): void {
+  stopRotation()
   activeId.value = id
-  startRotation()
 }
 
 onMounted(startRotation)

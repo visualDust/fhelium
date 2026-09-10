@@ -214,18 +214,18 @@ def test_keyswitch_moddown_does_not_mutate_public_p_residues() -> None:
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
 
-    engine = CkksEngine(Preset.slots8192_scale40_levels7_int64, device="cuda:0")
-    level = 0
-    q_row_count = len(engine.rns_layout.prime_ids(level))
+    engine = CkksEngine(Preset.slots8192_scale40_depth7_int64, device="cuda:0")
+    depth = 0
+    q_row_count = len(engine.rns_layout.prime_ids(depth))
     p_row_count = engine.config.num_p_primes
     q_residues = torch.zeros(
         (q_row_count, engine.config.N),
-        dtype=engine.config.torch_dtype,
+        dtype=engine.rns_runtime.dtype,
         device=engine.device,
     )
     p_residues = torch.arange(
         p_row_count,
-        dtype=engine.config.torch_dtype,
+        dtype=engine.rns_runtime.dtype,
         device=engine.device,
     )[:, None].repeat(1, engine.config.N)
     p_before = p_residues.clone()
@@ -237,7 +237,7 @@ def test_keyswitch_moddown_does_not_mutate_public_p_residues() -> None:
     result = ckks_ops.keyswitch_moddown_qp_to_q(
         q_residues,
         p_residues,
-        engine.moddown_p_drop_inverses_montgomery_by_level[level],
+        engine.moddown_p_drop_inverses_montgomery_by_depth[depth],
         active_parameters,
     )
 
@@ -248,14 +248,14 @@ def test_keyswitch_moddown_does_not_mutate_public_p_residues() -> None:
         ckks_ops.keyswitch_moddown_qp_to_q(
             q_residues,
             p_residues.cpu(),
-            engine.moddown_p_drop_inverses_montgomery_by_level[level],
+            engine.moddown_p_drop_inverses_montgomery_by_depth[depth],
             active_parameters,
         )
     with pytest.raises(RuntimeError, match="same integral dtype"):
         ckks_ops.keyswitch_moddown_qp_to_q(
             q_residues,
             p_residues,
-            engine.moddown_p_drop_inverses_montgomery_by_level[level].to(
+            engine.moddown_p_drop_inverses_montgomery_by_depth[depth].to(
                 torch.int32
             ),
             active_parameters,
@@ -362,19 +362,19 @@ def test_native_binary_op_rejects_incompatible_batch_counts() -> None:
         pytest.skip("CUDA is not available")
 
     engine = CkksEngine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         device="cuda:0",
         allow_sk_gen=False,
     )
     limb_count = len(engine.rns_layout.prime_ids(0))
     lhs = torch.zeros(
         (3, limb_count, engine.config.N),
-        dtype=engine.config.torch_dtype,
+        dtype=engine.rns_runtime.dtype,
         device=engine.device,
     )
     rhs = torch.zeros(
         (2, limb_count, engine.config.N),
-        dtype=engine.config.torch_dtype,
+        dtype=engine.rns_runtime.dtype,
         device=engine.device,
     )
     parameters = engine.rns_runtime.rns_parameters_for(lhs)
@@ -389,13 +389,13 @@ def test_standard_subtraction_returns_residues_below_modulus() -> None:
         pytest.skip("CUDA is not available")
 
     engine = CkksEngine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         device="cuda:0",
         allow_sk_gen=False,
     )
     moduli = torch.tensor(
         engine.rns_runtime.moduli_for_basis(0),
-        dtype=engine.config.torch_dtype,
+        dtype=engine.rns_runtime.dtype,
         device=engine.device,
     )[:, None]
     lhs = torch.cat((torch.ones_like(moduli), 2 * moduli - 1), dim=-1)
@@ -420,25 +420,25 @@ def test_native_compressed_arithmetic_rejects_invalid_storage_and_dtype() -> (
         pytest.skip("CUDA is not available")
 
     engine = CkksEngine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         device="cuda:0",
         allow_sk_gen=False,
     )
     limb_count = len(engine.rns_layout.prime_ids(0))
     valid_ring = torch.zeros(
         (limb_count, engine.config.N),
-        dtype=engine.config.torch_dtype,
+        dtype=engine.rns_runtime.dtype,
         device=engine.device,
     )
     parameters = engine.rns_runtime.rns_parameters_for(valid_ring)
     invalid_ring = torch.zeros(
         (limb_count, 12),
-        dtype=engine.config.torch_dtype,
+        dtype=engine.rns_runtime.dtype,
         device=engine.device,
     )
     compressed = torch.zeros(
         (limb_count, 4),
-        dtype=engine.config.torch_dtype,
+        dtype=engine.rns_runtime.dtype,
         device=engine.device,
     )
 

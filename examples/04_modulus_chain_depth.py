@@ -1,102 +1,111 @@
 #!/usr/bin/env python3
 
-"""Explore modulus-chain depth, modulus bits, and level-dependent sizes.
+"""Compare exact Q chains with different maximum public depths.
 
 Run:
-    python examples/04_modulus_chain_depth.py --preset slots32768-scale40-levels34-int64
+    python examples/04_modulus_chain_depth.py \
+        --preset slots32768-scale40-depth34-int64
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 
 import torch
 
 from common import add_engine_args, format_bytes, parse_preset, print_table
 
-from fhelium.eager import Engine
 from fhelium.config import CkksConfig
+from fhelium.eager import Engine
 
 
-def variant_depths(preset_name: str) -> list[int]:
-    default_cfg = CkksConfig.parse(parse_preset(preset_name))
-    full = default_cfg.num_scale_primes
-    # Low/mid/full defaults, clipped and de-duplicated.
-    candidates = [max(1, full // 2), max(1, (full * 3) // 4), full]
+def selected_depths(config: CkksConfig) -> list[int]:
+    """Return representative maximum depths for one source parameter set."""
+
+    candidates = [
+        max(0, config.max_depth // 2),
+        max(0, (config.max_depth * 3) // 4),
+        config.max_depth,
+    ]
     return sorted(set(candidates))
+
+
+def prefix_config(source: CkksConfig, max_depth: int) -> CkksConfig:
+    """Retain the requested public Q-group prefix and terminal group."""
+
+    if not 0 <= max_depth <= source.max_depth:
+        raise ValueError(f"max_depth must be in [0, {source.max_depth}]")
+    return CkksConfig(
+        default_scale=source.default_scale,
+        q_depth_groups=(
+            *source.q_depth_groups[:max_depth],
+            source.q_depth_groups[-1],
+        ),
+        p_moduli=source.p_moduli,
+        logN=source.logN,
+        sigma=source.sigma,
+        security_bits=source.security_bits,
+        enforce_security_budget=source.enforce_security_budget,
+        galois_generator=source.galois_generator,
+    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_engine_args(parser, default_preset="slots32768-scale40-levels34-int64")
+    add_engine_args(parser, default_preset="slots32768-scale40-depth34-int64")
     parser.add_argument(
         "--depths",
         default=None,
-        help=(
-            "Comma-separated num_scale_primes values. "
-            "Default: low/mid/full for the preset."
-        ),
+        help="Comma-separated max_depth values. Default: middle and full variants.",
     )
     args = parser.parse_args()
     torch.set_default_device(args.device)
 
-    preset = parse_preset(args.preset)
+    source = CkksConfig.parse(parse_preset(args.preset))
     depths = (
-        [int(x) for x in args.depths.split(",")]
+        [int(item) for item in args.depths.split(",")]
         if args.depths
-        else variant_depths(args.preset)
+        else selected_depths(source)
     )
 
     rows = []
-    for depth in depths:
-        cfg = CkksConfig.parse(preset, num_scale_primes=depth)
-        engine = Engine(
-            cfg,
-            ntt_backend=args.ntt_backend,
-        )
-        ct0 = engine.encrypt_message([1, 2, 3, 4], level=0)
-        # A ciphertext at level l stores the active Q_l scale rows plus the
-        # base Q row.  Level 0 is therefore the largest ciphertext.
+    for max_depth in depths:
+        config = prefix_config(source, max_depth)
+        engine = Engine(config, ntt_backend=args.ntt_backend)
+        ciphertext = engine.encrypt_message([1, 2, 3, 4], depth=0)
         rows.append(
             [
-                depth,
-                cfg.total_modulus_bits,
-                cfg.maximum_modulus_bits,
-                cfg.num_q_primes,
-                cfg.num_p_primes,
-                cfg.total_num_primes,
-                format_bytes(ct0.data.nbytes),
-                f"{ct0.data.nbytes / 1e6:.3f}",
+                max_depth,
+                config.num_q_primes,
+                config.num_p_primes,
+                config.total_modulus_bits,
+                config.maximum_modulus_bits,
+                str(engine.dtype).removeprefix("torch."),
+                format_bytes(ciphertext.data.nbytes),
             ]
         )
 
-    default_cfg = CkksConfig.parse(preset)
     print(
-        f"Preset {args.preset}: scale_bits={default_cfg.scale_bits} by "
-        "default; num_scale_primes is the public-level count."
+        f"Source preset {args.preset}: "
+        f"log2(default_scale)={math.log2(source.default_scale):.3f}, "
+        f"terminal Q rows={len(source.q_depth_groups[-1])}."
     )
     print_table(
         [
-            "scale primes/public levels",
-            "QP modulus bits",
+            "max depth",
+            "Q rows",
+            "P rows",
+            "QP bits",
             "security budget bits",
-            "Q primes",
-            "P primes",
-            "total primes",
-            "level-0 ct size",
-            "level-0 ct MB",
+            "RNS dtype",
+            "depth-0 CT size",
         ],
         rows,
     )
-    print(f"\nRule of thumb for the selected {default_cfg.torch_dtype} preset:")
-    base_bits = default_cfg.base_prime_bits or default_cfg.message_bits
     print(
-        "  total_modulus_bits ~= num_scale_primes * "
-        f"{default_cfg.scale_bits} + {base_bits}(base) + "
-        f"{default_cfg.message_bits}*num_p_primes"
-    )
-    print(
-        "  current ciphertext size follows the active Q_l rows at the current level, not just the initial chain length."
+        "\nOne public rescale consumes one Q depth group. Ciphertext size and "
+        "native work follow the active prime-row count inside those groups."
     )
 
 

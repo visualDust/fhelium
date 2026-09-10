@@ -129,7 +129,7 @@ def _json(value: object) -> str:
 def _spec_data(spec: InputSpec) -> dict[str, object]:
     return {
         "role": spec.role,
-        "level": spec.level,
+        "depth": spec.depth,
         "scale": spec.scale,
         "slots": spec.slots,
         "batch_mode": spec.batch_mode,
@@ -196,7 +196,7 @@ class _Emitter:
                     spec.role,
                     {
                         "input_spec": StringAttr(_json(_spec_data(spec))),
-                        "level": IntegerAttr(spec.level, 64),
+                        "depth": IntegerAttr(spec.depth, 64),
                         "scale": StringAttr(
                             "unknown"
                             if spec.scale is None

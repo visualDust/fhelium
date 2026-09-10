@@ -16,16 +16,16 @@ from xdsl.ir import Block, Operation
 
 from fhelium import compile as fh_compile
 from fhelium import ir
-from fhelium.config import CkksConfig
+from fhelium.config import CkksConfig, Preset
 
 
 def _config() -> CkksConfig:
+    source = CkksConfig.parse(Preset.slots16384_scale50_depth12_int64)
     return CkksConfig(
+        default_scale=source.default_scale,
+        q_depth_groups=source.q_depth_groups[:6],
+        p_moduli=source.p_moduli,
         logN=12,
-        scale_bits=50,
-        base_prime_bits=50,
-        num_scale_primes=4,
-        num_p_primes=2,
         enforce_security_budget=False,
     )
 
@@ -37,7 +37,7 @@ def _ciphertext_type(
     components: int = 2,
 ) -> ir.dialects.ckks.CiphertextType:
     return ir.dialects.ckks.CiphertextType().with_state(
-        level=IntegerAttr(0, 64),
+        depth=IntegerAttr(0, 64),
         scale=FloatAttr(4.0, Float64Type()),
         prime_ids=ArrayAttr(IntegerAttr(index, 64) for index in range(5)),
         basis=StringAttr("Q"),
@@ -53,7 +53,7 @@ def _plaintext_type(
     residues: str,
 ) -> ir.dialects.ckks.PlaintextType:
     return ir.dialects.ckks.PlaintextType().with_state(
-        level=IntegerAttr(0, 64),
+        depth=IntegerAttr(0, 64),
         scale=FloatAttr(4.0, Float64Type()),
         prime_ids=ArrayAttr(IntegerAttr(index, 64) for index in range(5)),
         basis=StringAttr("Q"),
@@ -63,7 +63,7 @@ def _plaintext_type(
     )
 
 
-def test_level_and_scale_assignment_preserve_cast_target_representation() -> (
+def test_depth_and_scale_assignment_preserve_cast_target_representation() -> (
     None
 ):
     coefficient = _ciphertext_type("coefficient", "standard")
@@ -78,7 +78,7 @@ def test_level_and_scale_assignment_preserve_cast_target_representation() -> (
     program = ir.Program.from_function(block, (ntt,))
     workspace: dict[object, object] = {CkksConfig: _config()}
 
-    fh_compile.AssignCkksLevelsPass(0).run(program, workspace)
+    fh_compile.AssignCkksDepthsPass(0).run(program, workspace)
     fh_compile.AssignCkksScalesPass(4.0).run(program, workspace)
 
     state = cast.outputs[0].type.state.data  # type: ignore[attr-defined]
@@ -111,7 +111,7 @@ def test_representation_defaults_and_state_analysis_match_plaintext_inverse() ->
 def test_rescale_analysis_preserves_ntt_montgomery_output() -> None:
     ntt = _ciphertext_type("ntt", "montgomery")
     rescaled_type = ntt.with_state(
-        level=IntegerAttr(1, 64),
+        depth=IntegerAttr(1, 64),
         prime_ids=ArrayAttr(IntegerAttr(index, 64) for index in range(1, 5)),
     )
     block = Block(arg_types=(ntt,))
@@ -136,10 +136,52 @@ def test_rescale_analysis_preserves_ntt_montgomery_output() -> None:
     lowered = next(
         operation
         for operation in program.single_block().ops
-        if isinstance(operation, ir.dialects.rns.RescaleDropLeadingPrimeOp)
+        if isinstance(operation, ir.dialects.rns.RescaleDropLeadingPrimesOp)
     )
     assert lowered.input_domain == StringAttr("ntt")
     assert lowered.output_domain == StringAttr("ntt")
+
+
+def test_rescale_lowering_preserves_the_requested_prime_group() -> None:
+    source = _config()
+    grouped = CkksConfig(
+        default_scale=source.default_scale,
+        q_depth_groups=(
+            (*source.q_depth_groups[0], *source.q_depth_groups[1]),
+            *source.q_depth_groups[2:],
+        ),
+        p_moduli=source.p_moduli,
+        logN=source.logN,
+        enforce_security_budget=False,
+    )
+    input_type = _ciphertext_type("coefficient", "standard").with_state(
+        depth=IntegerAttr(0, 64),
+        prime_ids=ArrayAttr(
+            IntegerAttr(index, 64) for index in range(grouped.num_q_primes)
+        ),
+    )
+    output_type = input_type.with_state(
+        depth=IntegerAttr(1, 64),
+        prime_ids=ArrayAttr(
+            IntegerAttr(index, 64)
+            for index in range(2, grouped.num_q_primes)
+        ),
+    )
+    block = Block(arg_types=(input_type,))
+    rescale = ir.dialects.ckks.RescaleOp(block.args[0], output_type)
+    block.add_ops((rescale, ReturnOp(rescale.result)))
+    program = ir.Program.from_function(block, (output_type,))
+
+    fh_compile.LowerCkksToRnsNttPass().run(
+        program, {CkksConfig: grouped}
+    )
+
+    drops = [
+        operation
+        for operation in program.single_block().ops
+        if isinstance(operation, ir.dialects.rns.RescaleDropLeadingPrimesOp)
+    ]
+    assert sum(drop.drop_count.value.data for drop in drops) == 2
 
 
 def test_multiply_transition_reuses_one_ntt_value_across_consumers() -> None:
@@ -249,7 +291,7 @@ def test_ntt_lowering_and_execution_gate_reject_unknown_representation() -> (
 ):
     unknown = ir.dialects.ckks.CiphertextType().with_state(
         components=IntegerAttr(3, 64),
-        level=IntegerAttr(0, 64),
+        depth=IntegerAttr(0, 64),
     )
     block = Block(arg_types=(unknown,))
     relinearize = ir.dialects.ckks.RelinearizeOp(

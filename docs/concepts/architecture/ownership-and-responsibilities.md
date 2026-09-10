@@ -117,7 +117,7 @@ contexts belongs to workload or product policy.
 
 A value preserves its cryptographic meaning when it moves among pageable CPU,
 pinned CPU, and CUDA storage. Interchangeability additionally requires matching
-parameter provenance, levels, scales, prime IDs, and key identities.
+parameter provenance, depths, scales, prime IDs, and key identities.
 
 ```mermaid
 graph LR

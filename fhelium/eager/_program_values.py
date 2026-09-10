@@ -64,7 +64,7 @@ def verify_runtime_value_type(
         _verify_fields(
             value_type,
             {
-                "level": value.level,
+                "depth": value.depth,
                 "scale": value.scale,
                 "prime_ids": value.prime_ids,
                 "basis": value.modulus_basis,
@@ -89,7 +89,7 @@ def verify_runtime_value_type(
         _verify_fields(
             value_type,
             {
-                "level": value.level,
+                "depth": value.depth,
                 "scale": value.scale,
                 "representation": value.representation,
                 "polynomial_domain": value.polynomial_domain,
@@ -114,7 +114,7 @@ def verify_runtime_value_type(
         _verify_fields(
             value_type,
             {
-                "level": value.level,
+                "depth": value.depth,
                 "scale": value.scale,
                 "prime_ids": value.prime_ids,
                 "basis": value.modulus_basis,
@@ -189,14 +189,14 @@ def public_value_from_tensor(
             raise ValueError(f"CKKS result lacks represented {name!r}")
         return default
 
-    template_level = None if template is None else template.level
+    template_depth = None if template is None else template.depth
     template_scale = None if template is None else template.scale
     template_domain = None if template is None else template.polynomial_domain
     template_basis = None if template is None else template.modulus_basis
     template_residues = (
         None if template is None else template.residue_representation
     )
-    level = represented_integer("level", template_level)
+    depth = represented_integer("depth", template_depth)
     scale = represented_float(
         "scale",
         scale_if_unrepresented
@@ -226,7 +226,7 @@ def public_value_from_tensor(
     if isinstance(value_type, ckks.CiphertextType):
         return Ciphertext(
             data=data,
-            level=level,
+            depth=depth,
             scale=scale,
             prime_ids=prime_ids,
             polynomial_domain=domain,  # type: ignore[arg-type]
@@ -235,7 +235,7 @@ def public_value_from_tensor(
         )
     return Plaintext(
         message=None,
-        level=level,
+        depth=depth,
         scale=scale,
         data=data,
         representation="rns",

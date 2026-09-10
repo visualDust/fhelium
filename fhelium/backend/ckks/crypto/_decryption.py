@@ -1,4 +1,4 @@
-"""Registered CKKS decryption and bounded coefficient reconstruction."""
+"""Registered CKKS decryption and centered Q-basis reconstruction."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def _decrypt_tensor_to_coefficient_standard_rns(
     ciphertext_data: torch.Tensor,
     secret_key_data: torch.Tensor,
     *,
-    level: int,
+    depth: int,
     includes_p: bool,
     secret_key_basis: ModulusBasis,
     input_domain: PolynomialDomain,
@@ -44,9 +44,8 @@ def _decrypt_tensor_to_coefficient_standard_rns(
     coefficient-domain sum.
     """
 
-    secret_data = secret_key_data[rns_context.level_row_starts[level] :]
-    if not includes_p and secret_key_basis == "QP":
-        secret_data = secret_data[: -rns_context.config.num_p_primes]
+    basis = rns_context.basis_parameters(depth, include_p=includes_p)
+    secret_data = secret_key_data[basis.parameter_row_start : basis.parameter_row_stop]
     if ciphertext_data.size(0) not in (2, 3):
         raise ValueError("Decryption requires a CT2 or CT3 payload")
     if input_domain not in ("coefficient", "ntt"):
@@ -118,18 +117,18 @@ def _mixed_radix_is_above_half(
     return above
 
 
-def reconstruct_tail_q_coefficients_tensor(
+def reconstruct_q_coefficients_tensor(
     plaintext_rns: torch.Tensor,
     *,
-    level: int,
+    depth: int,
     includes_p: bool,
     rns_context: RnsContext,
     reconstruction: DecryptReconstructionResource,
 ) -> torch.Tensor:
-    """Reconstruct the centered trailing-Q class on the rns_context device."""
+    """Reconstruct the centered class modulo the complete active Q product."""
 
-    q_prime_ids = rns_context.rns_layout.prime_ids(level)
-    source_prime_ids = tuple(q_prime_ids[-2:])
+    q_prime_ids = rns_context.rns_layout.prime_ids(depth)
+    source_prime_ids = reconstruction.source_prime_ids_by_depth[depth]
     del includes_p
     source = plaintext_rns.narrow(
         -2,
@@ -153,12 +152,8 @@ def reconstruct_tail_q_coefficients_tensor(
             centered,
         ).to(torch.float64)
 
-    if source_prime_ids != reconstruction.source_prime_ids:
-        raise ValueError(
-            "Decryption reconstruction table differs from active trailing Q"
-        )
-    normalizers = reconstruction.normalizers
-    propagation = reconstruction.propagation
+    normalizers = reconstruction.normalizers_by_depth[depth]
+    propagation = reconstruction.propagation_by_depth[depth]
     lo, hi, neg_lo, neg_hi = source_params[1:5]
 
     def decompose(residues: torch.Tensor) -> torch.Tensor:
@@ -199,7 +194,7 @@ def decrypt_tensor(
     ciphertext_data: torch.Tensor,
     secret_key_data: torch.Tensor,
     *,
-    level: int,
+    depth: int,
     ciphertext_basis: ModulusBasis,
     secret_key_basis: ModulusBasis,
     input_domain: PolynomialDomain,
@@ -213,16 +208,16 @@ def decrypt_tensor(
     plaintext_rns = _decrypt_tensor_to_coefficient_standard_rns(
         ciphertext_data,
         secret_key_data,
-        level=level,
+        depth=depth,
         includes_p=includes_p,
         secret_key_basis=secret_key_basis,
         input_domain=input_domain,
         rns_context=rns_context,
         ntt_context=ntt_context,
     )
-    return reconstruct_tail_q_coefficients_tensor(
+    return reconstruct_q_coefficients_tensor(
         plaintext_rns,
-        level=level,
+        depth=depth,
         includes_p=includes_p,
         rns_context=rns_context,
         reconstruction=reconstruction,
@@ -276,7 +271,7 @@ class NativeDecryptImplementation:
             decrypt_tensor(
                 inputs[0],
                 key.data,
-                level=int(cast(int, invocation.attributes["level"])),
+                depth=int(cast(int, invocation.attributes["depth"])),
                 ciphertext_basis=cast(
                     ModulusBasis,
                     invocation.attributes["modulus_basis"],
@@ -296,5 +291,5 @@ class NativeDecryptImplementation:
 __all__ = [
     "NativeDecryptImplementation",
     "decrypt_tensor",
-    "reconstruct_tail_q_coefficients_tensor",
+    "reconstruct_q_coefficients_tensor",
 ]

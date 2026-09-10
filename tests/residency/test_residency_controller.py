@@ -49,7 +49,7 @@ from fhelium.residency.request import (
 def _plaintext(offset: float = 0.0) -> Plaintext:
     return Plaintext(
         message=torch.arange(8, dtype=torch.float64) + offset,
-        level=0,
+        depth=0,
         scale=16.0,
     )
 

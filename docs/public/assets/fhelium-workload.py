@@ -25,9 +25,9 @@ from fhelium.runtime import CudaGraphProgram
 
 Mode = Literal["pt-ct", "ct-ct"]
 PRESETS = {
-    7: fh.Preset.slots8192_scale40_levels7_int64,
-    16: fh.Preset.slots16384_scale40_levels16_int64,
-    34: fh.Preset.slots32768_scale40_levels34_int64,
+    7: fh.Preset.slots8192_scale40_depth7_int64,
+    16: fh.Preset.slots16384_scale40_depth16_int64,
+    34: fh.Preset.slots32768_scale40_depth34_int64,
 }
 CUDA_NTT_BACKENDS: dict[tuple[int, Mode], str] = {
     (7, "pt-ct"): "radix4_compact",
@@ -36,14 +36,6 @@ CUDA_NTT_BACKENDS: dict[tuple[int, Mode], str] = {
     (16, "ct-ct"): "radix2_compact_group16_smem8",
     (34, "pt-ct"): "radix2_compact_group16_smem8",
     (34, "ct-ct"): "radix2_compact_group16_smem8",
-}
-CPU_THREAD_COUNTS: dict[tuple[int, Mode], int] = {
-    (7, "pt-ct"): 32,
-    (7, "ct-ct"): 24,
-    (16, "pt-ct"): 32,
-    (16, "ct-ct"): 32,
-    (34, "pt-ct"): 32,
-    (34, "ct-ct"): 24,
 }
 
 
@@ -164,7 +156,7 @@ def _prepare_groups(
     public_key: fh.PublicKey | None,
     local_giants: tuple[int, ...],
     baby_step: int,
-    input_level: int,
+    input_depth: int,
     device: torch.device,
 ) -> tuple[
     dict[int, fh.Plaintext],
@@ -190,7 +182,7 @@ def _prepare_groups(
                         engine.prepare_plaintext_for_multiplication(
                             engine.encode(
                                 message,
-                                level=input_level,
+                                depth=input_depth,
                                 device=device,
                             )
                         )
@@ -205,7 +197,7 @@ def _prepare_groups(
                 engine.encrypt_message(
                     message,
                     public_key,
-                    level=input_level,
+                    depth=input_depth,
                     device=device,
                 )
                 for message in messages
@@ -264,7 +256,7 @@ def _evaluate_local(
             group = engine.sum_ciphertext_batch(product_batch)
             if retained_domain == "coefficient":
                 group = engine.ntt_domain_to_coefficient_domain(group)
-            group = engine.rescale_to_next_level(group)
+            group = engine.rescale_to_next_depth(group)
         else:
             assert relinearization_key is not None
             product_batch = engine.multiply(
@@ -272,7 +264,7 @@ def _evaluate_local(
                 ciphertext_groups[giant_index],
             )
             group_triplet = engine.sum_ciphertext_batch(product_batch)
-            group = engine.rescale_to_next_level(
+            group = engine.rescale_to_next_depth(
                 engine.relinearize(
                     group_triplet,
                     relinearization_key,
@@ -303,25 +295,11 @@ def _run_case(
     warmup: int,
     runs: int,
     device: str,
-    input_level: int,
+    input_depth: int,
     retained_domain: str,
 ) -> dict[str, object] | None:
     if size % baby_step:
         raise ValueError("baby_step must divide matrix size")
-    if device == "cpu":
-        available = set(os.sched_getaffinity(0))
-        selected = available & set(range(48))
-        if selected:
-            os.sched_setaffinity(0, selected)
-        torch.set_num_threads(
-            int(
-                os.environ.get(
-                    "FHE_CPU_THREADS",
-                    str(CPU_THREAD_COUNTS[(depth, mode)]),
-                )
-            )
-        )
-        torch.set_num_interop_threads(1)
     graph_program: CudaGraphProgram[fh.Ciphertext] | None = None
     dist.init()
     try:
@@ -356,7 +334,7 @@ def _run_case(
             root_source = engine.encrypt_message(
                 _periodic(vector, engine.num_slots),
                 public_key,
-                level=input_level,
+                depth=input_depth,
                 device=execution_device,
             )
             if mode == "ct-ct":
@@ -384,7 +362,7 @@ def _run_case(
             public_key=public_key,
             local_giants=local_giants,
             baby_step=baby_step,
-            input_level=input_level,
+            input_depth=input_depth,
             device=execution_device,
         )
         _sync(execution_device)
@@ -494,11 +472,16 @@ def _run_case(
             "q_product_bits": math.prod(config.q_moduli).bit_length(),
             "qp_product_bits": math.prod(config.moduli).bit_length(),
             "multiplication_q_bits": math.prod(
-                config.q_moduli[input_level:]
+                config.active_q_moduli(input_depth)
             ).bit_length(),
-            "input_level": input_level,
-            "output_level": input_level + 1,
+            "input_depth": input_depth,
+            "output_depth": input_depth + 1,
             "threads": torch.get_num_threads(),
+            "interop_threads": torch.get_num_interop_threads(),
+            "thread_environment": {
+                name: os.environ.get(name)
+                for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+            },
             "cpu_affinity": sorted(os.sched_getaffinity(0)),
             "setup_ms": setup_ms,
             "warmup": warmup,
@@ -552,13 +535,15 @@ def _launch_cuda(args: argparse.Namespace) -> None:
             str(args.warmup),
             "--runs",
             str(args.runs),
-            "--input-level",
-            str(args.input_level),
+            "--input-depth",
+            str(args.input_depth),
             "--retained-domain",
             args.retained_domain,
             "--output",
             str(worker_output),
         ]
+        if args.threads is not None:
+            command.extend(("--threads", str(args.threads)))
         subprocess.run(command, check=True)
         args.output.write_text(worker_output.read_text())
         print(worker_output.read_text(), end="")
@@ -577,7 +562,9 @@ def main() -> None:
     parser.add_argument("--baby-step", type=int, required=True)
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--runs", type=int, default=10)
-    parser.add_argument("--input-level", type=int, default=0)
+    parser.add_argument("--input-depth", type=int, default=0)
+    parser.add_argument("--threads", type=int, default=None,
+                        help="Override PyTorch intra-op threads; otherwise preserve environment settings.")
     parser.add_argument(
         "--retained-domain",
         choices=("coefficient", "ntt"),
@@ -585,6 +572,10 @@ def main() -> None:
     )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.threads is not None:
+        if args.threads < 1:
+            parser.error("--threads must be positive")
+        torch.set_num_threads(args.threads)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if args.device == "cuda" and not args.worker:
         _launch_cuda(args)
@@ -597,7 +588,7 @@ def main() -> None:
         warmup=args.warmup,
         runs=args.runs,
         device=args.device,
-        input_level=args.input_level,
+        input_depth=args.input_depth,
         retained_domain=args.retained_domain,
     )
     if result is not None:

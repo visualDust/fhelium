@@ -33,10 +33,10 @@ def _persistence_demo(
     factor_message = torch.full_like(message, 1.25)
     encoded_factor = engine.encode(
         factor_message,
-        level=ciphertext.level,
+        depth=ciphertext.depth,
     )
     factor = engine.prepare_plaintext_for_multiplication(
-        engine.encode(factor_message, level=ciphertext.level)
+        engine.encode(factor_message, depth=ciphertext.depth)
     )
     encoded_bytes = encoded_factor.nbytes
 
@@ -100,7 +100,7 @@ def _persistence_demo(
     )
     torch.testing.assert_close(artifact_factor.data, restored_factor.data)
 
-    result = engine.rescale_to_next_level(
+    result = engine.rescale_to_next_depth(
         engine.ntt_domain_to_coefficient_domain(
             engine.multiply_plaintext(
                 engine.coefficient_domain_to_ntt_domain(restored_ciphertext),
@@ -127,7 +127,7 @@ def _persistence_demo(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_engine_args(parser)
-    parser.add_argument("--levels", default="0,1,2")
+    parser.add_argument("--depths", default="0,1,2")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -136,25 +136,25 @@ def main() -> None:
     args = parser.parse_args()
 
     engine = make_engine(args)
-    requested = [int(item) for item in args.levels.split(",") if item.strip()]
-    levels = [
-        level for level in requested if 0 <= level < engine.public_level_count
+    requested = [int(item) for item in args.depths.split(",") if item.strip()]
+    depths = [
+        depth for depth in requested if 0 <= depth < engine.max_depth + 1
     ]
-    if not levels:
-        raise ValueError("--levels did not select a valid CKKS level")
+    if not depths:
+        raise ValueError("--depths did not select a valid CKKS depth")
     message = small_complex_vector(engine.num_slots, seed=42)
 
     rows = []
     sample_ciphertext = None
-    for level in levels:
-        plaintext = engine.encode(message, level=level)
+    for depth in depths:
+        plaintext = engine.encode(message, depth=depth)
         assert plaintext.data is not None
         ciphertext = engine.encrypt(plaintext)
         if sample_ciphertext is None:
             sample_ciphertext = ciphertext
         rows.append(
             [
-                level,
+                depth,
                 ciphertext.limb_count,
                 tuple(ciphertext.data.shape),
                 format_bytes(ciphertext.nbytes),
@@ -162,7 +162,7 @@ def main() -> None:
             ]
         )
     print_table(
-        ["level", "Q limbs", "ciphertext shape", "ciphertext", "plaintext"],
+        ["depth", "Q limbs", "ciphertext shape", "ciphertext", "plaintext"],
         rows,
     )
 

@@ -455,6 +455,14 @@ export default defineConfig({
       { text: 'About', link: '/about/' },
     ],
     sidebar: {
+      '/benchmarks/': [{
+        text: 'Benchmarks',
+        items: [
+          { text: 'Results', link: '/benchmarks/' },
+          { text: 'Methodology', link: '/benchmarks/methodology' },
+          { text: 'Run and submit', link: '/benchmarks/run-and-submit' },
+        ],
+      }],
       '/tutorial/': learningSidebar,
       '/concepts/': [
         {
@@ -501,6 +509,10 @@ export default defineConfig({
               link: '/concepts/ckks/context-and-modulus-chain',
             },
             {
+              text: 'Scale, depth, and RNS format',
+              link: '/concepts/ckks/scale-depth-and-execution-format',
+            },
+            {
               text: 'Value model and identity',
               link: '/concepts/ckks/value-model-and-identity',
             },
@@ -509,8 +521,8 @@ export default defineConfig({
               link: '/concepts/ckks/state-transitions-and-orthogonality',
             },
             {
-              text: 'Scale and level lifecycle',
-              link: '/concepts/ckks/scale-and-level-lifecycle',
+              text: 'Scale and depth lifecycle',
+              link: '/concepts/ckks/scale-and-depth-lifecycle',
             },
             {
               text: 'Evaluator operation transitions',
@@ -677,8 +689,8 @@ export default defineConfig({
               link: '/how-to/choose-ntt-backend',
             },
             {
-              text: 'Benchmark a workload correctly',
-              link: '/how-to/benchmark-a-workload',
+              text: 'Run and submit a benchmark',
+              link: '/benchmarks/run-and-submit',
             },
             {
               text: 'Choose a homogeneous batch size',

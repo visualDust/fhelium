@@ -38,24 +38,6 @@ export default {
   enhanceApp({ app, router }) {
     installVercelObservability(router)
     app.component('BsgsMatvecPerformance', BsgsMatvecPerformance)
-    app.component(
-      'BenchmarkV1Compare',
-      defineAsyncComponent(
-        () => import('./benchmarks/v1/components/BenchmarkCompare.vue'),
-      ),
-    )
-    app.component(
-      'BenchmarkV1Portal',
-      defineAsyncComponent(
-        () => import('./benchmarks/v1/components/BenchmarkPortal.vue'),
-      ),
-    )
-    app.component(
-      'BenchmarkV1ResultDetail',
-      defineAsyncComponent(
-        () => import('./benchmarks/v1/components/BenchmarkResultDetail.vue'),
-      ),
-    )
     app.component('BlogIndex', BlogIndex)
     app.component('DocCard', DocCard)
     app.component('DocGrid', DocGrid)

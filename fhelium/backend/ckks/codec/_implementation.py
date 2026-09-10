@@ -133,7 +133,7 @@ class NativeIntegerCoefficientsToRnsImplementation:
         return (
             context.lift_integer_coefficients_exact(
                 inputs[0],
-                int(cast(int, invocation.attributes["level"])),
+                int(cast(int, invocation.attributes["depth"])),
                 include_p=basis == "QP",
             ),
         )

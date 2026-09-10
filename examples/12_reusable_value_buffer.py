@@ -18,7 +18,7 @@ The application chooses the number of tiles and Plaintexts per tile. Execution
 utilities only validate value structure, reuse storage, enqueue copies,
 and expose future-like :class:`fhelium.runtime.CopyHandle` objects.
 
-The fixed `slots32768-scale40-levels34-int64` workload at level 20
+The fixed `slots32768-scale40-depth34-int64` workload at depth 20
 materializes 16 tiles with 64 Plaintexts per tile. One multiply-ready Plaintext
 is 7.5 MiB, so all-resident weight storage is 7.5 GiB while two reusable
 buffers own 0.9375 GiB. Peak measurements also include the shared ciphertext
@@ -39,9 +39,9 @@ from fhelium.eager import Engine
 from fhelium.runtime import CopyHandle, ReusableValueBuffer
 
 # The 1e-5 absolute error check below was established for this fixed CKKS
-# parameter set, input level, and tile-weight sum. Expected slots cross zero,
+# parameter set, input depth, and tile-weight sum. Expected slots cross zero,
 # where a relative criterion would collapse with the reference value.
-_WORKLOAD_PRESET = fh.Preset.slots32768_scale40_levels34_int64
+_WORKLOAD_PRESET = fh.Preset.slots32768_scale40_depth34_int64
 _WORKLOAD_LEVEL = 20
 _WORKLOAD_WEIGHT_SUM = 0.125
 _VALIDATION_ATOL = 1e-5
@@ -99,7 +99,7 @@ def _pinned_plaintext_copy(prototype: fh.Plaintext) -> fh.Plaintext:
     data.copy_(prototype.data)
     return fh.Plaintext(
         message=None,
-        level=prototype.level,
+        depth=prototype.depth,
         scale=prototype.scale,
         data=data,
         representation=prototype.representation,
@@ -150,7 +150,7 @@ def evaluate_weight_tile(
         else:
             engine.add_(accumulator, product)
     assert accumulator is not None
-    return engine.rescale_to_next_level(
+    return engine.rescale_to_next_depth(
         engine.ntt_domain_to_coefficient_domain(accumulator)
     )
 
@@ -398,11 +398,11 @@ def run(args: argparse.Namespace) -> None:
         _WORKLOAD_PRESET,
         allow_automatic_key_generation=False,
     )
-    if not 0 <= _WORKLOAD_LEVEL < engine.final_public_level:
+    if not 0 <= _WORKLOAD_LEVEL < engine.max_depth:
         raise RuntimeError(
-            "The fixed workload level must leave one rescale available: "
-            f"level={_WORKLOAD_LEVEL}, "
-            f"final_public_level={engine.final_public_level}"
+            "The fixed workload depth must leave one rescale available: "
+            f"depth={_WORKLOAD_LEVEL}, "
+            f"final_public_depth={engine.max_depth}"
         )
     if args.message_size > engine.num_slots:
         raise ValueError(
@@ -420,11 +420,11 @@ def run(args: argparse.Namespace) -> None:
     source = engine.encrypt_message(
         message,
         public_key,
-        level=_WORKLOAD_LEVEL,
+        depth=_WORKLOAD_LEVEL,
     )
     scalar = _WORKLOAD_WEIGHT_SUM / args.plaintexts_per_tile
     prototype_weight = engine.prepare_plaintext_for_multiplication(
-        engine.encode(scalar, level=_WORKLOAD_LEVEL)
+        engine.encode(scalar, depth=_WORKLOAD_LEVEL)
     ).cpu()
 
     host_prepare_start = time.perf_counter()
@@ -439,7 +439,7 @@ def run(args: argparse.Namespace) -> None:
     expected = message * _WORKLOAD_WEIGHT_SUM
 
     print(
-        f"preset={_WORKLOAD_PRESET.value} level={_WORKLOAD_LEVEL} "
+        f"preset={_WORKLOAD_PRESET.value} depth={_WORKLOAD_LEVEL} "
         f"tiles={args.num_tiles} "
         f"plaintexts_per_tile={args.plaintexts_per_tile}"
     )

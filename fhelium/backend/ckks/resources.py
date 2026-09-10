@@ -57,13 +57,16 @@ def ckks_key_resource_kind(key: object) -> str:
 
 @dataclass(frozen=True)
 class RescaleExecutionResource:
-    """Own pairwise prime-drop inverses used by CKKS rescaling."""
+    """Own pairwise and prefix-product inverses used by RNS rescaling."""
 
     rns_context: RnsContext
     dropped_prime_inverses_montgomery: torch.Tensor
     _active_views: Mapping[
         tuple[int, bool], tuple[torch.Tensor, torch.Tensor, int]
     ] = field(init=False, repr=False, compare=False)
+    _prefix_inverses: dict[tuple[int, int, bool], torch.Tensor] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         table = self.dropped_prime_inverses_montgomery
@@ -75,21 +78,21 @@ class RescaleExecutionResource:
         views: dict[
             tuple[int, bool], tuple[torch.Tensor, torch.Tensor, int]
         ] = {}
-        for level in range(self.rns_context.q_row_stop - 1):
+        for depth in range(self.rns_context.q_row_stop - 1):
             for include_p in (False, True):
                 stop = (
                     self.rns_context.qp_row_stop
                     if include_p
                     else self.rns_context.q_row_stop
                 )
-                row_count = stop - level
-                remaining_ids = tuple(range(level + 1, stop))
+                row_count = stop - depth
+                remaining_ids = tuple(range(depth + 1, stop))
                 views[(row_count, include_p)] = (
                     self.rns_context.rns_parameters_for_prime_ids(
                         remaining_ids
                     ),
-                    table[level, level + 1 : stop],
-                    int(self.rns_context.montgomery_parameters.moduli[level]),
+                    table[depth, depth + 1 : stop],
+                    int(self.rns_context.montgomery_parameters.moduli[depth]),
                 )
         object.__setattr__(self, "_active_views", MappingProxyType(views))
 
@@ -113,6 +116,35 @@ class RescaleExecutionResource:
                 "active Q row"
             ) from None
 
+    def prefix_inverse(
+        self, row_count: int, drop_count: int, *, include_p: bool
+    ) -> torch.Tensor:
+        r"""Return $M^{-1}R\bmod q_i$ for each surviving prime.
+
+        $M$ is the product of the leading ``drop_count`` active primes. The
+        resource retains the vector for reuse with the same prime interval.
+        """
+
+        if drop_count == 1:
+            return self.active_views(row_count, include_p=include_p)[1]
+        key = (row_count, drop_count, include_p)
+        if key not in self._prefix_inverses:
+            context = self.rns_context
+            stop = context.qp_row_stop if include_p else context.q_row_stop
+            start = stop - row_count
+            moduli = context.montgomery_parameters.moduli
+            divisor = prod(moduli[start : start + drop_count])
+            radix = context.montgomery_parameters.R
+            self._prefix_inverses[key] = torch.tensor(
+                [
+                    pow(divisor, -1, q) * radix % q
+                    for q in moduli[start + drop_count : stop]
+                ],
+                dtype=context.dtype,
+                device=context.device,
+            )
+        return self._prefix_inverses[key]
+
 
 @dataclass(frozen=True)
 class KeySwitchExecutionResource:
@@ -120,7 +152,7 @@ class KeySwitchExecutionResource:
 
     rns_context: RnsContext
     ntt_context: NttContext
-    moddown_p_drop_inverses_montgomery_by_level: tuple[torch.Tensor, ...]
+    moddown_p_drop_inverses_montgomery_by_depth: tuple[torch.Tensor, ...]
     galois_generator: int = 3
     p_inverse_montgomery: torch.Tensor = field(
         init=False, repr=False, compare=False
@@ -131,7 +163,7 @@ class KeySwitchExecutionResource:
             raise ValueError(
                 "Key-switch NTT context composes another RNS context"
             )
-        if not self.moddown_p_drop_inverses_montgomery_by_level:
+        if not self.moddown_p_drop_inverses_montgomery_by_depth:
             raise ValueError("Key-switch resource requires ModDown tables")
         if self.galois_generator not in {3, 5}:
             raise ValueError(
@@ -145,7 +177,7 @@ class KeySwitchExecutionResource:
             "p_inverse_montgomery",
             torch.tensor(
                 [pow(p_product, -1, q) * radix % q for q in config.q_moduli],
-                dtype=config.torch_dtype,
+                dtype=self.rns_context.dtype,
                 device=self.rns_context.device,
             ),
         )
@@ -156,9 +188,9 @@ class KeySwitchExecutionResource:
 
     @property
     def moddown_tables(self) -> tuple[torch.Tensor, ...]:
-        """Return the level-indexed P-drop inverse tables read by ModDown."""
+        """Return the depth-indexed P-drop inverse tables read by ModDown."""
 
-        return self.moddown_p_drop_inverses_montgomery_by_level
+        return self.moddown_p_drop_inverses_montgomery_by_depth
 
 
 __all__ = [

@@ -16,7 +16,7 @@ classDiagram
     class Plaintext {
       message or data
       representation
-      level
+      depth
       scale
       polynomial_domain
       modulus_basis
@@ -24,7 +24,7 @@ classDiagram
     }
     class Ciphertext {
       data
-      level
+      depth
       scale
       prime_ids
       polynomial_domain
@@ -47,7 +47,7 @@ mindmap
   root((Value description))
     CKKS value state
       concrete type and tensor topology
-      level scale prime IDs
+      depth scale prime IDs
       plaintext representation where applicable
       polynomial domain and residue representation
       Q or QP modulus basis
@@ -63,7 +63,7 @@ mindmap
 These dimensions contribute independently:
 
 - polynomial domain and residue representation are separate coordinates;
-- modulus basis and level are separate coordinates;
+- modulus basis and depth are separate coordinates;
 - device movement preserves cryptographic meaning;
 - shape compatibility also requires compatible CKKS parameters and prime IDs;
 - rotation-key compatibility includes the normalized rotation step.
@@ -94,7 +94,7 @@ An empty `batch_shape` preserves the original unbatched layouts. `(1,)` is a
 real singleton batch and is never silently squeezed. Empty batch extents are
 invalid.
 
-All members of one value share level, scale, polynomial domain,
+All members of one value share depth, scale, polynomial domain,
 modulus basis, dtype, component count, and RNS row identity. Their tensor
 fields also share one physical placement. Ciphertext members must have a
 compatible external encryption-key relation. The application retains parameter
@@ -128,9 +128,9 @@ Decryption names its bounded tail-Q binary64 reconstruction
 `approximate_coefficients`. Exact integer-coefficient output requires an exact
 reconstruction operation with its own numerical contract.
 
-If the same semantic weight is needed in two operation states or at two levels,
+If the same semantic weight is needed in two operation states or at two depths,
 the application creates two distinct values. Each `Plaintext` owns one active
-representation and level.
+representation and depth.
 
 ## Ciphertext dense layout
 
@@ -178,7 +178,7 @@ and execution ABI:
 graph LR
     A[type dtype tensor ndim]
     B[ring extent dtype device]
-    C[level prime IDs modulus basis]
+    C[depth prime IDs modulus basis]
     D[polynomial domain residue representation components]
     E[scale stored key state external key relation]
     K[native operator launch]
@@ -188,7 +188,7 @@ graph LR
 For example:
 
 - addition requires compatible two- or three-component layouts,
-  level, active rows, polynomial domain, modulus basis, residue representation,
+  depth, active rows, polynomial domain, modulus basis, residue representation,
   and scale;
 - multiplication requires two two-component NTT/Montgomery ciphertexts;
 - relinearization requires three components and a compatible relinearization
@@ -197,7 +197,7 @@ For example:
   normalized step;
 - rescale accepts coefficient/standard or NTT/Montgomery residues, requires
   every expected active row for the Q or QP modulus basis and another legal
-  level, preserves the selected arithmetic state, and records the actual scale
+  depth, preserves the selected arithmetic state, and records the actual scale
   quotient.
 
 The caller remains responsible for the mathematical relationship among the
@@ -223,7 +223,7 @@ When diagnosing a mismatch, inspect the complete state:
 
 ```text
 type
-level and scale
+depth and scale
 prime_ids
 plaintext representation
 polynomial domain
@@ -239,7 +239,7 @@ device
 ## Continue
 
 - [State transitions and orthogonality](state-transitions-and-orthogonality.md)
-- [Scale and level lifecycle](scale-and-level-lifecycle.md)
+- [Scale and depth lifecycle](scale-and-depth-lifecycle.md)
 - [Configuration and modulus chain](context-and-modulus-chain.md)
 - [Evaluator operation transitions](evaluator-operation-transitions.md)
 - [Key lifecycle](key-lifecycle.md)

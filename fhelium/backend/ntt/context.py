@@ -56,6 +56,7 @@ class NttContext:
             self.config,
             materialize_parameter_rows=rns_context.materialize_parameter_rows,
             device=self.device,
+            dtype=rns_context.dtype,
         )
         self.ntt_tables.convert_twiddles_to_montgomery_(
             rns_context.rns_parameter_tensor

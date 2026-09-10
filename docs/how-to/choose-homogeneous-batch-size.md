@@ -1,9 +1,9 @@
 # Choose a homogeneous batch size
 
-Homogeneous batching is an workload execution choice. It can
+Homogeneous batching is a workload execution choice. It can
 reduce launch overhead and execute several independent messages together, but
 it also multiplies the active RNS/NTT working set. There is no batch size that
-is optimal for every preset, level, GPU, and evaluator.
+is optimal for every preset, depth, GPU, and evaluator.
 
 Use the runnable
 [homogeneous batching tutorial](../tutorial/homogeneous-batching.md) before
@@ -21,7 +21,7 @@ looped:   [evaluator(member) for member in ciphertext.unbind_batch()]
 Keep fixed:
 
 - cleartext inputs and expected outputs;
-- preset, level, scale, and active prime ids;
+- preset, depth, scale, and active prime ids;
 - NTT backend and direct keyset;
 - evaluator schedule, graph mode, and hoisting policy;
 - warmup, timed region, and synchronization rule.
@@ -59,7 +59,7 @@ $$
 The full peak additionally includes NTT read/write traffic, key rows, two
 key-switch accumulators, automorphism temporaries, ciphertext outputs, and
 allocator behavior. The proxy still explains why the same B can be favorable
-at a later level and unfavorable at level zero.
+at a later depth and unfavorable at depth zero.
 
 ```mermaid
 flowchart LR
@@ -79,12 +79,12 @@ Compare the complete active set with effective cache capacity. Multiple live
 tensors can cross the effective capacity threshold
 even when one digit alone is smaller than L2.
 
-## 4. Sweep the levels used by the evaluator
+## 4. Sweep the depths used by the evaluator
 
-Level reduces the active Q rows. For
-`Preset.slots32768_scale40_levels34_int64` in the reference configuration:
+Depth reduces the active Q rows. For
+`Preset.slots32768_scale40_depth34_int64` in the reference configuration:
 
-| Level | Active QP rows | One-message extended QP digit |
+| Depth | Active QP rows | One-message extended QP digit |
 | ---: | ---: | ---: |
 | 0 | 39 | 19.5 MiB |
 | 5 | 34 | 17.0 MiB |
@@ -94,7 +94,7 @@ Level reduces the active Q rows. For
 | 25 | 14 | 7.0 MiB |
 | 30 | 9 | 4.5 MiB |
 
-Do not benchmark only level zero if production work mostly occurs near the end
+Do not benchmark only depth zero if production work mostly occurs near the end
 of the chain.
 
 ## 5. Measure latency and peak memory together
@@ -103,13 +103,13 @@ Run:
 
 ```bash
 python examples/15_homogeneous_batching.py \
-  --preset slots32768-scale40-levels34-int64 --level 0 --batch-sizes 1,4,8
+  --preset slots32768-scale40-depth34-int64 --depth 0 --batch-sizes 1,4,8
 
 python examples/15_homogeneous_batching.py \
-  --preset slots32768-scale40-levels34-int64 --level 20 --batch-sizes 1,4,8
+  --preset slots32768-scale40-depth34-int64 --depth 20 --batch-sizes 1,4,8
 
 python examples/15_homogeneous_batching.py \
-  --preset slots32768-scale40-levels34-int64 --level 30 --batch-sizes 1,4,8
+  --preset slots32768-scale40-depth34-int64 --depth 30 --batch-sizes 1,4,8
 ```
 
 Repeat enough times for stable medians. If the production evaluator uses CUDA
@@ -118,7 +118,12 @@ capture can remove much of the host-launch disadvantage of the loop.
 
 ## Reference measurement: RTX PRO 6000 Blackwell
 
-The following data is a worked example for the measured platform and workload.
+The following data is a dated historical worked example for the measured
+platform and workload. It preserves the original FHElium 0.20-era values and
+configuration rather than representing the current benchmark catalog. The
+page does not retain the PRO 6000 run's source commit or complete software
+provenance, so use it as context and rerun the workload before making a
+deployment decision.
 
 | Field | Reference value |
 | --- | --- |
@@ -140,7 +145,7 @@ For `[1, slots]` versus `[slots]`:
 
 - NTT, plaintext multiply, relinearize, rotation, and decryption were generally
   within 0–4%;
-- later-level rescale reached about 6% overhead;
+- later-depth rescale reached about 6% overhead;
 - encode reached 12–13%, but the absolute difference was about 0.018 ms;
 - complete matrix-vector (MxV) and rotate-many workloads were approximately at parity.
 
@@ -161,11 +166,11 @@ loop.
 |  | 8 | 2.27x | 5.11x | 2.29x | 1.55x | 1.56x | 3.66x | 3.37x |
 
 The mechanism is operation-specific. Encode and decrypt can benefit while a
-key-switch-heavy evaluator at the same level loses.
+key-switch-heavy evaluator at the same depth loses.
 
 ### `logN = 16` crossover
 
-| Level | B4 NTT | B8 NTT | B4 relin | B8 relin | B4 MxV-8 | B8 MxV-8 |
+| Depth | B4 NTT | B8 NTT | B4 relin | B8 relin | B4 MxV-8 | B8 MxV-8 |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 0.85x | 0.63x | 0.92x | 0.72x | 0.84x | 0.70x |
 | 5 | 0.90x | 0.82x | 0.89x | 0.76x | 0.84x | 0.73x |
@@ -194,17 +199,17 @@ accumulators, automorphism, and output tensors enlarge the working set.
 
 ## Hardware contrast: RTX A6000
 
-A second measurement on 2026-07-25 used commit
+A second historical measurement on 2026-07-25 used commit
 `9f4a1756bc20dd17f172b70ae88b9cf1ffd855c4` and one NVIDIA RTX A6000
 (SM86, 6 MiB L2, 47.4 GiB device memory). The same-build batch and loop paths
-matched exactly at the ciphertext-data level. Singleton batches remained at
+matched exactly at the ciphertext-data depth. Singleton batches remained at
 parity: the median loop/batch ratio was 1.001x for `logN = 14` and 1.000x for
 both `logN = 15` and `logN = 16`.
 
 The one-message QP digit size identifies whether increasing B creates a new
 fit-to-spill transition:
 
-| `logN` / level | Active QP rows | QP digit per message | Measured behavior |
+| `logN` / depth | Active QP rows | QP digit per message | Measured behavior |
 | --- | ---: | ---: | --- |
 | 14 / L0 | 9 | 1.125 MiB | B4/B8 eager evaluators benefited from launch amortization. |
 | 14 / L3 | 6 | 0.750 MiB | B8 MxV-8 reached 2.55x. |
@@ -230,7 +235,7 @@ loop's host-submission disadvantage. Values remain `loop / batch`:
 | `logN = 16`, L25 B8 MxV-8, radix16 | 1.07x | 1.03x |
 
 On this A6000, `logN = 15` exposed the clearest fit-to-spill loss: one
-level-zero message was close to the 6 MiB L2 capacity, while even B2 was not.
+depth-zero message was close to the 6 MiB L2 capacity, while even B2 was not.
 At `logN = 16`, L0 B1 was already larger than L2, so increasing B did not
 introduce the same new cache transition. The genuine radix-16 backend reduced enough transform
 work to retain small batch gains. A dispatch rule therefore needs measured
@@ -257,13 +262,13 @@ A reasonable starting policy for the reference GPU was:
 logN = 14:
     benchmark and normally batch B4/B8
 
-logN = 16 level <= 15, key-switch-heavy workload:
+logN = 16 depth <= 15, key-switch-heavy workload:
     normally loop
 
-logN = 16 level 20:
+logN = 16 depth 20:
     test B4; normally loop B8
 
-logN = 16 level >= 25:
+logN = 16 depth >= 25:
     benchmark and normally batch B4/B8
 ```
 
@@ -284,12 +289,12 @@ logN = 16:
 ```
 
 Do not encode this table as a universal library heuristic. Re-run the example
-when the GPU, backend, preset, level distribution, graph policy, workload, or
+when the GPU, backend, preset, depth distribution, graph policy, workload, or
 memory budget changes.
 
 ## Related documentation
 
 - [Homogeneous batching tutorial](../tutorial/homogeneous-batching.md)
 - [CKKS workload cost model](../concepts/performance/cost-model.md)
-- [Benchmark a workload correctly](benchmark-a-workload.md)
+- [Benchmark methodology](/benchmarks/methodology)
 - [Optimize a workload systematically](optimize-workload.md)

@@ -174,7 +174,7 @@ def _eager_expression(
     if isinstance(operation, ckks.EncodeOp):
         return (
             "engine.encode("
-            f"{operands[0]}, level={integer(operation.level, label='encode level')}, "
+            f"{operands[0]}, depth={integer(operation.depth, label='encode depth')}, "
             f"scale={floating(operation.scale, label='encode scale')!r})",
             resources,
         )
@@ -219,6 +219,25 @@ def _eager_expression(
         return (
             f"engine.rotate_many_with_keys({operands[0]}, ({keys},), "
             f"use_hoisting=True, output_domain={operation.output_domain.data!r})",
+            resources,
+        )
+    if isinstance(operation, ckks.GroupedRotationWeightedSumOp):
+        steps = tuple(int(step.value.data) for step in operation.baby_steps)
+        key_operands = iter(operands[1 : 1 + len(operation.keys)])
+        entries = [
+            "None" if step == 0 else next(key_operands) for step in steps
+        ]
+        plaintext_operands = operands[1 + len(operation.keys) :]
+        term_count = int(operation.term_count.value.data)
+        groups = [
+            "("
+            + ", ".join(plaintext_operands[first : first + term_count])
+            + ",)"
+            for first in range(0, len(plaintext_operands), term_count)
+        ]
+        return (
+            f"engine.sum_rotated_plaintext_product_groups({operands[0]}, "
+            f"({', '.join(entries)},), ({', '.join(groups)},))",
             resources,
         )
     if isinstance(operation, ckks.ToNttOp):
@@ -304,14 +323,14 @@ def _eager_expression(
             else string(operation.rounding, label="rescale rounding")
         )
         return (
-            f"engine.rescale_to_next_level({operands[0]}, rounding={rounding!r})",
+            f"engine.rescale_to_next_depth({operands[0]}, rounding={rounding!r})",
             resources,
         )
     if isinstance(operation, ckks.ModSwitchOp):
         target = integer(
-            operation.target_level, label="mod-switch target level"
+            operation.target_depth, label="mod-switch target depth"
         )
-        return f"engine.mod_switch_to_level({operands[0]}, {target})", resources
+        return f"engine.mod_switch_to_depth({operands[0]}, {target})", resources
     if isinstance(operation, ckks.ReinterpretScaleOp):
         scale = floating(operation.scale, label="reinterpret scale")
         return (

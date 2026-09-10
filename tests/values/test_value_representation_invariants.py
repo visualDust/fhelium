@@ -23,14 +23,14 @@ def engine() -> CkksEngine:
     if not torch.cuda.is_available():
         pytest.skip("CUDA is required")
     return CkksEngine(
-        fh.Preset.slots8192_scale40_levels7_int64, device="cuda:0"
+        fh.Preset.slots8192_scale40_depth7_int64, device="cuda:0"
     )
 
 
 def _deterministic_engine(seed: int) -> CkksEngine:
     """Create an engine whose cryptographic regression vector is reproducible."""
 
-    config = fh.CkksConfig.parse(fh.Preset.slots8192_scale40_levels7_int64)
+    config = fh.CkksConfig.parse(fh.Preset.slots8192_scale40_depth7_int64)
     return CkksEngine(
         config,
         device="cuda:0",
@@ -39,26 +39,26 @@ def _deterministic_engine(seed: int) -> CkksEngine:
     )
 
 
-def test_core_values_reject_invalid_scale_and_level_metadata() -> None:
+def test_core_values_reject_invalid_scale_and_depth_metadata() -> None:
     invalid_scales = (0, -1, float("nan"), float("inf"))
     for invalid_scale in invalid_scales:
         constructors = (
             lambda: Ciphertext(
                 data=torch.zeros((2, 1, 2), dtype=torch.int64),
-                level=0,
+                depth=0,
                 scale=invalid_scale,
                 prime_ids=(0,),
             ),
             lambda: Plaintext(
                 message=torch.zeros(1),
-                level=0,
+                depth=0,
                 scale=invalid_scale,
             ),
             lambda: CompressedPlaintext(
                 data=torch.zeros((1, 1), dtype=torch.int64),
                 ring_dimension=2,
                 compression_layout="cyclic",
-                level=0,
+                depth=0,
                 scale=invalid_scale,
                 polynomial_domain="coefficient",
                 modulus_basis="Q",
@@ -70,16 +70,16 @@ def test_core_values_reject_invalid_scale_and_level_metadata() -> None:
             with pytest.raises(InvalidScaleError):
                 constructor()
 
-    for invalid_level in (True, 1.5):
+    for invalid_depth in (True, 1.5):
         for constructor in (
             lambda: Plaintext(
                 message=torch.zeros(2),
-                level=invalid_level,
+                depth=invalid_depth,
                 scale=2.0**40,
             ),
             lambda: Ciphertext(
                 data=torch.zeros((2, 1, 8), dtype=torch.int64),
-                level=invalid_level,
+                depth=invalid_depth,
                 scale=2.0**40,
                 prime_ids=(0,),
             ),
@@ -103,16 +103,16 @@ def test_public_scale_entry_points_validate_raw_values(
             operation()
 
 
-@pytest.mark.parametrize("invalid_level", [True, 1.5, -1, 7])
+@pytest.mark.parametrize("invalid_depth", [True, 1.5, -1, 8])
 @pytest.mark.gpu
-def test_public_value_creation_requires_a_strict_public_level(
-    engine: CkksEngine, invalid_level: object
+def test_public_value_creation_requires_a_strict_public_depth(
+    engine: CkksEngine, invalid_depth: object
 ) -> None:
     message = torch.zeros(4, dtype=torch.float64)
     for operation in (
-        lambda: engine.plaintext(message, level=invalid_level),
-        lambda: engine.encode(message, level=invalid_level),
-        lambda: engine.encrypt_message(message, level=invalid_level),
+        lambda: engine.plaintext(message, depth=invalid_depth),
+        lambda: engine.encode(message, depth=invalid_depth),
+        lambda: engine.encrypt_message(message, depth=invalid_depth),
     ):
         with pytest.raises((TypeError, ValueError)):
             operation()
@@ -123,32 +123,32 @@ def test_message_encryption_validates_input_before_lazy_key_generation() -> (
     None
 ):
     engine = CkksEngine(
-        fh.Preset.slots8192_scale40_levels7_int64,
+        fh.Preset.slots8192_scale40_depth7_int64,
         device="cuda:0",
         allow_sk_gen=False,
     )
     message = torch.zeros(4, dtype=torch.float64)
 
-    with pytest.raises(ValueError, match="0 <= level"):
-        engine.encrypt_message(message, level=-1)
+    with pytest.raises(ValueError, match="0 <= depth"):
+        engine.encrypt_message(message, depth=-1)
     with pytest.raises(InvalidScaleError):
         engine.encrypt_message(message, scale=0)
 
 
 @pytest.mark.gpu
-def test_imported_engine_values_cannot_use_private_structural_levels(
+def test_imported_engine_values_cannot_use_private_structural_depths(
     engine: CkksEngine,
 ) -> None:
     encoded = engine.encode(torch.zeros(4))
-    imported_plaintext = replace(encoded, level=engine.public_level_count)
-    with pytest.raises(ValueError, match="0 <= level"):
+    imported_plaintext = replace(encoded, depth=engine.max_depth + 1)
+    with pytest.raises(ValueError, match="0 <= depth"):
         engine.integer_coefficients_to_rns(imported_plaintext)
-    with pytest.raises(ValueError, match="0 <= level"):
+    with pytest.raises(ValueError, match="0 <= depth"):
         engine.encrypt(imported_plaintext)
 
     ciphertext = engine.encrypt_message(torch.zeros(4))
-    imported_ciphertext = replace(ciphertext, level=engine.public_level_count)
-    with pytest.raises(ValueError, match="0 <= level"):
+    imported_ciphertext = replace(ciphertext, depth=engine.max_depth + 1)
+    with pytest.raises(ValueError, match="0 <= depth"):
         engine.coefficient_domain_to_ntt_domain(imported_ciphertext)
 
 
@@ -169,7 +169,7 @@ def test_integer_coefficients_require_integral_tensor_storage() -> None:
     with pytest.raises(TypeError, match="integral"):
         Plaintext(
             message=None,
-            level=0,
+            depth=0,
             scale=2.0**40,
             data=torch.arange(8, dtype=torch.float64),
             representation="integer_coefficients",
@@ -239,7 +239,7 @@ def test_decode_rejects_wrong_coefficient_ring_dimension(
 ) -> None:
     malformed = Plaintext(
         message=None,
-        level=0,
+        depth=0,
         scale=2.0**40,
         data=torch.zeros(
             engine.config.N - 1, dtype=dtype, device=engine.device
@@ -254,7 +254,7 @@ def test_decode_rejects_wrong_coefficient_ring_dimension(
 def test_approximate_coefficients_require_dense_finite_float64_tensor() -> None:
     common = dict(
         message=None,
-        level=0,
+        depth=0,
         scale=2.0**40,
         representation="approximate_coefficients",
         polynomial_domain="coefficient",
@@ -279,7 +279,7 @@ def test_approximate_coefficients_require_dense_finite_float64_tensor() -> None:
 def test_plaintext_raw_transition_chain_is_composable_and_axis_exact(
     engine: CkksEngine,
 ) -> None:
-    encoded = engine.encode(torch.linspace(-0.01, 0.01, 16), level=2)
+    encoded = engine.encode(torch.linspace(-0.01, 0.01, 16), depth=2)
     standard = engine.integer_coefficients_to_rns(encoded, modulus_basis="QP")
     montgomery = engine.standard_residues_to_montgomery_residues(standard)
     ntt = engine.coefficient_domain_to_ntt_domain(montgomery)
@@ -322,7 +322,7 @@ def test_plaintext_raw_transition_chain_is_composable_and_axis_exact(
         standard.representation,
         standard.modulus_basis,
         standard.prime_ids,
-        standard.level,
+        standard.depth,
         standard.scale,
     )
     for value in (montgomery, ntt, coefficient_montgomery, roundtrip):
@@ -330,7 +330,7 @@ def test_plaintext_raw_transition_chain_is_composable_and_axis_exact(
             value.representation,
             value.modulus_basis,
             value.prime_ids,
-            value.level,
+            value.depth,
             value.scale,
         ) == identity
 
@@ -395,7 +395,7 @@ def test_core_rejects_unsupported_ntt_standard_plaintext() -> None:
     with pytest.raises(ValueError, match="must use Montgomery"):
         Plaintext(
             message=None,
-            level=0,
+            depth=0,
             scale=2.0**40,
             data=torch.zeros((1, 8), dtype=torch.int64),
             representation="rns",
@@ -411,7 +411,7 @@ def test_core_prime_ids_are_not_coerced(prime_ids: tuple[object, ...]) -> None:
     with pytest.raises((TypeError, ValueError)):
         Ciphertext(
             data=torch.zeros((2, len(prime_ids), 8), dtype=torch.int64),
-            level=0,
+            depth=0,
             scale=2.0**40,
             prime_ids=prime_ids,  # type: ignore[arg-type]
         )
@@ -426,7 +426,7 @@ def test_native_payloads_are_structural() -> None:
     with pytest.raises(ValueError, match="cannot be empty"):
         Plaintext(
             message=None,
-            level=0,
+            depth=0,
             scale=2.0**40,
             data=torch.zeros((1, 0), dtype=torch.int64),
             representation="rns",

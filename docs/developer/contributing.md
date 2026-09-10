@@ -83,23 +83,10 @@ Native binaries are specific to the Python, PyTorch, CUDA, and C++ application
 binary interfaces (ABIs) and to the GPU architectures selected when they were
 built. Do not validate a change against an unrelated cached wheel.
 
-## Before changing code
+## Development checks
 
-1. Read the [Developer Guide](index.md) and the relevant subsystem
-   page.
-2. Read the
-   [Terminology and mathematical model](../concepts/terminology-and-mathematical-model.md)
-   when the change affects CKKS state, RNS/NTT representation, tensor layout,
-   scale, level, keys, or a native operation.
-3. Identify the affected interface or owned subsystem and the smallest check
-   that exercises the proposed change. For evaluator changes, also identify
-   the state transition, mutation or aliasing rule, and numerical oracle.
-4. Keep unrelated staged and unstaged work unchanged.
-
-## Validation order
-
-Run the smallest affected test first. Broaden validation according to the
-surface changed:
+The repository provides Python linting, type checks, behavior tests and static
+API-documentation generation:
 
 ```bash
 ruff check fhelium tests examples scripts
@@ -111,15 +98,11 @@ npm --prefix docs run typecheck
 npm --prefix docs run build
 ```
 
-Native, CUDA, distributed, packaging, or opt-in bootstrap changes require their
-corresponding targeted builds and representative workloads in addition to this
-baseline. Record commands, results, skipped validation, and remaining
-risk in the contribution description.
-
-Do not loosen a numerical tolerance merely to make a failure pass. Reconcile
-the mathematical error model, compare controlled cases, and inspect the
-observed error distribution before proposing any change to the acceptance
-criterion.
+The generic Python checks do not establish CUDA execution, distributed
+correctness or wheel compatibility. Those properties require execution on the
+relevant device, process topology or installed-wheel environment. A numerical
+acceptance criterion describes the intended error bound; a proposed change to
+that bound needs a mathematical rationale and measured error distribution.
 
 ## Documentation changes
 

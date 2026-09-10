@@ -1,10 +1,13 @@
-"""Lower CKKS representation and level transitions into logical operations."""
+"""Lower CKKS representation and depth transitions into logical operations."""
 
 from __future__ import annotations
 
 from typing import Literal, cast
 
-from xdsl.dialects.builtin import StringAttr
+from xdsl.dialects.builtin import (
+    IntegerAttr,
+    StringAttr,
+)
 from xdsl.ir import Operation
 
 from fhelium.config import CkksConfig
@@ -145,10 +148,17 @@ def _lower_rescale(
         kind="rescale-plan",
     )
     rounding = operation.rounding or StringAttr("nearest")
-    logical = rns.RescaleDropLeadingPrimeOp(
+    source_rns_type = _rns_type(operation.value.type)
+    depth_attr = source_rns_type.state.data.get("depth")
+    if not isinstance(depth_attr, IntegerAttr):
+        raise ValueError("rescale lowering requires concrete ciphertext depth")
+    depth = int(depth_attr.value.data)
+    drop_count = len(config.q_depth_groups[depth])
+    logical = rns.RescaleDropLeadingPrimesOp(
         value,
         resource,
         _rns_type(operation.result.type),
+        drop_count=drop_count,
         rounding=rounding,
         polynomial_domain=cast(
             Literal["coefficient", "ntt"], operation.input_domain.data
@@ -214,11 +224,11 @@ def _lower_mod_switch(
         symbol="active-rns-parameters",
         kind="rns-parameters",
     )
-    logical = rns.RestrictLevelOp(
+    logical = rns.RestrictDepthOp(
         value,
         resource,
         _rns_type(operation.result.type),
-        target_level=operation.target_level,
+        target_depth=operation.target_depth,
     )
     result_cast, result = _cast_to_ckks(
         logical.results[0], operation.result.type
@@ -282,7 +292,7 @@ REPRESENTATION_LOWERINGS = (
         is_default=True,
     ),
     CkksLoweringDefinition(
-        "rns-restrict-level",
+        "rns-restrict-depth",
         ckks.ModSwitchOp,
         _lower_mod_switch,
         is_default=True,

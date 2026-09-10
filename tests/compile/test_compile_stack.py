@@ -150,7 +150,7 @@ def test_pass_can_select_ckks_config_after_ckks_ir_exists() -> None:
     def add(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         return left + right
 
-    config = CkksConfig.parse(Preset.slots8192_scale40_levels7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
     caller_value = object()
 
     @dataclass(frozen=True)

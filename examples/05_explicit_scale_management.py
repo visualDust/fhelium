@@ -3,7 +3,7 @@
 """Plan and track actual per-value CKKS scales across two plaintext products.
 
 Run:
-    python examples/05_explicit_scale_management.py --preset slots8192-scale40-levels7-int64
+    python examples/05_explicit_scale_management.py --preset slots8192-scale40-depth7-int64
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import fhelium as fh
 from fhelium.eager import Engine
 
 
-def multiply_twice_then_rescale_to_next_level(
+def multiply_twice_then_rescale_to_next_depth(
     engine: Engine,
     source: fh.Ciphertext,
     first_message: torch.Tensor,
@@ -40,7 +40,8 @@ def multiply_twice_then_rescale_to_next_level(
     $$
     \Delta(c_1)=\Delta(c_0)\Delta(p_1),\qquad
     \Delta(c_2)=\Delta(c_1)\Delta(p_2),\qquad
-    \Delta(c_3)=\frac{\Delta(c_2)}{q_{\mathrm{drop}}}.
+    \Delta(c_3)=\frac{\Delta(c_2)}{M_{\mathrm{drop}}},
+    \qquad M_{\mathrm{drop}}=\prod_{q\in G_d}q.
     $$
 
     Decoded slots satisfy $m_3\mathrel{\approx}m_0m_1m_2$ up to CKKS
@@ -60,10 +61,10 @@ def multiply_twice_then_rescale_to_next_level(
     """
 
     first = engine.prepare_plaintext_for_multiplication(
-        engine.encode(first_message, level=source.level, scale=first_scale)
+        engine.encode(first_message, depth=source.depth, scale=first_scale)
     )
     second = engine.prepare_plaintext_for_multiplication(
-        engine.encode(second_message, level=source.level, scale=second_scale)
+        engine.encode(second_message, depth=source.depth, scale=second_scale)
     )
     after_first = engine.multiply_plaintext(
         engine.coefficient_domain_to_ntt_domain(source), first
@@ -72,7 +73,7 @@ def multiply_twice_then_rescale_to_next_level(
     return (
         after_first,
         before_rescale,
-        engine.rescale_to_next_level(
+        engine.rescale_to_next_depth(
             engine.ntt_domain_to_coefficient_domain(before_rescale)
         ),
     )
@@ -83,7 +84,7 @@ def scale_row(label: str, value: fh.Ciphertext) -> list[object]:
 
     return [
         label,
-        value.level,
+        value.depth,
         f"{value.scale:.17g}",
         f"{math.log2(value.scale):.9f}",
     ]
@@ -109,7 +110,7 @@ def main() -> None:
     """Run the scale-planning and guarded-reinterpretation example."""
 
     parser = argparse.ArgumentParser(description=__doc__)
-    add_engine_args(parser, default_preset="slots8192-scale40-levels7-int64")
+    add_engine_args(parser, default_preset="slots8192-scale40-depth7-int64")
     parser.add_argument(
         "--reinterpret-bound",
         type=float,
@@ -131,15 +132,16 @@ def main() -> None:
     expected_product = message * first_message * second_message
 
     source = engine.encrypt_message(message, scale=default_scale)
-    dropped_prime = engine.rescale_to_next_drop_prime(level=source.level)
+    dropped_divisor = engine.rescale_divisor(depth=source.depth)
 
     # The first factor receives a precision allocation. The second
     # scale completes the product required to reach default_scale after
-    # division by the actual q_0.
-    first_scale = float(1 << (engine.config.scale_bits // 2))
-    second_scale = default_scale * dropped_prime / (source.scale * first_scale)
+    # division by the actual leading Q-group product.
+    default_scale_bits = math.floor(math.log2(default_scale))
+    first_scale = float(1 << (default_scale_bits // 2))
+    second_scale = default_scale * dropped_divisor / (source.scale * first_scale)
     planned_first, planned_pre, planned = (
-        multiply_twice_then_rescale_to_next_level(
+        multiply_twice_then_rescale_to_next_depth(
             engine,
             source,
             first_message,
@@ -148,23 +150,24 @@ def main() -> None:
             second_scale=second_scale,
         )
     )
-    predicted_scale = engine.rescale_to_next_output_scale(
+    predicted_scale = engine.rescale_output_scale(
         planned_pre.scale,
-        level=planned_pre.level,
+        depth=planned_pre.depth,
     )
     assert planned.scale == predicted_scale == default_scale
 
-    # Level alignment is independent of scale alignment. Because the planned
-    # branch reaches default_scale exactly, a level-only modulus switch makes
+    # Depth alignment is independent of scale alignment. Because the planned
+    # branch reaches default_scale exactly, a depth-only modulus switch makes
     # the original branch directly add-compatible.
-    level_aligned_source = engine.mod_switch_to_level(source, planned.level)
-    planned_sum = engine.add(planned, level_aligned_source)
+    depth_aligned_source = engine.mod_switch_to_depth(source, planned.depth)
+    planned_sum = engine.add(planned, depth_aligned_source)
 
     # The comparison allocation uses a plaintext-scale product of Delta.
-    # Rescale records Delta^2/q_0, so the following addition has unequal scales.
+    # Rescale records Delta^2 divided by the leading Q-group product, so the
+    # result does not meet the matching-scale precondition for addition.
     approximate_second_scale = default_scale / first_scale
     approximate_first, approximate_pre, approximate = (
-        multiply_twice_then_rescale_to_next_level(
+        multiply_twice_then_rescale_to_next_depth(
             engine,
             source,
             first_message,
@@ -173,12 +176,7 @@ def main() -> None:
             second_scale=approximate_second_scale,
         )
     )
-    try:
-        engine.add(approximate, level_aligned_source)
-    except fh.errors.ScaleMismatchError as error:
-        strict_add_diagnostic = str(error)
-    else:
-        raise RuntimeError("strict addition accepted unequal scales")
+    scale_difference = approximate.scale / depth_aligned_source.scale - 1.0
 
     # Guarded reinterpretation records the configured target scale while
     # preserving residues. The bound limits the accepted message bias.
@@ -187,32 +185,33 @@ def main() -> None:
         default_scale,
         max_relative_change=args.reinterpret_bound,
     )
-    reinterpreted_sum = engine.add(reinterpreted, level_aligned_source)
+    reinterpreted_sum = engine.add(reinterpreted, depth_aligned_source)
     sync_if_cuda(torch.get_default_device())
 
     print(engine)
     print(f"default scale Delta: {default_scale:.17g}")
-    print(f"level-0 rescale prime q0: {dropped_prime}")
+    print(f"depth-0 rescale divisor: {dropped_divisor}")
     print(
         f"allocated plaintext scales: p1={first_scale:.17g}, p2={second_scale:.17g}"
     )
     print("\nExplicit scale states")
     print_table(
-        ["value", "level", "scale", "log2(scale)"],
+        ["value", "depth", "scale", "log2(scale)"],
         [
             scale_row("source", source),
             scale_row("planned after pmult 1", planned_first),
             scale_row("planned before rescale", planned_pre),
             scale_row("planned after rescale", planned),
-            scale_row("level-only switched source", level_aligned_source),
+            scale_row("depth-only switched source", depth_aligned_source),
             scale_row("Delta-product before rescale", approximate_pre),
-            scale_row("actual Delta^2/q0 result", approximate),
+            scale_row("actual Delta^2/M0 result", approximate),
             scale_row("explicitly reinterpreted", reinterpreted),
         ],
     )
 
-    print("\nStrict-add diagnostic before explicit reinterpretation")
-    print(strict_add_diagnostic)
+    print("\nScale comparison before explicit reinterpretation")
+    print(f"Relative scale difference: {scale_difference:.9e}")
+    print("The caller aligns actual scales before addition; Eager does not infer alignment.")
 
     # Reinterpretation changes the decoded product by old_scale/new_scale.
     reinterpret_ratio = approximate.scale / reinterpreted.scale
@@ -228,7 +227,7 @@ def main() -> None:
                 expected_product,
             ),
             error_row(
-                "planned product + level-switched source",
+                "planned product + depth-switched source",
                 engine,
                 planned_sum,
                 expected_product + message,

@@ -30,7 +30,7 @@ ckks_compilation = fh_compile.Pipeline(
         fh_compile.LowerSemanticToLogicalPass(),
         fh_compile.LowerLogicalToCkksPass(),
         fh_compile.ResolveRotationKeyOperandsPass(),
-        fh_compile.AssignCkksLevelsPass(entry_level=0),
+        fh_compile.AssignCkksDepthsPass(entry_depth=0),
         fh_compile.AssignCkksScalesPass(
             entry_scale=config.default_scale,
         ),

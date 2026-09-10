@@ -304,7 +304,7 @@ def _fhelium_operation_counts(program: ir.Program) -> list[tuple[str, int]]:
 
 
 def main() -> None:
-    config = CkksConfig.parse(Preset.slots8192_scale40_levels7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
     device = "cpu"
     capture_inputs = {
         "x": fh_compile.encrypted(
@@ -344,9 +344,9 @@ def main() -> None:
             # immediate relinearization independently from rescale placement.
             fh_compile.InsertRelinearizationPass(),
             # Consolidate product rescaling at legal add-tree frontiers before
-            # assigning the resulting levels and per-value actual scales.
+            # assigning the resulting depths and per-value actual scales.
             fh_compile.LateRescalePass(),
-            fh_compile.AssignCkksLevelsPass(entry_level=0),
+            fh_compile.AssignCkksDepthsPass(entry_depth=0),
             fh_compile.AssignCkksScalesPass(
                 entry_scale=config.default_scale,
             ),
@@ -380,8 +380,14 @@ def main() -> None:
     )
     # The materializer lazily constructs the RNS, NTT, rescale, codec, and
     # key-switch tables requested during this Program link.
-    chain = RnsChain(config.num_q_primes, config.num_p_primes)
-    layout = RnsLayout(chain, HybridRnsDecomposition(chain))
+    chain = RnsChain(
+        config.num_q_primes,
+        config.num_p_primes,
+        tuple(len(group) for group in config.q_depth_groups),
+    )
+    layout = RnsLayout(
+        chain, HybridRnsDecomposition(chain, config.q_moduli, config.p_moduli)
+    )
     device_resources = CkksDeviceResources(
         config=config,
         rns_layout=layout,
@@ -417,7 +423,7 @@ def main() -> None:
     encrypted_x = engine.encrypt_message(
         tiled_x,
         public_key,
-        level=0,
+        depth=0,
         scale=config.default_scale,
         device=device,
     )
@@ -496,7 +502,7 @@ def main() -> None:
                 "Backend maximum error",
                 f"{float((decoded.real - expected).abs().max()):.3e}",
             ],
-            ["output level", encrypted_result.level],
+            ["output depth", encrypted_result.depth],
             ["output scale", f"{encrypted_result.scale:.6e}"],
         ],
     )

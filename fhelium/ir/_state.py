@@ -95,7 +95,7 @@ class InferredValueState:
 
 _LAYOUT_FIELDS = (
     "key_space",
-    "level",
+    "depth",
     "prime_ids",
     "basis",
     "polynomial_domain",
@@ -355,15 +355,29 @@ def analyze_state_flow(
             inferred = tuple(
                 _result_state(result, fields) for result in operation.outputs
             )
+        elif isinstance(operation, ckks.GroupedRotationWeightedSumOp):
+            source = states[operation.value]
+            plaintext = states[operation.plaintexts[0]]
+            fields = {
+                **source.fields,
+                "scale": StateFact.symbolic(
+                    "multiply",
+                    source.field("scale"),
+                    plaintext.field("scale"),
+                ),
+                "polynomial_domain": StateFact.known("ntt"),
+                "residue_representation": StateFact.known("montgomery"),
+            }
+            inferred = (_result_state(operation.result, fields),)
         elif isinstance(operation, ckks.RescaleOp):
             source = states[operation.value]
             domain = operation.output_domain.data
-            level = source.field("level")
+            depth = source.field("depth")
             prime_ids = source.field("prime_ids")
-            next_level = (
-                StateFact.known(int(level.value) + 1)
-                if level.status == "known" and isinstance(level.value, int)
-                else StateFact.symbolic("increment", level)
+            next_depth = (
+                StateFact.known(int(depth.value) + 1)
+                if depth.status == "known" and isinstance(depth.value, int)
+                else StateFact.symbolic("increment", depth)
             )
             next_primes = (
                 StateFact.known(tuple(prime_ids.value)[1:])
@@ -375,7 +389,7 @@ def analyze_state_flow(
                 _unary_state(
                     operation,
                     states,
-                    level=next_level,
+                    depth=next_depth,
                     prime_ids=next_primes,
                     polynomial_domain=StateFact.known(domain),
                     residue_representation=StateFact.known(
@@ -384,7 +398,7 @@ def analyze_state_flow(
                     scale=StateFact.symbolic(
                         "divide_by_dropped_prime",
                         source.field("scale"),
-                        source.field("level"),
+                        source.field("depth"),
                     ),
                 ),
             )

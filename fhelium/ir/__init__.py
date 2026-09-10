@@ -1,6 +1,6 @@
 """Represent and inspect permissive mixed-level FHElium programs.
 
-The package owns xDSL module structure, registered multi-level dialects, open
+The package owns xDSL module structure, registered multi-depth dialects, open
 FHElium value/reference types, read-only Program analyses, and formatting.
 It does not own frontend capture, numerical correctness, backend coverage, live
 runtime objects, or execution.

@@ -31,7 +31,7 @@ def engine() -> Iterator[Engine]:
         pytest.skip("CUDA is not available")
     previous_device = torch.get_default_device()
     torch.set_default_device("cuda:0")
-    instance = Engine(Preset.slots8192_scale40_levels7_int64)
+    instance = Engine(Preset.slots8192_scale40_depth7_int64)
     yield instance
     torch.set_default_device(previous_device)
     del instance

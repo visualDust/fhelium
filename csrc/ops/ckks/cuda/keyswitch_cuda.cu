@@ -78,9 +78,16 @@ __global__ void keyswitch_moddown_prepare_p_basis_kernel(
         params[RNS_PARAM_NEG_INV_MODULUS_LO][param_row];
     const scalar_t neg_inv_modulus_hi =
         params[RNS_PARAM_NEG_INV_MODULUS_HI][param_row];
+    const int half_nbits = kMontgomeryRadixBits<scalar_t> / 2;
+    const scalar_t modulus = modulus_lo + (modulus_hi << half_nbits);
     for (int lower = p_row_count - 1; lower > row; --lower) {
+      // A reverse mixed-radix digit is bounded by its own source prime, not
+      // by this later target prime. Reduce it before the lazy subtraction so
+      // unequal-width dropped bases retain the same recurrence as CPU.
+      const scalar_t lower_digit =
+          p_scratch[batch][lower][coefficient] % modulus;
       const scalar_t difference = sub_lazy_residues(
-          value, p_scratch[batch][lower][coefficient], twice_modulus);
+          value, lower_digit, twice_modulus);
       // Match the CPU multiply_split recurrence by reducing this lazy
       // difference before multiplication. Canonicalize the result as well
       // because later P steps reinterpret the stored residue as an ordinary
@@ -259,6 +266,76 @@ __global__ void keyswitch_accumulate_digit_products_kernel(
       accumulator1[batch][row][coefficient], product1, twice_modulus);
 }
 
+constexpr int kMaximumGroupedKeyDigits = 16;
+
+template <typename scalar_t>
+struct KeyswitchDigitPointers {
+  const scalar_t* values[kMaximumGroupedKeyDigits];
+  int64_t batch_stride[kMaximumGroupedKeyDigits];
+  int64_t row_stride[kMaximumGroupedKeyDigits];
+  int64_t coefficient_stride[kMaximumGroupedKeyDigits];
+};
+
+template <typename scalar_t, bool Permute>
+__global__ void keyswitch_accumulate_products_kernel(
+    CudaTensorAccessor32<scalar_t, 3> accumulator0,
+    CudaTensorAccessor32<scalar_t, 3> accumulator1,
+    const KeyswitchDigitPointers<scalar_t> digits,
+    const int digit_count,
+    const CudaTensorAccessor32<scalar_t, 4> key,
+    const CudaTensorAccessor32<scalar_t, 2> params,
+    const int key_digit_row_start,
+    const int32_t* source_indices,
+    const int64_t source_index_stride) {
+  const int row = blockIdx.x;
+  const int coefficient = blockIdx.y * blockDim.x + threadIdx.x;
+  const int batch = blockIdx.z;
+  if (coefficient >= accumulator0.size(2)) return;
+  int source_coefficient = coefficient;
+  if constexpr (Permute) {
+    source_coefficient = source_indices[coefficient * source_index_stride];
+    CUDA_KERNEL_ASSERT(source_coefficient >= 0 &&
+                       source_coefficient < accumulator0.size(2));
+  }
+  const scalar_t twice_modulus = params[RNS_PARAM_TWICE_MODULUS][row];
+  const scalar_t modulus_lo = params[RNS_PARAM_MODULUS_LO][row];
+  const scalar_t modulus_hi = params[RNS_PARAM_MODULUS_HI][row];
+  const scalar_t neg_inv_modulus_lo = params[RNS_PARAM_NEG_INV_MODULUS_LO][row];
+  const scalar_t neg_inv_modulus_hi = params[RNS_PARAM_NEG_INV_MODULUS_HI][row];
+  scalar_t sum0 = 0;
+  scalar_t sum1 = 0;
+  const int key_row = key_digit_row_start + row;
+#pragma unroll
+  for (int digit_index = 0; digit_index < kMaximumGroupedKeyDigits;
+       ++digit_index) {
+    if (digit_index >= digit_count) break;
+    const scalar_t digit = digits.values[digit_index][
+        batch * digits.batch_stride[digit_index] +
+        row * digits.row_stride[digit_index] +
+        source_coefficient * digits.coefficient_stride[digit_index]];
+    sum0 = add_lazy_residues(
+        sum0,
+        montgomery_mul(digit,
+                       key[digit_index][0][key_row][coefficient],
+                       modulus_lo,
+                       modulus_hi,
+                       neg_inv_modulus_lo,
+                       neg_inv_modulus_hi),
+        twice_modulus);
+    sum1 = add_lazy_residues(
+        sum1,
+        montgomery_mul(digit,
+                       key[digit_index][1][key_row][coefficient],
+                       modulus_lo,
+                       modulus_hi,
+                       neg_inv_modulus_lo,
+                       neg_inv_modulus_hi),
+        twice_modulus);
+  }
+  accumulator0[batch][row][coefficient] = sum0;
+  accumulator1[batch][row][coefficient] = sum1;
+}
+
 void keyswitch_accumulate_digit_products_inplace_cuda(
     torch::Tensor accumulator0_qp,
     torch::Tensor accumulator1_qp,
@@ -345,10 +422,111 @@ void keyswitch_accumulate_digit_products_inplace_cuda(
       });
 }
 
+void keyswitch_accumulate_products_inplace_cuda(
+    torch::Tensor accumulator0_qp,
+    torch::Tensor accumulator1_qp,
+    const at::TensorList extended_digits_ntt_qp,
+    const torch::Tensor key_switch_key,
+    const torch::Tensor rns_params,
+    const int64_t key_digit_row_start,
+    const std::optional<torch::Tensor> source_indices) {
+  constexpr const char* operation = "keyswitch_accumulate_products";
+  TORCH_CHECK(!extended_digits_ntt_qp.empty() &&
+                  extended_digits_ntt_qp.size() <= kMaximumGroupedKeyDigits,
+              operation,
+              " requires between 1 and ",
+              kMaximumGroupedKeyDigits,
+              " digits");
+  const auto& prototype_tensor = extended_digits_ntt_qp.front();
+  auto accumulator0 = view_rns_batch_3d(accumulator0_qp, "accumulator0_qp");
+  auto accumulator1 = view_rns_batch_3d(accumulator1_qp, "accumulator1_qp");
+  const auto prototype =
+      view_rns_batch_3d(prototype_tensor, "extended_digits_ntt_qp[0]");
+  check_keyswitch_cuda_peer(prototype_tensor, accumulator0_qp, operation,
+                            "accumulator0_qp");
+  check_keyswitch_cuda_peer(prototype_tensor, accumulator1_qp, operation,
+                            "accumulator1_qp");
+  check_keyswitch_cuda_peer(prototype_tensor, key_switch_key, operation,
+                            "key_switch_key");
+  check_keyswitch_cuda_peer(prototype_tensor, rns_params, operation,
+                            "rns_params");
+  check_rns_binary_3d(accumulator0, prototype, operation, false);
+  check_rns_binary_3d(accumulator1, prototype, operation, false);
+  check_rns_parameter_rows(prototype, rns_params, operation);
+  TORCH_CHECK(key_switch_key.dim() == 4 &&
+                  key_switch_key.size(0) == extended_digits_ntt_qp.size() &&
+                  key_switch_key.size(1) == 2 &&
+                  key_digit_row_start >= 0 &&
+                  key_digit_row_start + prototype.size(1) <=
+                      key_switch_key.size(2) &&
+                  key_switch_key.size(3) == prototype.size(2),
+              operation, " key shape or row interval mismatch");
+  for (const auto& digit_tensor : extended_digits_ntt_qp) {
+    check_keyswitch_cuda_peer(
+        prototype_tensor, digit_tensor, operation, "digit");
+    const auto digit = view_rns_batch_3d(digit_tensor, "digit");
+    check_rns_binary_3d(prototype, digit, operation, false);
+    at::assert_no_overlap(accumulator0, digit);
+    at::assert_no_overlap(accumulator1, digit);
+  }
+  at::assert_no_internal_overlap(accumulator0);
+  at::assert_no_internal_overlap(accumulator1);
+  at::assert_no_overlap(accumulator0, accumulator1);
+  at::assert_no_overlap(accumulator0, key_switch_key);
+  at::assert_no_overlap(accumulator1, key_switch_key);
+  const int32_t* permutation = nullptr;
+  int64_t permutation_stride = 0;
+  if (source_indices) {
+    const auto& indices = *source_indices;
+    TORCH_CHECK(indices.device() == prototype_tensor.device() &&
+                    indices.scalar_type() == torch::kInt32 &&
+                    indices.dim() == 1 && indices.size(0) == prototype.size(2),
+                operation, " requires int32 source indices matching N");
+    permutation = indices.data_ptr<int32_t>();
+    permutation_stride = indices.stride(0);
+    at::assert_no_overlap(accumulator0, indices);
+    at::assert_no_overlap(accumulator1, indices);
+  }
+  const int device = prototype_tensor.device().index();
+  cudaSetDevice(device);
+  auto stream = at::cuda::getCurrentCUDAStream(device);
+  dim3 grid(prototype.size(1),
+            (prototype.size(2) + kCudaBlockSize - 1) / kCudaBlockSize,
+            prototype.size(0));
+  AT_DISPATCH_INTEGRAL_TYPES(prototype_tensor.scalar_type(), operation, [&] {
+    KeyswitchDigitPointers<scalar_t> pointers{};
+    for (int digit_index = 0;
+         digit_index < static_cast<int>(extended_digits_ntt_qp.size());
+         ++digit_index) {
+      const auto digit = view_rns_batch_3d(
+          extended_digits_ntt_qp[digit_index], "digit");
+      pointers.values[digit_index] = digit.data_ptr<scalar_t>();
+      pointers.batch_stride[digit_index] = digit.stride(0);
+      pointers.row_stride[digit_index] = digit.stride(1);
+      pointers.coefficient_stride[digit_index] = digit.stride(2);
+    }
+    const auto kernel = permutation
+        ? keyswitch_accumulate_products_kernel<scalar_t, true>
+        : keyswitch_accumulate_products_kernel<scalar_t, false>;
+    kernel<<<grid, kCudaBlockSize, 0, stream>>>(
+        FHELIUM_CUDA_ACCESSOR32(accumulator0, scalar_t, 3),
+        FHELIUM_CUDA_ACCESSOR32(accumulator1, scalar_t, 3),
+        pointers,
+        static_cast<int>(extended_digits_ntt_qp.size()),
+        FHELIUM_CUDA_ACCESSOR32(key_switch_key, scalar_t, 4),
+        FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2),
+        static_cast<int>(key_digit_row_start),
+        permutation,
+        permutation_stride);
+  });
+}
+
 }  // namespace
 
 TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
   m.impl("keyswitch_moddown_qp_to_q", &keyswitch_moddown_qp_to_q_cuda);
   m.impl("keyswitch_accumulate_digit_products_",
          &keyswitch_accumulate_digit_products_inplace_cuda);
+  m.impl("keyswitch_accumulate_products_",
+         &keyswitch_accumulate_products_inplace_cuda);
 }

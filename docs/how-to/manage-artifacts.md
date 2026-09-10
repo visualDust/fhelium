@@ -212,7 +212,7 @@ and one real consumer operation:
 6. Delete the replacement by reference and assert the logical name is absent.
 7. Reopen the store from the same root and verify the remaining inventory.
 
-A tensor byte comparison alone does not prove that level, scale, prime IDs,
+A tensor byte comparison alone does not prove that depth, scale, prime IDs,
 polynomial domain, modulus basis, residue representation, or key relation was
 reconstructed correctly. The store does not record CKKS parameter provenance;
 verify it through application-owned artifact metadata before use.

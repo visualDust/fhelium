@@ -8,7 +8,7 @@ correctness of an application protocol.
 ## What FHElium validates
 
 FHElium validates operation-specific state before native execution, including
-tensor device and dtype, CKKS level and actual scale,
+tensor device and dtype, CKKS depth and actual scale,
 polynomial domain, residue representation, RNS layout, component count, and
 required key material.
 
@@ -34,7 +34,7 @@ The application is responsible for:
 - generating, authorizing, transporting, storing, rotating, and deleting key
   material;
 - bounding cleartext inputs and intermediate values;
-- selecting an operation schedule with sufficient levels and precision;
+- selecting an operation schedule with sufficient depths and precision;
 - comparing decrypted results with a representative cleartext oracle and a
   justified error criterion;
 - protecting serialized values and keys at rest and in transit;
@@ -52,7 +52,7 @@ not encrypt its payload.
 
 CKKS is approximate. A successful operation and a parameter-budget check do not
 establish that the decrypted result meets an application's accuracy target.
-Document the input range, circuit, scale and level schedule, cleartext
+Document the input range, circuit, scale and depth schedule, cleartext
 reference, observed error distribution, and acceptance threshold for each
 workload. Do not weaken a threshold to hide an unexplained discrepancy.
 

@@ -1,13 +1,14 @@
 from functools import cached_property
 
 from fhelium.config import CkksConfig
+from fhelium.backend.rns.format import RnsExecutionFormat
 
 
 class MontgomeryParameters:
     r"""Host-side constants for per-prime Montgomery arithmetic.
 
     Let $R=2^w$, where $w=\mathtt{buffer\_bit\_length}$. For every odd modulus $q_i$
-    in level-zero ``[Q | P]`` order, standard residue $x_i$ is stored
+    in depth-zero ``[Q | P]`` order, standard residue $x_i$ is stored
     in Montgomery representation as $x_iR\bmod q_i$. The native reduction
 
     $$
@@ -22,7 +23,7 @@ class MontgomeryParameters:
     """
 
     def __init__(self, ckks_config: CkksConfig):
-        buffer_bit_length = ckks_config.buffer_bit_length
+        buffer_bit_length = RnsExecutionFormat.select(ckks_config.moduli).radix_bits
         moduli = ckks_config.moduli
         # Montgomery reduction with R=2^w requires every modulus to be odd.
         if any((qi % 2 == 0) for qi in moduli):

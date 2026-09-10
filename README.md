@@ -65,7 +65,7 @@ from fhelium.eager import Engine
 
 # Change this to "cuda:0" to create inputs and keys on CUDA.
 torch.set_default_device("cpu")
-engine = Engine(fh.Preset.slots8192_scale40_levels7_int64)
+engine = Engine(fh.Preset.slots8192_scale40_depth7_int64)
 
 x = torch.linspace(-0.05, 0.05, 32, dtype=torch.float64)
 y = torch.linspace(0.02, -0.02, 32, dtype=torch.float64)
@@ -78,7 +78,7 @@ ct_sum = engine.add(ct_x, ct_y)
 x_ntt = engine.coefficient_domain_to_ntt_domain(ct_x)
 y_ntt = engine.coefficient_domain_to_ntt_domain(ct_y)
 product_triplet = engine.multiply(x_ntt, y_ntt)
-ct_product = engine.rescale_to_next_level(
+ct_product = engine.rescale_to_next_depth(
     engine.relinearize(product_triplet)
 )
 
@@ -182,7 +182,7 @@ from fhelium.eager import Engine
 def main():
     dist.init()
     torch.set_default_device(dist.local_device())
-    engine = Engine(fh.Preset.slots32768_scale40_levels34_int64)
+    engine = Engine(fh.Preset.slots32768_scale40_depth34_int64)
 
     weight = (
         engine.encode(torch.ones(16, dtype=torch.float64))
@@ -191,7 +191,7 @@ def main():
     )
     weight = dist.broadcast_plaintext(weight, src=0)
     print(
-        f"rank={dist.get_rank()} device={weight.device} level={weight.level}"
+        f"rank={dist.get_rank()} device={weight.device} depth={weight.depth}"
     )
     dist.shutdown()
 
@@ -221,13 +221,13 @@ fhelium version
 fhelium cuda info
 fhelium cuda topo --bandwidth
 fhelium benchmark list
-fhelium benchmark v1 run --device cpu --output results/benchmark-v1.json
+fhelium benchmark run --device cpu --output results/benchmark.json
 fhelium benchmark recommend ntt --suite kernel --device cuda:0
 ```
 
 Running `fhelium benchmark` without a subcommand opens the interactive
 benchmark interface. See [Inspect runtime and CUDA](https://fhelium.550w.host/how-to/inspect-runtime-and-cuda)
-and [Benchmark a workload](https://fhelium.550w.host/how-to/benchmark-a-workload)
+and [Benchmark methodology](https://fhelium.550w.host/benchmarks/methodology)
 for the complete command options and output schemas.
 
 ## Documentation and examples
@@ -269,7 +269,7 @@ If you use FHElium in research or software, cite the project as:
   author  = {Zhaoting Gong and Jiaming Liang and Ran Ran and Wujie Wen},
   title   = {FHElium: A Cross-Stack CKKS Research Framework for CPU and CUDA},
   year    = {2026},
-  version = {0.20.0},
+  version = {0.25.0},
   url     = {https://github.com/VisualDust/fhelium}
 }
 ```

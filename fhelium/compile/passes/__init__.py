@@ -14,7 +14,7 @@ from .program import (
     default_svg_operation_color_key,
 )
 from .ckks import (
-    AssignCkksLevelsPass,
+    AssignCkksDepthsPass,
     AssignCkksScalesPass,
     HoistRotationsPass as HoistRotationsPass,
     InsertMultiplyNttTransitionsPass,
@@ -48,7 +48,7 @@ __all__ = [
     "InitializeResourceBindingsPass",
     "AssignImplementationsPass",
     "AssignNttImplementationPass",
-    "AssignCkksLevelsPass",
+    "AssignCkksDepthsPass",
     "AssignCkksScalesPass",
     "EliminateDeadValuesPass",
     "EmitBackendPythonPass",

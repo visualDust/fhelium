@@ -1,4 +1,4 @@
-"""Low-level CKKS slot/polynomial encoding helpers."""
+"""Low-depth CKKS slot/polynomial encoding helpers."""
 
 from collections.abc import Sequence
 from functools import cache

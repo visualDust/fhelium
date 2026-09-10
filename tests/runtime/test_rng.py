@@ -63,20 +63,14 @@ def test_cpu_csprng_shapes_ranges_and_engine_integration() -> None:
     assert gaussian[0].shape == (3, 64)
     assert raw[0].shape == (2, 16, 16)
 
-    config = CkksConfig.parse(Preset.slots8192_scale40_levels7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
     engine = CkksEngine(config, device="cpu")
     assert isinstance(engine.rng, Csprng)
     assert engine.device.type == "cpu"
 
 
 def test_cpu_engine_rng_uses_the_configured_int32_dtype() -> None:
-    config = CkksConfig.parse(
-        Preset.slots8192_scale30_levels9_int64,
-        buffer_bit_length=30,
-        scale_bits=25,
-        num_scale_primes=3,
-        enforce_security_budget=False,
-    )
+    config = CkksConfig.parse(Preset.slots8192_scale25_depth14_int32)
     engine = CkksEngine(config, device="cpu")
     assert isinstance(engine.rng, Csprng)
     assert engine.rng.torch_dtype is torch.int32
@@ -85,7 +79,7 @@ def test_cpu_engine_rng_uses_the_configured_int32_dtype() -> None:
 
 
 def test_engine_normalizes_unindexed_local_devices() -> None:
-    config = CkksConfig.parse(Preset.slots8192_scale40_levels7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
     assert CkksEngine(config, device="cpu:0").device == torch.device("cpu")
     if torch.cuda.is_available():
         engine = CkksEngine(config, device="cuda")
@@ -119,7 +113,7 @@ def test_csprng_rejects_mixed_device_types_and_negative_channels() -> None:
 
 
 def test_ckks_engine_owns_seeded_rng_configuration() -> None:
-    config = CkksConfig.parse(Preset.slots8192_scale40_levels7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
     first = CkksEngine(
         config,
         device="cpu",
@@ -140,19 +134,19 @@ def test_ckks_engine_owns_seeded_rng_configuration() -> None:
 def test_ckks_engine_rejects_noninteger_rng_stream_material() -> None:
     with pytest.raises(TypeError, match="rng_seed must be an integer"):
         CkksEngine(
-            Preset.slots8192_scale40_levels7_int64,
+            Preset.slots8192_scale40_depth7_int64,
             device="cpu",
             rng_seed=True,  # type: ignore[arg-type]
         )
     with pytest.raises(TypeError, match="rng_seed must be an integer"):
         CkksEngine(
-            Preset.slots8192_scale40_levels7_int64,
+            Preset.slots8192_scale40_depth7_int64,
             device="cpu",
             rng_seed="7",  # type: ignore[arg-type]
         )
     with pytest.raises(TypeError, match="rng_nonce must be an integer"):
         CkksEngine(
-            Preset.slots8192_scale40_levels7_int64,
+            Preset.slots8192_scale40_depth7_int64,
             device="cpu",
             rng_nonce=1.5,  # type: ignore[arg-type]
         )
@@ -162,7 +156,7 @@ def test_ckks_engine_rejects_noninteger_rng_stream_material() -> None:
 def test_ckks_engine_passes_configured_gaussian_sigma() -> None:
     _require_cuda_devices(1)
     config = CkksConfig.parse(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         sigma=4.25,
         enforce_security_budget=False,
     )

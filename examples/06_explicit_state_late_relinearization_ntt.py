@@ -63,7 +63,7 @@ def late_relinearization(
 
     if accumulator is None or reference is None:
         raise ValueError("pair_count must be positive")
-    output = engine.rescale_to_next_level(engine.relinearize(accumulator))
+    output = engine.rescale_to_next_depth(engine.relinearize(accumulator))
     return output, reference
 
 
@@ -88,7 +88,7 @@ def ntt_reuse(
     )
 
     product = engine.multiply(source, fixed)
-    output = engine.rescale_to_next_level(engine.relinearize(product))
+    output = engine.rescale_to_next_depth(engine.relinearize(product))
     return output, source_values * fixed_values
 
 
@@ -112,9 +112,9 @@ def main() -> None:
             engine.num_slots,
         )
         rows.append(
-            [name, value.level, _state(value), f"{error['max_abs']:.3e}"]
+            [name, value.depth, _state(value), f"{error['max_abs']:.3e}"]
         )
-    print_table(["demo", "level", "state", "max abs error"], rows)
+    print_table(["demo", "depth", "state", "max abs error"], rows)
 
 
 if __name__ == "__main__":

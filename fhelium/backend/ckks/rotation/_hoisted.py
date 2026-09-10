@@ -30,13 +30,13 @@ class _PreparedRotationDigits:
 
     `ntt_digits_qp` has shape
     ``[digit, *batch, active_qp_limb, ntt_index]``.  `digit` uses active local
-    order at `level`; each consumer separately resolves the corresponding
+    order at `depth`; each consumer separately resolves the corresponding
     stable key-storage digit through `RnsDigitSpec.key_digit_index`. The
     executor creates and consumes this private value within one rotate-many
     call.
     """
 
-    level: int
+    depth: int
     ntt_digits_qp: torch.Tensor
 
 
@@ -49,14 +49,14 @@ class _RotationHoistExecutor:
         config: CkksConfig,
         rns_context: RnsContext,
         ntt_context: NttContext,
-        moddown_p_drop_inverses_montgomery_by_level: tuple[torch.Tensor, ...],
+        moddown_p_drop_inverses_montgomery_by_depth: tuple[torch.Tensor, ...],
         galois_generator: int = 3,
     ) -> None:
         self.config = config
         self.rns_context = rns_context
         self.ntt_context = ntt_context
-        self.moddown_p_drop_inverses_montgomery_by_level = (
-            moddown_p_drop_inverses_montgomery_by_level
+        self.moddown_p_drop_inverses_montgomery_by_depth = (
+            moddown_p_drop_inverses_montgomery_by_depth
         )
         self.galois_generator = galois_generator
         self._mixed_radix_native_arg_cache: dict[
@@ -82,7 +82,7 @@ class _RotationHoistExecutor:
         self,
         component: torch.Tensor,
         *,
-        level: int,
+        depth: int,
         key: RotationKey,
     ) -> torch.Tensor:
         """Apply the coefficient-domain automorphism for one slot rotation."""
@@ -130,7 +130,7 @@ class _RotationHoistExecutor:
             component,
             tables[0],
             tables[1],
-            self.rns_context.twice_modulus_for_basis(level, include_p=False),
+            self.rns_context.twice_modulus_for_basis(depth, include_p=False),
         )
 
     def _mixed_radix_native_args(
@@ -144,7 +144,7 @@ class _RotationHoistExecutor:
         torch.Tensor,
         torch.Tensor,
     ]:
-        cache_key = (digit_spec.level, digit_spec.digit_index)
+        cache_key = (digit_spec.depth, digit_spec.digit_index)
         cached = self._mixed_radix_native_arg_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -181,7 +181,7 @@ class _RotationHoistExecutor:
         ].clone()
         if component_count == 1:
             return source
-        if component_count <= 8:
+        if component_count <= 16:
             return rns_ops.mixed_radix_decompose(
                 source,
                 *self._mixed_radix_native_args(digit_spec),
@@ -233,7 +233,7 @@ class _RotationHoistExecutor:
         digit_spec: RnsDigitSpec,
     ) -> torch.Tensor:
         active = self.rns_context.basis_parameters(
-            digit_spec.level,
+            digit_spec.depth,
             include_p=True,
         )
         source = self.rns_context.row_parameters(digit_spec.prime_ids)
@@ -257,13 +257,13 @@ class _RotationHoistExecutor:
     def prepare(
         self,
         component: torch.Tensor,
-        level: int,
+        depth: int,
     ) -> _PreparedRotationDigits:
         """Materialize reusable NTT/Montgomery QP digits for `component`."""
 
-        digit_specs = self.rns_context.rns_layout.digit_specs(level)
+        digit_specs = self.rns_context.rns_layout.digit_specs(depth)
         active_start = self.rns_context.basis_parameters(
-            level,
+            depth,
             include_p=True,
         ).parameter_row_start
         digits: torch.Tensor | None = None
@@ -285,7 +285,7 @@ class _RotationHoistExecutor:
         if digits is None:
             raise RuntimeError("Rotation hoisting requires an active RNS digit")
         return _PreparedRotationDigits(
-            level=level,
+            depth=depth,
             ntt_digits_qp=digits,
         )
 
@@ -338,14 +338,14 @@ class _RotationHoistExecutor:
         self,
         accumulator0_qp: torch.Tensor,
         accumulator1_qp: torch.Tensor,
-        level: int,
+        depth: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         self.ntt_context.inverse_to_standard_(accumulator0_qp, include_p=True)
         self.ntt_context.inverse_to_standard_(accumulator1_qp, include_p=True)
         p_count = self.config.num_p_primes
-        inverses = self.moddown_p_drop_inverses_montgomery_by_level[level]
+        inverses = self.moddown_p_drop_inverses_montgomery_by_depth[depth]
         parameters = self.rns_context.basis_parameters(
-            level,
+            depth,
             include_p=True,
         ).native_parameters
         return (
@@ -373,7 +373,7 @@ class _RotationHoistExecutor:
 
         accumulator = self._accumulate(prepared, key)
         correction0, correction1 = self._moddown(
-            accumulator[0], accumulator[1], prepared.level
+            accumulator[0], accumulator[1], prepared.depth
         )
         return (
             self.rns_context.add_standard(rotated_c0, correction0),
@@ -390,7 +390,7 @@ class _RotationHoistExecutor:
         """Rotate shared c0 evaluations and return Q NTT/Montgomery components."""
 
         accumulator = self._accumulate(prepared, key)
-        corrections = moddown_ntt_qp_to_q(accumulator, plan, prepared.level)
+        corrections = moddown_ntt_qp_to_q(accumulator, plan, prepared.depth)
         indices = self._ntt_galois_source_indices(
             key.rotation_step, c0_ntt.device
         )
@@ -414,15 +414,32 @@ class _RotationHoistExecutor:
             device=prototype.device,
         )
         active = self.rns_context.basis_parameters(
-            prepared.level,
+            prepared.depth,
             include_p=True,
         )
         source_indices = self._ntt_galois_source_indices(
             key.rotation_step,
             prototype.device,
         )
+        digit_specs = self.rns_context.rns_layout.digit_specs(prepared.depth)
+        if (
+            prototype.is_cuda
+            and len(prepared.ntt_digits_qp) <= 5
+            and tuple(spec.key_digit_index for spec in digit_specs)
+            == tuple(range(len(digit_specs)))
+        ):
+            ckks_ops.keyswitch_accumulate_products_(
+                accumulator[0],
+                accumulator[1],
+                list(prepared.ntt_digits_qp),
+                key.data,
+                active.native_parameters,
+                active.parameter_row_start,
+                source_indices,
+            )
+            return accumulator
         for digit_spec, digit_qp in zip(
-            self.rns_context.rns_layout.digit_specs(prepared.level),
+            digit_specs,
             prepared.ntt_digits_qp,
             strict=True,
         ):

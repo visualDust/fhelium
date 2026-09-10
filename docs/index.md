@@ -27,6 +27,13 @@ ciphertext-vector (**CT×CT**) evaluation. <a href="/assets/fhelium-workload.py"
 
 <BsgsMatvecPerformance />
 
+These retained measurements compare the named reference implementations with
+FHElium's 0.20-era workload configuration. The chart's `Depth 7`, `Depth 16`,
+and `Depth 34` labels identify maximum-chain-depth preset families whose ring
+dimensions are shown beside them, not the input depth of one run. The
+downloadable script is the current workload implementation rather than a
+historical source snapshot.
+
 ## Continue by task
 
 <DocGrid class="home-task-grid">

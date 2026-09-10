@@ -6,18 +6,19 @@ one Engine. Preconfigured constructors live in
 :mod:`fhelium.experimental.bootstrap.presets`.
 """
 
-from fhelium.experimental.bootstrap._full_slot import FullSlotBootstrap
-from fhelium.experimental.bootstrap._linear import (
+from fhelium.experimental.bootstrap.full_slot import FullSlotBootstrap
+from fhelium.experimental.bootstrap.arithmetic import BootstrapArithmetic
+from fhelium.experimental.bootstrap.linear import (
     DiagonalBSGSEvaluator,
     DiagonalLinearTransform,
     DirectDiagonalEvaluator,
     Radix2FourierTransformCompiler,
 )
-from fhelium.experimental.bootstrap._modular import (
+from fhelium.experimental.bootstrap.reduction import (
     CosineDoubleAngleReduction,
     ExponentialSquaringReduction,
 )
-from fhelium.experimental.bootstrap._polynomial import (
+from fhelium.experimental.bootstrap.polynomial import (
     BalancedPowerEvaluator,
     BinaryDecompositionChebyshevEvaluator,
     ChebyshevInterpolator,
@@ -28,6 +29,7 @@ from fhelium.experimental.bootstrap._polynomial import (
 
 __all__ = [
     'BalancedPowerEvaluator',
+    'BootstrapArithmetic',
     'BinaryDecompositionChebyshevEvaluator',
     'ChebyshevInterpolator',
     'CosineDoubleAngleReduction',

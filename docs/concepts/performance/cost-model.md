@@ -72,7 +72,7 @@ workload.
 | --- | --- | --- |
 | Late relinearization | Repeated key switches across compatible triplets | Larger three-component live state |
 | Operation-ready plaintexts | Repeated encode/lift/NTT preparation | Larger persistent weight footprint |
-| Reused NTT operands | Repeated transforms of fixed operands | Level/state coupling |
+| Reused NTT operands | Repeated transforms of fixed operands | Depth/state coupling |
 | NTT-domain product accumulation | Per-term inverse transforms in additive PT×CT regions | One coefficient transition before rescale/decrypt |
 | NTT grouping/compact tables | Launches and table/global-memory traffic | Registers, occupancy, index arithmetic |
 | Rotation hoisting | Repeated decomposition/ModUp/NTT prefix | Hoist temporaries and output memory |
@@ -81,7 +81,7 @@ workload.
 | Multi-GPU partition | Rank-local dominant work | Communication, imbalance, key placement |
 | Minimal keyset | Key memory and movement | Possible extra operations with decomposition |
 
-Each mechanism has a shape-, level-, platform-, and workload-dependent
+Each mechanism has a shape-, depth-, platform-, and workload-dependent
 crossover.
 
 ## Hoisting has a memory curve
@@ -105,7 +105,7 @@ Chunk size is a workload policy. Measure latency and peak memory together.
 ## Homogeneous batching has a working-set crossover
 
 A homogeneous batch adds independent-message dimensions while keeping one
-level, scale, polynomial domain, modulus basis, device, dtype, and component count. The
+depth, scale, polynomial domain, modulus basis, device, dtype, and component count. The
 public ciphertext layout keeps its structural component axis first, followed
 by `*batch`, limb, and polynomial-index axes. Message batch axes are distinct
 from RNS limbs, ciphertext components, hybrid-decomposition digits, and
@@ -123,7 +123,7 @@ $$
 The full active set is larger because transforms read and write data while
 keys, accumulators, temporaries, and outputs are live. Once that set exceeds
 effective cache capacity, a larger batch can replace cache reuse with DRAM
-traffic and become slower than an explicit loop. Later CKKS levels use fewer Q
+traffic and become slower than an explicit loop. Later CKKS depths use fewer Q
 rows, so the crossover may reverse without changing `N` or `B`.
 
 Two cache regimes are useful when interpreting the crossover:
@@ -137,10 +137,10 @@ B1 already streams beyond cache:
     occupancy, bandwidth, and launch count determine the relative result
 ```
 
-For example, an RTX A6000 measurement with 6 MiB L2 placed one level-zero QP
-digit for `Preset.slots16384_scale40_levels16_int64` at 4.75 MiB: B1 was close to
-cache capacity, while B2 was not. The same GPU placed one level-zero digit for
-`Preset.slots32768_scale40_levels34_int64` at 19.5 MiB, so even B1 was already a
+For example, an RTX A6000 measurement with 6 MiB L2 placed one depth-zero QP
+digit for `Preset.slots16384_scale40_depth16_int64` at 4.75 MiB: B1 was close to
+cache capacity, while B2 was not. The same GPU placed one depth-zero digit for
+`Preset.slots32768_scale40_depth34_int64` at 19.5 MiB, so even B1 was already a
 streaming workload. The former showed a clear batching loss; the latter
 retained modest gains with a strict radix-16 backend. The digit size is
 one source of explanatory evidence within the complete cache-fit measurement.
@@ -184,7 +184,7 @@ occupancy, or interact poorly with active row count.
 The best backend depends on:
 
 - ring dimension;
-- active level/row count;
+- active depth/row count;
 - transform batch shape;
 - GPU architecture;
 - table footprint and traffic;
@@ -233,7 +233,7 @@ graph LR
     Q --> M
 ```
 
-Accept a faster configuration only when it preserves level
+Accept a faster configuration only when it preserves depth
 semantics, wraps realistic inputs, or exceeds the error bound. Every
 performance result should include correctness.
 
@@ -261,7 +261,7 @@ A reproducible report records:
 
 - GPU model/count/topology, driver, PyTorch, and CUDA;
 - FHElium version/commit and source or installed wheel;
-- preset, `logN`, level, scale, Q/P row counts;
+- preset, `logN`, depth, scale, Q/P row counts;
 - NTT backend and grouping policy;
 - warmup, measured runs, and statistic;
 - synchronization and event-completion rule;
@@ -301,5 +301,5 @@ invariants fixed, and promote measured improvements into regression coverage.
 - [Rotation hoisting tutorial](../../tutorial/rotation-hoisting.md)
 - [CUDA Graph tutorial](../../tutorial/cuda-graph-matvec.md)
 - [Residency lifetimes](../execution/residency-lifetimes.md)
-- [Benchmark a workload correctly](../../how-to/benchmark-a-workload.md)
+- [Benchmark methodology](/benchmarks/methodology)
 - [Optimize a workload systematically](../../how-to/optimize-workload.md)

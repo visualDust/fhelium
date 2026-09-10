@@ -1,0 +1,70 @@
+name: Benchmark results
+description: Submit a complete FHElium suite report or an unsuccessful run for diagnosis.
+title: "[Benchmark]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        See [Methodology](https://fhelium.550w.host/benchmarks/methodology) and [Run and submit](https://fhelium.550w.host/benchmarks/run-and-submit).
+        Attach the original JSON in a ZIP. Hardware and measurement values are read from the report; do not copy them into this form.
+        This issue and its attachments are public. Review reports and logs before uploading. Submission does not automatically publish results on the website.
+
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Run outcome
+      options:
+        - Complete suite (capacity or unsupported cells may be present)
+        - Failed or interrupted run (diagnosis only)
+    validations:
+      required: true
+
+  - type: textarea
+    id: report
+    attributes:
+      label: Report attachment
+      description: Drag benchmark.zip containing the original output JSON into this field. Do not paste the JSON. For an external archive, provide a stable download link and SHA-256. Include logs only when relevant to diagnosis, after checking them for private information.
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and environment overrides
+      description: Include the exact benchmark command and any intentional thread, device-visibility or launcher settings. Do not paste a full environment dump or credentials.
+      placeholder: fhelium benchmark run --device cuda:0 --output benchmark-gpu.json
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: conditions
+    attributes:
+      label: Execution conditions
+      description: Was the host/device exclusive or shared? Did other computation overlap? Note power/clock changes, virtualization, scheduler restrictions or other relevant conditions. If unchanged, say so.
+    validations:
+      required: true
+
+  - type: textarea
+    id: source
+    attributes:
+      label: Installation and source changes
+      description: State whether you used a release or source build. Supply a commit when applicable, especially if absent from the report. Describe changes affecting measurement, or state that the source is unmodified. Do not attach private source.
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+      description: For an unsuccessful run, describe where it stopped and any observed error. For repeated runs, explain which conditions changed.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Submission checks
+      options:
+        - label: I retained the original task results and samples, did not loosen correctness tolerances, and reported any source changes above.
+          required: true
+        - label: I reviewed the report and optional logs for information I do not want publicly disclosed; no keys, credentials or private source are attached.
+          required: true

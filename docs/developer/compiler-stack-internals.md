@@ -126,7 +126,7 @@ or strings. None of these entries is serialized into Program text.
 key-switch digit layout is reconstructed from the Q/P chain in that
 configuration and is device-independent. Under the one currently
 supported decomposition policy, one configuration determines one complete
-per-level key-digit-index table. The reverse mapping is many-to-one because
+per-depth key-digit-index table. The reverse mapping is many-to-one because
 configurations with different unrelated parameters can produce the same table.
 If the configuration is absent, the pass reports the missing input and leaves
 CKKS operations in the Program. `Engine` directly owns the fixed resources
@@ -308,8 +308,9 @@ manifests, `connection_abi = "python-object-ssa-v1"`,
 
 At invocation, the wrapper binds Program arguments once, stores SSA results as
 Python objects, invokes region executables in selected source order, and passes
-escaping results to downstream regions. The plan records the provider,
-transfer, layout, and stream actions performed by those regions.
+escaping results to downstream regions. The plan records SSA connections and
+provider/implementation assignments; the executable manifest separately
+records the connection ABI, stream convention, and region manifests.
 
 ## Triton pointwise lowering
 
@@ -385,9 +386,9 @@ dispatch table. The selected NTT executor belongs to `NttContext`; Compile
 records its name as `fhelium.execution.implementation` on the existing NTT
 operation.
 
-`fhelium.eager.Engine` checks public values, computes the called operation's
-result metadata, and invokes a registered implementation through an
-`OperationInvocation`. Compile and JIT callers apply their selected frontend, middle-level,
+`fhelium.eager.Engine` applies the documented per-operation input handling,
+computes the called operation's result metadata, and invokes a registered
+implementation through an `OperationInvocation`. Compile and JIT callers apply their selected frontend, middle-level,
 and Backend passes, then use `OperationBackend.link()` to produce an
 executable. JIT region compilers reuse the same mechanism.
 Encode, decode, integer-coefficient conversion,

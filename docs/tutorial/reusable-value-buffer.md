@@ -11,7 +11,7 @@ code.
 ## Start with a small resource allocation
 
 The example fixes its CKKS configuration to
-`Preset.slots32768_scale40_levels34_int64` at level `20`, which is the
+`Preset.slots32768_scale40_depth34_int64` at depth `20`, which is the
 configuration covered by the example's numerical evidence. For a practical
 functional run, reduce only the resource-scaling knobs:
 
@@ -23,7 +23,7 @@ python examples/12_reusable_value_buffer.py \
 ```
 
 This example is CUDA-specific and selects `cuda:0` internally. It deliberately
-does not expose preset or level options: changing either would create a new
+does not expose preset or depth options: changing either would create a new
 numerical validation target rather than a smaller residency experiment.
 
 Run the documented large point only on a GPU with sufficient memory:
@@ -68,7 +68,7 @@ data.copy_(prototype.data)
 ```
 
 Pinned memory enables asynchronous host-to-device copies. Each `Plaintext`
-still carries level, scale, representation, polynomial domain, modulus basis, residue representation, and
+still carries depth, scale, representation, polynomial domain, modulus basis, residue representation, and
 prime IDs.
 
 The example creates application-selected tiles. FHElium does not decide how
@@ -152,12 +152,12 @@ The example reports both:
 ## 7. Keep the benchmark semantics clear
 
 Each tile contains operation-ready scalar plaintexts whose sum is the fixed
-workload constant `0.125`. The preset, input level, and weight sum are fixed;
+workload constant `0.125`. The preset, input depth, and weight sum are fixed;
 `--num-tiles`, `--plaintexts-per-tile`, and `--message-size` scale the residency
 experiment without selecting a different CKKS parameter set. Tiles are
 evaluated sequentially, and the final tile output is checked against the same
 expected scalar product. The fixed `atol=1e-5, rtol=0` check is supported by
-evidence for this CKKS configuration, level, and weight sum only.
+evidence for this CKKS configuration, depth, and weight sum only.
 Expected slot values approach and cross zero, so the check uses an absolute
 criterion rather than a relative allowance that shrinks with the reference
 value.

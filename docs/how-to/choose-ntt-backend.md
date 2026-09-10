@@ -5,6 +5,12 @@ but backend measurements are close, inconsistent, or different between raw
 NTT kernels and CKKS operations. It explains how to identify the limiting
 resource before selecting an `Engine(ntt_backend=...)` policy.
 
+The recommendation commands currently run the retained internal
+`fhelium.legacy.engine.CkksEngine` diagnostic evaluator. They provide backend
+screening evidence, not current `fhelium.eager.Engine` performance evidence.
+Confirm the selected policy with the current Eager evaluator and the complete
+production workload.
+
 For the screening command, decision thresholds, and a complete example result,
 start with [Screen NTT backends on the target GPU](screen-ntt-backends.md).
 
@@ -26,14 +32,14 @@ is rejected.
 Run the screening suite first and retain its raw evidence:
 
 ```bash
-fhelium benchmark recommend ntt --suite kernel --preset slots32768-scale40-levels34-int64 \
+fhelium benchmark recommend ntt --suite kernel --preset slots32768-scale40-depth34-int64 \
   --device cuda:0 --output results/kernel.json
 ```
 
 Then run the CKKS primitive suite under the same environment:
 
 ```bash
-fhelium benchmark recommend ntt --suite ckks-primitive --preset slots32768-scale40-levels34-int64 \
+fhelium benchmark recommend ntt --suite ckks-primitive --preset slots32768-scale40-depth34-int64 \
   --device cuda:0 --output results/primitives.json
 ```
 
@@ -164,10 +170,10 @@ One CKKS transform applies the same backend across multiple active Q/P prime
 rows. More rows increase parallel work and can improve GPU saturation, but they
 also enlarge the working set. A backend that wins a small kernel microbenchmark
 can change position when key switching adds P rows or when the active Q suffix
-shrinks at a later level.
+shrinks at a later depth.
 
-If the production evaluator is dominated by a specific level, reproduce its
-active rows instead of assuming level-0 QP measurements are sufficient.
+If the production evaluator is dominated by a specific depth, reproduce its
+active rows instead of assuming depth-0 QP measurements are sufficient.
 
 ### Why GPU architecture changes the result
 
@@ -197,12 +203,12 @@ Use the pattern, not only the aggregate rank:
 | Repetition winner changes or CV is high | Thermal state, clock drift, competing work, first-use effects, or insufficient runs | Stabilize the machine and repeat; do not encode a winner. |
 | One backend fails correctness | Specification or implementation defect, not a performance result | Stop ranking and preserve the failing input/environment. |
 
-The CKKS primitive suite times key use but excludes key generation. Its
+The legacy CKKS primitive suite times key use but excludes key generation. Its
 `multiply_relinearize` measurement includes multiplication and relinearization;
 `rotate_many_by_steps[4]` includes grouped decomposition/hoisting and four
-rotations.
-Those measurement definitions are intentional because users experience the composed
-primitive, not an isolated internal NTT call.
+rotations. These measurement definitions are intentional because users
+experience the composed primitive, not an isolated internal NTT call. They do
+not substitute for a current Eager measurement.
 
 One RTX A6000 measurement illustrates the final application check. For
 `logN = 15`, the CKKS primitive suite recommended
@@ -237,7 +243,7 @@ Use this order:
 2. Reject clearly slower candidates with the kernel suite.
 3. Use the primitive suite to select among plausible candidates.
 4. Keep the stable fallback for a near tie or inconsistent repetitions.
-5. Benchmark the full production evaluator with representative levels, batch
+5. Benchmark the full production evaluator with representative depths, batch
    sizes, and rotation/key-switch schedule.
 6. Pass the chosen backend name to every constructed engine that must
    reproduce the deployment.

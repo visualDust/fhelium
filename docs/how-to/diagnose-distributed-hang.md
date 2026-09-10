@@ -45,7 +45,7 @@ rank
 collective function
 src/dst/root
 value type and shape
-level, prime IDs, polynomial domain, modulus basis
+depth, prime IDs, polynomial domain, modulus basis
 ```
 
 The last phase entered by all ranks and the first phase entered by only some
@@ -73,7 +73,7 @@ Compare the descriptor fields on every rank:
 - concrete value/key type;
 - tensor shapes and dtypes;
 - context;
-- level and scale;
+- depth and scale;
 - prime IDs;
 - polynomial domain, modulus basis, and residue representation;
 - rotation step or key specialization.

@@ -1,4 +1,4 @@
-"""Level-specific CKKS plaintext values."""
+"""Depth-specific CKKS plaintext values."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from fhelium.values.state import (
 from fhelium.values.tensor_resident import TensorResident
 from fhelium.values._validation import (
     validate_integral_tensor,
-    validate_nonnegative_level,
+    validate_nonnegative_depth,
     validate_prime_ids,
 )
 
@@ -56,12 +56,12 @@ class Plaintext(TensorResident):
     A program that needs the same semantic message in multiple arithmetic states
     constructs separate values. The object owns no engine, cache, placement, or
     persistence reference. ``scale`` is the positive finite actual scale
-    $\Delta(v)$; ``level`` identifies $Q_\ell$ but never substitutes for
+    $\Delta(v)$; ``depth`` identifies $Q_\ell$ but never substitutes for
     ``prime_ids``.
     """
 
     message: torch.Tensor | None
-    level: int
+    depth: int
     scale: float
     data: torch.Tensor | None = None
     representation: PlaintextRepresentation = "slots"
@@ -72,8 +72,8 @@ class Plaintext(TensorResident):
 
     def __post_init__(self) -> None:
         self.scale = coerce_scale(self.scale, value_name="Plaintext")
-        self.level = validate_nonnegative_level(
-            self.level, value_name="Plaintext"
+        self.depth = validate_nonnegative_depth(
+            self.depth, value_name="Plaintext"
         )
         if (self.message is None) == (self.data is None):
             raise ValueError(
@@ -286,7 +286,7 @@ class Plaintext(TensorResident):
 
         return Plaintext(
             message=None if self.message is None else self.message.clone(),
-            level=self.level,
+            depth=self.depth,
             scale=self.scale,
             data=None if self.data is None else self.data.clone(),
             representation=self.representation,
@@ -301,7 +301,7 @@ class Plaintext(TensorResident):
         cls,
         *,
         message: torch.Tensor | None,
-        level: int,
+        depth: int,
         scale: float,
         data: torch.Tensor | None,
         representation: PlaintextRepresentation,
@@ -314,7 +314,7 @@ class Plaintext(TensorResident):
 
         result: Self = object.__new__(cls)
         result.message = message
-        result.level = level
+        result.depth = depth
         result.scale = scale
         result.data = data
         result.representation = representation
@@ -352,7 +352,7 @@ class Plaintext(TensorResident):
                 "a slot vector for each value first"
             )
         metadata = (
-            "level",
+            "depth",
             "scale",
             "representation",
             "polynomial_domain",
@@ -430,7 +430,7 @@ class Plaintext(TensorResident):
         data = next(iterator) if self.data is not None else None
         return Plaintext(
             message=message,
-            level=self.level,
+            depth=self.depth,
             scale=self.scale,
             data=data,
             representation=self.representation,
@@ -447,7 +447,7 @@ class Plaintext(TensorResident):
         data_shape = None if self.data is None else tuple(self.data.shape)
         return (
             "Plaintext("
-            f"level={self.level}, scale={self.scale}, "
+            f"depth={self.depth}, scale={self.scale}, "
             f"representation={self.representation!r}, "
             f"polynomial_domain={self.polynomial_domain!r}, modulus_basis={self.modulus_basis!r}, "
             f"residue_representation={self.residue_representation}, prime_ids={self.prime_ids}, "

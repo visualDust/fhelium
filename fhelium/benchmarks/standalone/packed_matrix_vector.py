@@ -33,14 +33,14 @@ _MIB = 1024**2
 
 _FIXED_WORKLOADS: dict[str, dict[str, Any]] = {
     "quick": {
-        "preset": fh.Preset.slots8192_scale40_levels7_int64.value,
+        "preset": fh.Preset.slots8192_scale40_depth7_int64.value,
         "ntt_backend": "radix2_compact_group8_smem8",
         "matrix_size": 8,
         "hoist_chunk_size": 7,
         "seed": 20260807,
     },
     "core": {
-        "preset": fh.Preset.slots8192_scale40_levels7_int64.value,
+        "preset": fh.Preset.slots8192_scale40_depth7_int64.value,
         "ntt_backend": "radix2_compact_group8_smem8",
         "matrix_size": 128,
         "hoist_chunk_size": 64,
@@ -108,7 +108,7 @@ def prepare_packed_matvec(
         engine.prepare_plaintext_for_multiplication(
             engine.encode(
                 cyclic_diagonal_slots(matrix, step, engine.num_slots),
-                level=source.level,
+                depth=source.depth,
             )
         )
         for step in range(matrix.size(0))
@@ -167,7 +167,7 @@ def evaluate_packed_matvec(
         chunk_sum = engine.sum_ciphertext_batch(
             engine.multiply_plaintext(rotated_batch_ntt, diagonal_batch)
         )
-        chunk_sum = engine.rescale_to_next_level(
+        chunk_sum = engine.rescale_to_next_depth(
             engine.ntt_domain_to_coefficient_domain(chunk_sum)
         )
         if accumulator is None:
@@ -426,7 +426,7 @@ def _run_packed_matvec(
                 "packing": "periodic repetitions of one logical vector",
             },
             "output_state": {
-                "level": result.level,
+                "depth": result.depth,
                 "scale": result.scale,
                 "component_count": result.component_count,
                 "polynomial_domain": result.polynomial_domain,

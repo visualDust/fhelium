@@ -233,5 +233,5 @@ fhelium.ir.Program → fhelium.compile Pipeline → Backend linking passes
 ```
 
 Read the focused tests beside each owner before changing an execution path.
-They capture value-state, mutation, resource, singleton-row, last-level, and
+They capture value-state, mutation, resource, singleton-row, last-depth, and
 Q/QP behavior that may not be visible from a benchmark.

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import cast
 
@@ -26,35 +25,12 @@ from ._resources import (
 )
 
 
-def _check_direct_decode_range(
-    coefficients: torch.Tensor,
-    *,
-    level: int,
-    rns_context: RnsContext,
-) -> None:
-    r"""Require coefficients inside the bounded direct-decode interval."""
-
-    max_abs = int(torch.max(torch.abs(coefficients)).item())
-    q_prime_ids = rns_context.rns_layout.prime_ids(level)
-    decode_product = math.prod(
-        int(rns_context.montgomery_parameters.moduli[index])
-        for index in q_prime_ids[-2:]
-    )
-    supported_max = decode_product // 4
-    if max_abs >= supported_max:
-        raise OverflowError(
-            "Encoded coefficient exceeds the direct decoder range: "
-            f"max_abs={max_abs}, supported_max={supported_max} at level "
-            f"{level}"
-        )
-
-
 def _encrypt_rns_plaintext_tensor(
     plaintext_rns: torch.Tensor,
     *,
     public_key_data: torch.Tensor,
     public_key_basis: ModulusBasis,
-    level: int,
+    depth: int,
     rns_context: RnsContext,
     ntt_context: NttContext,
     rng: Csprng,
@@ -64,7 +40,7 @@ def _encrypt_rns_plaintext_tensor(
 
     include_p = public_key_basis == "QP"
     expected_prime_ids = rns_context.rns_layout.prime_ids(
-        level,
+        depth,
         include_p=include_p,
     )
     if plaintext_rns.ndim < 2 or plaintext_rns.size(-2) != len(
@@ -83,10 +59,10 @@ def _encrypt_rns_plaintext_tensor(
         2, *batch_shape, rns_context.config.N
     )
     e0_tiled = rns_context.lift_centered_coefficients(
-        e0e1[0], level, include_p=include_p
+        e0e1[0], depth, include_p=include_p
     )
     e1_tiled = rns_context.lift_centered_coefficients(
-        e0e1[1], level, include_p=include_p
+        e0e1[1], depth, include_p=include_p
     )
 
     pte0 = rns_context.add_lazy(
@@ -95,15 +71,15 @@ def _encrypt_rns_plaintext_tensor(
         include_p=include_p,
     )
 
-    start = rns_context.level_row_starts[level]
-    pk0 = public_key_data[0, start:]
-    pk1 = public_key_data[1, start:]
+    basis = rns_context.basis_parameters(depth, include_p=include_p)
+    pk0 = public_key_data[0, basis.parameter_row_start : basis.parameter_row_stop]
+    pk1 = public_key_data[1, basis.parameter_row_start : basis.parameter_row_stop]
     v = rng.randint(amax=2, shift=0, repeats=batch_size)[0].view(
         *batch_shape, rns_context.config.N
     )
     v = rns_context.lift_centered_coefficients(
         v,
-        level,
+        depth,
         include_p=include_p,
     )
     ntt_context.forward_to_montgomery_(v, include_p=include_p)
@@ -131,7 +107,7 @@ def encrypt_tensor(
     public_key_data: torch.Tensor,
     *,
     public_key_basis: ModulusBasis,
-    level: int,
+    depth: int,
     rns_context: RnsContext,
     ntt_context: NttContext,
     rng: Csprng,
@@ -139,13 +115,10 @@ def encrypt_tensor(
 ) -> torch.Tensor:
     """Encrypt integer coefficients with call-bound rns_context resources."""
 
-    _check_direct_decode_range(
-        coefficients, level=level, rns_context=rns_context
-    )
     include_p = public_key_basis == "QP"
     plaintext_rns = rns_context.lift_integer_coefficients_exact(
         coefficients,
-        level,
+        depth,
         include_p=include_p,
         max_abs=int(torch.max(torch.abs(coefficients)).item()),
     )
@@ -153,7 +126,7 @@ def encrypt_tensor(
         plaintext_rns,
         public_key_data=public_key_data,
         public_key_basis=public_key_basis,
-        level=level,
+        depth=depth,
         rns_context=rns_context,
         ntt_context=ntt_context,
         rng=rng,
@@ -205,7 +178,7 @@ class NativeEncryptImplementation:
                 inputs[0],
                 key.data,
                 public_key_basis=key.modulus_basis,
-                level=int(cast(int, invocation.attributes["level"])),
+                depth=int(cast(int, invocation.attributes["depth"])),
                 rns_context=rns_context,
                 ntt_context=ntt_context,
                 rng=rng,

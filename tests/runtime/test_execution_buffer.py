@@ -27,7 +27,7 @@ def test_reusable_value_buffer_preserves_addresses_and_validates_before_copy() -
         "values": [
             Plaintext(
                 message=torch.tensor([1.0, 2.0]),
-                level=0,
+                depth=0,
                 scale=16.0,
             )
         ],
@@ -42,7 +42,7 @@ def test_reusable_value_buffer_preserves_addresses_and_validates_before_copy() -
         "values": [
             Plaintext(
                 message=torch.tensor([3.0, 4.0]),
-                level=0,
+                depth=0,
                 scale=16.0,
             )
         ],
@@ -60,18 +60,18 @@ def test_reusable_value_buffer_preserves_addresses_and_validates_before_copy() -
     assert buffer.signature == ValueTreeSignature.from_value(prototype)
     assert buffer.nbytes == value_tree_nbytes(prototype)
 
-    wrong_level = {
+    wrong_depth = {
         "tensor": torch.full((4,), 99.0, dtype=torch.float64),
         "values": [
             Plaintext(
                 message=torch.tensor([5.0, 6.0]),
-                level=1,
+                depth=1,
                 scale=16.0,
             )
         ],
     }
     with pytest.raises(ExecutionInputError, match="value signature"):
-        buffer.copy_from(wrong_level)
+        buffer.copy_from(wrong_depth)
     torch.testing.assert_close(buffer.value["tensor"], source["tensor"])
 
     buffer.close()
@@ -185,7 +185,7 @@ def test_copy_handle_retains_submitted_leaf_after_source_tree_mutation() -> (
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
 def test_signatures_ignore_residency_but_bind_exact_value_state() -> None:
     engine = Engine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         allow_automatic_key_generation=False,
     )
     secret_key = engine.create_secret_key()
@@ -203,9 +203,9 @@ def test_signatures_ignore_residency_but_bind_exact_value_state() -> None:
 
     signature = ValueTreeSignature.from_value({"input": cuda_value})
     signature.validate({"input": cpu_value})
-    wrong_level = replace(cpu_value, level=cpu_value.level + 1)
+    wrong_depth = replace(cpu_value, depth=cpu_value.depth + 1)
     with pytest.raises(ExecutionInputError, match="signature differs"):
-        signature.validate({"input": wrong_level})
+        signature.validate({"input": wrong_depth})
 
     del cpu_value, cuda_value, public_key, secret_key, engine
     gc.collect()

@@ -14,7 +14,7 @@ Write down:
 mathematical operation
 input/output tensor shapes and axes
 dtypes and devices
-level and active prime-row mapping
+depth and active prime-row mapping
 Q or QP basis
 coefficient/NTT domain
 standard/Montgomery representation
@@ -34,7 +34,7 @@ Before editing CUDA, create a minimal test/harness that:
 - reaches the target operation through public state transitions;
 - compares against a cleartext or trusted reference;
 - checks output state as well as tensor values;
-- identifies the first failing operation/level;
+- identifies the first failing operation/depth;
 - synchronizes narrowly enough to locate asynchronous errors.
 
 For a chained bug, add checkpoints after every legal materialization step.
@@ -75,7 +75,7 @@ copy or a device fallback to make a schema appear portable.
 Audit:
 
 - configured prime row for every compact input row;
-- level-specific table/parameter offsets;
+- depth-specific table/parameter offsets;
 - Q/QP row order;
 - key-digit index versus active local digit index;
 - tensor strides and contiguous assumptions;
@@ -171,7 +171,7 @@ At minimum run the focused tests and then the broader relevant suite. Include:
 - output shape/dtype/device;
 - mutation/alias behavior;
 - fake/meta behavior where registered;
-- level zero, middle, and final legal level;
+- depth zero, middle, and final legal depth;
 - Q and QP;
 - singleton row/digit;
 - functional and in-place variants;

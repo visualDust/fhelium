@@ -343,6 +343,58 @@ def montgomery_mul_row_scalars_standard(
     )
 
 
+def montgomery_weighted_sum(
+    ciphertexts: list[torch.Tensor],
+    plaintexts: list[torch.Tensor],
+    rns_params: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_rns_ops::montgomery_weighted_sum``.
+
+    Torch schema::
+
+        fhelium_rns_ops::montgomery_weighted_sum(Tensor[] ciphertexts, Tensor[] plaintexts, Tensor rns_params) -> Tensor
+
+    Args:
+        ciphertexts: list[torch.Tensor].
+        plaintexts: list[torch.Tensor].
+        rns_params: torch.Tensor.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.montgomery_weighted_sum(
+        ciphertexts, plaintexts, rns_params
+    )
+
+
+def montgomery_weighted_sums(
+    ciphertexts: list[torch.Tensor],
+    plaintexts: list[torch.Tensor],
+    group_count: int,
+    rns_params: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_rns_ops::montgomery_weighted_sums``.
+
+    Torch schema::
+
+        fhelium_rns_ops::montgomery_weighted_sums(Tensor[] ciphertexts, Tensor[] plaintexts, int group_count, Tensor rns_params) -> Tensor
+
+    Args:
+        ciphertexts: list[torch.Tensor].
+        plaintexts: list[torch.Tensor].
+        group_count: int.
+        rns_params: torch.Tensor.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.montgomery_weighted_sums(
+        ciphertexts, plaintexts, group_count, rns_params
+    )
+
+
 def reduce_to_standard_(
     lazy_residues: torch.Tensor, rns_params: torch.Tensor
 ) -> None:

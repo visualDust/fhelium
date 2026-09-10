@@ -33,7 +33,7 @@ class RnsLayout(Protocol):
 
     def prime_ids(
         self,
-        level: int,
+        depth: int,
         *,
         include_p: bool = False,
     ) -> tuple[int, ...]: ...
@@ -45,15 +45,16 @@ class CkksValidator:
 
     config: CkksConfig
     rns_layout: RnsLayout
+    rns_dtype: torch.dtype
 
-    def _validate_level(self, level: object) -> int:
-        if type(level) is not int:
-            raise TypeError("level must be an integer")
-        if not 0 <= level < self.config.num_scale_primes:
+    def _validate_depth(self, depth: object) -> int:
+        if type(depth) is not int:
+            raise TypeError("depth must be an integer")
+        if not 0 <= depth <= self.config.max_depth:
             raise ValueError(
-                f"level must be in [0, {self.config.num_scale_primes - 1}]"
+                f"depth must be in [0, {self.config.max_depth}]"
             )
-        return level
+        return depth
 
     def _validate_tensor(
         self,
@@ -64,7 +65,7 @@ class CkksValidator:
     ) -> None:
         if tensor.layout != torch.strided:
             raise TypeError(f"{value_name} must use dense strided storage")
-        expected_dtype = self.config.torch_dtype if dtype is None else dtype
+        expected_dtype = self.rns_dtype if dtype is None else dtype
         if tensor.dtype != expected_dtype:
             raise TypeError(
                 f"{value_name} dtype {tensor.dtype} differs from {expected_dtype}"
@@ -78,7 +79,7 @@ class CkksValidator:
     def _validate_prime_ids(
         self,
         *,
-        level: int,
+        depth: int,
         modulus_basis: object,
         prime_ids: tuple[int, ...],
         value_name: str,
@@ -86,7 +87,7 @@ class CkksValidator:
         if modulus_basis not in {"Q", "QP"}:
             raise ValueError(f"{value_name} has unsupported modulus basis")
         expected = self.rns_layout.prime_ids(
-            level,
+            depth,
             include_p=modulus_basis == "QP",
         )
         if prime_ids != expected:
@@ -99,10 +100,10 @@ class CkksValidator:
 
         if not isinstance(value, Ciphertext):
             raise TypeError(f"Expected Ciphertext, got {type(value).__name__}")
-        level = self._validate_level(value.level)
+        depth = self._validate_depth(value.depth)
         self._validate_tensor(value.data, value_name="Ciphertext")
         self._validate_prime_ids(
-            level=level,
+            depth=depth,
             modulus_basis=value.modulus_basis,
             prime_ids=value.prime_ids,
             value_name="Ciphertext",
@@ -113,7 +114,7 @@ class CkksValidator:
 
         if not isinstance(value, Plaintext):
             raise TypeError(f"Expected Plaintext, got {type(value).__name__}")
-        self._validate_level(value.level)
+        self._validate_depth(value.depth)
         if value.is_slots:
             if value.message is None:
                 raise ValueError("Slots Plaintext has no message tensor")
@@ -130,7 +131,7 @@ class CkksValidator:
         )
         if value.is_rns:
             self._validate_prime_ids(
-                level=value.level,
+                depth=value.depth,
                 modulus_basis=value.modulus_basis,
                 prime_ids=value.prime_ids,
                 value_name="Plaintext",
@@ -159,7 +160,7 @@ class CkksValidator:
                 f"{type(key).__name__} requires {required_basis} basis"
             )
         self._validate_prime_ids(
-            level=0,
+            depth=0,
             modulus_basis=key.modulus_basis,
             prime_ids=key.prime_ids,
             value_name=type(key).__name__,
@@ -197,12 +198,12 @@ class CkksValidator:
                 )
 
     def validate_secret_key(self, key: SecretKey) -> None:
-        """Validate a level-zero secret key."""
+        """Validate a depth-zero secret key."""
 
         self._validate_key_storage(key, expected_type=SecretKey)
 
     def validate_public_key(self, key: PublicKey) -> None:
-        """Validate a level-zero public encryption key."""
+        """Validate a depth-zero public encryption key."""
 
         self._validate_key_storage(key, expected_type=PublicKey)
 

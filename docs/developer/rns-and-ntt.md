@@ -14,25 +14,26 @@ Q prime IDs: 0 ... num_q - 1
 P prime IDs: num_q ... num_q + num_p - 1
 ```
 
-At level $l$, the active Q basis drops the consumed Q prefix:
+At depth $d$, the active Q basis drops the rows in all preceding depth groups.
+Let $s_d$ be the sum of their row counts:
 
 ```text
-Q_l  = Q[l:]
-QP_l = Q[l:] + P
+Q_d  = Q[s_d:]
+QP_d = Q[s_d:] + P
 ```
 
 ```mermaid
 graph TB
-    L0[level 0<br/>q0 q1 q2 ... q_base]
-    L1[level 1<br/>q1 q2 ... q_base]
-    L2[level 2<br/>q2 ... q_base]
-    QP[level-specific Q plus special P rows]
+    L0[depth 0<br/>G0 G1 G2 ... terminal Q group]
+    L1[depth 1<br/>G1 G2 ... terminal Q group]
+    L2[depth 2<br/>G2 ... terminal Q group]
+    QP[depth-specific Q plus special P rows]
     L0 -->|rescale| L1 -->|rescale| L2
     L1 -->|ModUp| QP
     QP -->|ModDown| L1
 ```
 
-The dense tensor is compact at the current level, while `prime_ids` and runtime
+The dense tensor is compact at the current depth, while `prime_ids` and runtime
 layout map each row to its parameter rows.
 
 ## Placement-independent layout
@@ -40,9 +41,9 @@ layout map each row to its parameter rows.
 `RnsLayout` describes:
 
 - active Q or QP prime IDs;
-- level-specific row counts and parameter slices;
+- depth-specific row counts and parameter slices;
 - hybrid decomposition digit rows;
-- stable level-zero key-digit indices;
+- stable depth-zero key-digit indices;
 - component-relative digit row IDs.
 
 It intentionally contains no device assignment or communication policy. An
@@ -109,7 +110,7 @@ For an operand with `k` compact active limbs, `RnsContext` selects a zero-copy
 parameter view with exactly `k` columns for the supplied physical basis.
 `NttContext` uses that row mapping while slicing its transform tables before
 invoking an operator. The registered C++ implementation validates tensor axes
-and device; it does not receive a Python level number or look up an engine.
+and device; it does not receive a Python depth number or look up an engine.
 
 ## NTT backend protocol
 
@@ -333,7 +334,7 @@ operand requirements that allow a singleton batch.
 
 Whenever row mapping, tables, or kernels change, test:
 
-- level zero and a middle level;
+- depth zero and a middle depth;
 - the final legal active row configuration;
 - one-row/singleton digit paths;
 - Q and QP bases;
@@ -353,7 +354,7 @@ Benchmark NTT policy at three layers:
 2. CKKS operators that use the transforms;
 3. complete workloads with keys, memory, and launch policy.
 
-Do not promote the fastest level-zero transform automatically to every level or
+Do not promote the fastest depth-zero transform automatically to every depth or
 workload.
 
 ## Continue

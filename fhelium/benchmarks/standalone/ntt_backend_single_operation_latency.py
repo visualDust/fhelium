@@ -10,6 +10,7 @@ from collections.abc import Sequence
 import torch
 
 from fhelium import Preset
+from fhelium.backend.rns.format import RnsExecutionFormat
 from fhelium.benchmarks.model import (
     BenchmarkCheck,
     BenchmarkDefinition,
@@ -242,11 +243,11 @@ def _run_ntt_backend_single_op(
             "timed_boundary": timed_boundary.to_dict(),
             "effective_parameters": effective_parameters,
             "resolved_parameters": resolved_parameters,
-            "level": 0,
+            "depth": 0,
             "modulus_basis": "QP",
             "residue_dtype": (
                 "torch.int32"
-                if config.buffer_bit_length == 30
+                if RnsExecutionFormat.select(config.moduli).dtype == torch.int32
                 else "torch.int64"
             ),
             "forward_input": "coefficient/Montgomery",
@@ -293,49 +294,49 @@ register_benchmark(
         description=(
             "Compares forward NTT, inverse NTT, and NTT+INTT roundtrip latency "
             "across every registered FHElium NTT backend compatible with the "
-            "selected logN, without higher-level CKKS, key-switch, or rotation "
+            "selected logN, without higher-depth CKKS, key-switch, or rotation "
             "work."
         ),
         profiles=(
             _profile(
                 "quick",
-                "Short 8,192-slot/40-bit-scale/7-level all-compatible-backend smoke comparison.",
-                preset=Preset.slots8192_scale40_levels7_int64.value,
+                "Short 8,192-slot/40-bit-scale/7-depth all-compatible-backend smoke comparison.",
+                preset=Preset.slots8192_scale40_depth7_int64.value,
                 warmup=1,
                 runs=3,
             ),
             _profile(
                 "core",
                 "Versioned 8,192-slot all-compatible-backend core comparison.",
-                preset=Preset.slots8192_scale40_levels7_int64.value,
+                preset=Preset.slots8192_scale40_depth7_int64.value,
                 warmup=5,
                 runs=20,
             ),
             _profile(
-                Preset.slots8192_scale40_levels7_int64.value,
-                "Stable 8,192-slot/40-bit-scale/7-level all-compatible-backend comparison.",
-                preset=Preset.slots8192_scale40_levels7_int64.value,
+                Preset.slots8192_scale40_depth7_int64.value,
+                "Stable 8,192-slot/40-bit-scale/7-depth all-compatible-backend comparison.",
+                preset=Preset.slots8192_scale40_depth7_int64.value,
                 warmup=5,
                 runs=50,
             ),
             _profile(
-                Preset.slots16384_scale40_levels16_int64.value,
-                "Stable 16,384-slot/40-bit-scale/16-level all-compatible-backend comparison.",
-                preset=Preset.slots16384_scale40_levels16_int64.value,
+                Preset.slots16384_scale40_depth16_int64.value,
+                "Stable 16,384-slot/40-bit-scale/16-depth all-compatible-backend comparison.",
+                preset=Preset.slots16384_scale40_depth16_int64.value,
                 warmup=5,
                 runs=50,
             ),
             _profile(
-                Preset.slots32768_scale40_levels34_int64.value,
-                "Stable 32,768-slot/40-bit-scale/34-level all-compatible-backend comparison.",
-                preset=Preset.slots32768_scale40_levels34_int64.value,
+                Preset.slots32768_scale40_depth34_int64.value,
+                "Stable 32,768-slot/40-bit-scale/34-depth all-compatible-backend comparison.",
+                preset=Preset.slots32768_scale40_depth34_int64.value,
                 warmup=5,
                 runs=50,
             ),
             _profile(
-                Preset.slots65536_scale40_levels72_int64.value,
-                "Stable 65,536-slot/40-bit-scale/72-level all-compatible-backend comparison.",
-                preset=Preset.slots65536_scale40_levels72_int64.value,
+                Preset.slots65536_scale40_depth72_int64.value,
+                "Stable 65,536-slot/40-bit-scale/72-depth all-compatible-backend comparison.",
+                preset=Preset.slots65536_scale40_depth72_int64.value,
                 warmup=5,
                 runs=50,
             ),

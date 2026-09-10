@@ -14,7 +14,7 @@ plaintext multiplication, and rescaling through a strict CUDA lease.
 ```bash
 python examples/14_automatic_residency.py \
   --device cuda:0 \
-  --preset slots8192-scale40-levels7-int64
+  --preset slots8192-scale40-depth7-int64
 ```
 
 CUDA is required. The output reports selected reclaim evidence, predicted
@@ -133,7 +133,7 @@ with scope:
                 resident[source_handle],
                 resident[key_handle],
             )
-            output = engine.rescale_to_next_level(
+            output = engine.rescale_to_next_depth(
                 engine.ntt_domain_to_coefficient_domain(
                     engine.multiply_plaintext(
                         engine.coefficient_domain_to_ntt_domain(rotated),

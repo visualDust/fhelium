@@ -6,6 +6,12 @@ dimension, number of active modulus primes, and surrounding CKKS operation.
 Use the default for a first evaluator. Compare alternatives only after a
 correct, representative workload exists on the target GPU.
 
+The current recommendation runner is an internal diagnostic path that uses
+the retained `fhelium.legacy.engine.CkksEngine` implementation. It can screen
+backend policies, but its measurements are not measurements of the current
+`fhelium.eager.Engine`. Confirm a selected backend with the current Eager
+evaluator and the production workload before deployment.
+
 Backend choice is an `Engine` execution option. It does not change
 CKKS parameters, ciphertext compatibility, or the library default.
 
@@ -26,7 +32,8 @@ The CLI calls each fixed list of measured operations a `suite`:
   round trip. Despite the CLI name, this test does not report one CUDA kernel
   launch. It reports complete NTT method calls while excluding engine and
   input construction. This page calls it the **NTT-only test**.
-- `--suite ckks-primitive` measures complete eager evaluator method calls:
+- `--suite ckks-primitive` measures complete method calls in the retained
+  legacy evaluator:
   encryption, decryption, multiplication followed by relinearization (reducing
   a three-component multiplication result to two components), one rotation,
   and four rotations that reuse one ciphertext decomposition (grouped
@@ -64,8 +71,9 @@ latency.
 ## Measure in three steps
 
 1. **Time NTT operations only** and remove clearly slower implementations.
-2. **Time complete CKKS operations** and compare the remaining backends after
-   encryption, key-switch, and rotation work is included.
+2. **Time composed CKKS operations** in the retained diagnostic evaluator and
+   compare the remaining backends after encryption, key-switch, and rotation
+   work is included.
 3. **Measure the application** before fixing the deployment choice.
 
 ### 1. Time NTT operations only
@@ -73,7 +81,7 @@ latency.
 ```bash
 fhelium benchmark recommend ntt \
   --suite kernel \
-  --preset slots32768-scale40-levels34-int64 \
+  --preset slots32768-scale40-depth34-int64 \
   --device cuda:0 \
   --output results/ntt-kernel.json
 ```
@@ -87,7 +95,7 @@ are outside the timed region.
 ```bash
 fhelium benchmark recommend ntt \
   --suite ckks-primitive \
-  --preset slots32768-scale40-levels34-int64 \
+  --preset slots32768-scale40-depth34-int64 \
   --device cuda:0 \
   --output results/ntt-ckks-primitives.json
 ```
@@ -106,18 +114,20 @@ Key generation and correctness checking remain outside the timed region.
 
 The complete-CKKS comparison gives every measured operation equal weight. A
 production workload does not. Confirm the remaining candidates with
-representative levels, batch sizes, numbers of relinearizations and rotations,
+representative depths, batch sizes, numbers of relinearizations and rotations,
 and whether the application uses ordinary eager calls or captured CUDA Graph
 replay. Preserve the two reports with the application measurement so that the
 scope of each decision remains visible.
 
 ## Worked example: why group16 is selected
 
-The following measurement used GPU 1 on an otherwise idle two-GPU host:
+The following historical measurement used GPU 1 on an otherwise idle two-GPU
+host. Its FHElium 0.10.0 identity is retained; it is not a measurement of the
+current 0.20.0 release or current Eager implementation:
 
 - NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition (compute capability
   12.0, also written `sm_120`);
-- `slots32768-scale40-levels34-int64`, whose ring dimension is $2^{16}$;
+- `slots32768-scale40-depth34-int64`, whose ring dimension is $2^{16}$;
 - FHElium 0.10.0, PyTorch 2.13.0+cu130, and CUDA 13.0;
 - 3 warmups, 10 timed runs per operation, and 3 repetitions; and
 - seed `20260823`; each repetition started with a different backend to reduce
@@ -157,8 +167,9 @@ group16 is fastest in every repetition and its lead exceeds 3%, but the lead
 does not reach the 5% required for high confidence.
 
 The first test did not select group8 for deployment; it only prevented
-group16 and radix16 from being removed too early. The second test provides the
-more relevant result for common eager `Engine` operations.
+group16 and radix16 from being removed too early. The second test provides a
+more relevant shortlist for composed operations, but it does not replace
+measurement with the current eager `Engine`.
 
 ## Apply the measured choice
 
@@ -166,11 +177,12 @@ The CLI prints a constructor expression. Copy the backend name:
 
 ```python
 import fhelium as fh
+import torch
 from fhelium.eager import Engine
 
+torch.set_default_device("cuda:0")
 engine = Engine(
-    fh.Preset.slots32768_scale40_levels34_int64,
-    device="cuda:0",
+    fh.Preset.slots32768_scale40_depth34_int64,
     ntt_backend="radix2_compact_group16_smem8",
 )
 ```
@@ -189,7 +201,7 @@ Repeat `--backend` to restrict a follow-up comparison:
 ```bash
 fhelium benchmark recommend ntt \
   --suite ckks-primitive \
-  --preset slots32768-scale40-levels34-int64 \
+  --preset slots32768-scale40-depth34-int64 \
   --backend radix2_compact_group16_smem8 \
   --backend radix16_compact
 ```
@@ -207,4 +219,4 @@ count, memory coalescing, shared-memory fusion, register pressure, occupancy,
 RNS row count, and key-switch composition, continue with
 [Analyze and choose an NTT backend](choose-ntt-backend.md).
 For a final production choice, also follow
-[Benchmark a workload correctly](benchmark-a-workload.md).
+[Benchmark methodology](/benchmarks/methodology).

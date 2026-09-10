@@ -103,9 +103,9 @@ rotated = (
     else engine.rotate_with_key(source, local_keys[rotation_step])
 )
 diagonal = engine.prepare_plaintext_for_multiplication(
-    engine.encode(diagonal_slots, level=rotated.level)
+    engine.encode(diagonal_slots, depth=rotated.depth)
 )
-term = engine.rescale_to_next_level(
+term = engine.rescale_to_next_depth(
     engine.ntt_domain_to_coefficient_domain(
         engine.multiply_plaintext(
             engine.coefficient_domain_to_ntt_domain(rotated), diagonal
@@ -114,7 +114,7 @@ term = engine.rescale_to_next_level(
 )
 ```
 
-All local terms reach the same level and scale, so they can be summed with
+All local terms reach the same depth and scale, so they can be summed with
 `engine.sum_ciphertexts`.
 
 ## 6. Reduce additive partials

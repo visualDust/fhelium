@@ -1,6 +1,6 @@
 [project]
 name = "fhelium"
-version = "0.20.0"
+version = "0.25.0"
 description = "A tensor-native CKKS framework for fully homomorphic encryption on CPU and NVIDIA CUDA with Python and PyTorch."
 authors = [
     { name = "Gavin Gong", email = "gavin@gong.host" },

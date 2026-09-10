@@ -12,7 +12,7 @@ from fhelium.values import Ciphertext
 from fhelium.values._scale import coerce_scale
 from fhelium.legacy.engine.rns.montgomery import MontgomeryParameters
 from fhelium.legacy.engine.rns.runtime import RnsRuntime
-from fhelium.errors import MaximumLevelError
+from fhelium.errors import MaximumDepthError
 from fhelium.native.wrapper import ckks_ops
 
 
@@ -27,7 +27,7 @@ class _ScalePrimeDrop:
     must not mutate them.
     """
 
-    next_level: int
+    next_depth: int
     dropped_q_inverse_montgomery_by_remaining_row: torch.Tensor
     remaining_parameters: torch.Tensor
     half_dropped_prime: int
@@ -39,11 +39,11 @@ class CkksRescaler:
 
     Each transition divides by the leading active Q prime
     $q_{\mathrm{drop}}$, rounds the quotient, and removes that residue row.
-    The class serves two kinds of level transition:
+    The class serves two kinds of depth transition:
 
-    * :meth:`rescale_to_next_level` and :meth:`rescale_to_next_level_` operate only on
-      public CKKS levels;
-    * :meth:`_rescale_final_public_level_to_structural_base` performs the one
+    * :meth:`rescale_to_next_depth` and :meth:`rescale_to_next_depth_` operate only on
+      public CKKS depths;
+    * :meth:`_rescale_max_depth_to_structural_base` performs the one
       additional private transition needed immediately before bootstrap
       modulus raising.
     """
@@ -53,40 +53,40 @@ class CkksRescaler:
         *,
         engine_id: str,
         device: torch.device,
-        public_level_count: int,
+        public_depth_count: int,
         rns_runtime: RnsRuntime,
         montgomery_parameters: MontgomeryParameters,
-        dropped_q_inverses_montgomery_by_level: list[torch.Tensor],
+        dropped_q_inverses_montgomery_by_depth: list[torch.Tensor],
         assert_engine_ciphertext: Callable[[Ciphertext], None],
         ciphertext_from_components: Callable[..., Ciphertext],
-        rescale_to_next_output_scale: Callable[..., float],
+        rescale_output_scale: Callable[..., float],
     ) -> None:
         self.engine_id = engine_id
         self.device = device
-        self.public_level_count = public_level_count
+        self.public_depth_count = public_depth_count
         self.rns_runtime = rns_runtime
         self.montgomery_parameters = montgomery_parameters
-        self.dropped_q_inverses_montgomery_by_level = (
-            dropped_q_inverses_montgomery_by_level
+        self.dropped_q_inverses_montgomery_by_depth = (
+            dropped_q_inverses_montgomery_by_depth
         )
         self._assert_engine_ciphertext = assert_engine_ciphertext
         self._ciphertext_from_components = ciphertext_from_components
-        self._rescale_to_next_output_scale = rescale_to_next_output_scale
+        self._rescale_output_scale = rescale_output_scale
 
     def __str__(self) -> str:
         return (
             f"CkksRescaler(engine_id={self.engine_id}, "
-            f"public_levels={self.public_level_count}, device={self.device})"
+            f"public_depths={self.public_depth_count}, device={self.device})"
         )
 
     __repr__ = __str__
 
-    def rescale_to_next_level(
+    def rescale_to_next_depth(
         self,
         ct: Ciphertext,
         rounding: Literal["nearest", "floor"] = "nearest",
     ) -> Ciphertext:
-        r"""Drop the current scale prime at an ordinary public CKKS level.
+        r"""Drop the current scale prime at an ordinary public CKKS depth.
 
         Rescaling divides by the leading active Q prime and removes that RNS
         row. For each component,
@@ -102,7 +102,7 @@ class CkksRescaler:
         $Q_{\ell+1}P$ and retains all P rows.
 
         Public rescaling stops before the one-prime structural basis. This
-        method returns new ciphertext storage; :meth:`rescale_to_next_level_`
+        method returns new ciphertext storage; :meth:`rescale_to_next_depth_`
         mutates its ciphertext argument.
 
         Args:
@@ -111,44 +111,44 @@ class CkksRescaler:
             rounding: ``"nearest"`` for nearest-integer division or
                 ``"floor"`` for the least-nonnegative-residue quotient.
         Returns:
-            A new coefficient-domain standard ciphertext at ``ct.level + 1``
+            A new coefficient-domain standard ciphertext at ``ct.depth + 1``
             with unchanged component count, batch shape, Q/QP basis, engine
             integral dtype/device, ``prime_ids=ct.prime_ids[1:]``, and
             residues in $[0,q_i)$. ``ct`` is unchanged and output
             storage is independent.
 
         Raises:
-            MaximumLevelError: If no further public rescale level exists.
+            MaximumDepthError: If no further public rescale depth exists.
             InvalidScaleError: If the output scale is invalid.
             ValueError: If the ciphertext state is incompatible with rescaling.
         """
 
-        self._require_public_rescale_level(ct)
+        self._require_public_rescale_depth(ct)
         self._validate_rounding(rounding)
         return self._drop_leading_scale_prime(
             ct,
             rounding=rounding,
         )
 
-    def rescale_to_next_level_(
+    def rescale_to_next_depth_(
         self,
         ct: Ciphertext,
         rounding: Literal["nearest", "floor"] = "nearest",
     ) -> Ciphertext:
-        r"""In-place form of :meth:`rescale_to_next_level`.
+        r"""In-place form of :meth:`rescale_to_next_depth`.
 
         Native kernels update the remaining RNS rows through views into
         ``ct.data``.  This method then narrows the dense tensor by one row and
-        updates ``level``, ``scale``, and ``prime_ids``.  The returned object is
+        updates ``depth``, ``scale``, and ``prime_ids``.  The returned object is
         ``ct`` itself; aliases must therefore be treated as mutated.
 
         The quotient and actual-scale equations are identical to
-        :meth:`rescale_to_next_level`. Aliases observe updated surviving rows,
-        narrowed ``ct.data``, level, scale, and ``prime_ids``. The
+        :meth:`rescale_to_next_depth`. Aliases observe updated surviving rows,
+        narrowed ``ct.data``, depth, scale, and ``prime_ids``. The
         narrowed tensor remains a view of the original allocation.
         """
 
-        self._require_public_rescale_level(ct)
+        self._require_public_rescale_depth(ct)
         self._validate_rounding(rounding)
         return self._drop_leading_scale_prime_(
             ct,
@@ -163,16 +163,16 @@ class CkksRescaler:
                 f"got {rounding!r}"
             )
 
-    def _require_public_rescale_level(self, ct: Ciphertext) -> None:
-        """Validate that ``ct`` has a following public CKKS level."""
+    def _require_public_rescale_depth(self, ct: Ciphertext) -> None:
+        """Validate that ``ct`` has a following public CKKS depth."""
 
-        if ct.level >= self.public_level_count - 1:
-            raise MaximumLevelError(
-                level=ct.level,
-                maximum_level=self.public_level_count - 1,
+        if ct.depth >= self.public_depth_count - 1:
+            raise MaximumDepthError(
+                depth=ct.depth,
+                maximum_depth=self.public_depth_count - 1,
             )
 
-    def _rescale_final_public_level_to_structural_base(
+    def _rescale_max_depth_to_structural_base(
         self,
         ct: Ciphertext,
         *,
@@ -181,8 +181,8 @@ class CkksRescaler:
         r"""Enter the one-prime structural basis required by ModRaise.
 
         The method applies the out-of-place divide-round-drop formula used by
-        :meth:`rescale_to_next_level` in the bootstrap-only transition after the final
-        public level. The active basis is conceptually
+        :meth:`rescale_to_next_depth` in the bootstrap-only transition after the final
+        public depth. The active basis is conceptually
         ``[q_last_scale, q_structural_base]``; dropping its leading row leaves
         only ``q_structural_base``.
 
@@ -197,23 +197,23 @@ class CkksRescaler:
         $$
 
         Args:
-            ct: Final-public-level coefficient-domain, standard-residue
+            ct: Final-public-depth coefficient-domain, standard-residue
                 ciphertext.
             rounding: ``"nearest"`` or ``"floor"`` quotient selection.
 
         Returns:
-            A new ciphertext at internal level ``public_level_count`` over the
+            A new ciphertext at internal depth ``public_depth_count`` over the
             single structural base prime.
 
         Raises:
             InvalidScaleError: If the output scale is invalid.
-            ValueError: If ``ct`` is not at the final public level or has an
+            ValueError: If ``ct`` is not at the final public depth or has an
                 incompatible arithmetic state.
         """
 
-        if ct.level != self.public_level_count - 1:
+        if ct.depth != self.public_depth_count - 1:
             raise ValueError(
-                "structural-base rescale requires the final public level"
+                "structural-base rescale requires the final public depth"
             )
         self._validate_rounding(rounding)
         return self._drop_leading_scale_prime(
@@ -224,7 +224,7 @@ class CkksRescaler:
     def _prepare_scale_prime_drop(self, ct: Ciphertext) -> _ScalePrimeDrop:
         """Validate one divide-round-drop step and collect native metadata.
 
-        The returned object contains only level- and modulus-dependent values.
+        The returned object contains only depth- and modulus-dependent values.
         Ciphertext component views are intentionally obtained by the copy or
         in-place caller so mutation is visible at the call site. Its inverse
         vector is ``[remaining_limb]`` and parameter table is
@@ -236,11 +236,11 @@ class CkksRescaler:
             polynomial_domain="coefficient", residue_representation="standard"
         )
         self._assert_engine_ciphertext(ct)
-        next_level = ct.level + 1
-        if next_level > self.public_level_count:
-            raise MaximumLevelError(
-                level=ct.level,
-                maximum_level=self.public_level_count,
+        next_depth = ct.depth + 1
+        if next_depth > self.public_depth_count:
+            raise MaximumDepthError(
+                depth=ct.depth,
+                maximum_depth=self.public_depth_count,
             )
         remaining_prime_ids = ct.prime_ids[1:]
         remaining_parameters = self.rns_runtime.rns_parameters_for_prime_ids(
@@ -249,17 +249,17 @@ class CkksRescaler:
         dropped_prime_id = ct.prime_ids[0]
         dropped_prime = self.montgomery_parameters.moduli[dropped_prime_id]
         output_scale = (
-            self._rescale_to_next_output_scale(ct.scale, level=ct.level)
-            if ct.level < self.public_level_count - 1
+            self._rescale_output_scale(ct.scale, depth=ct.depth)
+            if ct.depth < self.public_depth_count - 1
             else coerce_scale(
                 ct.scale / float(dropped_prime),
                 value_name="rescale result",
             )
         )
         return _ScalePrimeDrop(
-            next_level=next_level,
+            next_depth=next_depth,
             dropped_q_inverse_montgomery_by_remaining_row=(
-                self.dropped_q_inverses_montgomery_by_level[ct.level][
+                self.dropped_q_inverses_montgomery_by_depth[ct.depth][
                     : len(remaining_prime_ids)
                 ]
             ),
@@ -368,7 +368,7 @@ class CkksRescaler:
         ]
         return self._ciphertext_from_components(
             components,
-            level=step.next_level,
+            depth=step.next_depth,
             scale=step.output_scale,
             polynomial_domain=ct.polynomial_domain,
             modulus_basis=ct.modulus_basis,
@@ -400,7 +400,7 @@ class CkksRescaler:
                 rounding=rounding,
             )
         ct.data = ct.data[..., 1:, :]
-        ct.level = step.next_level
+        ct.depth = step.next_depth
         ct.scale = step.output_scale
         ct.prime_ids = ct.prime_ids[1:]
         return ct

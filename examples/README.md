@@ -5,9 +5,9 @@ tutorials. Run them from the repository root in the same Python/PyTorch
 environment used to build FHElium:
 
 ```bash
-python examples/01_basic_ckks_flow.py --preset slots8192-scale40-levels7-int64
+python examples/01_basic_ckks_flow.py --preset slots8192-scale40-depth7-int64
 python examples/01_basic_ckks_flow.py --device cuda:0 \
-  --preset slots8192-scale40-levels7-int64
+  --preset slots8192-scale40-depth7-int64
 ```
 
 Use `python examples/<file>.py --help` to inspect a script's configuration,
@@ -18,7 +18,7 @@ use a CUDA default and reject CPU with a parser error. Each example exposes
 its CKKS state and workload policy in a self-contained workflow.
 
 For a practical reusable-buffer smoke run, keep Example 12's fixed
-`slots32768-scale40-levels34-int64` preset at level `20` while reducing only
+`slots32768-scale40-depth34-int64` preset at depth `20` while reducing only
 its residency allocation:
 
 ```bash

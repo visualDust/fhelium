@@ -142,10 +142,3 @@ manually from the existing tag and those three files. The catalog patch is
 reviewed and applied only after the public release exists, so the documentation
 does not advertise unavailable wheel recipes. FHElium 0.10.0 remains immutable;
 Windows wheels begin with FHElium 0.20.0.
-
-## Packaging validation
-
-After modifying packaging code, run static checks for the changed scripts first.
-Run actual wheel builds only when build logic, native linkage, matrix identities,
-or the release candidate has changed. Packaging changes do not require adding
-packaging-specific pytest files.

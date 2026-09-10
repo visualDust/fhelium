@@ -4,9 +4,7 @@ import math
 from collections.abc import Mapping
 from enum import Enum
 from functools import cached_property
-from typing import Any
-
-import torch
+from typing import Any, cast
 
 from fhelium._version import __version__
 from fhelium.config._prime_catalog import get_prime_catalog
@@ -17,8 +15,8 @@ from fhelium.config.security import (
 )
 from fhelium.errors import (
     InsufficientPrimeCatalogError,
-    MessagePrimeCatalogEntryNotFoundError,
-    ScalePrimeCatalogEntryNotFoundError,
+    ScalingPrimeCatalogEntryNotFoundError,
+    SpecialPrimeCatalogEntryNotFoundError,
     SecurityBudgetExceededError,
     SecurityParametersUnsupportedError,
 )
@@ -27,133 +25,139 @@ from fhelium.errors import (
 class Preset(Enum):
     """Built-in CKKS parameter presets.
 
-    Each member name records the complex slot capacity, default scale-prime
-    bit width, number of public levels, and integral tensor dtype in its
-    baseline configuration. ``int32`` members use the 30-bit residue buffer;
-    ``int64`` members use the 62-bit residue buffer. All baselines select the
-    128-bit classical security category, Gaussian error standard deviation
+    Each member name records the complex slot capacity, default scale bits,
+    maximum public depth, and the Engine's selected residue dtype for its
+    prime set. All baselines select the 128-bit classical
+    security category, Gaussian error standard deviation
     3.19, uniform-ternary secret sampling, and a ring-specific P-prime count.
     :meth:`CkksConfig.parse` accepts keyword overrides when an application
     needs a derived configuration.
     """
 
-    slots8192_scale30_levels9_int64 = "slots8192-scale30-levels9-int64"
-    slots8192_scale40_levels7_int64 = "slots8192-scale40-levels7-int64"
-    slots8192_scale50_levels5_int64 = "slots8192-scale50-levels5-int64"
-    slots16384_scale30_levels21_int64 = "slots16384-scale30-levels21-int64"
-    slots16384_scale40_levels16_int64 = "slots16384-scale40-levels16-int64"
-    slots16384_scale50_levels12_int64 = "slots16384-scale50-levels12-int64"
-    slots32768_scale30_levels45_int64 = "slots32768-scale30-levels45-int64"
-    slots32768_scale40_levels34_int64 = "slots32768-scale40-levels34-int64"
-    slots32768_scale50_levels27_int64 = "slots32768-scale50-levels27-int64"
-    slots65536_scale30_levels95_int64 = "slots65536-scale30-levels95-int64"
-    slots65536_scale40_levels72_int64 = "slots65536-scale40-levels72-int64"
-    slots65536_scale50_levels58_int64 = "slots65536-scale50-levels58-int64"
-    slots8192_scale25_levels14_int32 = "slots8192-scale25-levels14-int32"
-    slots16384_scale25_levels29_int32 = "slots16384-scale25-levels29-int32"
-    slots32768_scale25_levels24_int32 = "slots32768-scale25-levels24-int32"
-    slots65536_scale25_levels14_int32 = "slots65536-scale25-levels14-int32"
+    slots8192_scale30_depth9_int64 = "slots8192-scale30-depth9-int64"
+    slots8192_scale40_depth7_int64 = "slots8192-scale40-depth7-int64"
+    slots8192_scale50_depth5_int64 = "slots8192-scale50-depth5-int64"
+    slots16384_scale30_depth21_int64 = "slots16384-scale30-depth21-int64"
+    slots16384_scale40_depth16_int64 = "slots16384-scale40-depth16-int64"
+    slots16384_scale50_depth12_int64 = "slots16384-scale50-depth12-int64"
+    slots32768_scale30_depth45_int64 = "slots32768-scale30-depth45-int64"
+    slots32768_scale40_depth34_int64 = "slots32768-scale40-depth34-int64"
+    slots32768_scale50_depth27_int64 = "slots32768-scale50-depth27-int64"
+    slots32768_scale50_depth29_int64 = "slots32768-scale50-depth29-int64"
+    slots65536_scale30_depth95_int64 = "slots65536-scale30-depth95-int64"
+    slots65536_scale40_depth72_int64 = "slots65536-scale40-depth72-int64"
+    slots65536_scale50_depth58_int64 = "slots65536-scale50-depth58-int64"
+    slots8192_scale25_depth14_int32 = "slots8192-scale25-depth14-int32"
+    slots16384_scale25_depth29_int32 = "slots16384-scale25-depth29-int32"
+    slots32768_scale25_depth24_int32 = "slots32768-scale25-depth24-int32"
+    slots65536_scale25_depth14_int32 = "slots65536-scale25-depth14-int32"
 
 
 _PRESET_CONFIGS: dict[Preset, dict[str, int]] = {
-    Preset.slots8192_scale30_levels9_int64: {
+    Preset.slots8192_scale30_depth9_int64: {
         "logN": 14,
-        "scale_bits": 30,
-        "num_scale_primes": 9,
+        "scaling_prime_bits": 30,
+        "max_depth": 9,
         "num_p_primes": 1,
     },
-    Preset.slots8192_scale40_levels7_int64: {
+    Preset.slots8192_scale40_depth7_int64: {
         "logN": 14,
-        "scale_bits": 40,
-        "num_scale_primes": 7,
+        "scaling_prime_bits": 40,
+        "max_depth": 7,
         "num_p_primes": 1,
     },
-    Preset.slots8192_scale50_levels5_int64: {
+    Preset.slots8192_scale50_depth5_int64: {
         "logN": 14,
-        "scale_bits": 50,
-        "num_scale_primes": 5,
+        "scaling_prime_bits": 50,
+        "max_depth": 5,
         "num_p_primes": 1,
     },
-    Preset.slots16384_scale30_levels21_int64: {
+    Preset.slots16384_scale30_depth21_int64: {
         "logN": 15,
-        "scale_bits": 30,
-        "num_scale_primes": 21,
+        "scaling_prime_bits": 30,
+        "max_depth": 21,
         "num_p_primes": 2,
     },
-    Preset.slots16384_scale40_levels16_int64: {
+    Preset.slots16384_scale40_depth16_int64: {
         "logN": 15,
-        "scale_bits": 40,
-        "num_scale_primes": 16,
+        "scaling_prime_bits": 40,
+        "max_depth": 16,
         "num_p_primes": 2,
     },
-    Preset.slots16384_scale50_levels12_int64: {
+    Preset.slots16384_scale50_depth12_int64: {
         "logN": 15,
-        "scale_bits": 50,
-        "num_scale_primes": 12,
+        "scaling_prime_bits": 50,
+        "max_depth": 12,
         "num_p_primes": 2,
     },
-    Preset.slots32768_scale30_levels45_int64: {
+    Preset.slots32768_scale30_depth45_int64: {
         "logN": 16,
-        "scale_bits": 30,
-        "num_scale_primes": 45,
+        "scaling_prime_bits": 30,
+        "max_depth": 45,
         "num_p_primes": 4,
     },
-    Preset.slots32768_scale40_levels34_int64: {
+    Preset.slots32768_scale40_depth34_int64: {
         "logN": 16,
-        "scale_bits": 40,
-        "num_scale_primes": 34,
+        "scaling_prime_bits": 40,
+        "max_depth": 34,
         "num_p_primes": 4,
     },
-    Preset.slots32768_scale50_levels27_int64: {
+    Preset.slots32768_scale50_depth27_int64: {
         "logN": 16,
-        "scale_bits": 50,
-        "num_scale_primes": 27,
+        "scaling_prime_bits": 50,
+        "max_depth": 27,
         "num_p_primes": 4,
     },
-    Preset.slots65536_scale30_levels95_int64: {
+    Preset.slots32768_scale50_depth29_int64: {
+        "logN": 16,
+        "scaling_prime_bits": 50,
+        "max_depth": 29,
+        "num_p_primes": 4,
+    },
+    Preset.slots65536_scale30_depth95_int64: {
         "logN": 17,
-        "scale_bits": 30,
-        "num_scale_primes": 95,
+        "scaling_prime_bits": 30,
+        "max_depth": 95,
         "num_p_primes": 6,
     },
-    Preset.slots65536_scale40_levels72_int64: {
+    Preset.slots65536_scale40_depth72_int64: {
         "logN": 17,
-        "scale_bits": 40,
-        "num_scale_primes": 72,
+        "scaling_prime_bits": 40,
+        "max_depth": 72,
         "num_p_primes": 6,
     },
-    Preset.slots65536_scale50_levels58_int64: {
+    Preset.slots65536_scale50_depth58_int64: {
         "logN": 17,
-        "scale_bits": 50,
-        "num_scale_primes": 58,
+        "scaling_prime_bits": 50,
+        "max_depth": 58,
         "num_p_primes": 6,
     },
-    Preset.slots8192_scale25_levels14_int32: {
-        "buffer_bit_length": 30,
+    Preset.slots8192_scale25_depth14_int32: {
+        "special_prime_bits": 28,
         "logN": 14,
-        "scale_bits": 25,
-        "num_scale_primes": 14,
+        "scaling_prime_bits": 25,
+        "max_depth": 14,
         "num_p_primes": 1,
     },
-    Preset.slots16384_scale25_levels29_int32: {
-        "buffer_bit_length": 30,
+    Preset.slots16384_scale25_depth29_int32: {
+        "special_prime_bits": 28,
         "logN": 15,
-        "scale_bits": 25,
-        "num_scale_primes": 29,
+        "scaling_prime_bits": 25,
+        "max_depth": 29,
         "num_p_primes": 2,
     },
-    Preset.slots32768_scale25_levels24_int32: {
-        "buffer_bit_length": 30,
+    Preset.slots32768_scale25_depth24_int32: {
+        "special_prime_bits": 28,
         "logN": 16,
-        "scale_bits": 25,
-        "num_scale_primes": 24,
+        "scaling_prime_bits": 25,
+        "max_depth": 24,
         "num_p_primes": 4,
     },
-    Preset.slots65536_scale25_levels14_int32: {
-        "buffer_bit_length": 30,
+    Preset.slots65536_scale25_depth14_int32: {
+        "special_prime_bits": 28,
         "logN": 17,
-        "scale_bits": 25,
-        "num_scale_primes": 14,
+        "scaling_prime_bits": 25,
+        "max_depth": 14,
         "num_p_primes": 6,
     },
 }
@@ -176,85 +180,158 @@ def _dumped_moduli(
     return tuple(value)
 
 
+def _preset_parameters(preset: Preset) -> dict[str, object]:
+    """Resolve one built-in recipe into exact Q and P moduli."""
+
+    recipe = _PRESET_CONFIGS[preset]
+    log_n = recipe["logN"]
+    degree = 1 << log_n
+    scaling_bits = recipe["scaling_prime_bits"]
+    special_bits = recipe.get("special_prime_bits", 60)
+    max_depth = recipe["max_depth"]
+    p_count = recipe["num_p_primes"]
+    catalog = get_prime_catalog()
+    try:
+        scaling_candidates = catalog.scaling_primes(scaling_bits, degree)
+    except KeyError as error:
+        raise ScalingPrimeCatalogEntryNotFoundError(
+            prime_bits=scaling_bits, ring_dimension=degree
+        ) from error
+    scaling_count = max_depth
+    if len(scaling_candidates) < scaling_count:
+        raise InsufficientPrimeCatalogError(
+            prime_kind="scaling",
+            ring_dimension=degree,
+            required_count=scaling_count,
+            available_count=len(scaling_candidates),
+        )
+    scaling = tuple(scaling_candidates[:scaling_count])
+    try:
+        special_candidates = catalog.special_primes(special_bits, degree)
+    except KeyError as error:
+        raise SpecialPrimeCatalogEntryNotFoundError(
+            prime_bits=special_bits, ring_dimension=degree
+        ) from error
+    if len(scaling_candidates) < scaling_count + 1:
+        raise InsufficientPrimeCatalogError(
+            prime_kind="scaling",
+            ring_dimension=degree,
+            required_count=(scaling_count + 1),
+            available_count=len(scaling_candidates),
+        )
+    terminal = scaling_candidates[scaling_count]
+    selected_q = (*scaling, terminal)
+    special_available = [
+        prime for prime in special_candidates if prime not in selected_q
+    ]
+    if len(special_available) < p_count:
+        raise InsufficientPrimeCatalogError(
+            prime_kind="special",
+            ring_dimension=degree,
+            required_count=p_count,
+            available_count=len(special_available),
+        )
+    special = tuple(special_available[:p_count])
+    return {
+        "default_scale": float(1 << scaling_bits),
+        "q_depth_groups": tuple((prime,) for prime in scaling)
+        + ((terminal,),),
+        "p_moduli": special,
+        "logN": log_n,
+    }
+
+
 class CkksConfig:
     r"""Immutable CKKS mathematical and security parameters.
 
     The configuration defines CKKS over
-    $R = \mathbb{Z}[X]/(X^N+1)$, where $N=2^{\mathtt{logN}}$ and the complex
-    slot count is $S=N/2$. Compatible values and keys share this cryptographic
-    context.
+    $R=\mathbb{Z}[X]/(X^N+1)$, where $N=2^{\mathtt{logN}}$, together with
+    the exact ciphertext-modulus chain and hybrid key-switch modulus.
 
-    At public level $\ell$, the active ordinary ciphertext modulus is
-    $Q_\ell=\prod_{i\in I_\ell}q_i$. ``num_scale_primes`` is the positive
-    number of scale-prime rows selected into the Q chain and the number of
-    public levels.
-    The final public level contains the last scale prime and the structural
-    base Q prime, so level zero has ``num_scale_primes - 1`` public one-level
-    transitions. ``num_q_primes`` includes the additional structural base.
-    The bootstrap-entry transition produces the one-prime structural basis.
-    The key-switch modulus is $P=\prod_j p_j$.
+    ``q_depth_groups`` contains ordered Q groups. At depth ``d``, the active
+    Q basis is the concatenation of groups ``d:``. A rescale removes group
+    ``d`` and advances to ``d + 1``. The last group is the terminal basis:
+    ``max_depth == len(q_depth_groups) - 1`` and no further rescale exists there.
+    Depth identifies the active basis; it does not count multiplications or
+    record how the value reached that basis.
 
-    ``scale_bits`` selects ordinary scale primes and the default
-    encoding/planning scale $\Delta_0=2^{\mathtt{scale\_bits}}$. Value
-    creation selects $\Delta_0$ when the scale argument is omitted. Each live
-    plaintext and ciphertext carries its actual scale $\Delta(v)$.
-    ``base_prime_bits`` independently selects the structural base Q prime. An
-    omitted value selects the message-prime catalog width. The packaged catalog
-    accepts a provided value equal to ``scale_bits``.
-
-    ``total_modulus_bits`` covers the complete QP parameter modulus, both
-    $Q_0$ and $P$, and ``maximum_modulus_bits`` is the corresponding security
-    budget. The built-in table supports Gaussian error standard deviation
-    ``sigma=3.19`` and classical categories 128, 192, and 256. Engine
-    construction checks the complete QP product before native initialization
-    when ``enforce_security_budget`` is true. Disabling that check transfers
-    parameter and sampler assessment to the caller.
+    ``p_moduli`` contains the special primes whose product is the key-switch
+    modulus P. ``default_scale`` is used only when value creation omits a
+    scale; every live plaintext and ciphertext carries its own actual scale.
+    The Engine selects the residue dtype and Montgomery radix from these exact
+    primes, and each device-local RNS context materializes the corresponding
+    arithmetic tables.
     """
 
     def __init__(
         self,
         *,
-        buffer_bit_length: int = 62,
-        scale_bits: int = 40,
-        base_prime_bits: int | None = None,
-        logN: int = 15,
-        num_scale_primes: int | None = 16,
-        num_p_primes: int = 2,
+        default_scale: float,
+        q_depth_groups: tuple[tuple[int, ...], ...],
+        p_moduli: tuple[int, ...],
+        logN: int,
         sigma: float = 3.19,
         security_bits: int = 128,
         enforce_security_budget: bool = True,
         galois_generator: int = 3,
-    ):
-        if buffer_bit_length not in (30, 62):
-            raise ValueError(
-                "buffer_bit_length must be 32-2=30 or 64-2=62."
-                "CPU and CUDA execution support int32 and int64."
+    ) -> None:
+        if type(logN) is not int or logN < 1:
+            raise ValueError("logN must be a positive integer")
+        if not isinstance(default_scale, (int, float)) or isinstance(
+            default_scale, bool
+        ):
+            raise TypeError("default_scale must be a real number")
+        default_scale = float(default_scale)
+        if not math.isfinite(default_scale) or default_scale <= 0.0:
+            raise ValueError("default_scale must be positive and finite")
+        if not isinstance(q_depth_groups, (list, tuple)) or any(
+            not isinstance(group, (list, tuple)) or not group
+            for group in q_depth_groups
+        ):
+            raise TypeError(
+                "q_depth_groups must be a sequence of nonempty prime groups"
             )
-        if num_scale_primes is not None:
-            if type(num_scale_primes) is not int:
-                raise TypeError("num_scale_primes must be an integer")
-            if num_scale_primes < 1:
-                raise ValueError("num_scale_primes must be at least 1")
+        groups = tuple(
+            _dumped_moduli(
+                group,
+                name=f"q_depth_groups[{index}]",
+                require_nonempty=True,
+            )
+            for index, group in enumerate(q_depth_groups)
+        )
+        if not groups:
+            raise ValueError(
+                "q_depth_groups must contain at least one group"
+            )
+        special = _dumped_moduli(
+            p_moduli, name="p_moduli", require_nonempty=True
+        )
+        all_moduli = tuple(prime for group in groups for prime in group) + special
+        if len(set(all_moduli)) != len(all_moduli):
+            raise ValueError("Q and P must contain distinct primes")
+        if any(prime <= 2 or prime % 2 == 0 for prime in all_moduli):
+            raise ValueError("Every Q/P modulus must be an odd integer above two")
+        N = 1 << logN
+        if any((prime - 1) % (2 * N) for prime in all_moduli):
+            raise ValueError(
+                "Every Q/P modulus must support the configured negacyclic NTT"
+            )
         if not isinstance(sigma, (int, float)) or isinstance(sigma, bool):
             raise TypeError("sigma must be a real number")
         sigma = float(sigma)
         if not math.isfinite(sigma) or sigma <= 0.0:
             raise ValueError("sigma must be positive and finite")
-        if type(security_bits) is not int:
-            raise TypeError("security_bits must be an integer")
-        if security_bits <= 0:
-            raise ValueError("security_bits must be positive")
+        if type(security_bits) is not int or security_bits <= 0:
+            raise ValueError("security_bits must be a positive integer")
         if type(enforce_security_budget) is not bool:
             raise TypeError("enforce_security_budget must be a boolean")
         if galois_generator not in {3, 5}:
             raise ValueError("galois_generator must be 3 or 5")
 
-        self.buffer_bit_length = buffer_bit_length
-        self.scale_bits = scale_bits
-        self.base_prime_bits = base_prime_bits
+        self.default_scale = default_scale
+        self.q_depth_groups = groups
+        self.p_moduli = special
         self.logN = logN
-        self._num_scale_primes_requested = num_scale_primes
-        self.num_p_primes = num_p_primes
         self.sigma = sigma
         self.security_bits = security_bits
         self.enforce_security_budget = enforce_security_budget
@@ -263,122 +340,82 @@ class CkksConfig:
 
     def __setattr__(self, name: str, value: object) -> None:
         if self.__dict__.get("_initialized", False):
-            raise AttributeError(
-                "CkksConfig is immutable; construct a new config"
-            )
+            raise AttributeError("CkksConfig is immutable; construct a new config")
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name: str) -> None:
         if self.__dict__.get("_initialized", False):
-            raise AttributeError(
-                "CkksConfig is immutable; construct a new config"
-            )
+            raise AttributeError("CkksConfig is immutable; construct a new config")
         object.__delattr__(self, name)
 
-    def dumps(self) -> dict[str, object]:
-        """Return a versioned dictionary with the selected Q and P moduli."""
-
-        return {
-            "fhelium_version": __version__,
-            "buffer_bit_length": self.buffer_bit_length,
-            "scale_bits": self.scale_bits,
-            "base_prime_bits": self.base_prime_bits,
-            "logN": self.logN,
-            "num_scale_primes": self.num_scale_primes,
-            "num_p_primes": self.num_p_primes,
-            "sigma": self.sigma,
-            "security_bits": self.security_bits,
-            "enforce_security_budget": self.enforce_security_budget,
-            "galois_generator": self.galois_generator,
-            "q_moduli": list(self.q_moduli),
-            "p_moduli": list(self.p_moduli),
-        }
-
-    # ---- construction helpers ------------------------------------------------
     @classmethod
     def parse(
         cls,
         src: Mapping[str, Any] | Preset,
         **overrides: Any,
     ) -> "CkksConfig":
-        """Resolve a parameter baseline into a CKKS configuration.
-
-        ``src`` is either a :class:`Preset` member, an ordinary constructor
-        mapping, or a dictionary returned by :meth:`dumps`. A dumped
-        configuration requires the same installed FHElium version and the same
-        prime-catalog selection. Keyword overrides replace constructor fields
-        before the dumped modulus selection is checked.
-        """
+        """Resolve a preset or a serialized exact configuration."""
 
         if isinstance(src, Preset):
-            base = dict(_PRESET_CONFIGS[src])
-            dumped_q_moduli: tuple[int, ...] | None = None
-            dumped_p_moduli: tuple[int, ...] | None = None
+            parameters = _preset_parameters(src)
         else:
-            base = dict(src)
-            dump_fields = {
-                name
-                for name in ("fhelium_version", "q_moduli", "p_moduli")
-                if name in base
-            }
-            if dump_fields and dump_fields != {
-                "fhelium_version",
-                "q_moduli",
-                "p_moduli",
-            }:
+            parameters = dict(src)
+            version = parameters.pop("fhelium_version", None)
+            if version is not None and version != __version__:
                 raise ValueError(
-                    "A serialized CKKS configuration requires "
-                    "fhelium_version, q_moduli, and p_moduli"
+                    "Serialized CKKS configuration requires FHElium "
+                    f"{version}; installed version is {__version__}"
                 )
-            if dump_fields:
-                dumped_version = base.pop("fhelium_version")
-                if not isinstance(dumped_version, str):
-                    raise TypeError(
-                        "Serialized CKKS configuration version must be a string"
-                    )
-                if dumped_version != __version__:
-                    raise ValueError(
-                        "Serialized CKKS configuration requires FHElium "
-                        f"{dumped_version}; installed version is {__version__}"
-                    )
-                dumped_q_moduli = _dumped_moduli(
-                    base.pop("q_moduli"),
-                    name="q_moduli",
-                    require_nonempty=True,
-                )
-                dumped_p_moduli = _dumped_moduli(
-                    base.pop("p_moduli"),
-                    name="p_moduli",
-                    require_nonempty=False,
-                )
-            else:
-                dumped_q_moduli = None
-                dumped_p_moduli = None
+        parameters.update(overrides)
+        expected = {
+            "default_scale",
+            "q_depth_groups",
+            "p_moduli",
+            "logN",
+            "sigma",
+            "security_bits",
+            "enforce_security_budget",
+            "galois_generator",
+        }
+        unexpected = parameters.keys() - expected
+        if unexpected:
+            name = min(unexpected)
+            raise TypeError(f"unexpected keyword argument {name!r}")
+        return cls(
+            default_scale=cast(float, parameters["default_scale"]),
+            q_depth_groups=cast(
+                tuple[tuple[int, ...], ...], parameters["q_depth_groups"]
+            ),
+            p_moduli=cast(tuple[int, ...], parameters["p_moduli"]),
+            logN=cast(int, parameters["logN"]),
+            sigma=cast(float, parameters.get("sigma", 3.19)),
+            security_bits=cast(int, parameters.get("security_bits", 128)),
+            enforce_security_budget=cast(
+                bool, parameters.get("enforce_security_budget", True)
+            ),
+            galois_generator=cast(
+                int, parameters.get("galois_generator", 3)
+            ),
+        )
 
-        config = cls(**{**base, **overrides})
-        if (
-            dumped_q_moduli is not None
-            and tuple(config.q_moduli) != dumped_q_moduli
-        ):
-            raise ValueError(
-                "Serialized CKKS Q moduli differ from the installed prime catalog"
-            )
-        if (
-            dumped_p_moduli is not None
-            and tuple(config.p_moduli) != dumped_p_moduli
-        ):
-            raise ValueError(
-                "Serialized CKKS P moduli differ from the installed prime catalog"
-            )
-        return config
+    def dumps(self) -> dict[str, object]:
+        """Return a versioned dictionary containing the exact parameter set."""
 
-    # ---- simple derived values ----------------------------------------------
+        return {
+            "fhelium_version": __version__,
+            "default_scale": self.default_scale,
+            "q_depth_groups": [list(group) for group in self.q_depth_groups],
+            "p_moduli": list(self.p_moduli),
+            "logN": self.logN,
+            "sigma": self.sigma,
+            "security_bits": self.security_bits,
+            "enforce_security_budget": self.enforce_security_budget,
+            "galois_generator": self.galois_generator,
+        }
+
     @cached_property
     def N(self) -> int:
-        r"""Ring dimension $N=2^{\mathtt{logN}}$ for $R$.
-
-        The corresponding complex CKKS slot count is $S=N/2$.
-        """
+        """Polynomial ring dimension."""
 
         return 1 << self.logN
 
@@ -389,57 +426,82 @@ class CkksConfig:
         return self.N // 2
 
     @cached_property
+    def max_depth(self) -> int:
+        """Greatest public CKKS depth represented by this Q chain."""
+
+        return len(self.q_depth_groups) - 1
+
+    def depth_remaining(self, depth: int) -> int:
+        """Return the public rescale transitions remaining at ``depth``."""
+
+        if type(depth) is not int or not 0 <= depth <= self.max_depth:
+            raise ValueError(f"depth must be in [0, {self.max_depth}]")
+        return self.max_depth - depth
+
+    @cached_property
+    def q_moduli(self) -> tuple[int, ...]:
+        """Q primes in depth-group and within-group order."""
+
+        return tuple(prime for group in self.q_depth_groups for prime in group)
+
+    @cached_property
+    def moduli(self) -> tuple[int, ...]:
+        """Complete QP prime sequence used by RNS resources."""
+
+        return self.q_moduli + self.p_moduli
+
+    @cached_property
+    def num_q_primes(self) -> int:
+        """Number of prime rows in the complete Q chain."""
+
+        return len(self.q_moduli)
+
+    @cached_property
+    def num_p_primes(self) -> int:
+        """Number of special-prime rows in P."""
+
+        return len(self.p_moduli)
+
+    @cached_property
+    def total_num_primes(self) -> int:
+        """Number of prime rows in the complete QP basis."""
+
+        return len(self.moduli)
+
+    def rescale_divisor(self, depth: int) -> int:
+        """Return the Q-group product removed at one public depth."""
+
+        if type(depth) is not int or not 0 <= depth < self.max_depth:
+            raise ValueError(f"rescale depth must be in [0, {self.max_depth})")
+        return math.prod(self.q_depth_groups[depth])
+
+    def q_row_start(self, depth: int) -> int:
+        """Return the first Q row active at ``depth``."""
+
+        if type(depth) is not int or not 0 <= depth <= self.max_depth:
+            raise ValueError(f"depth must be in [0, {self.max_depth}]")
+        return sum(len(group) for group in self.q_depth_groups[:depth])
+
+    def active_q_moduli(self, depth: int) -> tuple[int, ...]:
+        """Return the ordered Q primes active at ``depth``."""
+
+        return self.q_moduli[self.q_row_start(depth) :]
+
+    @cached_property
     def inverse_ntt_scale(self) -> tuple[int, ...]:
-        r"""Return $N^{-1}\bmod m$ for every Q/P modulus row $m$.
+        r"""Return $N^{-1}\bmod m$ in complete QP prime order."""
 
-        The result follows :attr:`moduli` order: ordinary $q_i$ rows followed
-        by special $p_j$ rows. Each value is the normalization factor used by
-        the inverse NTT for that row.
-        """
-
-        return tuple(pow(self.N, -1, qi) for qi in self.moduli)
+        return tuple(pow(self.N, -1, modulus) for modulus in self.moduli)
 
     @cached_property
-    def int_scale(self) -> int:
-        r"""Integer default scale $\Delta_0=2^{\mathtt{scale\_bits}}$."""
+    def total_modulus_bits(self) -> int:
+        """Bit width of the complete QP product."""
 
-        return 1 << self.scale_bits
+        return (math.prod(self.moduli) - 1).bit_length()
 
-    @cached_property
-    def default_scale(self) -> float:
-        r"""Binary64 default encoding and planning scale $\Delta_0$.
-
-        Value creation selects this scale when its scale argument is omitted.
-        Arithmetic reads and updates the actual scale stored on each value.
-        """
-
-        return float(self.int_scale)
-
-    @cached_property
-    def torch_dtype(self):
-        return {30: torch.int32, 62: torch.int64}[self.buffer_bit_length]
-
-    @cached_property
-    def message_bits(self) -> int:
-        """Legacy message-prime catalog width used for structural Q and P.
-
-        This name does not denote CKKS message precision. Renaming the catalog
-        selector and its packaged resources requires a separate versioned
-        catalog migration.
-        """
-
-        # W - 2 bits, where W is the signed machine-word width.
-        return self.buffer_bit_length - 2
-
-    # ---- primes + security budget -------------------------------------------
     @cached_property
     def maximum_modulus_bits(self) -> int:
-        """Built-in budget for the complete QP modulus bit width.
-
-        Raises:
-            SecurityParametersUnsupportedError: If this configuration does
-                not match a table row.
-        """
+        """Built-in complete-QP budget for the selected security category."""
 
         maximum = _lookup_maximum_modulus_bits(
             ring_dimension=self.N,
@@ -454,229 +516,20 @@ class CkksConfig:
                 secret_distribution="ternary",
                 error_stddev=self.sigma,
                 reason=(
-                    "No built-in budget matches this configuration; "
-                    "see the security guide for external "
-                    "assessment requirements."
+                    "No built-in budget matches this configuration; see the "
+                    "security guide for external assessment requirements."
                 ),
             )
         return maximum
 
     @cached_property
     def security_assessment(self) -> SecurityAssessment:
-        """Structured table assessment of the complete QP modulus."""
+        """Return the built-in assessment of the complete QP product."""
 
         return assess_config_security(self)
 
-    @cached_property
-    def _message_and_p_primes(self) -> tuple[int, ...]:
-        try:
-            return tuple(
-                get_prime_catalog().message_primes(
-                    self.message_bits,
-                    self.N,
-                )
-            )
-        except KeyError as error:
-            raise MessagePrimeCatalogEntryNotFoundError(
-                coefficient_bits=self.message_bits,
-                ring_dimension=self.N,
-            ) from error
-
-    @cached_property
-    def _scale_primes(self) -> tuple[int, ...]:
-        try:
-            return tuple(
-                get_prime_catalog().scale_primes(
-                    self.scale_bits,
-                    self.N,
-                )
-            )
-        except KeyError as error:
-            raise ScalePrimeCatalogEntryNotFoundError(
-                scale_bits=self.scale_bits,
-                ring_dimension=self.N,
-            ) from error
-
-    @cached_property
-    def _base_and_p_primes(self) -> tuple[int, ...]:
-        r"""Select the structural Q base followed by key-switch P primes.
-
-        The default path preserves the existing catalog layout: the first
-        message-width prime is Q's structural base and subsequent primes form
-        $P$. When ``base_prime_bits`` is set, Q's base instead comes from a
-        reserved scale-width catalog entry, while P still uses message-width
-        primes.  Keeping P unchanged avoids coupling the bootstrap precision
-        choice to hybrid key-switch decomposition.
-
-        Returns:
-            ``[q_structural_base, *p_primes]`` in catalog order,
-            where the first row belongs to $Q_\ell$ and the remaining rows
-            multiply to $P$.
-
-        Raises:
-            ValueError: If the requested base width is unsupported.
-            InsufficientPrimeCatalogError: If the catalog cannot provide all P
-                rows after selecting the base.
-        """
-
-        if self.base_prime_bits is not None:
-            if self.base_prime_bits != self.scale_bits:
-                raise ValueError(
-                    "The current prime catalog supports an overridden base "
-                    "prime only when base_prime_bits == scale_bits"
-                )
-            # Use a scale-width prime not otherwise selected into the public
-            # scale chain. P remains in the message-prime catalog.
-            base_prime = self._scale_primes[-1]
-            p_primes = self._message_and_p_primes[: self.num_p_primes]
-            if len(p_primes) != self.num_p_primes:
-                raise InsufficientPrimeCatalogError(
-                    prime_kind="message",
-                    ring_dimension=self.N,
-                    required_count=self.num_p_primes,
-                    available_count=len(p_primes),
-                )
-            return (base_prime, *p_primes)
-        needed = 1 + self.num_p_primes
-        primes = self._message_and_p_primes[:needed]
-        if len(primes) != needed:
-            raise InsufficientPrimeCatalogError(
-                prime_kind="message",
-                ring_dimension=self.N,
-                required_count=needed,
-                available_count=len(primes),
-            )
-        return tuple(primes)
-
-    @cached_property
-    def num_scale_primes(self) -> int:
-        """Number of selected scale-prime rows and ordinary public levels.
-
-        Public levels are ``[0, num_scale_primes)``. The final public level
-        retains one scale prime plus the structural base, giving
-        ``num_scale_primes - 1`` public transitions from level zero. The count
-        is at least one. A configured count is validated against
-        catalog capacity when :attr:`moduli` is constructed. An omitted count
-        is filled greedily within the security-table modulus-bit budget.
-
-        Raises:
-            ValueError: If automatic derivation cannot fit one scale prime in
-                the security budget.
-        """
-        if self._num_scale_primes_requested is not None:
-            return self._num_scale_primes_requested
-
-        # Greedily fill using exact integer products and bit widths.  This path
-        # is opt-in through num_scale_primes=None; built-in presets carry
-        # fixed counts so a future table update cannot alter their depth.
-        modulus = math.prod(self._base_and_p_primes)
-        radix = 1 << self.buffer_bit_length
-        if any(4 * prime >= radix for prime in self._base_and_p_primes):
-            raise ValueError(
-                "The structural Q/P primes violate the native Montgomery "
-                "requirement 4 * modulus < 2**buffer_bit_length"
-            )
-        count = 0
-        reserved_primes = set(self._base_and_p_primes)
-        while count < len(self._scale_primes):
-            scale_prime = self._scale_primes[count]
-            if scale_prime in reserved_primes or 4 * scale_prime >= radix:
-                break
-            candidate = modulus * scale_prime
-            if (candidate - 1).bit_length() > self.maximum_modulus_bits:
-                break
-            modulus = candidate
-            count += 1
-        if count < 1:
-            raise ValueError(
-                "The security budget must permit at least one scale prime"
-            )
-        return count
-
-    @cached_property
-    def moduli(self) -> tuple[int, ...]:
-        r"""Complete ordered QP parameter-modulus list.
-
-        The order is ``[scale_q_primes, structural_q_prime, p_primes]``.
-        The ordinary rows form $Q_0=\prod_i q_i$, and the special rows form
-        $P=\prod_j p_j$.
-        """
-        scale_moduli = self._scale_primes[: self.num_scale_primes]
-        if len(scale_moduli) != self.num_scale_primes:
-            raise InsufficientPrimeCatalogError(
-                prime_kind="scale",
-                ring_dimension=self.N,
-                required_count=self.num_scale_primes,
-                available_count=len(scale_moduli),
-            )
-        moduli = scale_moduli + self._base_and_p_primes
-        if len(set(moduli)) != len(moduli):
-            raise ValueError(
-                "The selected Q/P modulus chain contains duplicate primes; "
-                "reduce num_scale_primes or choose another base-prime policy"
-            )
-        radix = 1 << self.buffer_bit_length
-        for prime_id, modulus in enumerate(moduli):
-            if 4 * modulus >= radix:
-                raise ValueError(
-                    "The selected Q/P modulus at prime_id "
-                    f"{prime_id} violates the native Montgomery requirement "
-                    "4 * modulus < 2**buffer_bit_length; reduce "
-                    "num_scale_primes or select a smaller scale-prime family"
-                )
-        return tuple(moduli)
-
-    @cached_property
-    def q_moduli(self) -> tuple[int, ...]:
-        r"""Ordered ordinary-prime rows whose level subsets form $Q_\ell$."""
-
-        return self.moduli[: self.num_q_primes]
-
-    @cached_property
-    def p_moduli(self) -> tuple[int, ...]:
-        r"""Ordered special-prime rows whose product is $P$."""
-
-        return self.moduli[self.num_q_primes :]
-
-    # ---- counts + security checks -------------------------------------------
-    @cached_property
-    def num_q_primes(self) -> int:
-        r"""Number of ordinary Q primes, including one structural base prime.
-
-        Therefore
-        $\mathtt{num\_q\_primes}=\mathtt{num\_scale\_primes}+1$.
-        """
-
-        return self.num_scale_primes + 1
-
-    @cached_property
-    def total_num_primes(self) -> int:
-        """Number of rows in the complete QP parameter basis."""
-
-        return self.num_q_primes + self.num_p_primes
-
-    @cached_property
-    def total_modulus_bits(self) -> int:
-        r"""Bit width $\lceil\log_2(Q_0P)\rceil$ of the complete QP modulus.
-
-        This value covers both ordinary Q primes and special P primes; it is
-        not the width of Q alone.
-        """
-
-        return (math.prod(self.moduli) - 1).bit_length()
-
     def validate_security_budget(self) -> SecurityAssessment:
-        """Require a supported assessment that meets its QP budget.
-
-        Returns:
-            The immutable structured assessment when the budget is met.
-
-        Raises:
-            SecurityParametersUnsupportedError: If no built-in row
-                matches this configuration.
-            SecurityBudgetExceededError: If the complete QP modulus exceeds
-                the matching table budget.
-        """
+        """Require the complete QP product to meet the configured budget."""
 
         assessment = self.security_assessment
         if assessment.status == "unsupported":
@@ -685,8 +538,7 @@ class CkksConfig:
                 target_bits=self.security_bits,
                 secret_distribution="ternary",
                 error_stddev=self.sigma,
-                reason=assessment.reason
-                or "No built-in budget matches this configuration.",
+                reason=assessment.reason or "No built-in budget matches this configuration.",
             )
         if assessment.status == "exceeds":
             maximum = assessment.maximum_modulus_bits
@@ -695,25 +547,20 @@ class CkksConfig:
                     "A below-budget assessment must report its table budget"
                 )
             raise SecurityBudgetExceededError(
-                scale_bits=self.scale_bits,
                 ring_dimension=self.N,
-                num_scale_primes=self.num_scale_primes,
+                max_depth=self.max_depth,
                 maximum_modulus_bits=maximum,
                 requested_modulus_bits=assessment.modulus_bits,
             )
         return assessment
 
-    # ---- pretty printing -----------------------------------------------------
     def __repr__(self) -> str:
         return (
             "CkksConfig("
-            f"buffer_bit_length={self.buffer_bit_length}, "
-            f"scale_bits={self.scale_bits}, "
-            f"base_prime_bits={self.base_prime_bits!r}, "
-            f"logN={self.logN}, "
-            f"num_scale_primes={self.num_scale_primes}, "
-            f"num_p_primes={self.num_p_primes}, "
-            f"sigma={self.sigma!r}, "
+            f"default_scale={self.default_scale!r}, "
+            f"q_depth_groups={self.q_depth_groups!r}, "
+            f"p_moduli={self.p_moduli!r}, "
+            f"logN={self.logN}, sigma={self.sigma!r}, "
             f"security_bits={self.security_bits}, "
             f"enforce_security_budget={self.enforce_security_budget}, "
             f"galois_generator={self.galois_generator})"
@@ -721,23 +568,19 @@ class CkksConfig:
 
     def __str__(self) -> str:
         assessment = self.security_assessment
-        maximum_modulus_bits: int | str = (
+        maximum: int | str = (
             assessment.maximum_modulus_bits
             if assessment.maximum_modulus_bits is not None
             else "unsupported"
         )
         return (
-            f"CkksConfig(buffer_bit_length={self.buffer_bit_length}, "
-            f"scale_bits={self.scale_bits}, "
-            f"base_prime_bits={self.base_prime_bits}, logN={self.logN}, "
-            f"N={self.N}, num_slots={self.N // 2}, "
-            f"num_scale_primes={self.num_scale_primes}, "
-            f"num_q_primes={self.num_q_primes}, "
-            f"num_p_primes={self.num_p_primes}, "
-            f"total_num_primes={self.total_num_primes}, "
+            f"CkksConfig(logN={self.logN}, N={self.N}, "
+            f"num_slots={self.num_slots}, max_depth={self.max_depth}, "
+            f"Q_primes={self.num_q_primes}, P_primes={self.num_p_primes}, "
+            f"default_scale={self.default_scale}, "
             f"total_modulus_bits={self.total_modulus_bits}, "
-            f"maximum_modulus_bits={maximum_modulus_bits}, "
-            f"sigma={self.sigma}, security_bits={self.security_bits}, "
+            f"maximum_modulus_bits={maximum}, sigma={self.sigma}, "
+            f"security_bits={self.security_bits}, "
             f"enforce_security_budget={self.enforce_security_budget}, "
             f"galois_generator={self.galois_generator})"
         )

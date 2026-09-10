@@ -126,7 +126,7 @@ def slice_ntt_parameter_rows(
 
     Backends store tables for the context's complete QP row order,
     while an individual operation may contain only a contiguous subset. For
-    example, a lower-level Q or QP basis omits a prefix of Q primes, and an
+    example, a lower-depth Q or QP basis omits a prefix of Q primes, and an
     internal key-switch digit may select another specified contiguous interval.
     ``parameter_row_start`` supplies the missing global-row identity.
 

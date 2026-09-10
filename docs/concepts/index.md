@@ -64,7 +64,7 @@ ciphertext or Program.
   />
   <DocCard
     title="Reason about CKKS values"
-    description="Start from value identity, represented state, operation transitions, and the scale-level lifecycle."
+    description="Start from value identity, represented state, operation transitions, and the scale-depth lifecycle."
     href="/concepts/ckks/value-model-and-identity"
   />
   <DocCard
@@ -126,7 +126,7 @@ For immediate evaluator work:
 Architecture
 → Value model and identity
 → Evaluator operation transitions
-→ Scale and level lifecycle
+→ Scale and depth lifecycle
 → Key lifecycle
 ```
 

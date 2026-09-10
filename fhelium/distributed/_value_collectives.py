@@ -550,7 +550,7 @@ def all_gather_ciphertexts(
 ) -> list[Ciphertext]:
     """All-gather independent ciphertexts with one identical layout.
 
-    Equality covers context, level, scale, components, prime IDs, domain,
+    Equality covers context, depth, scale, components, prime IDs, domain,
     basis, Montgomery state, degree, shape, and dtype.  Rank-local CUDA device
     indices may differ because descriptors intentionally preserve device type
     rather than one global device index.  This is transport of independent
@@ -597,7 +597,7 @@ def all_gather_plaintexts(
     """All-gather independent plaintexts with one arithmetic state.
 
     Every rank must provide the same message/encoded representation kind,
-    shape, dtype, context, level, scale, layout, domain, basis, Montgomery
+    shape, dtype, context, depth, scale, layout, domain, basis, Montgomery
     state, and prime IDs.  This is representation-preserving transport, not an
     arithmetic operation.  It is synchronous, accepts no ``async_op``
     argument, and returns no :class:`torch.distributed.Work`.
@@ -640,7 +640,7 @@ def all_gather_plaintexts(
     return [
         Plaintext(
             message=None if message_parts is None else message_parts[rank],
-            level=value.level,
+            depth=value.depth,
             scale=value.scale,
             data=None if data_parts is None else data_parts[rank],
             representation=value.representation,

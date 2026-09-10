@@ -71,7 +71,7 @@ class CkksDecryptor:
         into finite ``torch.float64`` ``[*batch, coefficient]`` on the engine
         device. This ``approximate_coefficients`` result is valid only for
         decoding; it is not full-$Q_\ell$ CRT and cannot return to RNS.
-        Level and actual scale are preserved. Inputs are unchanged and output
+        Depth and actual scale are preserved. Inputs are unchanged and output
         storage is independent.
         """
 
@@ -89,7 +89,7 @@ class CkksDecryptor:
         )
         return self.plaintext_codec._wrap_approximate_plaintext(
             coeff,
-            level=ciphertext.level,
+            depth=ciphertext.depth,
             scale=ciphertext.scale,
         )
 
@@ -106,15 +106,15 @@ class CkksDecryptor:
         computes $c_0(X)+c_1(X)s(X)$; three-component input must be
         NTT/Montgomery and computes
         $c_0(X)+c_1(X)s(X)+c_2(X)s(X)^2$. ``secret_key`` is
-        ``[level_zero_limb, ntt_index]`` in Montgomery form. Output is newly
+        ``[depth_zero_limb, ntt_index]`` in Montgomery form. Output is newly
         allocated ``[*batch, limb, coefficient]`` with engine integral
         dtype/device, the ciphertext Q/QP basis and rows, and
         standard residues. Inputs are not mutated.
         """
 
-        level = ciphertext.level
+        depth = ciphertext.depth
         secret_data = secret_key.data[
-            self.rns_runtime.level_row_starts[level] :
+            self.rns_runtime.depth_row_starts[depth] :
         ]
         if not ciphertext.includes_p and secret_key.modulus_basis == "QP":
             secret_data = secret_data[: -self.config.num_p_primes]
@@ -197,7 +197,7 @@ class CkksDecryptor:
         full-$Q_\ell$ CRT reconstruction.
         """
 
-        q_prime_ids = self.rns_layout.prime_ids(ciphertext.level)
+        q_prime_ids = self.rns_layout.prime_ids(ciphertext.depth)
         # Use the trailing scale/base pair for client-side decoding. Its product
         # is the centered-coefficient dynamic range of the direct
         # decoder. The convenience encoder checks its coefficient bound so
@@ -298,7 +298,7 @@ class CkksDecryptor:
         normalizers = []
         propagation = torch.zeros(
             (len(source_moduli) - 1, len(source_moduli)),
-            dtype=self.config.torch_dtype,
+            dtype=self.rns_runtime.dtype,
             device=self.device,
         )
         for component_index, prefix in enumerate(prefix_products):
@@ -317,7 +317,7 @@ class CkksDecryptor:
         cached = (
             torch.tensor(
                 normalizers,
-                dtype=self.config.torch_dtype,
+                dtype=self.rns_runtime.dtype,
                 device=self.device,
             ),
             propagation,

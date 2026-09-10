@@ -98,7 +98,7 @@ that is the requested implementation route.
 ### Compile
 
 Compile begins with a captured, parsed, or programmatically constructed
-`Program`. Its SSA value types may leave level, scale, prime identity, domain,
+`Program`. Its SSA value types may leave depth, scale, prime identity, domain,
 basis, or representation state unknown until a pass assigns or transforms
 that information. Caller-composed passes can preserve a CKKS operation for a
 whole-operation implementation or lower it to registered RNS/NTT operations.

@@ -9,7 +9,7 @@ __global__ void inverse_ntt_indexed_stage_kernel(
     const CudaTensorAccessor32<int, 2> odd_acc,
     const CudaTensorAccessor32<scalar_t, 3> inverse_twiddles_acc,
     const CudaTensorAccessor32<scalar_t, 2> params_acc,
-    const int level) {
+    const int stage) {
   // Thread Indexing
   const int row = blockIdx.x;
   const int batch = blockIdx.z;
@@ -25,11 +25,11 @@ __global__ void inverse_ntt_indexed_stage_kernel(
       params_acc[RNS_PARAM_NEG_INV_MODULUS_HI][row];
 
   // Butterfly.
-  const int even_j = even_acc[level][j];
-  const int odd_j = odd_acc[level][j];
+  const int even_j = even_acc[stage][j];
+  const int odd_j = odd_acc[stage][j];
 
   const scalar_t U = a_acc[batch][row][even_j];
-  const scalar_t S = inverse_twiddles_acc[row][level][j];
+  const scalar_t S = inverse_twiddles_acc[row][stage][j];
   const scalar_t V = a_acc[batch][row][odd_j];
 
   const scalar_t UminusV = U + twice_modulus - V;

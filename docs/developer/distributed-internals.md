@@ -190,7 +190,7 @@ position:
 - gather and all-gather reconstruct complete values in process-group order.
 
 These are transport operations. They preserve payload bits and value metadata;
-they do not add ciphertexts, concatenate RNS rows, align levels, or change
+they do not add ciphertexts, concatenate RNS rows, align depths, or change
 scale.
 
 Receiver allocation follows descriptor device type. A CUDA-described tensor
@@ -203,7 +203,7 @@ The transfer layer does not silently change the sender's declared device type.
 RNS partitioning. A shard carries a subset of the ordered `prime_ids` and the
 matching tensor limb rows. Reconstruction requires:
 
-- one public level and caller-established CKKS parameter provenance;
+- one public depth and caller-established CKKS parameter provenance;
 - identical component and batch axes;
 - identical scale, polynomial domain, modulus basis, and residue form;
 - non-overlapping requested prime IDs;

@@ -41,7 +41,7 @@ A `TensorSignature` records:
 
 A `ValueSignature` additionally records the serialization type and schema,
 normalized stored arithmetic metadata, and ordered tensor-leaf
-signatures. That metadata includes fields such as level, scale, representation,
+signatures. That metadata includes fields such as depth, scale, representation,
 domain, basis, `prime_ids`, and key specialization where present. It does not
 record CKKS parameter provenance.
 

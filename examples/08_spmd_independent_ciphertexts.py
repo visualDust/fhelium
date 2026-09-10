@@ -36,7 +36,7 @@ def main() -> None:
     dist.init()
     torch.set_default_device(dist.local_device())
     engine = Engine(
-        fh.Preset.slots32768_scale40_levels34_int64,
+        fh.Preset.slots32768_scale40_depth34_int64,
         allow_automatic_key_generation=False,
     )
 
@@ -52,7 +52,7 @@ def main() -> None:
             engine.encrypt_message(message, public_key) for message in messages
         ]
         root_weight = engine.prepare_plaintext_for_multiplication(
-            engine.encode(torch.full((32,), 1.25, dtype=torch.float64), level=0)
+            engine.encode(torch.full((32,), 1.25, dtype=torch.float64), depth=0)
         )
     else:
         secret_key = None
@@ -69,9 +69,9 @@ def main() -> None:
     # rank. It is distinct from scattering independent Ciphertexts above.
     weight = dist.broadcast_plaintext(root_weight, src=0)
 
-    # multiply_plaintext deliberately does not rescale. The level transition is separate,
+    # multiply_plaintext deliberately does not rescale. The depth transition is separate,
     # and each rank creates its public rank-specific bias locally.
-    local_output = engine.rescale_to_next_level(
+    local_output = engine.rescale_to_next_depth(
         engine.ntt_domain_to_coefficient_domain(
             engine.multiply_plaintext(
                 engine.coefficient_domain_to_ntt_domain(local_input), weight
@@ -86,7 +86,7 @@ def main() -> None:
     bias = engine.prepare_plaintext_for_addition(
         engine.encode(
             bias_message,
-            level=local_output.level,
+            depth=local_output.depth,
             scale=local_output.scale,
         )
     )
@@ -95,7 +95,7 @@ def main() -> None:
     outputs = dist.gather_ciphertexts(local_output, dst=0)
     print(
         f"rank={dist.get_rank()} sample={dist.get_rank()} "
-        f"level={local_output.level}"
+        f"depth={local_output.depth}"
     )
 
     if dist.get_rank() == 0:

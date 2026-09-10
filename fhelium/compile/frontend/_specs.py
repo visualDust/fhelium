@@ -18,7 +18,7 @@ StaticValue = bool | int | float | complex | str | None
 class InputSpec:
     """Declare one function input's role in the PyTorch-to-FHE interface.
 
-    ``encrypted`` declares a logical slot extent, batch policy, level, and
+    ``encrypted`` declares a logical slot extent, batch policy, depth, and
     scale for a runtime Tensor or core ``Ciphertext``. ``message`` declares
     public Python/PyTorch data passed through directly until an
     plaintext-preparation operation consumes it. ``plaintext`` declares a
@@ -28,7 +28,7 @@ class InputSpec:
     """
 
     role: ValueRole
-    level: int = 0
+    depth: int = 0
     scale: float | None = None
     slots: SlotExtent = "full"
     batch_mode: BatchMode = "none"
@@ -41,7 +41,7 @@ class InputSpec:
             raise ValueError(f"Unsupported compile input role: {self.role!r}")
 
         if self.role != "encrypted" and (
-            self.level != 0
+            self.depth != 0
             or self.scale is not None
             or self.slots != "full"
             or self.batch_mode != "none"
@@ -80,10 +80,10 @@ class InputSpec:
         if self.role in ("message", "plaintext"):
             return
 
-        if isinstance(self.level, bool) or not isinstance(self.level, int):
-            raise TypeError("Encrypted input level must be an integer")
-        if self.level < 0:
-            raise ValueError("Encrypted input level must be nonnegative")
+        if isinstance(self.depth, bool) or not isinstance(self.depth, int):
+            raise TypeError("Encrypted input depth must be an integer")
+        if self.depth < 0:
+            raise ValueError("Encrypted input depth must be nonnegative")
         if self.scale is not None:
             if isinstance(self.scale, bool) or not isinstance(
                 self.scale, (int, float)
@@ -121,7 +121,7 @@ class InputSpec:
 
 def encrypted(
     *,
-    level: int = 0,
+    depth: int = 0,
     scale: float | None = None,
     slots: SlotExtent = "full",
     batch_mode: BatchMode = "none",
@@ -130,7 +130,7 @@ def encrypted(
 ) -> InputSpec:
     """Declare a secret slot input accepted as Tensor or ``Ciphertext``.
 
-    ``level`` and a non-``None`` ``scale`` define the runtime CKKS input
+    ``depth`` and a non-``None`` ``scale`` define the runtime CKKS input
     state; ``scale=None`` selects the execution Engine's default scale. ``slots``
     specifies either the engine's full capacity or a final-axis extent.
     ``batch_mode='none'`` requires a one-dimensional Tensor and an unbatched
@@ -148,7 +148,7 @@ def encrypted(
 
     return InputSpec(
         "encrypted",
-        level=level,
+        depth=depth,
         scale=scale,
         slots=slots,
         batch_mode=batch_mode,

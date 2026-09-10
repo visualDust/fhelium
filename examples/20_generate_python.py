@@ -41,18 +41,22 @@ def _load_function(
 
 
 def main() -> None:
-    config = CkksConfig.parse(Preset.slots8192_scale40_levels7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
     workspace = fh_compile.CompileWorkspace({CkksConfig: config})
     captured = fh_compile.capture(
         rotated_sum,
         inputs={
-            "x": fh_compile.encrypted(slots=_LOGICAL_SLOTS),
+            "x": fh_compile.encrypted(
+                slots=_LOGICAL_SLOTS,
+                polynomial_domain="coefficient",
+                residue_representation="standard",
+            ),
             "rotation": fh_compile.static(_ROTATION),
         },
         workspace=workspace,
     )
 
-    # Emit Eager Python from a CKKS-level Program. The emitter is a normal
+    # Emit Eager Python from a CKKS-depth Program. The emitter is a normal
     # optional pass and does not prescribe the passes before or after it.
     ckks_compilation = fh_compile.Pipeline(
         (
@@ -60,7 +64,7 @@ def main() -> None:
             fh_compile.LowerSemanticToLogicalPass(),
             fh_compile.LowerLogicalToCkksPass(),
             fh_compile.ResolveRotationKeyOperandsPass(),
-            fh_compile.AssignCkksLevelsPass(entry_level=0),
+            fh_compile.AssignCkksDepthsPass(entry_depth=0),
             fh_compile.AssignCkksScalesPass(
                 entry_scale=config.default_scale,
             ),
@@ -106,7 +110,7 @@ def main() -> None:
     encrypted_x = engine.encrypt_message(
         clear_x,
         public_key,
-        level=0,
+        depth=0,
         scale=config.default_scale,
         device="cpu",
     )
@@ -120,8 +124,14 @@ def main() -> None:
     )
     assert isinstance(eager_result, Ciphertext)
 
-    chain = RnsChain(config.num_q_primes, config.num_p_primes)
-    layout = RnsLayout(chain, HybridRnsDecomposition(chain))
+    chain = RnsChain(
+        config.num_q_primes,
+        config.num_p_primes,
+        tuple(len(group) for group in config.q_depth_groups),
+    )
+    layout = RnsLayout(
+        chain, HybridRnsDecomposition(chain, config.q_moduli, config.p_moduli)
+    )
     materializer = CkksDeviceResources(
         config=config,
         rns_layout=layout,

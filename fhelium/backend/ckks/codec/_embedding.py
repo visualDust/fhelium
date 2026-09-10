@@ -234,7 +234,7 @@ def encode_slots(
         device=device,
         generator=generator,
     )
-    return rng.randround(coefficients * float(scale))
+    return rng.randround(coefficients * float(scale), dtype=torch.int64)
 
 
 def decode_slots(

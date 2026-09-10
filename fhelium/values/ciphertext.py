@@ -16,7 +16,7 @@ from fhelium.values.state import (
 from fhelium.values.tensor_resident import TensorResident
 from fhelium.values._validation import (
     validate_integral_tensor,
-    validate_nonnegative_level,
+    validate_nonnegative_depth,
     validate_prime_ids,
 )
 
@@ -41,7 +41,7 @@ class Ciphertext(TensorResident):
     NTT domain with Montgomery residues. ``scale`` is the positive finite
     actual scale $\Delta(c)$.
 
-    Every member of ``batch_shape`` shares the same level, scale, component
+    Every member of ``batch_shape`` shares the same depth, scale, component
     count, domain, basis, residue form, and ordered ``prime_ids``.
     Direct construction retains the input dtype, device, and storage; engine
     operations additionally require the engine's configured integral dtype,
@@ -55,7 +55,7 @@ class Ciphertext(TensorResident):
     """
 
     data: torch.Tensor
-    level: int
+    depth: int
     scale: float
     prime_ids: tuple[int, ...]
     polynomial_domain: PolynomialDomain = "coefficient"
@@ -64,8 +64,8 @@ class Ciphertext(TensorResident):
 
     def __post_init__(self) -> None:
         self.scale = coerce_scale(self.scale, value_name="Ciphertext")
-        self.level = validate_nonnegative_level(
-            self.level, value_name="Ciphertext"
+        self.depth = validate_nonnegative_depth(
+            self.depth, value_name="Ciphertext"
         )
         self.data = validate_integral_tensor(self.data, value_name="Ciphertext")
         self.prime_ids = validate_prime_ids(
@@ -226,7 +226,7 @@ class Ciphertext(TensorResident):
 
         return Ciphertext(
             data=data,
-            level=self.level,
+            depth=self.depth,
             scale=self.scale,
             prime_ids=self.prime_ids,
             polynomial_domain=self.polynomial_domain,
@@ -239,7 +239,7 @@ class Ciphertext(TensorResident):
         cls,
         *,
         data: torch.Tensor,
-        level: int,
+        depth: int,
         scale: float,
         prime_ids: tuple[int, ...],
         polynomial_domain: PolynomialDomain,
@@ -250,7 +250,7 @@ class Ciphertext(TensorResident):
 
         result: Self = object.__new__(cls)
         result.data = data
-        result.level = level
+        result.depth = depth
         result.scale = scale
         result.prime_ids = prime_ids
         result.polynomial_domain = polynomial_domain
@@ -283,7 +283,7 @@ class Ciphertext(TensorResident):
             )
         return Ciphertext(
             data=self.data[..., start:stop, :],
-            level=self.level,
+            depth=self.depth,
             scale=self.scale,
             prime_ids=self.prime_ids[start:stop],
             polynomial_domain=self.polynomial_domain,
@@ -312,7 +312,7 @@ class Ciphertext(TensorResident):
             )
         first = values[0]
         metadata = (
-            "level",
+            "depth",
             "scale",
             "prime_ids",
             "polynomial_domain",
@@ -378,7 +378,7 @@ class Ciphertext(TensorResident):
         """
 
         self.data = other.data
-        self.level = other.level
+        self.depth = other.depth
         self.scale = other.scale
         self.prime_ids = other.prime_ids
         self.polynomial_domain = other.polynomial_domain
@@ -389,7 +389,7 @@ class Ciphertext(TensorResident):
     def __str__(self) -> str:
         return (
             "Ciphertext("
-            f"level={self.level}, scale={self.scale}, polynomial_domain={self.polynomial_domain!r}, "
+            f"depth={self.depth}, scale={self.scale}, polynomial_domain={self.polynomial_domain!r}, "
             f"modulus_basis={self.modulus_basis!r}, components={self.component_count}, "
             f"batch_shape={tuple(self.batch_shape)}, "
             f"prime_ids={self.prime_ids}, shape={tuple(self.data.shape)})"

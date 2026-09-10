@@ -34,6 +34,7 @@ from xdsl.irdl import (
     opt_attr_def,
     result_def,
     traits_def,
+    var_operand_def,
 )
 from xdsl.traits import Pure
 from xdsl.utils.exceptions import VerifyException
@@ -63,14 +64,14 @@ class RnsParametersType(OpenStateType):
 
 @irdl_attr_definition
 class RescalePlanType(OpenStateType):
-    """Level-specific dropped-prime, inverse, and surviving-row resources."""
+    """Depth-specific dropped-prime, inverse, and surviving-row resources."""
 
     name = "fhelium_rns.rescale_plan"
 
 
 @irdl_attr_definition
 class KeySwitchPlanType(OpenStateType):
-    """Level-specialized hybrid decomposition and ModUp/ModDown resources."""
+    """Depth-specialized hybrid decomposition and ModUp/ModDown resources."""
 
     name = "fhelium_rns.key_switch_plan"
 
@@ -90,7 +91,7 @@ class AddStandardOp(IRDLOperation):
     prime $q_i$.  For every component, coefficient, and row, this operation
     computes $z_i=(x_i+y_i)\bmod q_i$.  Both operands use the same Q or QP
     prime rows and store values in the standard range $[0,q_i)$.  Component
-    shape, level, basis, polynomial domain, Montgomery factor, and scale are
+    shape, depth, basis, polynomial domain, Montgomery factor, and scale are
     unchanged."""
 
     name = "fhelium_rns.add_standard"
@@ -122,7 +123,7 @@ class SubtractStandardOp(IRDLOperation):
 
     For each active prime $q_i$, component, and coefficient, the result is
     $z_i=(x_i-y_i)\bmod q_i$.  The operation preserves component shape, prime
-    rows, level, modulus basis, polynomial domain, and scale."""
+    rows, depth, modulus basis, polynomial domain, and scale."""
 
     name = "fhelium_rns.subtract_standard"
     lhs = operand_def(RnsBundleType)
@@ -202,7 +203,7 @@ class AddPlaintextOp(_CiphertextPlaintextOp):
     $c'_j=c_j$ for $j>0$. With coefficient/standard ciphertext input, the
     prepared plaintext uses coefficient-domain Montgomery residues and the
     operation returns standard residues. With NTT/Montgomery input, both
-    operands and the result remain NTT/Montgomery. Level, component count, and
+    operands and the result remain NTT/Montgomery. Depth, component count, and
     ciphertext scale are preserved."""
 
     name = "fhelium_rns.add_plaintext"
@@ -219,31 +220,138 @@ class MultiplyPlaintextOp(_CiphertextPlaintextOp):
     prime rows.  For each component $j$, prime $q_i$, and transform index
     $k$, Montgomery multiplication computes
     $c'_{j,i,k}=c_{j,i,k}p_{i,k}R_i^{-1}\bmod q_i$.  Thus the polynomial
-    meaning is $c'_j=c_jp$ in $R_{q_i}$.  Component count and level remain;
+    meaning is $c'_j=c_jp$ in $R_{q_i}$.  Component count and depth remain;
     the CKKS result scale is the product of operand scales."""
 
     name = "fhelium_rns.multiply_plaintext"
 
 
 @irdl_op_definition
-class RescaleDropLeadingPrimeOp(IRDLOperation):
-    r"""Divide, round, and remove the leading active Q prime.
+class MontgomeryWeightedSumOp(IRDLOperation):
+    r"""Sum ciphertext/plaintext products in NTT/Montgomery representation.
 
-    Let $q_d$ be the first active Q prime, $d=x\bmod q_d$ in
-    $[0,q_d)$, and $x_i=x\bmod q_i$ for a surviving prime.  Truncating
-    quotient uses $t=d$; nearest quotient uses $t=d-q_d$ when
-    $d>q_d/2$, otherwise $t=d$.  Each surviving row is
-    $y_i=(x_i-t)q_d^{-1}\bmod q_i$, representing the selected rounded
-    quotient of $x/q_d$.  The $q_d$ row is removed, the public level advances
-    by one, and actual scale $\Delta$ becomes $\Delta/q_d$. Component count
-    is preserved. Coefficient/standard input returns coefficient/standard
-    output. NTT/Montgomery input inverts only the dropped row for rounding and
-    retains the surviving rows in NTT/Montgomery form."""
+    For $T$ ciphertext bundles $c_t$ followed by $T$ plaintext bundles $p_t$,
+    each component, batch element, active-prime row, and NTT index computes
 
-    name = "fhelium_rns.rescale_drop_leading_prime"
+    $$
+    y=\sum_{t=0}^{T-1}c_tp_t\pmod {q_i}.
+    $$
+
+    Every term uses the same component and batch shape, depth, prime rows,
+    ciphertext scale, and plaintext scale.  ``term_count`` separates the two
+    equal operand ranges.  The result keeps the ciphertext shape, depth, and
+    NTT/Montgomery representation; its CKKS scale is the product of the common
+    ciphertext and plaintext scales.  The operation chooses no grouping,
+    platform, kernel, or execution schedule.
+    """
+
+    name = "fhelium_rns.montgomery_weighted_sum"
+    parameters = operand_def(RnsParametersType)
+    terms = var_operand_def(RnsBundleType)
+    result = result_def(RnsBundleType)
+    term_count = attr_def(IntegerAttr)
+    traits = traits_def(Pure())
+
+    def __init__(
+        self,
+        parameters: SSAValue | Operation,
+        ciphertexts: tuple[SSAValue | Operation, ...],
+        plaintexts: tuple[SSAValue | Operation, ...],
+        result_type: Attribute,
+    ) -> None:
+        super().__init__(
+            operands=(parameters, (*ciphertexts, *plaintexts)),
+            result_types=[result_type],
+            attributes={"term_count": IntegerAttr(len(ciphertexts), 64)},
+        )
+
+    def verify_(self) -> None:
+        count = int(self.term_count.value.data)
+        if count <= 0 or len(self.terms) != 2 * count:
+            raise VerifyException(
+                "RNS Montgomery weighted sum requires equally sized, "
+                "non-empty ciphertext and plaintext operand ranges"
+            )
+
+
+@irdl_op_definition
+class MontgomeryWeightedSumsOp(IRDLOperation):
+    r"""Apply a dense plaintext matrix to shared ciphertext terms.
+
+    For $T$ ciphertext bundles $c_t$ and $G T$ plaintext bundles $p_{g,t}$,
+    the operation returns $G$ independent bundles
+
+    $$
+    y_g=\sum_{t=0}^{T-1}c_t p_{g,t}\pmod {q_i}.
+    $$
+
+    Operands after ``parameters`` contain the $T$ ciphertexts followed by the
+    group-major plaintext matrix. Every ciphertext has one NTT/Montgomery
+    component, batch, depth, and prime-row layout; every plaintext has the
+    matching row and batch layout and one common scale. The results keep the
+    ciphertext state and have scale $\Delta_c\Delta_p$. ``term_count`` and
+    ``group_count`` describe the supplied matrix; the operation does not
+    choose its groups, platform, kernel, or execution schedule.
+    """
+
+    name = "fhelium_rns.montgomery_weighted_sums"
+    parameters = operand_def(RnsParametersType)
+    terms = var_operand_def(RnsBundleType)
+    result = result_def(RnsBundleType)
+    term_count = attr_def(IntegerAttr)
+    group_count = attr_def(IntegerAttr)
+    traits = traits_def(Pure())
+
+    def __init__(
+        self,
+        parameters: SSAValue | Operation,
+        ciphertexts: tuple[SSAValue | Operation, ...],
+        plaintexts: tuple[SSAValue | Operation, ...],
+        result_type: Attribute,
+        *,
+        group_count: int,
+    ) -> None:
+        super().__init__(
+            operands=(parameters, (*ciphertexts, *plaintexts)),
+            result_types=[result_type],
+            attributes={
+                "term_count": IntegerAttr(len(ciphertexts), 64),
+                "group_count": IntegerAttr(group_count, 64),
+            },
+        )
+
+    def verify_(self) -> None:
+        term_count = int(self.term_count.value.data)
+        group_count = int(self.group_count.value.data)
+        if term_count <= 0 or group_count <= 0:
+            raise VerifyException(
+                "RNS weighted sums require positive term and group counts"
+            )
+        if len(self.terms) != term_count * (group_count + 1):
+            raise VerifyException(
+                "RNS weighted-sums operands must contain term_count "
+                "ciphertexts followed by group_count * term_count plaintexts"
+            )
+
+
+@irdl_op_definition
+class RescaleDropLeadingPrimesOp(IRDLOperation):
+    r"""Divide-round by the product of a leading prime group and remove its rows.
+
+    For the first ``drop_count`` primes, let $M$ be their product and
+    $r=x\bmod M$ in $[0,M)$. Floor quotient uses $t=r$; nearest quotient
+    uses $t=r-M$ when $r>M/2$, otherwise $t=r$. Each surviving row is
+    $y_i=(x_i-t)M^{-1}\bmod q_i$. Component count and polynomial domain
+    are preserved. NTT/Montgomery input may retain surviving evaluations
+    while constructing the rounded coefficient correction from dropped rows.
+    The caller supplies resulting CKKS depth and scale; this RNS operation
+    describes a row-group quotient, not a count of CKKS transitions."""
+
+    name = "fhelium_rns.rescale_drop_leading_primes"
     value = operand_def(RnsBundleType)
     plan = operand_def(RescalePlanType)
     result = result_def(RnsBundleType)
+    drop_count = attr_def(IntegerAttr, default_value=IntegerAttr(1, 64))
     rounding = opt_attr_def(StringAttr)
     input_domain = attr_def(StringAttr, default_value=StringAttr("coefficient"))
     output_domain = attr_def(
@@ -257,11 +365,13 @@ class RescaleDropLeadingPrimeOp(IRDLOperation):
         plan: SSAValue | Operation,
         result_type: Attribute,
         *,
+        drop_count: int = 1,
         rounding: str | StringAttr = "nearest",
         polynomial_domain: Literal["coefficient", "ntt"] = "coefficient",
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         attrs: dict[str, Attribute | None] = dict(attributes or {})
+        attrs["drop_count"] = IntegerAttr(drop_count, 64)
         attrs["rounding"] = (
             StringAttr(rounding) if isinstance(rounding, str) else rounding
         )
@@ -276,6 +386,8 @@ class RescaleDropLeadingPrimeOp(IRDLOperation):
     def verify_(self) -> None:
         """Accept only the represented CKKS quotient-rounding rules."""
 
+        if self.drop_count.value.data < 1:
+            raise VerifyException("RNS rescale drop_count must be positive")
         if self.rounding is not None and self.rounding.data not in {
             "nearest",
             "floor",
@@ -298,7 +410,7 @@ class ExtractComponentOp(IRDLOperation):
 
     For an RNS bundle $(c_0,\ldots,c_{k-1})$, ``component=j`` returns $c_j$
     with the same coefficient values, active prime rows, polynomial domain,
-    Montgomery state, level, and scale."""
+    Montgomery state, depth, and scale."""
 
     name = "fhelium_rns.extract_component"
     value = operand_def(RnsBundleType)
@@ -469,7 +581,7 @@ class KeySwitchDigitProductOp(IRDLOperation):
     has two components
     $(d k_{d,0},d k_{d,1})$ in every active QP prime row.  Products use
     Montgomery pointwise multiplication and remain NTT/Montgomery.  The operation
-    forms one summand of hybrid key switching and leaves CKKS level and scale
+    forms one summand of hybrid key switching and leaves CKKS depth and scale
     unchanged."""
 
     name = "fhelium_rns.key_switch_digit_product"
@@ -517,7 +629,7 @@ class AddMontgomeryLazyOp(IRDLOperation):
     For each active prime $q_i$ or $p_i$, the represented result is
     $z=x+y\pmod {q_i}$ while storage may remain in the implementation's lazy
     range, currently bounded modulo $2q_i$.  Polynomial domain, Montgomery
-    factor, prime rows, component axes, level, and scale are preserved."""
+    factor, prime rows, component axes, depth, and scale are preserved."""
 
     name = "fhelium_rns.add_montgomery_lazy"
     lhs = operand_def(RnsBundleType)
@@ -550,7 +662,7 @@ class ModDownQpToQOp(IRDLOperation):
     $(x_i-d)p_d^{-1}\bmod p_i$.  Repeating this residue-algebra division removes
     all P rows and returns active-Q residues.  This is the ModDown stage of hybrid
     key switching; key construction supplies the factor P, so CKKS message scale
-    and level do not change."""
+    and depth do not change."""
 
     name = "fhelium_rns.moddown_qp_to_q"
     value = operand_def(RnsBundleType)
@@ -618,7 +730,7 @@ class CoefficientAutomorphismOp(IRDLOperation):
     $X\mapsto X^g$ in $R_q=\mathbb{Z}_q[X]/(X^N+1)$.  A coefficient
     $a_jX^j$ moves to index $gj\bmod N$ and changes sign when reduction of
     $gj$ modulo $2N$ crosses $N$.  The same permutation is applied to
-    every component and prime row.  Level, scale, basis, and residue form remain
+    every component and prime row.  Depth, scale, basis, and residue form remain
     unchanged."""
 
     name = "fhelium_rns.coefficient_automorphism"
@@ -677,7 +789,7 @@ class StandardToMontgomeryOp(_ResidueConversionOp):
 
     For every active prime $q_i$ and stored residue $x_i$, the result is
     $x_iR_i\bmod q_i$, where $R_i$ is the Montgomery radix.  Polynomial
-    coefficients, prime rows, level, basis, and CKKS scale otherwise do not
+    coefficients, prime rows, depth, basis, and CKKS scale otherwise do not
     change."""
 
     name = "fhelium_rns.standard_to_montgomery"
@@ -689,25 +801,25 @@ class MontgomeryToStandardOp(_ResidueConversionOp):
 
     For every active prime $q_i$, the operation maps stored
     $x_iR_i\bmod q_i$ to $x_i\bmod q_i$ by Montgomery reduction.  Polynomial
-    coefficients, prime rows, level, basis, and CKKS scale are preserved."""
+    coefficients, prime rows, depth, basis, and CKKS scale are preserved."""
 
     name = "fhelium_rns.montgomery_to_standard"
 
 
 @irdl_op_definition
-class RestrictLevelOp(IRDLOperation):
-    r"""Select the suffix of prime rows belonging to a later level.
+class RestrictDepthOp(IRDLOperation):
+    r"""Select the suffix of prime rows belonging to a later depth.
 
-    If level $\ell$ uses active rows $(q_\ell,\ldots,q_L)$, restriction to
+    If depth $\ell$ uses active rows $(q_\ell,\ldots,q_L)$, restriction to
     $t\ge\ell$ discards $(q_\ell,\ldots,q_{t-1})$ and copies the remaining
     rows.  No division or rounding occurs, so the actual scale and every surviving
     residue are unchanged.  P rows remain when the modulus basis is QP."""
 
-    name = "fhelium_rns.restrict_level"
+    name = "fhelium_rns.restrict_depth"
     value = operand_def(RnsBundleType)
     parameters = operand_def(RnsParametersType)
     result = result_def(RnsBundleType)
-    target_level = attr_def(IntegerAttr)
+    target_depth = attr_def(IntegerAttr)
     traits = traits_def(Pure())
 
     def __init__(
@@ -716,16 +828,16 @@ class RestrictLevelOp(IRDLOperation):
         parameters: SSAValue | Operation,
         result_type: Attribute,
         *,
-        target_level: int | IntegerAttr,
+        target_depth: int | IntegerAttr,
     ) -> None:
         super().__init__(
             operands=[value, parameters],
             result_types=[result_type],
             attributes={
-                "target_level": (
-                    IntegerAttr(target_level, 64)
-                    if isinstance(target_level, int)
-                    else target_level
+                "target_depth": (
+                    IntegerAttr(target_depth, 64)
+                    if isinstance(target_depth, int)
+                    else target_depth
                 )
             },
         )
@@ -738,7 +850,7 @@ class ReinterpretScaleOp(IRDLOperation):
     The result refers to the same residue classes and polynomial representation
     but records the supplied actual scale $\Delta'$.  Consequently decoding
     interprets the represented coefficients as $x/\Delta'$ rather than
-    $x/\Delta$; no modular arithmetic, row selection, or level transition is
+    $x/\Delta$; no modular arithmetic, row selection, or depth transition is
     performed."""
 
     name = "fhelium_rns.reinterpret_scale"
@@ -772,7 +884,9 @@ _RNS_OPERATION_TYPES = (
     NegateStandardOp,
     AddPlaintextOp,
     MultiplyPlaintextOp,
-    RescaleDropLeadingPrimeOp,
+    MontgomeryWeightedSumOp,
+    MontgomeryWeightedSumsOp,
+    RescaleDropLeadingPrimesOp,
     ExtractComponentOp,
     PackTwoComponentsOp,
     PackThreeComponentsOp,
@@ -785,13 +899,16 @@ _RNS_OPERATION_TYPES = (
     CoefficientAutomorphismOp,
     StandardToMontgomeryOp,
     MontgomeryToStandardOp,
-    RestrictLevelOp,
+    RestrictDepthOp,
     ReinterpretScaleOp,
 )
 
 _RNS_ATTRIBUTES: dict[type[Operation], tuple[str, ...]] = {
     AddPlaintextOp: ("polynomial_domain",),
-    RescaleDropLeadingPrimeOp: (
+    MontgomeryWeightedSumOp: ("term_count",),
+    MontgomeryWeightedSumsOp: ("term_count", "group_count"),
+    RescaleDropLeadingPrimesOp: (
+        "drop_count",
         "rounding",
         "input_domain",
         "output_domain",
@@ -800,7 +917,7 @@ _RNS_ATTRIBUTES: dict[type[Operation], tuple[str, ...]] = {
     HybridModUpDigitOp: ("digit_index",),
     KeySwitchDigitProductOp: ("key_digit_index",),
     CoefficientAutomorphismOp: ("galois_element",),
-    RestrictLevelOp: ("target_level",),
+    RestrictDepthOp: ("target_depth",),
     ReinterpretScaleOp: ("scale",),
 }
 
@@ -850,15 +967,17 @@ __all__ = [
     "ModDownNttQpToQOp",
     "MontgomeryToStandardOp",
     "MontgomeryMultiplyOp",
+    "MontgomeryWeightedSumOp",
+    "MontgomeryWeightedSumsOp",
     "MultiplyPlaintextOp",
     "OPERATION_SPECS",
     "PackTwoComponentsOp",
     "PackThreeComponentsOp",
     "SubtractStandardOp",
     "FHEliumRns",
-    "RescaleDropLeadingPrimeOp",
+    "RescaleDropLeadingPrimesOp",
     "RescalePlanType",
-    "RestrictLevelOp",
+    "RestrictDepthOp",
     "ReinterpretScaleOp",
     "RnsBundleType",
     "RnsParametersType",

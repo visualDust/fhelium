@@ -61,10 +61,10 @@ flowchart LR
     PT --> M1
 ```
 
-The output scale is multiplied, but level is unchanged until a rescale. `multiply_plaintext` does not perform hidden forward or inverse NTTs;
+The output scale is multiplied, but depth is unchanged until a rescale. `multiply_plaintext` does not perform hidden forward or inverse NTTs;
 the caller or JIT places transitions around a multiplication region. Compatible
 products may be added in NTT form and converted to coefficient-domain standard
-residues once before rescale. Prepared plaintext reuse must match level, scale,
+residues once before rescale. Prepared plaintext reuse must match depth, scale,
 basis, prime IDs, domain, and residue representation exactly.
 
 ## Ciphertext multiplication
@@ -126,19 +126,20 @@ Each stage has distinct row, basis, and representation requirements. Fusing stag
 be useful, but a fused operator must preserve the same observable state and
 residue-range assumptions.
 
-## Hybrid digits across levels
+## Hybrid digits across depths
 
-All Q primes, including the base prime, are partitioned into contiguous digits
-of at most `num_p_primes` rows. The base prime can share the last digit with scale
-primes. At later levels, an active digit can become shorter or disappear.
+All Q primes, including the terminal group, are partitioned into contiguous
+digits by their products. Each digit takes the longest next Q prefix whose
+product is below the special modulus P; a single prime at or above P occupies
+its own digit. At later depths, consumed Q groups shorten or remove digits.
 
 ```mermaid
 graph LR
-    subgraph L0[level 0]
+    subgraph L0[depth 0]
       D0[q0 q1 q2 q3]
       D1[q4 q5 q6 q_base]
     end
-    subgraph L2[later level]
+    subgraph L2[later depth]
       E0[q2 q3]
       E1[q4 q5 q6 q_base]
     end
@@ -146,14 +147,13 @@ graph LR
     D1 --> E1
 ```
 
-`RnsDigitSpec` keeps both the active digit index and stable level-zero
+`RnsDigitSpec` keeps both the active digit index and stable depth-zero
 `key_digit_index` used to select the correct evaluation-key axis. A local digit
 index is not necessarily the key tensor index.
 
-The partition determines evaluation-key storage. Keys generated with the former
-separate-base partition must be regenerated when the partition changes; their
-digit axes cannot be reused with the new decomposition. Q/P primes, ciphertext
-level and message scale are unchanged by this layout change.
+The partition determines the evaluation key's digit axis. Key generation,
+Compile lowering, and execution derive that axis from the same decomposition.
+Changing the partition requires regenerating the key.
 
 ## Rotation and hoisting
 
@@ -188,7 +188,7 @@ key's row order nor the destination accumulator order.
 `Engine.rotate_many_with_keys(..., output_domain="ntt")`, `relinearize`,
 `switch_key`, `conjugate`, and the corresponding CKKS operation attributes
 request NTT/Montgomery outputs. The default remains coefficient/standard. Both
-choices preserve Q rows, level and actual scale.
+choices preserve Q rows, depth and actual scale.
 
 The logical `rns.ModDownNttQpToQOp` removes P without inverting the Q rows. For
 QP NTT data $\widehat{x}$, let $r\in[0,P)$ be the coefficient representative
@@ -231,30 +231,32 @@ implementation, with the same CKKS operation semantics.
 
 ## Rescale
 
-For leading active prime $q_l$:
+For the leading active Q depth group $G_l$, let
+$M_l=\prod_{q\in G_l}q$:
 
 $$
-c'\approx\operatorname{round}(c/q_l)\pmod{Q_{l+1}}.
+c'\approx\operatorname{round}(c/M_l)\pmod{Q_{l+1}}.
 $$
 
 ```mermaid
 flowchart LR
     IN[Q_l residue rows]
-    DROP[select dropped leading row]
+    DROP[select dropped Q-group rows]
     ROUND[nearest/truncate correction]
-    INV[multiply inverse of q_l modulo remaining primes]
+    INV[multiply inverse of M_l modulo remaining primes]
     OUT[remaining rows in Q_l+1]
     IN --> DROP --> ROUND --> INV --> OUT
 ```
 
-The implementation must select constants using configured prime identity, not
-an ambiguous compact row position. Output metadata must increase level, remove
-the dropped prime ID, reduce row count, and update scale.
+The implementation must select constants using configured prime identities, not
+an ambiguous compact row position. Output metadata must increase depth, remove
+all IDs in the dropped group, reduce row count by that group's size, and update
+scale by $M_l$.
 
 NTT/Montgomery input can remain in that representation. The implementation
 inverts only the dropped row to obtain the rounding value, forms the quotient
 correction on surviving Q rows, transforms that correction, and adds it to the
-surviving evaluations multiplied by $q_l^{-1}$. This is congruent to
+surviving evaluations multiplied by $M_l^{-1}$. This is congruent to
 coefficient rescale followed by a forward NTT without inverting the surviving
 input rows.
 
@@ -277,8 +279,8 @@ For a change in these paths, cover:
 
 ```text
 fresh single operation
-chained operation across several levels
-level 0 / middle / last legal level
+chained operation across several depths
+depth 0 / middle / maximum depth
 single-row digit and shortened digit
 Q / QP
 2 / 3 components
@@ -294,7 +296,7 @@ incorrect stage.
 
 ## Continue
 
-- [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md)
+- [Scale and depth lifecycle](../concepts/ckks/scale-and-depth-lifecycle.md)
 - [RNS and NTT architecture](rns-and-ntt.md)
 - [Native operator workflow](native-operator-workflow.md)
 - [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)

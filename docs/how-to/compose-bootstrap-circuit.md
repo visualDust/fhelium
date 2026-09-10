@@ -47,7 +47,7 @@ bootstrap = bs.FullSlotBootstrap(
     modular_reduction=modular_reduction,
     slots_to_coeffs_compiler=compiler,
     slots_to_coeffs_evaluator=linear_evaluator,
-    modulus_raise_target_level=0,
+    modulus_raise_target_depth=0,
     retain_diagonals=False,
 )
 ```
@@ -55,17 +55,17 @@ bootstrap = bs.FullSlotBootstrap(
 Before using this object, establish all of the following:
 
 1. the input is a two-component coefficient-domain standard-RNS Q ciphertext
-   at the final public level and actual scale near `default_scale` or its square;
+   at `bootstrap.input_depth`, with input precision suitable for the circuit;
 2. every batch member uses all $S=N/2$ slots and the active `prime_ids`;
 3. both raw branch coordinates lie within `[-input_bound, input_bound]`;
 4. the selected polynomial degree and evaluator meet the application's error
    model;
-5. the modulus chain accommodates `bootstrap.output_level`;
-6. the supplied `RotationKeySet` contains the reported rotations, and compatible
-   relinearization and conjugation keys are supplied separately.
+5. the modulus chain accommodates `bootstrap.output_depth`;
+6. the supplied `EvaluationKeySet` contains the reported rotations and the
+   compatible relinearization and conjugation capabilities.
 
 Construction checks structural-base/default-scale proximity, transform slot
-counts, target level, and depth. It cannot inspect the encrypted coordinate
+counts, target depth, and depth. It cannot inspect the encrypted coordinate
 range or certify an application error bound.
 
 ## Replace BSGS with direct evaluation
@@ -92,12 +92,17 @@ L(x)=\sum_kd_k\mathbin{\odot}\operatorname{Rot}_k(x),
 $$
 
 BSGS splits $k=g+b$ and moves the final giant rotation outside each group. This
-is algebraically equivalent to direct evaluation. Both consume one Q level per
-stage and use
+is algebraically equivalent to direct evaluation. Both consume one Q depth per
+stage. If the input scale is $\Delta_{\rm in}$ and the evaluator prepares the
+diagonal at scale $\Delta_p$, the dropped Q group has product $M_d$, and the
+stage uses
 
-$$
-\Delta_{\rm out}=\Delta_{\rm in}\Delta_0/q_{\rm drop}.
-$$
+$
+\Delta_{\rm out}=\frac{\Delta_{\rm in}\Delta_p}{M_d}.
+$
+
+`BootstrapArithmetic` selects $\Delta_p$ from the circuit's target schedule;
+it is not necessarily `config.default_scale`.
 
 They can differ in rotation inventory, operation ordering, memory use, and CKKS
 rounding, so compare decoded semantics rather than requiring bitwise residues.
@@ -125,7 +130,7 @@ bootstrap = bs.FullSlotBootstrap(
 The exponential component stores ascending power coefficients
 $a_n=(i\pi)^n/n!$, squares $\log_2 B$ times, and extracts sine by conjugation.
 It has its own depth and key needs. The constructor computes the resulting
-output level from the selected components.
+output depth from the selected components.
 
 ## Respect polynomial basis conventions
 
@@ -137,18 +142,31 @@ output level from the selected components.
 For an approximation designed on physical $[a,b]$, the stored coefficient
 coordinate is $x=(2t-a-b)/(b-a)$. `evaluate_plaintext()` and homomorphic
 evaluators do not insert this affine map. Apply the input normalization and
-include the resulting level cost in the component's declared level budget.
+include the resulting depth cost in the component's declared depth budget.
+
+Polynomial evaluators derive their basis scale recurrence from the input's
+actual scale. This preserves the polynomial's coefficients and does not
+require guessing a full-slot stage's target scale. For a high-degree
+polynomial, inspect `arithmetic.for_input(value, depths).target_scales` when
+planning precision. If the resulting scalar plaintexts cannot fit the integer
+encoding range, prepare the value with `arithmetic.advance_depth(value)` and
+include that real transition in the depth budget; evaluation does not add it
+silently.
 
 ## Change the complete topology
 
-A complete custom algorithm is a Python callable. It can invoke
-`fhelium.eager.Engine`, component `evaluate()` methods, and application-specific code in
-any order:
+A complete custom algorithm is a Python callable. `BootstrapArithmetic` owns
+one Engine plus the prepared-constant cache used by Bootstrap's depth-dependent
+multiplication, depth advancement, and scalar operations. Pass that owner to
+component `evaluate()` methods so nested reduction and polynomial schedules
+share the same material lifecycle. Application code may interleave these
+components with ordinary Engine operations in any order:
 
 ```python
 class MyBootstrap:
     def __init__(self, engine, reduction):
         self.engine = engine
+        self.arithmetic = bs.BootstrapArithmetic(engine)
         self.reduction = reduction
 
     def __call__(
@@ -172,7 +190,7 @@ class MyBootstrap:
         )
         reduced = [
             self.reduction.evaluate(
-                self.engine,
+                self.arithmetic,
                 my_normalize_raw_coordinate(branch),
                 relinearization_key=relinearization_key,
             )
@@ -185,7 +203,7 @@ class MyBootstrap:
         )
 ```
 
-Document the custom callable's tensor axes, level/scale/domain/basis
+Document the custom callable's tensor axes, depth/scale/domain/basis
 transitions, raw range, normalization owner, and output target. Ordinary
 dictionaries or tensors can hold caches; runtime value serialization and artifact
 facilities remain available for persistence.
@@ -221,15 +239,13 @@ rotation inventory.
 ## Use the versioned factories correctly
 
 The experimental `logn16` factory names identify documented bootstrap
-configurations rather than runtime validators. Their measured end-to-end setup
-is:
+configurations rather than runtime validators. Their documented setup is:
 
 ```python
 from fhelium.eager import Engine
 
 config = fh.CkksConfig.parse(
-    fh.Preset.slots32768_scale50_levels27_int64,
-    base_prime_bits=50,
+    fh.Preset.slots32768_scale50_depth27_int64,
     galois_generator=5,
 )
 engine = Engine(config)

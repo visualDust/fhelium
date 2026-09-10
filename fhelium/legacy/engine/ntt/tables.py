@@ -111,7 +111,7 @@ def prepare_ntt_tables(
 ) -> NttTables:
     """Build a plan and return separately allocated backend table tensors.
 
-    Prime rows follow the config's level-zero QP order.
+    Prime rows follow the config's depth-zero QP order.
     Returned tensors use ``ckks_config.torch_dtype`` on ``device`` and remain
     in standard representation until ``RnsRuntime`` converts them in place.
     """

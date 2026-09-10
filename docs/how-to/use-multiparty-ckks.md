@@ -49,9 +49,9 @@ epoch_id                 application-defined unique label
 party_ids                ordered set of cryptographic party identities
 ckks_config              engine.config.dumps()
 ring_dimension           engine.config.N
-q_prime_ids              engine.level0_qp_prime_ids[:engine.config.num_q_primes]
-qp_prime_ids             engine.level0_qp_prime_ids
-engine_dtype              engine.config.torch_dtype
+q_prime_ids              engine.depth0_qp_prime_ids[:engine.config.num_q_primes]
+qp_prime_ids             engine.depth0_qp_prime_ids
+engine_dtype              engine.dtype
 key_digit_count          engine.key_digit_count
 galois_generator         engine.galois_generator
 ```
@@ -77,7 +77,7 @@ This envelope is application metadata. Its presence alone supplies no authentica
 
 | Role | Responsibility |
 | --- | --- |
-| Party | Holds one process-local level-zero QP secret share $s_i$ and any request-local RKG ephemeral $u_i$ |
+| Party | Holds one process-local depth-zero QP secret share $s_i$ and any request-local RKG ephemeral $u_i$ |
 | Aggregator | Collects exactly one accepted message per party and invokes the matching `aggregate_*` function |
 | Evaluator | Uses collective public/evaluation keys and ciphertexts with `fhelium.eager.Engine` |
 | Fusion recipient | Collects Protocol-3 shares, fuses them to `Plaintext`, and obtains the decoded result |
@@ -91,14 +91,14 @@ Let:
 
 - $N$ be `engine.config.N`;
 - $L_Q$ be `engine.config.num_q_primes`;
-- $L_{QP}$ be `len(engine.level0_qp_prime_ids)`;
+- $L_{QP}$ be `len(engine.depth0_qp_prime_ids)`;
 - $D$ be `engine.key_digit_count`;
 - $B$ be `tuple(ciphertext.batch_shape)`; and
-- $L_\ell$ be `ciphertext.limb_count` at its current level.
+- $L_\ell$ be `ciphertext.limb_count` at its current depth.
 
 | Object or message | Required state and shape |
 | --- | --- |
-| Party $s_i$; RKG $u_i$ | Core `SecretKey`, complete level-zero QP, NTT/Montgomery, `[L_QP, N]`, matching caller-selected parameters, dtype, and device |
+| Party $s_i$; RKG $u_i$ | Core `SecretKey`, complete depth-zero QP, NTT/Montgomery, `[L_QP, N]`, matching caller-selected parameters, dtype, and device |
 | CKG common $a$ | Contiguous engine-integral tensor `[L_Q, N]` from `sample_common_uniform(basis="Q")` |
 | CKG share | Raw Q NTT/Montgomery tensor `[L_Q, N]` |
 | Collective public key | Core Q `PublicKey` with data `[2, L_Q, N]` |
@@ -314,7 +314,7 @@ left = engine.coefficient_domain_to_ntt_domain(ciphertext)
 right = engine.coefficient_domain_to_ntt_domain(ciphertext)
 product = engine.multiply(left, right)
 relinearized = engine.relinearize(product, relinearization_key)
-squared = engine.rescale_to_next_level(relinearized)
+squared = engine.rescale_to_next_depth(relinearized)
 ```
 
 Both secret-dependent output functions require a two-component coefficient-domain, standard-residue Q ciphertext. Relinearize a three-component multiplication result before opening an output request.
@@ -424,7 +424,7 @@ CKG, RKG, and Galois share functions sample internal errors on every invocation.
 Run the example from the repository root:
 
 ```bash
-python examples/23_multiparty_ckks.py --preset slots8192-scale40-levels7-int64
+python examples/23_multiparty_ckks.py --preset slots8192-scale40-depth7-int64
 ```
 
 The example holds two party-local `SecretKey` objects in one Python process so it can demonstrate the complete arithmetic dataflow. It never sums them, installs an aggregate secret, or uses an aggregate secret for verification. Its fixed/canceling Protocol-3/4 coefficient tensors are named and documented as correctness fixtures.
@@ -476,7 +476,7 @@ Use this scenario only to measure arithmetic correctness and precision under dec
 
 A destination recipient generates a compatible throwaway key pair. All collective parties bind its Q public key and one evaluated ciphertext, then produce public-key-switch shares. The aggregator returns a ciphertext that the destination recipient decrypts with its own secret key.
 
-Use this scenario to study Protocol-4 algebra, level/scale preservation, and destination-key interoperability. The result establishes no secure-recipient-output claim.
+Use this scenario to study Protocol-4 algebra, depth/scale preservation, and destination-key interoperability. The result establishes no secure-recipient-output claim.
 
 ## Security and protocol coverage
 

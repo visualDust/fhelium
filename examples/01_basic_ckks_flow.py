@@ -20,15 +20,15 @@ from common import (
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_engine_args(parser)
-    parser.add_argument("--level", type=int, default=0)
+    parser.add_argument("--depth", type=int, default=0)
     args = parser.parse_args()
 
     engine = make_engine(args)
     slots = engine.num_slots
     x = small_complex_vector(slots, seed=1)
     y = small_complex_vector(slots, seed=2)
-    ct_x = engine.encrypt_message(x, level=args.level)
-    ct_y = engine.encrypt_message(y, level=args.level)
+    ct_x = engine.encrypt_message(x, depth=args.depth)
+    ct_y = engine.encrypt_message(y, depth=args.depth)
 
     # These are three independent branches. add is out-of-place and does
     # not feed the multiplication or rotation below.
@@ -39,7 +39,7 @@ def main() -> None:
     mul_x = engine.coefficient_domain_to_ntt_domain(ct_x)
     mul_y = engine.coefficient_domain_to_ntt_domain(ct_y)
     product_triplet = engine.multiply(mul_x, mul_y)
-    ct_product = engine.rescale_to_next_level(
+    ct_product = engine.rescale_to_next_depth(
         engine.relinearize(product_triplet)
     )
 
@@ -58,12 +58,12 @@ def main() -> None:
     ]:
         error = error_stats(engine.decrypt_message(ct).cpu(), reference, slots)
         rows.append(
-            [name, ct.level, f"{error['max_abs']:.3e}", f"{error['rms']:.3e}"]
+            [name, ct.depth, f"{error['max_abs']:.3e}", f"{error['rms']:.3e}"]
         )
 
     print(engine)
     print_table(
-        ["operation", "output level", "max abs error", "rms error"], rows
+        ["operation", "output depth", "max abs error", "rms error"], rows
     )
     print(
         "Unbatched ciphertext layout: "

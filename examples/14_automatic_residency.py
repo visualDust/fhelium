@@ -98,7 +98,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_engine_args(
         parser,
-        default_preset="slots8192-scale40-levels7-int64",
+        default_preset="slots8192-scale40-depth7-int64",
     )
     args = parser.parse_args()
 
@@ -115,11 +115,11 @@ def main() -> None:
     cold_message = torch.full_like(message, 0.25)
 
     weight = engine.prepare_plaintext_for_multiplication(
-        engine.encode(weight_message, level=0),
+        engine.encode(weight_message, depth=0),
         modulus_basis="Q",
     ).cpu()
     cold = engine.prepare_plaintext_for_multiplication(
-        engine.encode(cold_message, level=0),
+        engine.encode(cold_message, depth=0),
         modulus_basis="Q",
     ).cpu()
     rotation_key = engine.create_rotation_key(1, engine.secret_key).cpu()
@@ -219,7 +219,7 @@ def main() -> None:
             key_value = resident[key_handle]
             weight_value = resident[weight_handle]
             rotated = engine.rotate_with_key(source_value, key_value)
-            output = engine.rescale_to_next_level(
+            output = engine.rescale_to_next_depth(
                 engine.ntt_domain_to_coefficient_domain(
                     engine.multiply_plaintext(
                         engine.coefficient_domain_to_ntt_domain(rotated),

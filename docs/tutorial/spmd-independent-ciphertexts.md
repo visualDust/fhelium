@@ -31,7 +31,7 @@ from fhelium.eager import Engine
 
 dist.init()
 engine = Engine(
-    fh.Preset.slots32768_scale40_levels34_int64,
+    fh.Preset.slots32768_scale40_depth34_int64,
     device=dist.local_device(),
     allow_automatic_key_generation=False,
 )
@@ -92,7 +92,7 @@ ciphertexts.
 ## 5. Evaluate the same program locally
 
 ```python
-local_output = engine.rescale_to_next_level(
+local_output = engine.rescale_to_next_depth(
     engine.ntt_domain_to_coefficient_domain(
         engine.multiply_plaintext(
             engine.coefficient_domain_to_ntt_domain(local_input), weight
@@ -103,7 +103,7 @@ local_output = engine.rescale_to_next_level(
 bias = engine.prepare_plaintext_for_addition(
     engine.encode(
         bias_message,
-        level=local_output.level,
+        depth=local_output.depth,
         scale=local_output.scale,
     )
 )
@@ -111,7 +111,7 @@ local_output = engine.add_plaintext(local_output, bias)
 ```
 
 Each rank owns its local activation and creates a rank-specific public bias.
-The multiplication does not rescale implicitly, so the level transition is
+The multiplication does not rescale implicitly, so the depth transition is
 visible in the source.
 
 ## 6. Gather independent ciphertext results

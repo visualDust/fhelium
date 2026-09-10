@@ -2,7 +2,7 @@
 
 ``PlaintextRepresentation`` states what the payload means. Polynomial domain,
 modulus basis, and residue representation are independent axes for RNS values;
-none can be inferred from ``level`` alone.
+none can be inferred from ``depth`` alone.
 """
 
 from typing import Literal

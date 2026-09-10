@@ -28,7 +28,7 @@
 // [*batch, destination_limb, coefficient] Montgomery lazy residues in
 // [0, 2p_j), evaluating $\sum_r d_rM_r\bmod p_j$. Inputs are read-only and no
 // output aliases them. All table/residue tensors share dtype and CUDA device.
-template <typename scalar_t>
+template <typename scalar_t, bool local_workspace>
 __global__ void mixed_radix_decompose_kernel(
     CudaTensorAccessor32<scalar_t, 3> out,
     const CudaTensorAccessor32<scalar_t, 3> source,
@@ -38,22 +38,30 @@ __global__ void mixed_radix_decompose_kernel(
     const CudaTensorAccessor32<scalar_t, 1> modulus_hi,
     const CudaTensorAccessor32<scalar_t, 1> neg_inv_modulus_lo,
     const CudaTensorAccessor32<scalar_t, 1> neg_inv_modulus_hi) {
-  constexpr int MAX_DIGIT_ROWS = 8;
+  constexpr int MAX_DIGIT_ROWS = 16;
   const int coefficient = blockIdx.x * blockDim.x + threadIdx.x;
   const int batch = blockIdx.z;
   const int row_count = source.size(1);
-  if (coefficient >= source.size(2) || row_count > MAX_DIGIT_ROWS) return;
+  if (coefficient >= source.size(2)) return;
 
-  scalar_t digits[MAX_DIGIT_ROWS];
+  scalar_t local_digits[local_workspace ? MAX_DIGIT_ROWS : 1];
+  auto digits = [&](int row) -> scalar_t& {
+    if constexpr (local_workspace) return local_digits[row];
+    else return out[batch][row][coefficient];
+  };
   const scalar_t first_residue = reduce_lazy_montgomery_operand(
       source[batch][0][coefficient], modulus_lo[0], modulus_hi[0]);
-  for (int row = 0; row < row_count; ++row) digits[row] = first_residue;
+  for (int row = 0; row < row_count; ++row) {
+    if constexpr (local_workspace) digits(row) = first_residue;
+    else digits(row) = reduce_montgomery_operand(first_residue, modulus_lo[row], modulus_hi[row]);
+  }
 
   for (int step = 0; step < row_count - 1; ++step) {
     const int row = step + 1;
-    const scalar_t difference = source[batch][row][coefficient] - digits[row];
+    const scalar_t difference = source[batch][row][coefficient] - digits(row);
     const scalar_t twice_modulus =
-        (modulus_lo[row] + (modulus_hi[row] << (sizeof(scalar_t) * 4 - 1)))
+        (modulus_lo[row] +
+         (modulus_hi[row] << (kMontgomeryRadixBits<scalar_t> / 2)))
         << 1;
     const scalar_t digit =
         reduce_lazy_residue(montgomery_mul_split(difference,
@@ -63,18 +71,28 @@ __global__ void mixed_radix_decompose_kernel(
                                                  neg_inv_modulus_lo[row],
                                                  neg_inv_modulus_hi[row]),
                             twice_modulus);
-    digits[row] = digit;
+    digits(row) = digit;
     for (int target = row + 1; target < row_count; ++target) {
-      digits[target] += montgomery_mul(digit,
+      if constexpr (local_workspace) {
+      digits(target) += montgomery_mul(digit,
                                        propagation[step][target],
                                        modulus_lo[target],
                                        modulus_hi[target],
                                        neg_inv_modulus_lo[target],
                                        neg_inv_modulus_hi[target]);
+      } else {
+        const scalar_t product = reduce_lazy_montgomery_operand(
+            montgomery_mul_split(digit, propagation[step][target],
+                modulus_lo[target], modulus_hi[target],
+                neg_inv_modulus_lo[target], neg_inv_modulus_hi[target]),
+            modulus_lo[target], modulus_hi[target]);
+        digits(target) = reduce_lazy_montgomery_operand(
+            static_cast<scalar_t>(digits(target) + product), modulus_lo[target], modulus_hi[target]);
+      }
     }
   }
   for (int row = 0; row < row_count; ++row) {
-    out[batch][row][coefficient] = digits[row];
+    out[batch][row][coefficient] = digits(row);
   }
 }
 
@@ -89,8 +107,6 @@ torch::Tensor mixed_radix_decompose_cuda(
   auto out = torch::empty_like(source_residues);
   const auto source = view_rns_batch_3d(source_residues, "source_residues");
   auto output = view_rns_batch_3d(out, "out");
-  TORCH_CHECK(source.size(1) <= 8,
-              "mixed_radix_decompose supports at most 8 digit rows");
   check_rns_row_vector(mixed_radix_normalizers,
                        source.size(1) - 1,
                        "mixed_radix_decompose",
@@ -127,7 +143,8 @@ torch::Tensor mixed_radix_decompose_cuda(
             source.size(0));
   AT_DISPATCH_INTEGRAL_TYPES(
       source_residues.scalar_type(), "mixed_radix_decompose", [&] {
-        mixed_radix_decompose_kernel<scalar_t>
+        if (source.size(1) <= 16) {
+        mixed_radix_decompose_kernel<scalar_t, true>
             <<<grid, kCudaBlockSize, 0, stream>>>(
                 FHELIUM_CUDA_ACCESSOR32(output, scalar_t, 3),
                 FHELIUM_CUDA_ACCESSOR32(source, scalar_t, 3),
@@ -138,6 +155,19 @@ torch::Tensor mixed_radix_decompose_cuda(
                 FHELIUM_CUDA_ACCESSOR32(modulus_hi, scalar_t, 1),
                 FHELIUM_CUDA_ACCESSOR32(neg_inv_modulus_lo, scalar_t, 1),
                 FHELIUM_CUDA_ACCESSOR32(neg_inv_modulus_hi, scalar_t, 1));
+        } else {
+        mixed_radix_decompose_kernel<scalar_t, false>
+            <<<grid, kCudaBlockSize, 0, stream>>>(
+                FHELIUM_CUDA_ACCESSOR32(output, scalar_t, 3),
+                FHELIUM_CUDA_ACCESSOR32(source, scalar_t, 3),
+                FHELIUM_CUDA_ACCESSOR32(mixed_radix_normalizers, scalar_t, 1),
+                FHELIUM_CUDA_ACCESSOR32(
+                    mixed_radix_propagation_coefficients, scalar_t, 2),
+                FHELIUM_CUDA_ACCESSOR32(modulus_lo, scalar_t, 1),
+                FHELIUM_CUDA_ACCESSOR32(modulus_hi, scalar_t, 1),
+                FHELIUM_CUDA_ACCESSOR32(neg_inv_modulus_lo, scalar_t, 1),
+                FHELIUM_CUDA_ACCESSOR32(neg_inv_modulus_hi, scalar_t, 1));
+        }
       });
   return out;
 }

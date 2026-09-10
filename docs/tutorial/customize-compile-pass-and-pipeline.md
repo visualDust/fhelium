@@ -2,7 +2,7 @@
 
 **Example source:** [`examples/19_customize_compile_pass.py`](https://github.com/VisualDust/fhelium/blob/main/examples/19_customize_compile_pass.py)
 
-Example 19 implements a caller-defined Compile pass that recognizes a captured `torch.matmul` with a compile-time square matrix and rewrites it as a baby-step/giant-step (BSGS) encrypted matrix-vector schedule. The source applies an illustrative elementwise square after the linear result, adding one ciphertext-ciphertext multiplication. Caller-selected passes then place relinearization and rescales, assign levels and actual scales, lower the schedule into RNS/NTT operations, link materials and evaluation keys, and execute it through the Backend.
+Example 19 implements a caller-defined Compile pass that recognizes a captured `torch.matmul` with a compile-time square matrix and rewrites it as a baby-step/giant-step (BSGS) encrypted matrix-vector schedule. The source applies an illustrative elementwise square after the linear result, adding one ciphertext-ciphertext multiplication. Caller-selected passes then place relinearization and rescales, assign depths and actual scales, lower the schedule into RNS/NTT operations, link materials and evaluation keys, and execute it through the Backend.
 
 The example demonstrates a transformation and execution architecture. Its CPU
 execution validates the selected matrix-multiplication schedule for the shown
@@ -108,8 +108,9 @@ within each add tree. A rotation is a barrier in this conservative policy
 because moving a rescale across key switching changes the active-Q key-switch
 work and error. The three giant groups therefore produce three rescales rather
 than eight; the square activation contributes one additional rescale.
-`AssignCkksLevelsPass` then reads those concrete transitions, and
-`AssignCkksScalesPass` computes each actual scale using the dropped Q prime.
+`AssignCkksDepthsPass` then reads those concrete transitions, and
+`AssignCkksScalesPass` computes each actual scale using the complete dropped
+Q-group product.
 
 This keeps BSGS as one caller-selected algebraic transformation while preserving other matrix-multiplication representations.
 

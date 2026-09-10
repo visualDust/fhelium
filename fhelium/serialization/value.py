@@ -29,7 +29,7 @@ from fhelium.values.state import (
     ResidueRepresentation,
 )
 
-VALUE_SCHEMA_VERSION = 3
+VALUE_SCHEMA_VERSION = 4
 
 _KEY_TYPES: dict[str, type] = {
     key_type.__name__: key_type
@@ -93,7 +93,7 @@ def _envelope_from_value(
             schema_version=VALUE_SCHEMA_VERSION,
             value_type="Plaintext",
             metadata={
-                "level": value.level,
+                "depth": value.depth,
                 "scale": value.scale,
                 "representation": value.representation,
                 "polynomial_domain": value.polynomial_domain,
@@ -116,7 +116,7 @@ def _envelope_from_value(
                 "compression_format_version": (
                     value.compression_format_version
                 ),
-                "level": value.level,
+                "depth": value.depth,
                 "scale": value.scale,
                 "polynomial_domain": value.polynomial_domain,
                 "modulus_basis": value.modulus_basis,
@@ -139,7 +139,7 @@ def _envelope_from_value(
             schema_version=VALUE_SCHEMA_VERSION,
             value_type="Ciphertext",
             metadata={
-                "level": value.level,
+                "depth": value.depth,
                 "scale": value.scale,
                 "prime_ids": list(value.prime_ids),
                 "polynomial_domain": value.polynomial_domain,
@@ -207,7 +207,7 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
             metadata,
             value_type,
             {
-                "level",
+                "depth",
                 "scale",
                 "representation",
                 "polynomial_domain",
@@ -263,7 +263,7 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
         )
         return Plaintext(
             message=message,
-            level=_metadata_integer(metadata, "level", value_type),
+            depth=_metadata_integer(metadata, "depth", value_type),
             scale=_metadata_scale(metadata, value_type),
             data=data,
             representation=cast(PlaintextRepresentation, representation),
@@ -280,7 +280,7 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
             metadata,
             value_type,
             {
-                "level",
+                "depth",
                 "scale",
                 "prime_ids",
                 "polynomial_domain",
@@ -291,7 +291,7 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
         _require_tensor_names(tensors, value_type, {"data"})
         return Ciphertext(
             data=_required_tensor(tensors, "data", value_type),
-            level=_metadata_integer(metadata, "level", value_type),
+            depth=_metadata_integer(metadata, "depth", value_type),
             scale=_metadata_scale(metadata, value_type),
             prime_ids=_metadata_prime_ids(metadata, value_type),
             polynomial_domain=cast(
@@ -315,7 +315,7 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
                 "ring_dimension",
                 "compression_layout",
                 "compression_format_version",
-                "level",
+                "depth",
                 "scale",
                 "polynomial_domain",
                 "modulus_basis",
@@ -351,7 +351,7 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
             compression_layout=cast(
                 CompressedPlaintextLayout, compression_layout
             ),
-            level=_metadata_integer(metadata, "level", value_type),
+            depth=_metadata_integer(metadata, "depth", value_type),
             scale=_metadata_scale(metadata, value_type),
             polynomial_domain=cast(
                 PolynomialDomain,
@@ -448,7 +448,7 @@ def validate_value_description(
 
     if value_type == "Plaintext":
         fields = {
-            "level",
+            "depth",
             "scale",
             "representation",
             "polynomial_domain",
@@ -459,8 +459,8 @@ def validate_value_description(
             "has_data",
         }
         _require_metadata_fields(typed_metadata, value_type, fields)
-        if _metadata_integer(typed_metadata, "level", value_type) < 0:
-            raise ValueError("Plaintext envelope level must be non-negative")
+        if _metadata_integer(typed_metadata, "depth", value_type) < 0:
+            raise ValueError("Plaintext envelope depth must be non-negative")
         _metadata_scale(typed_metadata, value_type)
         has_message = _metadata_bool(typed_metadata, "has_message", value_type)
         has_data = _metadata_bool(typed_metadata, "has_data", value_type)
@@ -530,7 +530,7 @@ def validate_value_description(
 
     if value_type == "Ciphertext":
         fields = {
-            "level",
+            "depth",
             "scale",
             "prime_ids",
             "polynomial_domain",
@@ -538,8 +538,8 @@ def validate_value_description(
             "residue_representation",
         }
         _require_metadata_fields(typed_metadata, value_type, fields)
-        if _metadata_integer(typed_metadata, "level", value_type) < 0:
-            raise ValueError("Ciphertext envelope level must be non-negative")
+        if _metadata_integer(typed_metadata, "depth", value_type) < 0:
+            raise ValueError("Ciphertext envelope depth must be non-negative")
         _metadata_scale(typed_metadata, value_type)
         _validate_required_rns_metadata(typed_metadata, value_type)
         if (
@@ -557,7 +557,7 @@ def validate_value_description(
             "ring_dimension",
             "compression_layout",
             "compression_format_version",
-            "level",
+            "depth",
             "scale",
             "polynomial_domain",
             "modulus_basis",
@@ -566,7 +566,7 @@ def validate_value_description(
             "has_implicit_data",
         }
         _require_metadata_fields(typed_metadata, value_type, fields)
-        for name in ("ring_dimension", "compression_format_version", "level"):
+        for name in ("ring_dimension", "compression_format_version", "depth"):
             if _metadata_integer(typed_metadata, name, value_type) < 0:
                 raise ValueError(
                     f"CompressedPlaintext {name} must be non-negative"

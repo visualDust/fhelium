@@ -43,6 +43,10 @@ inline void check_rns_binary_3d(const torch::Tensor& lhs,
                                 const torch::Tensor& rhs,
                                 const char* operation,
                                 bool allow_rhs_singleton_batch) {
+  TORCH_CHECK(lhs.device() == rhs.device(),
+              operation,
+              " requires operands on the same device; got ",
+              lhs.device(), " and ", rhs.device());
   TORCH_CHECK(lhs.dim() == 3 && rhs.dim() == 3,
               operation,
               " requires [batch, limb, coefficient] operands");
@@ -70,6 +74,10 @@ inline void check_rns_binary_3d(const torch::Tensor& lhs,
 inline void check_rns_parameter_rows(const torch::Tensor& operand,
                                      const torch::Tensor& rns_params,
                                      const char* operation) {
+  TORCH_CHECK(operand.device() == rns_params.device(),
+              operation,
+              " requires RNS parameters on the operand device; got ",
+              operand.device(), " and ", rns_params.device());
   TORCH_CHECK(rns_params.dim() == 2,
               operation,
               " requires [parameter, limb] RNS parameters");

@@ -73,7 +73,7 @@ class CoefficientStandardToNttMontgomeryOp(_NttOp):
     $a_j \bmod q_i$ for a polynomial in
     $R_{q_i}=\mathbb{Z}_{q_i}[X]/(X^N+1)$.  The result contains its
     number-theoretic transform $\operatorname{NTT}_{q_i}(a)$, multiplied by the
-    Montgomery radix $R_i$ modulo $q_i$.  Prime rows, CKKS level, component
+    Montgomery radix $R_i$ modulo $q_i$.  Prime rows, CKKS depth, component
     axes, and scale do not change."""
 
     name = "fhelium_ntt.coefficient_standard_to_ntt_montgomery"
@@ -86,7 +86,7 @@ class CoefficientMontgomeryToNttMontgomeryOp(_NttOp):
     Each input coefficient row represents $a_j R_i \bmod q_i$.  The transform
     is applied independently for every active prime and returns
     $\operatorname{NTT}_{q_i}(a)R_i \bmod q_i$.  The operation preserves prime
-    rows, level, component axes, and CKKS scale."""
+    rows, depth, component axes, and CKKS scale."""
 
     name = "fhelium_ntt.coefficient_montgomery_to_ntt_montgomery"
 
@@ -98,7 +98,7 @@ class NttMontgomeryToCoefficientStandardOp(_NttOp):
     For each active prime $q_i$, an NTT/Montgomery row
     $\operatorname{NTT}_{q_i}(a)R_i$ is mapped to coefficient residues
     $a_j \bmod q_i$.  The inverse transform includes the Montgomery and
-    transform normalization factors.  Prime rows, level, components, and scale
+    transform normalization factors.  Prime rows, depth, components, and scale
     are preserved."""
 
     name = "fhelium_ntt.ntt_montgomery_to_coefficient_standard"
@@ -110,7 +110,7 @@ class InverseMontgomeryOp(_NttOp):
 
     For every active prime $q_i$, the input
     $\operatorname{NTT}_{q_i}(a)R_i$ becomes coefficient data
-    $a_jR_i \bmod q_i$.  The prime-row set, level, component axes, and CKKS
+    $a_jR_i \bmod q_i$.  The prime-row set, depth, component axes, and CKKS
     scale remain unchanged."""
 
     name = "fhelium_ntt.inverse_montgomery"

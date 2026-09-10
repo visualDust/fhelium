@@ -44,7 +44,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_engine_args(
         parser,
-        default_preset=fh.Preset.slots8192_scale40_levels7_int64.value,
+        default_preset=fh.Preset.slots8192_scale40_depth7_int64.value,
     )
     parser.add_argument("--period", type=int, default=256)
     parser.add_argument("--iterations", type=int, default=20)

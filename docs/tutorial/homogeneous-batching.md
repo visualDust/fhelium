@@ -12,8 +12,8 @@ Start with the 8,192-slot, 40-bit-scale baseline:
 
 ```bash
 python examples/15_homogeneous_batching.py \
-  --preset slots8192-scale40-levels7-int64 \
-  --level 0 \
+  --preset slots8192-scale40-depth7-int64 \
+  --depth 0 \
   --batch-sizes 1,4,8 \
   --warmup 2 \
   --runs 10
@@ -23,13 +23,13 @@ Then compare the two ends of the 32,768-slot, 40-bit-scale chain:
 
 ```bash
 python examples/15_homogeneous_batching.py \
-  --preset slots32768-scale40-levels34-int64 --level 0 --batch-sizes 1,4,8
+  --preset slots32768-scale40-depth34-int64 --depth 0 --batch-sizes 1,4,8
 
 python examples/15_homogeneous_batching.py \
-  --preset slots32768-scale40-levels34-int64 --level 30 --batch-sizes 1,4,8
+  --preset slots32768-scale40-depth34-int64 --depth 30 --batch-sizes 1,4,8
 ```
 
-The second command measures the smaller active RNS row count at level 30,
+The second command measures the smaller active RNS row count at depth 30,
 which changes both arithmetic work and the size of each NTT/key-switch working
 set.
 
@@ -40,7 +40,7 @@ The example constructs `B` independent vectors:
 ```python
 vectors.shape == (B, size)
 messages = vectors.repeat(1, engine.num_slots // size)
-source = engine.encrypt_message(messages, level=level)
+source = engine.encrypt_message(messages, depth=depth)
 assert tuple(source.batch_shape) == (B,)
 ```
 
@@ -57,7 +57,7 @@ For an RNS plaintext it is:
 ```
 
 The leading dimensions index independent messages in the batch. All members of
-one homogeneous value share its level, scale,
+one homogeneous value share its depth, scale,
 polynomial domain, modulus basis, device, dtype, and component count.
 
 They must also have the same CKKS parameter provenance and effective
@@ -91,7 +91,7 @@ def matrix_vector(source, *, engine, diagonals, rotation_keys):
     weighted = engine.multiply_plaintext(
         rotated_ntt, Plaintext.stack_batch(diagonals)
     )
-    return engine.rescale_to_next_level(
+    return engine.rescale_to_next_depth(
         engine.ntt_domain_to_coefficient_domain(
             engine.sum_ciphertext_batch(weighted)
         )
@@ -190,8 +190,8 @@ Use these rules as a measurement plan, not as hard-coded library behavior:
    installed build.
 2. Compare `[1, slots]` with `[slots]` to isolate B1 overhead.
 3. Compare B4/B8 with an explicit loop over the same members at the same preset
-   and level.
-4. Repeat at the levels used by the real evaluator.
+   and depth.
+4. Repeat at the depths used by the real evaluator.
 5. Measure the complete workload and peak memory, not only an NTT kernel.
 6. Keep the resulting choice in application or scheduler code.
 
@@ -209,5 +209,5 @@ The stable mechanism is summarized in the
 - [Values and state](../api/fhelium/values/ciphertext.md)
 - [CKKS workload cost model](../concepts/performance/cost-model.md)
 - [Choose a homogeneous batch size](../how-to/choose-homogeneous-batch-size.md)
-- [Benchmark a workload correctly](../how-to/benchmark-a-workload.md)
+- [Benchmark methodology](/benchmarks/methodology)
 - [CUDA Graph matrix-vector](cuda-graph-matvec.md)

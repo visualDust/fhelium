@@ -19,7 +19,7 @@ A local CKKS value is described by several distinct axes:
 | Polynomial domain | `coefficient`, `ntt` | Distinguishes polynomial coefficients from NTT evaluations |
 | Residue representation | `standard`, `montgomery` | Distinguishes ordinary residues from Montgomery residues |
 | Modulus basis | `Q`, `QP` | Selects the active Q rows or active Q plus auxiliary P rows |
-| Level | Nonnegative Q-chain level | Selects the active Q suffix, together with `prime_ids`; ordinary values use public levels, while modulus raising may use the one-prime structural base internally |
+| Depth | Nonnegative Q-chain position | Selects the active Q-group suffix, together with `prime_ids`; it does not count executed operations |
 | Scale | Positive finite binary64 | Records the actual CKKS scale of the value |
 | Component count | Two or three for ciphertexts | Records the current secret-key polynomial degree |
 | Placement | CPU or CUDA device | Identifies storage location |
@@ -28,8 +28,8 @@ These axes are distinct metadata coordinates. Valid value states and operation
 contracts constrain their combinations:
 
 - polynomial domain and residue representation remain separate coordinates;
-- modulus basis and level remain separate coordinates;
-- `level` and ordered `prime_ids` jointly identify the active Q suffix;
+- modulus basis and depth remain separate coordinates;
+- `depth` and ordered `prime_ids` jointly identify the active Q suffix;
 - placement changes storage location while preserving the represented
   polynomial and CKKS message.
 
@@ -95,13 +95,13 @@ For ciphertexts,
 `coefficient_domain_to_ntt_domain` applies a forward NTT and converts standard
 residues to Montgomery form. `ntt_domain_to_coefficient_domain` applies the
 normalized inverse NTT and returns standard residues. Both preserve the ring
-element, component count, level, scale, Q/QP basis, and `prime_ids`.
+element, component count, depth, scale, Q/QP basis, and `prime_ids`.
 
 Ciphertext multiplication primitives consume and produce the
 `(ntt, montgomery)` state. This common rule covers both `multiply` and
 `multiply_plaintext`; neither hides a round trip through
 `(coefficient, standard)`. Ciphertext-ciphertext multiplication maps two CT2
-inputs to one CT3 result, preserves level and active rows, and multiplies the
+inputs to one CT3 result, preserves depth and active rows, and multiplies the
 two actual scales. Plaintext multiplication preserves component count and
 multiplies the ciphertext and plaintext scales.
 
@@ -113,16 +113,16 @@ representation, and actual scale.
 Relinearization consumes a CT3 `(ntt, montgomery)` ciphertext. Its default
 output is CT2 `(coefficient, standard)`; `output_domain="ntt"` returns CT2
 `(ntt, montgomery)`. Rescaling accepts either valid ciphertext arithmetic
-state and preserves it: the NTT path inverts the dropped row for quotient
+state and preserves it: the NTT path processes the dropped rows for quotient
 rounding and transforms the correction without inverting the surviving rows.
 Both operations preserve component count as applicable; rescaling advances the
-level by one and divides actual scale by the dropped prime.
+depth by one and divides actual scale by the dropped Q-group product.
 
 `rotate_with_key` consumes a CT2 Q ciphertext in either coupled arithmetic
 state. `rotate_many_with_keys` consumes `(coefficient, standard)` input so its
 outputs can share the coefficient-domain key-switch preparation. Their default
 output is `(coefficient, standard)`; `output_domain="ntt"` instead returns the
-equivalent `(ntt, montgomery)` result. Both choices preserve level, active Q
+equivalent `(ntt, montgomery)` result. Both choices preserve depth, active Q
 rows, component count, and actual scale. The step-oriented `rotate_by_step` and
 `rotate_many_by_steps` APIs currently return `(coefficient, standard)` state.
 `switch_key` and `conjugate` expose the same output-domain choice.
@@ -135,13 +135,13 @@ preserved, as for plaintexts, or follows the ciphertext coupling rule.
 
 | API | Accepted source | Target | Preserved state |
 | --- | --- | --- | --- |
-| `integer_coefficients_to_rns` | `integer_coefficients` plaintext | RNS `(coefficient, standard)` plaintext | Level, scale, semantic polynomial; basis is provided as an argument |
-| `standard_residues_to_montgomery_residues` | RNS `(coefficient, standard)` plaintext | RNS `(coefficient, montgomery)` plaintext | Representation, domain, level, scale, basis, `prime_ids` |
-| `coefficient_domain_to_ntt_domain` | RNS `(coefficient, montgomery)` plaintext | RNS `(ntt, montgomery)` plaintext | Representation, residue form, level, scale, basis, `prime_ids` |
-| `coefficient_domain_to_ntt_domain` | `(coefficient, standard)` ciphertext | `(ntt, montgomery)` ciphertext | Components, level, scale, basis, `prime_ids` |
-| `ntt_domain_to_coefficient_domain` | RNS `(ntt, montgomery)` plaintext | RNS `(coefficient, montgomery)` plaintext | Representation, residue form, level, scale, basis, `prime_ids` |
-| `ntt_domain_to_coefficient_domain` | `(ntt, montgomery)` ciphertext | `(coefficient, standard)` ciphertext | Components, level, scale, basis, `prime_ids` |
-| `montgomery_residues_to_standard_residues` | RNS `(coefficient, montgomery)` plaintext | RNS `(coefficient, standard)` plaintext | Representation, domain, level, scale, basis, `prime_ids` |
+| `integer_coefficients_to_rns` | `integer_coefficients` plaintext | RNS `(coefficient, standard)` plaintext | Depth, scale, semantic polynomial; basis is provided as an argument |
+| `standard_residues_to_montgomery_residues` | RNS `(coefficient, standard)` plaintext | RNS `(coefficient, montgomery)` plaintext | Representation, domain, depth, scale, basis, `prime_ids` |
+| `coefficient_domain_to_ntt_domain` | RNS `(coefficient, montgomery)` plaintext | RNS `(ntt, montgomery)` plaintext | Representation, residue form, depth, scale, basis, `prime_ids` |
+| `coefficient_domain_to_ntt_domain` | `(coefficient, standard)` ciphertext | `(ntt, montgomery)` ciphertext | Components, depth, scale, basis, `prime_ids` |
+| `ntt_domain_to_coefficient_domain` | RNS `(ntt, montgomery)` plaintext | RNS `(coefficient, montgomery)` plaintext | Representation, residue form, depth, scale, basis, `prime_ids` |
+| `ntt_domain_to_coefficient_domain` | `(ntt, montgomery)` ciphertext | `(coefficient, standard)` ciphertext | Components, depth, scale, basis, `prime_ids` |
+| `montgomery_residues_to_standard_residues` | RNS `(coefficient, montgomery)` plaintext | RNS `(coefficient, standard)` plaintext | Representation, domain, depth, scale, basis, `prime_ids` |
 
 The accepted-source column states the caller contract. Value construction
 rejects invalid state combinations, but transition methods and Backend
@@ -197,19 +197,18 @@ above.
 
 ## Transitions on other axes
 
-Evaluator state management also includes level, scale, component count, key
+Evaluator state management also includes depth, scale, component count, key
 relations, and placement. These operations retain their mathematical names
 because their source and target values are runtime-dependent:
 
 | Axis or relation | APIs | Semantics |
 | --- | --- | --- |
-| Level and scale | `rescale_to_next_level`, `rescale_to_next_level_` | Drop one leading Q prime and divide actual scale by that prime |
-| Structural level and scale | `rescale_to_structural_base` | From the final public level, drop its leading Q prime, divide actual scale by that prime, and enter the private one-prime structural base used for modulus raising |
-| Level only | `mod_switch_to_next_level`, `mod_switch_to_next_level_`, `mod_switch_to_level`, `mod_switch_to_level_` | Restrict the active Q basis while preserving scale and arithmetic state |
+| Depth and scale | `rescale_to_next_depth`, `rescale_to_next_depth_` | Drop one complete leading Q depth group and divide actual scale by that group's product |
+| Depth only | `mod_switch_to_next_depth`, `mod_switch_to_next_depth_`, `mod_switch_to_depth`, `mod_switch_to_depth_` | Restrict the active Q basis while preserving scale and arithmetic state |
 | Scale metadata | `reinterpret_at_scale`, `reinterpret_at_scale_` | Preserve residues and replace scale metadata under a provided relative-change bound |
-| Component count and arithmetic state | `relinearize` | Convert CT3 `(ntt, montgomery)` to CT2 through key switching; select coefficient/standard or NTT/Montgomery output while preserving level and scale |
+| Component count and arithmetic state | `relinearize` | Convert CT3 `(ntt, montgomery)` to CT2 through key switching; select coefficient/standard or NTT/Montgomery output while preserving depth and scale |
 | Key dependency | `switch_key`, conjugation | Apply the supplied or engine-owned key relation to CT2 `(coefficient, standard)` state and preserve that state |
-| Key dependency and output arithmetic state | `rotate_with_key`, `rotate_many_with_keys` | Apply each rotation-key relation and select `(coefficient, standard)` or `(ntt, montgomery)` output while preserving level, scale, Q rows, and CT2 shape |
+| Key dependency and output arithmetic state | `rotate_with_key`, `rotate_many_with_keys` | Apply each rotation-key relation and select `(coefficient, standard)` or `(ntt, montgomery)` output while preserving depth, scale, Q rows, and CT2 shape |
 | Placement | `value.to(device)` | Move storage while preserving mathematical state |
 
 Ciphertext Q-to-QP digit extension and QP-to-Q ModDown occur inside key-switch
@@ -238,5 +237,5 @@ decrypt -> decode -> encode -> encrypt
 
 - [Value model and identity](value-model-and-identity.md)
 - [Evaluator operation transitions](evaluator-operation-transitions.md)
-- [Scale and level lifecycle](scale-and-level-lifecycle.md)
+- [Scale and depth lifecycle](scale-and-depth-lifecycle.md)
 - [Diagnose a value-state mismatch](../../how-to/diagnose-value-state-mismatch.md)

@@ -76,9 +76,9 @@ those declared semantic owners.
 ### Numerical incompleteness or inconsistency
 
 Known encrypted types use open state dictionaries. A value may omit a scale,
-level, basis, polynomial domain, or other CKKS fact because the fact is not yet
+depth, basis, polynomial domain, or other CKKS fact because the fact is not yet
 known. A Program may also represent a candidate schedule in which two addition
-operands have incompatible scales, a rescale has no valid prime to drop, or an
+operands have incompatible scales, a rescale has no valid Q depth group to drop, or an
 approximation has no established error bound.
 
 These states are useful inputs to analysis, diagnostics, and experimental
@@ -107,7 +107,7 @@ level. For example, the registered spellings include
 One module can contain operations from all of these levels together with
 application, vendor, or research extensions. A pass transforms the registered
 patterns it recognizes and leaves the rest unchanged. Different functions may be
-lowered to different depths, and a single function may connect several levels.
+lowered at different CKKS depths, and a single function may connect several abstraction levels.
 Structural verification accepts this mixed-level composition.
 
 Registration gives first-party operations and types structural constructors and
@@ -119,7 +119,7 @@ Backend coverage checks external bindings and implementation availability.
 Registered value types carry open state dictionaries so a Program can represent
 known facts without requiring every fact at construction. The core `fhelium`
 types provide compatibility roles such as `EncryptedType`, `MessageType`, and
-`PlaintextType`; specialized dialects provide level-specific types including
+`PlaintextType`; specialized dialects provide depth-specific types including
 `semantic.SecretType`, `semantic.PublicType`, `logical.EncryptedType`,
 `ckks.CiphertextType`, `ckks.PlaintextType`, `rns.BundleType`, and
 `keyswitch.KeyType`. `MaterialType` and `ResourceType` represent graph-external

@@ -12,7 +12,7 @@ def _ciphertext(value: int = 0, *, batch_shape=()) -> Ciphertext:
     data = torch.full((2, *batch_shape, 3, 8), value, dtype=torch.int64)
     return Ciphertext(
         data=data,
-        level=2,
+        depth=2,
         scale=float(2**40),
         prime_ids=(2, 3, 4),
     )
@@ -55,9 +55,9 @@ def test_ciphertext_stack_batch_is_explicit_copy_and_unbind_returns_views():
 def test_ciphertext_stack_batch_rejects_heterogeneous_exact_state():
     first = _ciphertext()
     second = _ciphertext()
-    second.level += 1
+    second.depth += 1
 
-    with pytest.raises(ValueError, match="level"):
+    with pytest.raises(ValueError, match="depth"):
         Ciphertext.stack_batch([first, second])
 
 
@@ -91,12 +91,12 @@ def test_ciphertext_limb_slice_preserves_all_batch_dimensions():
 def test_plaintext_batch_shape_depends_on_layout():
     slots = Plaintext(
         message=torch.zeros(6, 4, dtype=torch.complex128),
-        level=0,
+        depth=0,
         scale=float(2**40),
     )
     coefficients = Plaintext(
         message=None,
-        level=0,
+        depth=0,
         scale=float(2**40),
         data=torch.zeros(6, 8, dtype=torch.int64),
         representation="integer_coefficients",
@@ -104,7 +104,7 @@ def test_plaintext_batch_shape_depends_on_layout():
     )
     rns = Plaintext(
         message=None,
-        level=0,
+        depth=0,
         scale=float(2**40),
         data=torch.zeros(6, 3, 8, dtype=torch.int64),
         representation="rns",
@@ -123,7 +123,7 @@ def test_plaintext_stack_batch_is_explicit_copy_and_unbind_returns_views():
     values = [
         Plaintext(
             message=torch.full((4,), value, dtype=torch.float64),
-            level=0,
+            depth=0,
             scale=float(2**40),
         )
         for value in (1, 2, 3)
@@ -143,7 +143,7 @@ def test_plaintext_stack_batch_is_explicit_copy_and_unbind_returns_views():
 
 def test_scalar_slot_plaintexts_cannot_be_batch_stacked_ambiguously():
     values = [
-        Plaintext(message=torch.tensor(value), level=0, scale=float(2**40))
+        Plaintext(message=torch.tensor(value), depth=0, scale=float(2**40))
         for value in (2.0, 3.0)
     ]
 
@@ -155,14 +155,14 @@ def test_zero_sized_batch_dimensions_are_rejected():
     with pytest.raises(ValueError, match="batch dimensions must be nonzero"):
         Ciphertext(
             data=torch.empty(2, 0, 3, 8, dtype=torch.int64),
-            level=0,
+            depth=0,
             scale=float(2**40),
             prime_ids=(0, 1, 2),
         )
     with pytest.raises(ValueError, match="batch dimensions must be nonzero"):
         Plaintext(
             message=torch.empty(0, 8),
-            level=0,
+            depth=0,
             scale=float(2**40),
         )
 
@@ -194,14 +194,14 @@ def batch_engine():
         pytest.skip("CUDA is not available")
     previous_device = torch.get_default_device()
     torch.set_default_device("cuda:0")
-    yield Engine(Preset.slots8192_scale40_levels7_int64)
+    yield Engine(Preset.slots8192_scale40_depth7_int64)
     torch.set_default_device(previous_device)
 
 
 @pytest.fixture(scope="module")
 def cpu_batch_engine():
     return Engine(
-        Preset.slots8192_scale40_levels7_int64,
+        Preset.slots8192_scale40_depth7_int64,
         ntt_backend="radix2_indexed",
     )
 
@@ -335,7 +335,7 @@ def test_batched_multiply_relinearize_pipeline(batch_engine):
 
     operand = batch_engine.coefficient_domain_to_ntt_domain(ciphertext)
     triplet = batch_engine.multiply(operand, operand)
-    product = batch_engine.rescale_to_next_level(
+    product = batch_engine.rescale_to_next_depth(
         batch_engine.relinearize(triplet)
     )
     decoded = batch_engine.decrypt_message(product, is_real=True)
@@ -362,7 +362,7 @@ def test_batched_plaintext_operations(batch_engine):
     )
 
     added = batch_engine.add_plaintext(ciphertext, addend)
-    multiplied = batch_engine.rescale_to_next_level(
+    multiplied = batch_engine.rescale_to_next_depth(
         batch_engine.ntt_domain_to_coefficient_domain(
             batch_engine.multiply_plaintext(
                 batch_engine.coefficient_domain_to_ntt_domain(ciphertext),
@@ -413,7 +413,7 @@ def test_unbatched_public_plaintext_constants_broadcast_without_copy(
     added = batch_engine.add_plaintext(ciphertext, addend)
     ciphertext_ntt = batch_engine.coefficient_domain_to_ntt_domain(ciphertext)
     product = batch_engine.multiply_plaintext(ciphertext_ntt, multiplier)
-    multiplied = batch_engine.rescale_to_next_level(
+    multiplied = batch_engine.rescale_to_next_depth(
         batch_engine.ntt_domain_to_coefficient_domain(product)
     )
 

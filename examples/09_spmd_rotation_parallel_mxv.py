@@ -99,7 +99,7 @@ def main() -> None:
     dist.init()
     torch.set_default_device(dist.local_device())
     engine = Engine(
-        fh.Preset.slots32768_scale40_levels34_int64,
+        fh.Preset.slots32768_scale40_depth34_int64,
         allow_automatic_key_generation=False,
     )
     if args.size <= 0 or args.size > engine.num_slots:
@@ -150,7 +150,7 @@ def main() -> None:
         diagonal = engine.prepare_plaintext_for_multiplication(
             engine.encode(
                 _cyclic_diagonal_slots(matrix, rotation_step, engine.num_slots),
-                level=rotated.level,
+                depth=rotated.depth,
             )
         )
         local_terms_ntt.append(
@@ -160,7 +160,7 @@ def main() -> None:
             )
         )
 
-    local_partial = engine.rescale_to_next_level(
+    local_partial = engine.rescale_to_next_depth(
         engine.sum_ciphertexts(local_terms_ntt)
     )
 

@@ -67,7 +67,7 @@ class SecretKey(TensorResident):
     r"""RNS storage for the secret polynomial $s(X)$.
 
     ``data`` is a dense integral ``[limb, coefficient_or_ntt_index]`` tensor;
-    row $i$ is modulo ``prime_ids[i]``. Engine-generated keys are level-zero
+    row $i$ is modulo ``prime_ids[i]``. Engine-generated keys are depth-zero
     Q or QP values in NTT domain and Montgomery form on the engine device,
     with final extent $N$. Direct construction retains the supplied tensor
     storage. :meth:`clone` allocates independent storage; residency views may
@@ -133,7 +133,7 @@ class PublicKey(TensorResident):
     $$
 
     where $B_0$ is Q or QP according to ``modulus_basis``. Row $i$ is modulo
-    ``prime_ids[i]``; generated keys are level-zero NTT-domain Montgomery
+    ``prime_ids[i]``; generated keys are depth-zero NTT-domain Montgomery
     residues on one device. The object does not record a symbolic key-lineage
     identifier, so callers must keep the key paired with its destination
     secret key. Direct construction and component access retain/share storage;
@@ -228,8 +228,8 @@ class KeySwitchKey(TensorResident):
     ``data`` is a dense integral
     ``[key_digit, key_component=2, limb, coefficient_or_ntt_index]`` tensor.
     ``key_digit`` is stable key-storage identity, not the local active
-    ``digit_index`` used at a later level. Limb row $i$ is modulo
-    ``prime_ids[i]``. Generated keys use the complete level-zero QP basis,
+    ``digit_index`` used at a later depth. Limb row $i$ is modulo
+    ``prime_ids[i]``. Generated keys use the complete depth-zero QP basis,
     NTT domain, Montgomery form, the engine integral dtype, and one engine
     device. Direct construction and digit/component access retain/share
     storage; :meth:`clone` allocates independent storage.
@@ -358,7 +358,7 @@ class RelinearizationKey(KeySwitchKey):
     r"""Key-switch material from source key $s(X)^2$ to $s(X)$.
 
     It replaces the $d_2(X)s(X)^2$ term of a three-component product with two
-    corrections, preserving level and actual scale up to key-switch error.
+    corrections, preserving depth and actual scale up to key-switch error.
     """
 
 

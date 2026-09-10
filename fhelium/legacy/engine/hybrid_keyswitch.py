@@ -48,12 +48,12 @@ class PreparedRotationKeySwitch:
 
     ``ntt_digits_qp`` is an integral tensor on the engine device with shape
     ``[digit, *batch, limb, ntt_index]``. Limb order is the active
-    ``rns_layout.prime_ids(level, include_p=True)`` order; every residue is
+    ``rns_layout.prime_ids(depth, include_p=True)`` order; every residue is
     Montgomery/lazy. ``digit`` is local active order and callers resolve each
     stable ``key_digit_index`` separately before indexing key storage.
     """
 
-    level: int
+    depth: int
     batch_shape: tuple[int, ...]
     ntt_digits_qp: torch.Tensor
 
@@ -66,14 +66,14 @@ class HybridKeySwitcher:
         *,
         config: CkksConfig,
         rns_runtime: RnsRuntime,
-        moddown_p_drop_inverses_montgomery_by_level: list[torch.Tensor],
+        moddown_p_drop_inverses_montgomery_by_depth: list[torch.Tensor],
         direct_digit_consumer: DirectKeySwitchDigitConsumer,
     ) -> None:
         self.config = config
         self.rns_runtime = rns_runtime
         self.rns_layout = rns_runtime.rns_layout
-        self.moddown_p_drop_inverses_montgomery_by_level = (
-            moddown_p_drop_inverses_montgomery_by_level
+        self.moddown_p_drop_inverses_montgomery_by_depth = (
+            moddown_p_drop_inverses_montgomery_by_depth
         )
         self.direct_digit_consumer = direct_digit_consumer
         self.galois_generator = config.galois_generator
@@ -219,7 +219,7 @@ class HybridKeySwitcher:
     ]:
         """Return cached dense scalar tables for native ModUp construction."""
 
-        cache_key = (digit_spec.level, digit_spec.digit_index)
+        cache_key = (digit_spec.depth, digit_spec.digit_index)
         cached = self._mixed_radix_native_arg_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -261,13 +261,13 @@ class HybridKeySwitcher:
         mixed-radix form. Output is non-aliasing
         ``[*batch, destination_limb, coefficient]`` in coefficient-domain
         Montgomery lazy form, with rows exactly
-        ``rns_layout.prime_ids(level, include_p=True)``. It evaluates
+        ``rns_layout.prime_ids(depth, include_p=True)``. It evaluates
         $\sum_r d_r\prod_{t<r}b_t$ modulo every destination prime; no scale,
         polynomial, or public batch semantics change.
         """
 
         active_basis = self.rns_runtime.basis_parameters(
-            digit_spec.level, include_p=True
+            digit_spec.depth, include_p=True
         )
         destination_row_count = len(active_basis.prime_ids)
         source_prime_ids = digit_spec.prime_ids
@@ -300,12 +300,12 @@ class HybridKeySwitcher:
         self,
         component: torch.Tensor,
         key_switch_key: KeySwitchKey,
-        level: int,
+        depth: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # A direct switch has exactly one key consumer, so materializing every
         # extended digit provides no reuse.  More importantly, transforming
         # the digit axis as one batch makes the QP NTT working set exceed L2
-        # at large parameter sets (for example logN=16 at level 0), regressing even
+        # at large parameter sets (for example logN=16 at depth 0), regressing even
         # a genuinely unbatched ciphertext.  Stream one disposable digit for
         # every backend; only the final NTT/consumer implementation differs.
         # ``prepare_rotation_digits`` remains the explicit materialization
@@ -314,14 +314,14 @@ class HybridKeySwitcher:
         return self._apply_key_switch_streaming(
             component,
             key_switch_key,
-            level,
+            depth,
         )
 
     def _apply_key_switch_streaming(
         self,
         component: torch.Tensor,
         key_switch_key: KeySwitchKey,
-        level: int,
+        depth: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Consume one disposable QP digit at a time for a direct switch.
 
@@ -334,9 +334,9 @@ class HybridKeySwitcher:
 
         accumulator0_qp: torch.Tensor | None = None
         accumulator1_qp: torch.Tensor | None = None
-        digit_specs = self.rns_layout.digit_specs(level)
+        digit_specs = self.rns_layout.digit_specs(depth)
         active_row_start = self.rns_runtime.basis_parameters(
-            level, include_p=True
+            depth, include_p=True
         ).parameter_row_start
         for digit_spec in digit_specs:
             mixed_radix_components = self._decompose_digit_mixed_radix(
@@ -366,18 +366,18 @@ class HybridKeySwitcher:
         return self._moddown_switch_accumulators(
             accumulator0_qp,
             accumulator1_qp,
-            level,
+            depth,
         )
 
     def prepare_rotation_digits(
-        self, component: torch.Tensor, level: int
+        self, component: torch.Tensor, depth: int
     ) -> PreparedRotationKeySwitch:
         """Materialize only reusable NTT-domain QP digits for rotate-many."""
 
-        digit_specs = self.rns_layout.digit_specs(level)
+        digit_specs = self.rns_layout.digit_specs(depth)
         digit_count = len(digit_specs)
         active_row_start = self.rns_runtime.basis_parameters(
-            level, include_p=True
+            depth, include_p=True
         ).parameter_row_start
         ntt_digits_qp: torch.Tensor | None = None
         for digit_spec in digit_specs:
@@ -410,7 +410,7 @@ class HybridKeySwitcher:
                 "rotation hoisting requires at least one RNS digit"
             )
         return PreparedRotationKeySwitch(
-            level=level,
+            depth=depth,
             batch_shape=tuple(component.shape[:-2]),
             ntt_digits_qp=ntt_digits_qp,
         )
@@ -425,7 +425,7 @@ class HybridKeySwitcher:
         prototype = prepared.ntt_digits_qp[0]
         accumulator0_qp = torch.zeros_like(prototype)
         accumulator1_qp = torch.zeros_like(prototype)
-        digit_specs = self.rns_layout.digit_specs(prepared.level)
+        digit_specs = self.rns_layout.digit_specs(prepared.depth)
         for digit_spec, digit_qp_ntt in zip(
             digit_specs, prepared.ntt_digits_qp, strict=True
         ):
@@ -438,7 +438,7 @@ class HybridKeySwitcher:
                 rotation_step=rotation_step,
             )
         return self._moddown_switch_accumulators(
-            accumulator0_qp, accumulator1_qp, prepared.level
+            accumulator0_qp, accumulator1_qp, prepared.depth
         )
 
     def _accumulate_prepared_rotation_digit_(
@@ -456,7 +456,7 @@ class HybridKeySwitcher:
         )
 
         active_basis = self.rns_runtime.basis_parameters(
-            digit_spec.level, include_p=True
+            digit_spec.depth, include_p=True
         )
         ckks_ops.keyswitch_accumulate_digit_products_(
             accumulator0_qp,
@@ -530,14 +530,14 @@ class HybridKeySwitcher:
         self,
         accumulator0_qp: torch.Tensor,
         accumulator1_qp: torch.Tensor,
-        level: int,
+        depth: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         r"""Apply sequential P ModDown to two QP key-switch accumulators.
 
         Inputs are integral NTT/Montgomery
         ``[*batch, active_qp_limb, ntt_index]`` tensors. They are inverse-transformed
         in place, then each P prime is rounded away using
-        ``moddown_p_drop_inverses_montgomery_by_level[level]``. Returned
+        ``moddown_p_drop_inverses_montgomery_by_depth[depth]``. Returned
         tensors are newly allocated coefficient/standard Q-only residues with
         $Q_\ell$ rows and the same public batch axes.
         """
@@ -547,10 +547,10 @@ class HybridKeySwitcher:
 
         p_count = self.config.num_p_primes
         moddown_p_drop_inverses_montgomery = (
-            self.moddown_p_drop_inverses_montgomery_by_level[level]
+            self.moddown_p_drop_inverses_montgomery_by_depth[depth]
         )
         active_params = self.rns_runtime.basis_parameters(
-            level, include_p=True
+            depth, include_p=True
         ).native_parameters
         correction0 = ckks_ops.keyswitch_moddown_qp_to_q(
             accumulator0_qp[..., :-p_count, :],
@@ -574,7 +574,7 @@ class HybridKeySwitcher:
         *,
         rotation_step: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        expected_q_rows = len(self.rns_layout.prime_ids(prepared.level))
+        expected_q_rows = len(self.rns_layout.prime_ids(prepared.depth))
         expected_c0_shape = (
             *prepared.batch_shape,
             expected_q_rows,

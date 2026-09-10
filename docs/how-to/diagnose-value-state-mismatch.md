@@ -57,7 +57,7 @@ because its other metadata is valid.
 
 Use this order:
 
-1. level;
+1. depth;
 2. active `prime_ids`;
 3. plaintext representation, where applicable;
 4. modulus basis (`Q` or `QP`);
@@ -71,10 +71,10 @@ Typical diagnoses:
 | Symptom | Likely mismatch |
 | --- | --- |
 | Fresh ciphertext rejected by `multiply` | Still coefficient domain or not rescaled/prepared |
-| Same-level addition rejected | Prime IDs, scale, polynomial domain, or modulus basis differ |
+| Same-depth addition has incompatible semantics | Caller did not match prime IDs, scale, polynomial domain, or modulus basis before dispatch |
 | Q value rejected by key-switch path | Key/value basis or active rows incompatible |
 | Three-component value rejected | Operation requires two components or relinearization |
-| `MaximumLevelError` | No remaining legal scale prime to drop |
+| `MaximumDepthError` | No remaining public depth transition is available |
 
 ## 5. Check stored key state and the external key relation
 
@@ -138,7 +138,7 @@ Add in this order:
 5. distributed transport/partition;
 6. residency/prefetch policy.
 
-At each step, preserve the same oracle, seed, level checkpoints, and error
+At each step, preserve the same oracle, seed, depth checkpoints, and error
 threshold.
 
 ## 9. If the problem reaches native code
@@ -148,8 +148,8 @@ Capture:
 - source commit and build/wheel origin;
 - operator schema and generated wrapper status;
 - shape/dtype/device and mutation or aliasing semantics;
-- level-specific row start/stop and prime IDs;
-- singleton/last-level/Q-vs-QP cases;
+- depth-specific row start/stop and prime IDs;
+- singleton/last-depth/Q-vs-QP cases;
 - synchronized CUDA error location;
 - smallest `logN` and NTT backend that reproduce the issue.
 
@@ -158,7 +158,7 @@ later call caused it.
 
 ## Related documentation
 
-- [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md)
+- [Scale and depth lifecycle](../concepts/ckks/scale-and-depth-lifecycle.md)
 - [Value model and identity](../concepts/ckks/value-model-and-identity.md)
 - [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)
 - [Basic CKKS tutorial](../tutorial/basic-ckks-workflow.md)

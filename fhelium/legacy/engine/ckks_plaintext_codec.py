@@ -44,7 +44,7 @@ class CkksPlaintextCodec:
         rns_layout: RnsLayout,
         rns_runtime: RnsRuntime,
         engine_id: str,
-        validate_public_level: Callable[[object], int],
+        validate_public_depth: Callable[[object], int],
     ) -> None:
         self.config = config
         self.device = device
@@ -53,7 +53,7 @@ class CkksPlaintextCodec:
         self.rns_runtime = rns_runtime
         self.galois_generator = config.galois_generator
         self.engine_id = engine_id
-        self._validate_public_level = validate_public_level
+        self._validate_public_depth = validate_public_depth
 
     @property
     def num_slots(self) -> int:
@@ -65,31 +65,31 @@ class CkksPlaintextCodec:
         return (
             f"CkksPlaintextCodec(engine_id={self.engine_id}, "
             f"logN={self.config.logN}, slots={self.num_slots}, "
-            f"scale_bits={self.config.scale_bits}, "
+            f"default_scale={self.config.default_scale}, "
             f"device={self.device})"
         )
 
     __repr__ = __str__
 
-    def plaintext(self, message, *, level: int = 0, scale=None) -> Plaintext:
+    def plaintext(self, message, *, depth: int = 0, scale=None) -> Plaintext:
         r"""Create an unencoded slots-only :class:`Plaintext`.
 
         No embedding or quantization occurs. The input is detached, cloned,
         and moved to the engine device while preserving its inferred dtype and
         shape; a later encode interprets the final axis as slots and preserves
-        leading batch axes. The value records level and actual scale
+        leading batch axes. The value records depth and actual scale
         $\Delta(p)$ but has no RNS domain, basis, residue form, or
         ``prime_ids``.
         """
 
-        self._validate_public_level(level)
+        self._validate_public_depth(depth)
         scale = coerce_scale(
             self.config.default_scale if scale is None else scale,
             value_name="Plaintext",
         )
         return Plaintext(
             message=torch.as_tensor(message).detach().clone().to(self.device),
-            level=level,
+            depth=depth,
             scale=float(scale),
         )
 
@@ -97,7 +97,7 @@ class CkksPlaintextCodec:
         self,
         coeff: torch.Tensor,
         *,
-        level: int,
+        depth: int,
         scale: float,
     ) -> Plaintext:
         """Wrap ``[*batch, coefficient]`` storage without copying.
@@ -109,7 +109,7 @@ class CkksPlaintextCodec:
 
         return Plaintext(
             message=None,
-            level=level,
+            depth=depth,
             scale=scale,
             data=coeff,
             representation="integer_coefficients",
@@ -120,7 +120,7 @@ class CkksPlaintextCodec:
         self,
         coefficients: torch.Tensor,
         *,
-        level: int,
+        depth: int,
         scale: float,
     ) -> Plaintext:
         r"""Wrap bounded binary64 decrypt coefficients without copying.
@@ -133,7 +133,7 @@ class CkksPlaintextCodec:
 
         return Plaintext(
             message=None,
-            level=level,
+            depth=depth,
             scale=scale,
             data=coefficients,
             representation="approximate_coefficients",
@@ -205,7 +205,7 @@ class CkksPlaintextCodec:
         self,
         message,
         *,
-        level: int = 0,
+        depth: int = 0,
         scale=None,
     ) -> Plaintext:
         r"""Encode slots into one integer-coefficient plaintext.
@@ -219,21 +219,21 @@ class CkksPlaintextCodec:
         \mathbb{E}[\operatorname{SRound}(x)]=x,
         $$
 
-        independently of the selected RNS level. The functional result is
+        independently of the selected RNS depth. The functional result is
         ``integer_coefficients`` with layout
         ``[*batch, coefficient]``, final extent $N$, engine integral dtype and
         device, coefficient domain, actual scale $\Delta$, and no RNS basis or
         ``prime_ids``. Use :meth:`integer_coefficients_to_rns` for modular reduction.
         """
 
-        self._validate_public_level(level)
+        self._validate_public_depth(depth)
         scale = coerce_scale(
             self.config.default_scale if scale is None else scale,
             value_name="Plaintext",
         )
         return self._wrap_integer_plaintext(
             self._encode_slots_to_integer_coefficients(message, scale=scale),
-            level=level,
+            depth=depth,
             scale=scale,
         )
 
@@ -250,7 +250,7 @@ class CkksPlaintextCodec:
         ``[*batch, coefficient]`` becomes
         ``[*batch, limb, coefficient]`` with engine integral dtype/device and
         final extent $N$. The output basis is $Q_\ell$ or $Q_\ell P$ exactly
-        as requested; its ordered ``prime_ids`` map every limb row. Level and
+        as requested; its ordered ``prime_ids`` map every limb row. Depth and
         actual scale are preserved. No NTT, Montgomery conversion, rounding,
         or CRT reconstruction occurs, and the functional output does not alias
         input coefficient storage.
@@ -289,12 +289,12 @@ class CkksPlaintextCodec:
         include_p = modulus_basis == "QP"
         data = self.rns_runtime.lift_integer_coefficients_exact(
             data,
-            plaintext.level,
+            plaintext.depth,
             include_p=include_p,
         )
         return Plaintext(
             message=None,
-            level=plaintext.level,
+            depth=plaintext.depth,
             scale=plaintext.scale,
             data=data,
             representation="rns",
@@ -302,7 +302,7 @@ class CkksPlaintextCodec:
             modulus_basis=modulus_basis,
             residue_representation="standard",
             prime_ids=self.rns_layout.prime_ids(
-                plaintext.level,
+                plaintext.depth,
                 include_p=include_p,
             ),
         )
@@ -320,7 +320,7 @@ class CkksPlaintextCodec:
             )
         return self.encode(
             plaintext.message,
-            level=plaintext.level,
+            depth=plaintext.depth,
             scale=plaintext.scale,
         )
 
@@ -348,7 +348,7 @@ class CkksPlaintextCodec:
                 f"{plaintext.representation!r}. Encode a separate "
                 "integer-coefficient Plaintext when required."
             )
-        self._validate_public_level(plaintext.level)
+        self._validate_public_depth(plaintext.depth)
         if (
             plaintext.polynomial_domain != "coefficient"
             or plaintext.modulus_basis is not None
@@ -376,10 +376,10 @@ class CkksPlaintextCodec:
                 f"{data.device} != {self.device}"
             )
         if plaintext.is_integer_coefficients:
-            if data.dtype != self.config.torch_dtype:
+            if data.dtype != self.rns_runtime.dtype:
                 raise TypeError(
                     "integer_coefficients Plaintext dtype does not match "
-                    f"engine: {data.dtype} != {self.config.torch_dtype}"
+                    f"engine: {data.dtype} != {self.rns_runtime.dtype}"
                 )
         else:
             if data.dtype != torch.float64:

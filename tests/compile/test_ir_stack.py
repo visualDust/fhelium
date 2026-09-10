@@ -12,9 +12,9 @@ builtin.module attributes {
   fhelium.schema_version = "1",
   fhelium.dialect_version = "0.2"
 } {
-  func.func @main(%secret: !fhelium_ckks.ciphertext<{components = 2 : i64, level = 3 : i64}>) -> !fhelium_ckks.ciphertext<{}> {
-    %product = "fhelium_ckks.multiply"(%secret, %secret) : (!fhelium_ckks.ciphertext<{components = 2 : i64, level = 3 : i64}>, !fhelium_ckks.ciphertext<{components = 2 : i64, level = 3 : i64}>) -> !fhelium_ckks.ciphertext<{components = 3 : i64, level = 3 : i64}>
-    %result = "vendor.experimental.refresh"(%product) : (!fhelium_ckks.ciphertext<{components = 3 : i64, level = 3 : i64}>) -> !fhelium_ckks.ciphertext<{}>
+  func.func @main(%secret: !fhelium_ckks.ciphertext<{components = 2 : i64, depth = 3 : i64}>) -> !fhelium_ckks.ciphertext<{}> {
+    %product = "fhelium_ckks.multiply"(%secret, %secret) : (!fhelium_ckks.ciphertext<{components = 2 : i64, depth = 3 : i64}>, !fhelium_ckks.ciphertext<{components = 2 : i64, depth = 3 : i64}>) -> !fhelium_ckks.ciphertext<{components = 3 : i64, depth = 3 : i64}>
+    %result = "vendor.experimental.refresh"(%product) : (!fhelium_ckks.ciphertext<{components = 3 : i64, depth = 3 : i64}>) -> !fhelium_ckks.ciphertext<{}>
     func.return %result : !fhelium_ckks.ciphertext<{}>
   }
 }

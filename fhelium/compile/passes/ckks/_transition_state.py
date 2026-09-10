@@ -145,7 +145,7 @@ def compatible_states(
     )
     if any(lhs.get(field) != rhs.get(field) for field in represented):
         return False
-    for field in ("level", "scale", "prime_ids"):
+    for field in ("depth", "scale", "prime_ids"):
         if field in lhs and field in rhs and lhs[field] != rhs[field]:
             return False
     return True
@@ -203,6 +203,7 @@ _PATH_OPERATION_TYPES = (
     ckks.ConjugateOp,
     ckks.RotateOp,
     ckks.RotateManyOp,
+    ckks.GroupedRotationWeightedSumOp,
     ckks.RescaleOp,
     ckks.ToNttOp,
     ckks.FromNttOp,
@@ -299,7 +300,7 @@ def _refresh_reachable_states(
                 state = dict(source_state)
                 domain = operation.output_domain.data
                 if result_state is not None:
-                    for field in ("level", "scale", "prime_ids"):
+                    for field in ("depth", "scale", "prime_ids"):
                         if field in result_state:
                             state[field] = result_state[field]
                 state.update(
@@ -413,6 +414,7 @@ def _normalize_reachable_inputs(
             operation,
             (
                 ckks.RotateManyOp,
+                ckks.GroupedRotationWeightedSumOp,
                 ckks.SwitchKeyOp,
                 ckks.ConjugateOp,
             ),

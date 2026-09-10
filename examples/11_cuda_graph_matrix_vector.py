@@ -66,7 +66,7 @@ def prepare_constants(
     diagonals = [
         engine.prepare_plaintext_for_multiplication(
             engine.encode(
-                cyclic_diagonal_slots(matrix, step, engine.num_slots), level=0
+                cyclic_diagonal_slots(matrix, step, engine.num_slots), depth=0
             )
         )
         for step in range(matrix.size(0))
@@ -99,7 +99,7 @@ def matrix_vector(
     )
     diagonal_batch = Plaintext.stack_batch(diagonals)
     weighted = engine.multiply_plaintext(rotated_ntt, diagonal_batch)
-    return engine.rescale_to_next_level(
+    return engine.rescale_to_next_depth(
         engine.ntt_domain_to_coefficient_domain(
             engine.sum_ciphertext_batch(weighted)
         )
@@ -110,7 +110,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_engine_args(
         parser,
-        default_preset="slots8192-scale40-levels7-int64",
+        default_preset="slots8192-scale40-depth7-int64",
     )
     parser.add_argument("--size", type=int, default=8)
     parser.add_argument("--capture-warmup", type=int, default=3)

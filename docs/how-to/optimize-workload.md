@@ -42,7 +42,7 @@ it.
 | Dominant cost | First mechanisms to test |
 | --- | --- |
 | Repeated relinearization | Late relinearization where triplets align |
-| Repeated plaintext preparation | Operation-ready level-specific plaintexts |
+| Repeated plaintext preparation | Operation-ready depth-specific plaintexts |
 | Repeated fixed NTT operand | Reuse prepared NTT/Montgomery value |
 | Many rotations/key switches | Hoisting, direct keyset, packing/schedule changes |
 | NTT table/launch traffic | Indexed/compact and grouping ablation |
@@ -73,7 +73,7 @@ Hold fixed:
 
 - input and seed;
 - packing and mathematical output;
-- preset, level, scale, and rows;
+- preset, depth, scale, and rows;
 - key strategy unless it is the tested variable;
 - warmup/runs/statistic;
 - synchronization rule and memory measurement point.
@@ -98,7 +98,7 @@ Sweep a small justified range. Do not assume the largest value is best.
 After each change, verify:
 
 - output error and range;
-- level and scale schedule;
+- depth and scale schedule;
 - active rows and basis;
 - component count;
 - rotation direction and direct keys;
@@ -113,7 +113,7 @@ relinearization placement without updating the declared operation schedule.
 A successful local result should be checked across:
 
 - fast smoke and target presets;
-- early, middle, and late legal levels where relevant;
+- early, middle, and late legal depths where relevant;
 - multiple seeds and amplitudes;
 - source build and installed wheel for native changes;
 - target GPU architecture;
@@ -140,7 +140,7 @@ component ablations before attributing the speedup to one kernel.
 ## Related documentation
 
 - [CKKS cost model](../concepts/performance/cost-model.md)
-- [Benchmark a workload](benchmark-a-workload.md)
+- [Benchmark methodology](/benchmarks/methodology)
 - [Late-relinearization tutorial](../tutorial/late-relinearization-and-ntt-reuse.md)
 - [Rotation-hoisting tutorial](../tutorial/rotation-hoisting.md)
 - [Capture a repeated evaluator](capture-repeated-evaluator.md)

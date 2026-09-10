@@ -33,7 +33,7 @@ order; it does not search surrounding operations or regroup them.
 
 ```bash
 python examples/07_rotation_hoisting_benchmark.py \
-  --preset slots32768-scale40-levels34-int64 \
+  --preset slots32768-scale40-depth34-int64 \
   --counts 4,8,16 \
   --warmup 5 \
   --runs 20
@@ -43,7 +43,7 @@ Start with fewer runs when checking a new environment:
 
 ```bash
 python examples/07_rotation_hoisting_benchmark.py \
-  --preset slots8192-scale40-levels7-int64 \
+  --preset slots8192-scale40-depth7-int64 \
   --counts 2,4 \
   --warmup 1 \
   --runs 3
@@ -167,4 +167,4 @@ consume all produced rotations.
 
 - [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)
 - [CKKS workload cost model](../concepts/performance/cost-model.md)
-- [Benchmark a workload correctly](../how-to/benchmark-a-workload.md)
+- [Benchmark methodology](/benchmarks/methodology)

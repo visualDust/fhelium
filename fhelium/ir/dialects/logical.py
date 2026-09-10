@@ -88,8 +88,8 @@ class AddEncryptedEncryptedOp(_BinaryLogicalOp):
     r"""Return the logical pointwise sum of encrypted values.
 
     For logical values representing slot tensors $x$ and $y$, the result
-    represents $z_i=x_i+y_i$.  This level records operand roles only; CKKS
-    levels, scales, residue rows, and polynomial representation are assigned by
+    represents $z_i=x_i+y_i$.  This depth records operand roles only; CKKS
+    depths, scales, residue rows, and polynomial representation are assigned by
     later passes.  ``LowerLogicalToCkksPass`` maps this operation to
     ``ckks.AddOp`` once both operands have usable CKKS state."""
 
@@ -104,8 +104,8 @@ class AddEncryptedPublicOp(_BinaryLogicalOp):
     r"""Return the logical pointwise sum of encrypted $x$ and public $y$.
 
     The result represents $z_i=x_i+y_i$.  The public operand remains a message
-    at this level so later preparation can encode it at the encrypted operand's
-    level and scale before lowering to CKKS plaintext addition."""
+    at this depth so later preparation can encode it at the encrypted operand's
+    depth and scale before lowering to CKKS plaintext addition."""
 
     name = "fhelium_logical.add.encrypted_public"
     lhs = operand_def(EncryptedType)
@@ -132,7 +132,7 @@ class SubtractEncryptedEncryptedOp(_BinaryLogicalOp):
     r"""Return the logical pointwise difference of encrypted values.
 
     For slot tensors $x$ and $y$, the result represents $z_i=x_i-y_i$.
-    Later CKKS passes establish compatible level, scale, basis, and residue state
+    Later CKKS passes establish compatible depth, scale, basis, and residue state
     before lowering this operation to ``ckks.SubtractOp``."""
 
     name = "fhelium_logical.subtract.encrypted_encrypted"
@@ -173,7 +173,7 @@ class MultiplyEncryptedEncryptedOp(_BinaryLogicalOp):
     r"""Return the logical pointwise product of encrypted values.
 
     For slot tensors $x$ and $y$, the result represents $z_i=x_i y_i$.
-    Later passes choose CKKS levels and scales, move polynomial payloads to the
+    Later passes choose CKKS depths and scales, move polynomial payloads to the
     number-theoretic-transform representation, and lower to ``ckks.MultiplyOp``."""
 
     name = "fhelium_logical.multiply.encrypted_encrypted"

@@ -11,6 +11,8 @@ from xdsl.dialects.builtin import (
 from xdsl.ir import Attribute, Operation, SSAValue
 
 from fhelium.config import CkksConfig
+from fhelium.backend.rns.chain import RnsChain
+from fhelium.backend.rns.decomposition import HybridRnsDecomposition
 
 from ....ir.dialects import ckks, rns
 
@@ -69,21 +71,21 @@ def _key_switch_digit_indices(
     *,
     operation: str,
 ) -> tuple[int, ...]:
-    level = _state_integer(value_type, "level", operation=operation)
-    if not 0 <= level < config.num_scale_primes:
+    depth = _state_integer(value_type, "depth", operation=operation)
+    if not 0 <= depth <= config.max_depth:
         raise ValueError(
-            f"{operation} requires a public CKKS level, got {level}"
+            f"{operation} requires a public CKKS depth, got {depth}"
         )
-    q_prime_ids = tuple(range(config.num_q_primes))
-    digit_width = config.num_p_primes
-    level_zero_digits = tuple(
-        q_prime_ids[start : start + digit_width]
-        for start in range(0, len(q_prime_ids), digit_width)
+    chain = RnsChain(
+        config.num_q_primes,
+        config.num_p_primes,
+        tuple(len(group) for group in config.q_depth_groups),
+    )
+    decomposition = HybridRnsDecomposition(
+        chain, config.q_moduli, config.p_moduli
     )
     return tuple(
-        key_digit_index
-        for key_digit_index, digit in enumerate(level_zero_digits)
-        if any(prime_id >= level for prime_id in digit)
+        digit.key_digit_index for digit in decomposition.digits_at_depth(depth)
     )
 
 

@@ -1,8 +1,8 @@
 # IR operator implementation index
 
-This index maps the operations used by FHElium's intermediate representation (IR) to the files that directly transform or execute them. An **IR abstraction level** describes how much cryptographic and execution detail an operation represents; it is independent of a CKKS modulus-chain level.
+This index maps the operations used by FHElium's intermediate representation (IR) to the files that directly transform or execute them. An **IR abstraction level** describes how much cryptographic and execution detail an operation represents; it is independent of a CKKS modulus-chain depth.
 
-The main inventory contains all 84 operations in `REGISTERED_DIALECTS` and groups them by mathematical or execution responsibility. Each group proceeds from higher-level intent toward lower-level arithmetic where applicable. A separate final section lists the 18 upstream xDSL operations that FHElium's current Backend executes directly.
+The main inventory contains all 87 operations in `REGISTERED_DIALECTS` and groups them by mathematical or execution responsibility. Each group proceeds from higher-level intent toward lower-level arithmetic where applicable. A separate final section lists the 18 upstream xDSL operations that FHElium's current Backend executes directly.
 
 [Operation declaration and implementation selection](./operation-registration-and-selection.md) describes how Compile records transformations and how execution owners assemble Backend implementations.
 
@@ -62,9 +62,9 @@ Boundary operations adapt messages, plaintexts, ciphertexts, and key resources t
 
 | Operator | Schema | File |
 |---|---|---|
-| `fhelium_ckks.encode` | `(M) {level: i64, scale: f64} -> PT` | `_implementation.py`<br>`_codec.py` |
+| `fhelium_ckks.encode` | `(M) {depth: i64, scale: f64} -> PT` | `_implementation.py`<br>`_codec.py` |
 | `fhelium_ckks.decode` | `(PT) {is_real: i64} -> M` | `_implementation.py`<br>`_codec.py` |
-| `fhelium_ckks.integer_coefficients_to_rns` | `(PT) {modulus_basis: str, level: i64} -> PT` | `_implementation.py` |
+| `fhelium_ckks.integer_coefficients_to_rns` | `(PT) {modulus_basis: str, depth: i64} -> PT` | `_implementation.py` |
 | `fhelium_ckks.encrypt` | `(PT) {key_symbol: str} -> CT` | `_encryption.py` |
 | `fhelium_ckks.decrypt` | `(CT) {key_symbol: str} -> PT` | `_decryption.py` |
 
@@ -107,6 +107,8 @@ Preparation operations convert a public source into an operation-ready plaintext
 | `fhelium_ckks.multiply_compressed_plaintext` | `(CT, CPT) {inplace?: i64} -> CT` | `operations.py`<br>`rns_arithmetic_cpu.cpp`<br>`rns_arithmetic_cuda.cu` |
 | `fhelium_rns.add_plaintext` | `(R, R, RP) -> R` | `operations.py`<br>`plaintext_cpu.cpp`<br>`plaintext_cuda.cu` |
 | `fhelium_rns.multiply_plaintext` | `(R, R, RP) -> R` | `operations.py`<br>`rns_arithmetic_cpu.cpp`<br>`rns_arithmetic_cuda.cu` |
+| `fhelium_rns.montgomery_weighted_sum` | `(RP, R...) {term_count: i64} -> R` | `operations.py` |
+| `fhelium_rns.montgomery_weighted_sums` | `(RP, R...) {term_count: i64, group_count: i64} -> R` | `operations.py` |
 
 ## Polynomial and residue representation transforms
 
@@ -127,15 +129,15 @@ These operations change polynomial domain or residue representation while preser
 
 ## Modulus-chain and scale transitions
 
-These operations change the active modulus basis, level metadata, or scale metadata. CKKS rescale accepts one ciphertext operand and carries `rounding: "nearest"` or `"floor"`.
+These operations change the active modulus basis, depth metadata, or scale metadata. CKKS rescale accepts one ciphertext operand and carries `rounding: "nearest"` or `"floor"`.
 
 | Operator | Schema | File |
 |---|---|---|
 | `fhelium_ckks.rescale` | `(CT, PT?) {condition: str, rounding: str} -> CT` | `_representation.py` |
-| `fhelium_ckks.mod_switch` | `(CT) {target_level: i64} -> CT` | `_representation.py` |
+| `fhelium_ckks.mod_switch` | `(CT) {target_depth: i64} -> CT` | `_representation.py` |
 | `fhelium_ckks.reinterpret_scale` | `(CT) {scale: f64} -> CT` | `_representation.py` |
-| `fhelium_rns.rescale_drop_leading_prime` | `(R, RS) {rounding?: str} -> R` | `rescale.py`<br>`rescale_cpu.cpp`<br>`rescale_cuda.cu` |
-| `fhelium_rns.restrict_level` | `(R, RP) {target_level: i64} -> R` | `operations.py` |
+| `fhelium_rns.rescale_drop_leading_primes` | `(R, RS) {drop_count: int, rounding?: str} -> R` | `rescale.py`<br>`rescale_cpu.cpp`<br>`rescale_cuda.cu` |
+| `fhelium_rns.restrict_depth` | `(R, RP) {target_depth: i64} -> R` | `operations.py` |
 | `fhelium_rns.reinterpret_scale` | `(R) {scale: f64} -> R` | `operations.py` |
 
 ## Key switching, automorphisms, and rotation
@@ -146,6 +148,7 @@ This group contains evaluation-key-dependent CKKS operations and their RNS key-s
 |---|---|---|
 | `fhelium_ckks.rotate` | `(CT, EK) -> CT` | `_resolve_rotation_keys.py`<br>`_keyswitch.py`<br>`operations.py` |
 | `fhelium_ckks.hoisted_rotate_many` | `(CT, EK...) -> CT...` | `_hoist_rotations.py`<br>`operations.py`<br>`_hoisted.py` |
+| `fhelium_ckks.grouped_rotation_weighted_sum` | `(CT, EK..., PT...) {baby_steps: i64[], term_count: i64, group_count: i64} -> CT` | `_hoist_rotations.py`<br>`operations.py`<br>`_hoisted.py` |
 | `fhelium_ckks.relinearize` | `(CT) -> CT` | `_keyswitch.py`<br>`operations.py` |
 | `fhelium_ckks.switch_key` | `(CT) {key_symbol: str} -> CT` | `_keyswitch.py` |
 | `fhelium_ckks.conjugate` | `(CT) -> CT` | `_keyswitch.py` |
@@ -153,6 +156,7 @@ This group contains evaluation-key-dependent CKKS operations and their RNS key-s
 | `fhelium_rns.key_switch_digit_product` | `(R, EK, RP, KP) {key_digit_index: i64} -> R` | `operations.py`<br>`keyswitch_cpu.cpp`<br>`keyswitch_cuda.cu` |
 | `fhelium_rns.add_montgomery_lazy` | `(R, R, RP) -> R` | `operations.py`<br>`rns_arithmetic_cpu.cpp`<br>`rns_arithmetic_cuda.cu` |
 | `fhelium_rns.moddown_qp_to_q` | `(R, RP, KP) -> R` | `operations.py`<br>`keyswitch_cpu.cpp`<br>`keyswitch_cuda.cu` |
+| `fhelium_rns.moddown_ntt_qp_to_q` | `(R, RP, KP) -> R` | `operations.py`<br>`keyswitch_cpu.cpp`<br>`keyswitch_cuda.cu` |
 | `fhelium_rns.coefficient_automorphism` | `(R, RP) {galois_element: i64} -> R` | `operations.py`<br>`automorphism_cpu.cpp`<br>`automorphism_cuda.cu` |
 
 ## Placement and memory movement

@@ -1,6 +1,6 @@
 # Implement a bootstrap component
 
-The experimental bootstrap component interfaces expose polynomial approximation, polynomial evaluation, linear-transform compilation and evaluation, and periodic reduction. Each component defines its coordinate, polynomial basis, tensor axes, arithmetic state, level/scale recurrence, mutation behavior, and numerical range.
+The experimental bootstrap component interfaces expose polynomial approximation, polynomial evaluation, linear-transform compilation and evaluation, and periodic reduction. Each component defines its coordinate, polynomial basis, tensor axes, arithmetic state, depth/scale recurrence, mutation behavior, and numerical range.
 
 ## Polynomial approximation
 
@@ -44,24 +44,24 @@ its output preserves those axes.
 
 ## Polynomial evaluation
 
-Implement `required_levels()` and `evaluate()` to execute another multiplication
+Implement `required_depths()` and `evaluate()` to execute another multiplication
 DAG:
 
 ```python
 class MyEvaluator:
-    def required_levels(self, polynomial):
+    def required_depths(self, polynomial):
         return my_depth(polynomial.coefficients)
 
     def evaluate(
         self,
-        engine,
+        arithmetic,
         ciphertext,
         polynomial,
         *,
         relinearization_key=None,
     ):
         return my_homomorphic_dag(
-            engine,
+            arithmetic,
             ciphertext,
             polynomial.coefficients,
             relinearization_key=relinearization_key,
@@ -78,14 +78,13 @@ coefficient/standard/Q/two components
   -> NTT/Montgomery/Q/two components
   -> NTT/Montgomery/Q/three components
   -> coefficient/standard/Q/two components
-  -> drop leading Q row and reinterpret at default_scale
+  -> drop one complete Q group and retain the actual quotient scale
 ```
 
-A custom evaluator must report whether it follows that private fixed-scale
-policy or preserves the core actual scale
-$\Delta_{\rm product}/q_{\rm drop}$. It must not claim
-`required_levels(polynomial) == d` unless every execution path advances by
-exactly $d$ levels.
+A custom evaluator must report its actual scale recurrence, such as
+$\Delta_{\rm product}/M_d$ for the dropped Q-group product $M_d$. It must not claim
+`required_depths(polynomial) == d` unless every execution path advances by
+exactly $d$ depths.
 An evaluator may accept `relinearization_key=None` only on an execution path
 whose polynomial DAG contains no ciphertext product, such as a constant or
 linear built-in polynomial.
@@ -129,12 +128,12 @@ class SparseEvaluator:
     def required_rotation_offsets(self, transform):
         return tuple(rotations_used_by(transform.matrix))
 
-    def required_levels(self, transform):
+    def required_depths(self, transform):
         return 1
 
     def evaluate(
         self,
-        engine,
+        arithmetic,
         ciphertext,
         transform,
         *,
@@ -143,7 +142,7 @@ class SparseEvaluator:
         encode_diagonal,
     ):
         return evaluate_sparse_map(
-            engine,
+            arithmetic,
             ciphertext,
             transform.matrix,
             rotation_keys=rotation_keys,
@@ -154,17 +153,18 @@ class SparseEvaluator:
 
 The callbacks provide rotation-key decomposition and diagonal encoding/cache
 policy. A built-in diagonal stage encodes an unbatched `[limb, ntt_index]`
-Montgomery plaintext at scale $\Delta_0$. For input scale $\Delta_j$ and leading
-prime $q_j$, one stage returns
+Montgomery plaintext at the selected scale $\Delta_{p,j}$. For input scale
+$\Delta_j$ and dropped group product $M_j$, one stage returns
 
 $$
 \ell_{j+1}=\ell_j+1,\qquad
-\Delta_{j+1}=\frac{\Delta_j\Delta_0}{q_j}.
+\Delta_{j+1}=\frac{\Delta_j\Delta_{p,j}}{M_j}.
 $$
 
 The output remains two-component coefficient-domain standard RNS over Q, with
-unchanged batch axes and the leading `prime_ids` row removed. If a custom
-evaluator uses another recurrence or state transition, report the differing recurrence or transition.
+unchanged batch axes and the complete leading `prime_ids` group removed. If a
+custom evaluator uses another recurrence or state transition, report the
+differing recurrence or transition.
 
 For a cyclic-diagonal map
 
@@ -202,7 +202,7 @@ class MyReduction:
     requires_relinearization = False
 
     @property
-    def required_levels(self):
+    def required_depths(self):
         return 6
 
     @property
@@ -214,7 +214,7 @@ class MyReduction:
 
     def evaluate(
         self,
-        engine,
+        arithmetic,
         ciphertext,
         *,
         relinearization_key=None,
@@ -223,7 +223,7 @@ class MyReduction:
         del relinearization_key, conjugation_key
         # With fusion, ciphertext already represents x = r / input_bound.
         return my_periodic_reduction_without_ciphertext_products(
-            engine, ciphertext
+            arithmetic, ciphertext
         )
 ```
 
@@ -233,12 +233,12 @@ The component interface specification must state:
 - whether `evaluate()` accepts $r$ or $x$ under each fusion setting;
 - the raw admissible interval and output target;
 - the polynomial basis and design interval;
-- `required_levels` and output actual scale;
+- `required_depths` and output actual scale;
 - whether `requires_relinearization` is true because evaluation performs a
   ciphertext-ciphertext product;
 - whether ciphertext products or conjugation consume the supplied primitive
   keys;
-- output level, component count, domain, basis, residue representation, and
+- output depth, component count, domain, basis, residue representation, and
   `prime_ids`;
 - whether execution mutates or aliases an input.
 
@@ -260,7 +260,7 @@ state sequence:
 ```mermaid
 flowchart LR
     FINAL[Final public Q]
-    BASE["Structural [q_b]"]
+    BASE["Structural terminal Q group"]
     RAISED[Centered target Q]
     C2S[CoeffsToSlots]
     SPLIT[Split]
@@ -278,7 +278,7 @@ $$
 $$
 
 Its final scale follows the actual SlotsToCoeffs recurrence and may differ from
-`default_scale`. A component must not hide a level, scale reinterpretation,
+`default_scale`. A component must not hide a depth, scale reinterpretation,
 basis extension, NTT transition, or range normalization from its declared
 state-transition specification.
 
@@ -289,7 +289,7 @@ Test components independently before inserting them into a full bootstrap:
 - compare `reference()` with the intended map on the documented coordinate;
 - test raw-to-normalized equivalence using $x=r/B$;
 - compare encrypted component output with the plaintext oracle;
-- assert output level advancement and actual scale recurrence;
+- assert output depth advancement and actual scale recurrence;
 - assert component, batch, limb, and coefficient/NTT axes;
 - assert domain, basis, residue representation, and `prime_ids`;
 - compare direct and BSGS decoded outputs for the same mathematical map;

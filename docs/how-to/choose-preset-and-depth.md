@@ -1,202 +1,149 @@
 # Choose a preset and chain depth
 
-Use this procedure before optimizing or distributing a new evaluator. The goal
-is a parameter plan that has enough slots, legal state transitions,
-realistic numerical range, and a reproducible correctness test.
+Choose a CKKS parameter set from the circuit's slot capacity, rescale schedule,
+precision, range, security budget, and memory requirements. Validate the
+resulting exact configuration against a cleartext oracle before optimizing its
+execution.
 
-## Built-in Preset baselines
+## Read a Preset name
 
-`Preset` members use the form
-`slots{capacity}_scale{bits}_levels{count}_{dtype}`. The corresponding CLI value
-uses hyphens, for example `slots8192-scale40-levels7-int64`. `levels` is the
-public-level count; the number of ordinary one-level transitions available
-from level zero is `levels - 1`.
+Preset names have the form
 
-The dtype suffix selects the packaged prime and scale family and is required in
-Python members and CLI values.
+```text
+slots{capacity}_scale{target}_depth{maximum}_{default_rns_dtype}
+```
 
-The `int32` family uses a 30-bit residue buffer and 28-bit structural Q/P
-primes. The `int64` family uses a 62-bit residue buffer and 60-bit structural
-Q/P primes. Both use the built-in 128-bit classical category, Gaussian error
-standard deviation 3.19, and uniform-ternary secret sampling. The
-installed prime values remain part of the resolved `CkksConfig` and context
-identity. The catalog stores preset level counts as reviewed fixed constants.
-Some int32 counts are limited
-by the reviewed prime catalog before they reach the security-table bit budget.
-A resolved `CkksConfig` is immutable so its cached prime sequences and security
-assessment cannot diverge. Create a derived configuration with
-`CkksConfig.parse(preset, **overrides)` so every override passes configuration
-construction and validation.
+For example, `slots32768_scale50_depth27_int64` resolves to a configuration
+with 32,768 complex slots, default scale $2^{50}$, public depths `0..27`, and
+primes that select `torch.int64` as the Engine's default RNS dtype.
 
-| Python member | dtype | `logN` | slots | scale bits | public levels | transitions | Q / P rows | QP bits / budget |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Preset.slots8192_scale25_levels14_int32` | int32 | 14 | 8,192 | 25 | 14 | 13 | 15 / 1 | 407 / 430 |
-| `Preset.slots16384_scale25_levels29_int32` | int32 | 15 | 16,384 | 25 | 29 | 28 | 30 / 2 | 816 / 868 |
-| `Preset.slots32768_scale25_levels24_int32` | int32 | 16 | 32,768 | 25 | 24 | 23 | 25 / 4 | 740 / 1,747 |
-| `Preset.slots65536_scale25_levels14_int32` | int32 | 17 | 65,536 | 25 | 14 | 13 | 15 / 6 | 543 / 3,523 |
-| `Preset.slots8192_scale30_levels9_int64` | int64 | 14 | 8,192 | 30 | 9 | 8 | 10 / 1 | 391 / 430 |
-| `Preset.slots8192_scale40_levels7_int64` | int64 | 14 | 8,192 | 40 | 7 | 6 | 8 / 1 | 400 / 430 |
-| `Preset.slots8192_scale50_levels5_int64` | int64 | 14 | 8,192 | 50 | 5 | 4 | 6 / 1 | 371 / 430 |
-| `Preset.slots16384_scale30_levels21_int64` | int64 | 15 | 16,384 | 30 | 21 | 20 | 22 / 2 | 810 / 868 |
-| `Preset.slots16384_scale40_levels16_int64` | int64 | 15 | 16,384 | 40 | 16 | 15 | 17 / 2 | 821 / 868 |
-| `Preset.slots16384_scale50_levels12_int64` | int64 | 15 | 16,384 | 50 | 12 | 11 | 13 / 2 | 781 / 868 |
-| `Preset.slots32768_scale30_levels45_int64` | int64 | 16 | 32,768 | 30 | 45 | 44 | 46 / 4 | 1,650 / 1,747 |
-| `Preset.slots32768_scale40_levels34_int64` | int64 | 16 | 32,768 | 40 | 34 | 33 | 35 / 4 | 1,660 / 1,747 |
-| `Preset.slots32768_scale50_levels27_int64` | int64 | 16 | 32,768 | 50 | 27 | 26 | 28 / 4 | 1,650 / 1,747 |
-| `Preset.slots65536_scale30_levels95_int64` | int64 | 17 | 65,536 | 30 | 95 | 94 | 96 / 6 | 3,311 / 3,523 |
-| `Preset.slots65536_scale40_levels72_int64` | int64 | 17 | 65,536 | 40 | 72 | 71 | 73 / 6 | 3,300 / 3,523 |
-| `Preset.slots65536_scale50_levels58_int64` | int64 | 17 | 65,536 | 50 | 58 | 57 | 59 / 6 | 3,320 / 3,523 |
+The scale field describes `log2(config.default_scale)`. The depth field is
+`config.max_depth`; it is already the number of public rescale transitions
+available from depth zero. The dtype field reports the default native residue
+format implied by the preset's exact primes.
 
-The int32 level counts have distinct limiting reasons:
+[Scale, depth, and native RNS dispatch](../concepts/ckks/scale-depth-and-execution-format.md)
+traces how these quantities interact.
 
-- `slots8192_scale25_levels14_int32` retains 23 bits of security-table margin;
-- `slots16384_scale25_levels29_int32` retains 52 bits rather than consuming
-  the budget to within one bit;
-- `slots32768_scale25_levels24_int32` stops at the longest catalog prefix for
-  which every modulus satisfies the native requirement
-  $4q<2^{\mathtt{buffer\_bit\_length}}$;
-- `slots65536_scale25_levels14_int32` stops before the scale catalog would
-  duplicate a selected structural/P prime.
+## Built-in parameter baselines
 
-The lower int32 default scale also changes numerical error. In controlled
-four-seed encryption measurements across the built-in ring dimensions, the 99th
-percentile absolute error was 8.00–8.63 times
-$N/\mathtt{default\_scale}$ for both int32 and int64. This common normalized
-distribution shows the same CKKS noise mechanism for int32 and int64, while
-the int32 $2^{25}$ default scale yields larger absolute error than the int64
-scale-40 family at the same ring. Treat a preset as a parameter baseline and
-measure the workload's error distribution.
+Every Preset resolves to exact `q_depth_groups` and `p_moduli`. The table lists
+the current complete QP product and built-in security budget.
 
-Choose the scale width from the workload's error and range requirements, then
-validate the observed error distribution. A 30-bit family provides more public transitions
-within the same security budget; a 50-bit family allocates more scale bits per
-transition and therefore provides fewer public levels.
+| Python member | `logN` | slots | default scale bits | max depth | Q / P rows | QP bits / budget |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `Preset.slots8192_scale25_depth14_int32` | 14 | 8,192 | 25 | 14 | 15 / 1 | 404 / 430 |
+| `Preset.slots8192_scale30_depth9_int64` | 14 | 8,192 | 30 | 9 | 10 / 1 | 360 / 430 |
+| `Preset.slots8192_scale40_depth7_int64` | 14 | 8,192 | 40 | 7 | 8 / 1 | 381 / 430 |
+| `Preset.slots8192_scale50_depth5_int64` | 14 | 8,192 | 50 | 5 | 6 / 1 | 361 / 430 |
+| `Preset.slots16384_scale25_depth29_int32` | 15 | 16,384 | 25 | 29 | 30 / 2 | 812 / 868 |
+| `Preset.slots16384_scale30_depth21_int64` | 15 | 16,384 | 30 | 21 | 22 / 2 | 781 / 868 |
+| `Preset.slots16384_scale40_depth16_int64` | 15 | 16,384 | 40 | 16 | 17 / 2 | 800 / 868 |
+| `Preset.slots16384_scale50_depth12_int64` | 15 | 16,384 | 50 | 12 | 13 / 2 | 770 / 868 |
+| `Preset.slots32768_scale25_depth24_int32` | 16 | 32,768 | 25 | 24 | 25 / 4 | 740 / 1,747 |
+| `Preset.slots32768_scale30_depth45_int64` | 16 | 32,768 | 30 | 45 | 46 / 4 | 1,620 / 1,747 |
+| `Preset.slots32768_scale40_depth34_int64` | 16 | 32,768 | 40 | 34 | 35 / 4 | 1,640 / 1,747 |
+| `Preset.slots32768_scale50_depth27_int64` | 16 | 32,768 | 50 | 27 | 28 / 4 | 1,640 / 1,747 |
+| `Preset.slots32768_scale50_depth29_int64` | 16 | 32,768 | 50 | 29 | 30 / 4 | 1,740 / 1,747 |
+| `Preset.slots65536_scale25_depth14_int32` | 17 | 65,536 | 25 | 14 | 15 / 6 | 543 / 3,523 |
+| `Preset.slots65536_scale30_depth95_int64` | 17 | 65,536 | 30 | 95 | 96 / 6 | 3,278 / 3,523 |
+| `Preset.slots65536_scale40_depth72_int64` | 17 | 65,536 | 40 | 72 | 73 / 6 | 3,280 / 3,523 |
+| `Preset.slots65536_scale50_depth58_int64` | 17 | 65,536 | 50 | 58 | 59 / 6 | 3,310 / 3,523 |
+
+Preset recipes are reviewed fixed baselines. `CkksConfig.parse(preset)` resolves
+a recipe to exact primes. Expert parameter work constructs a new `CkksConfig`
+with exact nested Q groups and exact P primes rather than changing a Preset by
+count.
 
 ## 1. Specify the cleartext workload
 
-Write down:
+Record:
 
-- logical input/output shapes;
-- slot packing and padding;
-- every ciphertext-ciphertext and ciphertext-plaintext multiplication;
-- where partial products are summed;
-- required rotations and conjugations;
-- expected input amplitude and worst-case intermediate magnitude;
-- output error tolerance.
+- logical input and output shapes;
+- slot packing, padding, masks, and replicated regions;
+- ciphertext-ciphertext and ciphertext-plaintext multiplications;
+- summation structure;
+- rotations and conjugations;
+- input and intermediate magnitude bounds;
+- output error requirements.
 
-Build a cleartext oracle with the same packing and rotation convention.
-Do not infer required depth from a high-level layer count alone.
+Implement a cleartext oracle with the same packing and rotation convention.
 
-## 2. Determine the slot requirement
+## 2. Determine slot capacity
 
-A ring with `logN = k` has:
+A ring with `logN = k` provides
 
 $$
-N=2^k,\qquad \text{slots}=N/2.
+N=2^k,\qquad S=N/2
 $$
 
-Include padding, masks, replicated blocks, and intermediate layouts—not only
-logical vector length. Choose the smallest candidate ring that satisfies the
-packing and security/configuration constraints, then validate on the intended
-target ring.
+complex slots. Count physical packed slots, including padding and intermediate
+layouts. Select the smallest candidate ring that accommodates them and satisfies
+the security budget.
 
-## 3. Draw the level schedule
+## 3. Draw the depth and scale schedule
 
-For each evaluator value, annotate:
+For each value, annotate:
 
 ```text
 operation
-level before
-scale before
-transition
-level after
-scale after
+depth before
+actual scale before
+Q group removed, if any
+depth after
+actual scale after
 ```
 
-Count `rescale_to_next_level` calls, including operand preparation before
-ciphertext-ciphertext multiplication. Addition does not consume a level, while
-plaintext multiplication changes scale until a rescale.
+Count `rescale_to_next_depth` calls on every execution path. Addition preserves
+depth. Multiplication preserves depth and multiplies actual scales. One rescale
+consumes one complete Q depth group.
 
-A useful sketch is:
+Verify that the largest depth reached is at most `config.max_depth`. Use
+`config.rescale_divisor(depth)` to calculate each scale transition rather than
+assuming a prime width from the Preset name.
 
-```mermaid
-flowchart LR
-    INPUT[Input ciphertext<br/>level 0]
-    R1[Rescale<br/>level 1]
-    NTT[coefficient_domain_to_ntt_domain]
-    MUL[Multiply]
-    RELIN[Relinearize]
-    PMUL[multiply_plaintext]
-    R2[Rescale<br/>level 2]
-    OUTPUT[Output]
+## 4. Check precision and range
 
-    INPUT --> R1 --> NTT --> MUL --> RELIN --> PMUL --> R2 --> OUTPUT
-```
+Evaluate fractional error and integer headroom together. Exercise:
 
-Ensure every rescale has another legal leading Q prime.
-
-## 4. Choose scale and estimate range
-
-Evaluate both fractional precision and integer headroom. Track approximate
-cleartext magnitude through products and wide sums. Large packing reductions
-can exhaust range even when multiplicative depth is shallow.
-
-Test at:
-
-- representative amplitude;
-- expected maximum amplitude;
+- representative and maximum input amplitudes;
 - positive and negative values;
+- wide sums and multiplication chains;
 - several random seeds;
-- early, middle, and final legal levels used by the schedule.
+- early, middle, and final depths used by the circuit.
 
-Do not lower scale or bypass range checks solely to improve a benchmark.
+Record the observed error distribution under the intended output criterion.
+Do not alter a tolerance to conceal an unexplained discrepancy.
 
-## 5. Start with a fast smoke configuration
+## 5. Check memory and key requirements
 
-Use the smallest built-in slot capacity and scale family appropriate for
-quick iteration, such as `Preset.slots8192_scale40_levels7_int64`, to validate
-program structure, state transitions, and keys. Then rerun the same oracle and
-schedule on the target slot, scale, and public-level baseline.
+At each important depth, record the active Q-row count and value size.
+Evaluation-key storage also depends on the QP basis, hybrid digit decomposition,
+and required rotation inventory. Measure peak temporary storage for the actual
+operation schedule.
 
-The smoke configuration does not prove target-level performance, memory, or
-numerical behavior.
+## 6. Preserve the exact parameter identity
 
-## 6. Record the configuration
+Store or report:
 
-For each tested configuration, record:
+- Preset, when one was used;
+- `CkksConfig.dumps()` output or its exact Q groups and P primes;
+- default and actual scales;
+- `max_depth` and checkpoint depths;
+- active `prime_ids` at a failure;
+- Engine RNS dtype and target device;
+- error, amplitude, and random-seed evidence.
 
-- preset and `logN`;
-- default scale;
-- number of Q and P rows;
-- level at every checkpoint;
-- active `prime_ids` where failures occur;
-- component count/polynomial domain/modulus basis/residue representation;
-- maximum absolute and relative error;
-- input amplitude and random seed;
-- value and key sizes.
+## 7. Optimize against the same oracle
 
-## 7. Add parameter-limit tests
-
-At minimum, include:
-
-- one successful operation at the first level;
-- one at a middle level;
-- one at the last legal level;
-- an expected failure when another rescale is impossible;
-- realistic wide accumulation;
-- persisted/reloaded values if the production path uses files;
-- target source or installed-wheel environment.
-
-## 8. Only then optimize or distribute
-
-Keep the single-GPU eager evaluator as the baseline. Add hoisting, graph
-capture, streaming, or SPMD one mechanism at a time and compare to the same
-cleartext oracle.
+Keep the simplest correct Eager execution as the comparison point. Introduce
+hoisting, retained NTT state, CUDA Graph capture, streaming, or distributed
+execution one mechanism at a time. Preserve the parameter set and cleartext
+criterion unless the experiment is specifically a parameter tradeoff.
 
 ## Related documentation
 
-- [Scale and level lifecycle](../concepts/ckks/scale-and-level-lifecycle.md)
+- [Scale, depth, and native RNS dispatch](../concepts/ckks/scale-depth-and-execution-format.md)
+- [Scale and depth lifecycle](../concepts/ckks/scale-and-depth-lifecycle.md)
 - [Configuration and modulus chain](../concepts/ckks/context-and-modulus-chain.md)
-- [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)
 - [Modulus-chain tutorial](../tutorial/modulus-chain-depth.md)
-- [Benchmark a workload](benchmark-a-workload.md)
