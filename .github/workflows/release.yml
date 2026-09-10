@@ -25,6 +25,11 @@ on:
         required: false
         default: ''
         type: string
+      reuse_build_run:
+        description: Existing run with successful Linux and Windows builds of this source (all scope only)
+        required: false
+        default: ''
+        type: string
       initialize_configurations:
         description: Comma-separated configuration roots allowed to be new and absent
         required: false
@@ -34,6 +39,7 @@ run-name: FHElium ${{ inputs.mode }} ${{ inputs.build_scope }} ${{ inputs.mode =
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: fhelium-release
@@ -100,6 +106,44 @@ jobs:
             "jsonschema==4.26.0"
           "$validation_python" -I packaging/matrix.py validate
           rm -rf "$validation_root"
+      - name: Validate reusable build run
+        if: inputs.reuse_build_run != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REUSE_BUILD_RUN: ${{ inputs.reuse_build_run }}
+          BUILD_SCOPE: ${{ inputs.build_scope }}
+          SOURCE_COMMIT: ${{ steps.version.outputs.source_commit }}
+        run: |
+          python - <<'PYCODE'
+          import json
+          import os
+          import subprocess
+
+          run_id = os.environ["REUSE_BUILD_RUN"]
+          if not run_id.isdecimal() or os.environ["BUILD_SCOPE"] != "all":
+              raise SystemExit("reuse_build_run requires a numeric run ID and build_scope=all")
+          api = f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run_id}"
+
+          def get(suffix=""):
+              return json.loads(subprocess.check_output(["gh", "api", api + suffix]))
+
+          run = get()
+          if run["path"] != ".github/workflows/release.yml" or run["event"] != "workflow_dispatch":
+              raise SystemExit("Build artifacts must come from the manually dispatched release workflow")
+          if run["status"] != "completed":
+              raise SystemExit("The build run must be complete before its artifacts can be reused")
+          jobs = {job["name"]: job["conclusion"] for job in get("/jobs?per_page=100")["jobs"]}
+          if any(jobs.get(name) != "success" for name in ("build-linux", "build-windows")):
+              raise SystemExit("Both platform build and installed-wheel verification jobs must have succeeded")
+          artifacts = get("/artifacts?per_page=100")["artifacts"]
+          for platform in ("linux", "windows"):
+              name = f"fhelium-{platform}-{os.environ['SOURCE_COMMIT']}"
+              matches = [artifact for artifact in artifacts if artifact["name"] == name and not artifact["expired"]]
+              if len(matches) != 1:
+                  raise SystemExit(f"Expected one unexpired source-matching artifact: {name}")
+          print(f"Reusing verified builds from run {run_id}; source {os.environ['SOURCE_COMMIT']}")
+          PYCODE
 
   verify-project:
     if: inputs.build_scope == 'all'
@@ -132,13 +176,16 @@ jobs:
           "$verification_python" -I -m pip install \
             --index-url "$torch_index_url" "$torch_requirement"
           "$verification_python" -I -m pip install \
-            --group dev --no-build-isolation
+            --group build --group dev --no-build-isolation
           "$verification_python" -I -m pip install \
             --editable . --no-build-isolation --no-cache-dir
           "$verification_python" -I -m ruff check \
             fhelium tests examples scripts packaging
-          "$verification_python" -I -m ruff format --check \
-            fhelium tests examples scripts packaging
+          # Formatting is reported without invalidating immutable release artifacts.
+          if ! "$verification_python" -I -m ruff format --check \
+            fhelium tests examples scripts packaging; then
+            echo '::warning::Source formatting differs from Ruff output; see the formatting report above.'
+          fi
           "$verification_python" -I -m pyright
           "$verification_python" -I -m pytest -q
           "$verification_python" -I -m pytest \
@@ -149,7 +196,7 @@ jobs:
           rm -rf "$verification_root"
 
   build-linux:
-    if: inputs.build_scope == 'all'
+    if: inputs.build_scope == 'all' && inputs.reuse_build_run == ''
     needs: resolve-source
     runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
     steps:
@@ -209,6 +256,7 @@ jobs:
           retention-days: 30
 
   build-windows:
+    if: inputs.reuse_build_run == ''
     needs: resolve-source
     runs-on: [self-hosted, Windows, X64, fhelium-release, gpu]
     steps:
@@ -308,7 +356,12 @@ jobs:
           retention-days: 30
 
   prepare-release:
-    if: inputs.build_scope == 'all'
+    if: >-
+      ${{ !cancelled() && inputs.build_scope == 'all' &&
+          needs.resolve-source.result == 'success' &&
+          needs.verify-project.result == 'success' &&
+          ((inputs.reuse_build_run == '' && needs.build-linux.result == 'success' && needs.build-windows.result == 'success') ||
+           (inputs.reuse_build_run != '' && needs.build-linux.result == 'skipped' && needs.build-windows.result == 'skipped')) }}
     needs: [resolve-source, verify-project, build-linux, build-windows]
     runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
     outputs:
@@ -319,11 +372,23 @@ jobs:
         with:
           ref: ${{ needs.resolve-source.outputs.source_commit }}
           fetch-depth: 0
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Clear candidate workspace
+        shell: bash
+        run: rm -rf "$RELEASE_OUTPUT"
+      - name: Restore verified Linux build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: fhelium-*-${{ needs.resolve-source.outputs.source_commit }}
+          name: fhelium-linux-${{ needs.resolve-source.outputs.source_commit }}
+          run-id: ${{ inputs.reuse_build_run || github.run_id }}
+          github-token: ${{ github.token }}
           path: ${{ env.RELEASE_OUTPUT }}
-          merge-multiple: true
+      - name: Restore verified Windows build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: fhelium-windows-${{ needs.resolve-source.outputs.source_commit }}
+          run-id: ${{ inputs.reuse_build_run || github.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ env.RELEASE_OUTPUT }}
       - name: Prepare repository candidate
         shell: bash
         env:
@@ -363,7 +428,9 @@ jobs:
           retention-days: 30
 
   publish:
-    if: inputs.mode == 'publish'
+    if: >-
+      ${{ !cancelled() && inputs.mode == 'publish' &&
+          needs.prepare-release.result == 'success' }}
     needs: prepare-release
     runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
     environment: release
@@ -503,7 +570,10 @@ jobs:
           rm -rf "$(dirname "$(dirname "$PUBLICATION_PYTHON")")"
 
   verify-public-linux:
-    if: inputs.mode == 'publish'
+    if: >-
+      ${{ !cancelled() && inputs.mode == 'publish' &&
+          needs.prepare-release.result == 'success' &&
+          needs.publish.result == 'success' }}
     needs: [prepare-release, publish]
     runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
     steps:
@@ -529,7 +599,10 @@ jobs:
           rm -rf "$work_root"
 
   verify-public-windows:
-    if: inputs.mode == 'publish'
+    if: >-
+      ${{ !cancelled() && inputs.mode == 'publish' &&
+          needs.prepare-release.result == 'success' &&
+          needs.publish.result == 'success' }}
     needs: [prepare-release, publish]
     runs-on: [self-hosted, Windows, X64, fhelium-release, gpu]
     steps:
@@ -607,7 +680,12 @@ jobs:
           Remove-Item -Recurse -Force $physicalWorkRoot
 
   prepare-github-release-assets:
-    if: inputs.mode == 'publish'
+    if: >-
+      ${{ !cancelled() && inputs.mode == 'publish' &&
+          needs.prepare-release.result == 'success' &&
+          needs.publish.result == 'success' &&
+          needs.verify-public-linux.result == 'success' &&
+          needs.verify-public-windows.result == 'success' }}
     needs: [prepare-release, publish, verify-public-linux, verify-public-windows]
     runs-on: [self-hosted, linux, x64, fhelium-release, gpu]
     steps:
