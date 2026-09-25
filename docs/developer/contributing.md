@@ -1,15 +1,10 @@
 # Contributing to FHElium
 
-Contributions should preserve FHElium's mathematical semantics and
-value-state invariants across Python, PyTorch tensors, C++/CUDA operators,
-generated API reference, examples, and documentation.
+Contributions should preserve FHElium's mathematical semantics and value-state invariants across Python, PyTorch tensors, C++/CUDA operators, generated API reference, examples, and documentation.
 
 ## Prepare the source tree
 
-Choose one environment workflow for a checkout. Use separate virtual
-environments when validating both workflows because the uv environment selects
-the locked Torch build while the pip environment preserves a Torch build chosen
-by the contributor.
+Choose one environment workflow for a checkout. Use separate virtual environments when validating both workflows because the uv environment selects the locked Torch build while the pip environment preserves a Torch build chosen by the contributor.
 
 ### Locked uv environment
 
@@ -21,13 +16,11 @@ source .venv/bin/activate
 pre-commit install
 ```
 
-On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1`. The sync
-installs the development tools and builds FHElium as an editable package.
+On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1`. The sync installs the development tools and builds FHElium as an editable package.
 
 ### Environment with a selected Torch build
 
-Create and activate a virtual environment, install the intended Torch package,
-then build FHElium without build isolation:
+Create and activate a virtual environment, install the intended Torch package, then build FHElium without build isolation:
 
 ```bash
 python -m pip install --group build
@@ -37,9 +30,7 @@ python -m pip install --group dev
 pre-commit install
 ```
 
-`--no-build-isolation` lets native configuration inspect the selected Torch
-ABI. `--no-cache-dir` prevents reuse of a wheel built for another Python,
-Torch, CUDA, or C++ ABI.
+`--no-build-isolation` lets native configuration inspect the selected Torch ABI. `--no-cache-dir` prevents reuse of a wheel built for another Python, Torch, CUDA, or C++ ABI.
 
 ### Development tools and repository metadata
 
@@ -47,46 +38,31 @@ The development files have separate responsibilities:
 
 - `pyproject.toml` declares build and development dependency groups;
 - `uv.lock` records the locked developer resolution;
-- `packaging/release_matrix.json` declares the Python, Torch, CUDA, operating
-  system, and artifact configurations used for releases;
-- `justfile` provides optional shortcuts and does not define dependencies or
-  release support.
+- `packaging/release_matrix.json` declares the Python, Torch, CUDA, operating system, and artifact configurations used for releases;
+- `justfile` provides optional shortcuts and does not define dependencies or release support.
 
-Running `just` without a recipe lists available commands. Cleanup requires a
-named recipe such as `just clean-build`; no default command deletes build or
-environment files. `just check` runs Ruff, Pyright, and pytest.
+Running `just` without a recipe lists available commands. Cleanup requires a named recipe such as `just clean-build`; no default command deletes build or environment files. `just check` runs Ruff, Pyright, and pytest.
 
-Use the build shortcut matching the active environment when native source
-changes:
+Use the build shortcut matching the active environment when native source changes:
 
 ```bash
 just NATIVE_BACKENDS=CPU build-uv
 just NATIVE_BACKENDS=CPU+CUDA build-pip
 ```
 
-The shortcuts rebuild the editable extension and refresh the ignored
-`build/compile_commands.json` used by `.clangd`. The refresh step selects the
-ABI-specific database for the active CPython interpreter and replaces uv's
-temporary isolated-build Torch include paths with the active environment's
-persistent Torch include paths. To refresh editor data after a direct build,
-run:
+The shortcuts rebuild the editable extension and refresh the ignored `build/compile_commands.json` used by `.clangd`. The refresh step selects the ABI-specific database for the active CPython interpreter and replaces uv's temporary isolated-build Torch include paths with the active environment's persistent Torch include paths. To refresh editor data after a direct build, run:
 
 ```bash
 python scripts/refresh_compile_commands.py
 ```
 
-The lock defines the reproducible default development environment.
-`packaging/release_matrix.json` defines the
-formal Python, Torch, CUDA, and operating-system artifact configurations.
+The lock defines the reproducible default development environment. `packaging/release_matrix.json` defines the formal Python, Torch, CUDA, and operating-system artifact configurations.
 
-Native binaries are specific to the Python, PyTorch, CUDA, and C++ application
-binary interfaces (ABIs) and to the GPU architectures selected when they were
-built. Do not validate a change against an unrelated cached wheel.
+Native binaries are specific to the Python, PyTorch, CUDA, and C++ application binary interfaces (ABIs) and to the GPU architectures selected when they were built. Do not validate a change against an unrelated cached wheel.
 
 ## Development checks
 
-The repository provides Python linting, type checks, behavior tests and static
-API-documentation generation:
+The repository provides Python linting, type checks, behavior tests and static API-documentation generation:
 
 ```bash
 ruff check fhelium tests examples scripts
@@ -98,27 +74,17 @@ npm --prefix docs run typecheck
 npm --prefix docs run build
 ```
 
-The generic Python checks do not establish CUDA execution, distributed
-correctness or wheel compatibility. Those properties require execution on the
-relevant device, process topology or installed-wheel environment. A numerical
-acceptance criterion describes the intended error bound; a proposed change to
-that bound needs a mathematical rationale and measured error distribution.
+The generic Python checks do not establish CUDA execution, distributed correctness or wheel compatibility. Those properties require execution on the relevant device, process topology or installed-wheel environment. A numerical acceptance criterion describes the intended error bound; a proposed change to that bound needs a mathematical rationale and measured error distribution.
 
 ## Documentation changes
 
-Every public API change must update the generated docstring source and the
-curated page that places the symbol in the API hierarchy. Every numbered example must retain a direct tutorial source link and a concrete
-opening explanation.
+Every public API change must update the generated docstring source and the curated page that places the symbol in the API hierarchy. Every numbered example must retain a direct tutorial source link and a concrete opening explanation.
 
-Follow the [documentation contributor guide](documentation.md) for page roles,
-API directives, generated-reference commands, diagrams, source links, and site
-validation.
+Follow the [documentation contributor guide](documentation.md) for page roles, API directives, generated-reference commands, diagrams, source links, and site validation.
 
 ## Review evidence
 
-FHElium uses direct, coherent API changes for unreleased or intentionally
-breaking surfaces. A contribution should
-state:
+FHElium uses direct, coherent API changes for unreleased or intentionally breaking surfaces. A contribution should state:
 
 - the problem and supported behavior after the change;
 - affected public paths and serialized formats;
@@ -126,9 +92,7 @@ state:
 - validation evidence and hardware/software environment;
 - migration steps when existing public behavior or requirements change.
 
-Security-sensitive changes need a documented threat model. Performance claims
-need a reproducible benchmark definition and environment that measures the
-claimed CKKS workload.
+Security-sensitive changes need a documented threat model. Performance claims need a reproducible benchmark definition and environment that measures the claimed CKKS workload.
 
 ## Useful entry points
 

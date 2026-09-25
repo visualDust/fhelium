@@ -30,6 +30,11 @@ from .._operation_catalog import (
     registered_operation_spec,
 )
 from ._common import OpenStateType
+from .._dependencies import (
+    OperationDependencies,
+    ValueDependency,
+    identity_axes,
+)
 
 
 @irdl_attr_definition
@@ -50,6 +55,12 @@ class TransferOp(IRDLOperation):
     result = result_def()
     memory_space = opt_attr_def(StringAttr)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Preserve the transported value's coordinates on its destination."""
+        return OperationDependencies(
+            (ValueDependency(0, 0, identity_axes(self.value)),)
+        )
 
     def __init__(
         self,

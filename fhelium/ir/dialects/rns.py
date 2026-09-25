@@ -9,13 +9,13 @@ stores the negacyclic transform of each polynomial row.
 
 Each operation defines one complete transformation of an RNS bundle. The
 operations contain no CPU, CUDA, Triton, kernel, radix, or fusion selection.
-Their resource operands identify context-specialized parameter and rescale
-assets that an eager or JIT executable binds before running a backend.
+Their parameter and table operands carry numerical Tensors supplied by Eager
+or bound to a Program before execution.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from xdsl.dialects.builtin import (
@@ -46,6 +46,14 @@ from .._operation_catalog import (
     registered_operation_spec,
 )
 from ._common import OpenStateType
+from .._dependencies import (
+    DependencyKind,
+    OperationDependencies,
+    ValueDependency,
+    operand_dependencies,
+    operand_relations,
+    string_fact,
+)
 
 
 @irdl_attr_definition
@@ -62,27 +70,6 @@ class RnsParametersType(OpenStateType):
     name = "fhelium_rns.parameters"
 
 
-@irdl_attr_definition
-class RescalePlanType(OpenStateType):
-    """Depth-specific dropped-prime, inverse, and surviving-row resources."""
-
-    name = "fhelium_rns.rescale_plan"
-
-
-@irdl_attr_definition
-class KeySwitchPlanType(OpenStateType):
-    """Depth-specialized hybrid decomposition and ModUp/ModDown resources."""
-
-    name = "fhelium_rns.key_switch_plan"
-
-
-@irdl_attr_definition
-class EvaluationKeyResourceType(OpenStateType):
-    """Adapter-validated evaluation-key material used by logical RNS ops."""
-
-    name = "fhelium_rns.evaluation_key_resource"
-
-
 @irdl_op_definition
 class AddStandardOp(IRDLOperation):
     r"""Add two standard-residue polynomial bundles row by row.
@@ -97,9 +84,29 @@ class AddStandardOp(IRDLOperation):
     name = "fhelium_rns.add_standard"
     lhs = operand_def(RnsBundleType)
     rhs = operand_def(RnsBundleType)
-    parameters = operand_def(RnsParametersType)
+    parameters = operand_def()
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'reindexed',
+                },
+                1: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'reindexed',
+                },
+            },
+        )
 
     def __init__(
         self,
@@ -128,9 +135,29 @@ class SubtractStandardOp(IRDLOperation):
     name = "fhelium_rns.subtract_standard"
     lhs = operand_def(RnsBundleType)
     rhs = operand_def(RnsBundleType)
-    parameters = operand_def(RnsParametersType)
+    parameters = operand_def()
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'reindexed',
+                },
+                1: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'reindexed',
+                },
+            },
+        )
 
     def __init__(
         self,
@@ -155,9 +182,23 @@ class NegateStandardOp(IRDLOperation):
 
     name = "fhelium_rns.negate_standard"
     value = operand_def(RnsBundleType)
-    parameters = operand_def(RnsParametersType)
+    parameters = operand_def()
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                },
+            },
+        )
 
     def __init__(
         self,
@@ -171,10 +212,64 @@ class NegateStandardOp(IRDLOperation):
         )
 
 
+@irdl_op_definition
+class SumStandardBatchOp(IRDLOperation):
+    r"""Reduce one leading batch axis of a standard-residue bundle.
+
+    The operand is $[*outer, n, *inner, \text{limb}, \text{coefficient}]$
+    with standard residues $x^{(k)}_{j,i}\in[0,q_i)$.  ``dim`` selects the
+    reduced axis of length $n$; the result keeps the remaining axes and
+    computes
+    $z_{j,i}=\sum_{k<n}x^{(k)}_{j,i}\bmod q_i$
+    with every partial sum reduced to $[0,q_i)$.  The reduction is the
+    modular sum of the selected axis: component, limb, coefficient, depth,
+    scale, polynomial domain, and residue representation are preserved while
+    the selected axis leaves the batch shape."""
+
+    name = "fhelium_rns.sum_standard_batch"
+    value = operand_def(RnsBundleType)
+    parameters = operand_def()
+    result = result_def(RnsBundleType)
+    dim = attr_def(IntegerAttr)
+    traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'mixing',
+                },
+            },
+        )
+
+    def __init__(
+        self,
+        value: SSAValue | Operation,
+        parameters: SSAValue | Operation,
+        result_type: Attribute,
+        *,
+        dim: int | IntegerAttr,
+    ) -> None:
+        super().__init__(
+            operands=[value, parameters],
+            result_types=[result_type],
+            attributes={
+                "dim": (
+                    IntegerAttr(dim, 64) if isinstance(dim, int) else dim
+                )
+            },
+        )
+
+
 class _CiphertextPlaintextOp(IRDLOperation):
     ciphertext = operand_def(RnsBundleType)
     plaintext = operand_def(RnsBundleType)
-    parameters = operand_def(RnsParametersType)
+    parameters = operand_def()
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
 
@@ -211,6 +306,26 @@ class AddPlaintextOp(_CiphertextPlaintextOp):
         StringAttr, default_value=StringAttr("coefficient")
     )
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'reindexed',
+                },
+                1: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'reindexed',
+                    'batch': 'reindexed',
+                },
+            },
+        )
+
 
 @irdl_op_definition
 class MultiplyPlaintextOp(_CiphertextPlaintextOp):
@@ -224,6 +339,26 @@ class MultiplyPlaintextOp(_CiphertextPlaintextOp):
     the CKKS result scale is the product of operand scales."""
 
     name = "fhelium_rns.multiply_plaintext"
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'reindexed',
+                },
+                1: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'reindexed',
+                    'batch': 'reindexed',
+                },
+            },
+        )
 
 
 @irdl_op_definition
@@ -246,11 +381,32 @@ class MontgomeryWeightedSumOp(IRDLOperation):
     """
 
     name = "fhelium_rns.montgomery_weighted_sum"
-    parameters = operand_def(RnsParametersType)
+    parameters = operand_def()
     terms = var_operand_def(RnsBundleType)
     result = result_def(RnsBundleType)
     term_count = attr_def(IntegerAttr)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe each term's NTT positions and its output component mapping."""
+        count = int(self.term_count.value.data)
+        return OperationDependencies(
+            tuple(
+                ValueDependency(
+                    0,
+                    index,
+                    {
+                        "coefficient": "element",
+                        "limb": "element",
+                        "component": "element"
+                        if index <= count
+                        else "reindexed",
+                        "batch": "reindexed",
+                    },
+                )
+                for index in range(1, len(self.operands))
+            )
+        )
 
     def __init__(
         self,
@@ -295,12 +451,33 @@ class MontgomeryWeightedSumsOp(IRDLOperation):
     """
 
     name = "fhelium_rns.montgomery_weighted_sums"
-    parameters = operand_def(RnsParametersType)
+    parameters = operand_def()
     terms = var_operand_def(RnsBundleType)
     result = result_def(RnsBundleType)
     term_count = attr_def(IntegerAttr)
     group_count = attr_def(IntegerAttr)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe each term's NTT positions and its output component mapping."""
+        count = int(self.term_count.value.data)
+        return OperationDependencies(
+            tuple(
+                ValueDependency(
+                    0,
+                    index,
+                    {
+                        "coefficient": "element",
+                        "limb": "element",
+                        "component": "element"
+                        if index <= count
+                        else "reindexed",
+                        "batch": "reindexed",
+                    },
+                )
+                for index in range(1, len(self.operands))
+            )
+        )
 
     def __init__(
         self,
@@ -349,7 +526,7 @@ class RescaleDropLeadingPrimesOp(IRDLOperation):
 
     name = "fhelium_rns.rescale_drop_leading_primes"
     value = operand_def(RnsBundleType)
-    plan = operand_def(RescalePlanType)
+    parameters = var_operand_def()
     result = result_def(RnsBundleType)
     drop_count = attr_def(IntegerAttr, default_value=IntegerAttr(1, 64))
     rounding = opt_attr_def(StringAttr)
@@ -359,10 +536,33 @@ class RescaleDropLeadingPrimesOp(IRDLOperation):
     )
     traits = traits_def(Pure())
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe the rounded quotient in its represented polynomial domain."""
+        domain = string_fact(
+            self, "input_domain", state_name="polynomial_domain"
+        )
+        position: DependencyKind = (
+            "element"
+            if domain == "coefficient"
+            else "mixing"
+            if domain == "ntt"
+            else "unknown"
+        )
+        return operand_dependencies(
+            self,
+            (0,),
+            {
+                "coefficient": position,
+                "limb": "mixing",
+                "component": "element",
+                "batch": "element",
+            },
+        )
+
     def __init__(
         self,
         value: SSAValue | Operation,
-        plan: SSAValue | Operation,
+        parameters: Sequence[SSAValue | Operation],
         result_type: Attribute,
         *,
         drop_count: int = 1,
@@ -378,7 +578,7 @@ class RescaleDropLeadingPrimesOp(IRDLOperation):
         attrs["input_domain"] = StringAttr(polynomial_domain)
         attrs["output_domain"] = StringAttr(polynomial_domain)
         super().__init__(
-            operands=[value, plan],
+            operands=[value, parameters],
             result_types=[result_type],
             attributes=attrs,
         )
@@ -418,6 +618,20 @@ class ExtractComponentOp(IRDLOperation):
     component = attr_def(IntegerAttr)
     traits = traits_def(Pure())
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'reindexed',
+                    'batch': 'element',
+                }
+            },
+        )
+
     def __init__(
         self,
         value: SSAValue | Operation,
@@ -456,6 +670,26 @@ class PackTwoComponentsOp(IRDLOperation):
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'reindexed',
+                    'batch': 'element',
+                },
+                1: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'reindexed',
+                    'batch': 'element',
+                },
+            },
+        )
+
     def __init__(
         self,
         component0: SSAValue | Operation,
@@ -483,6 +717,32 @@ class PackThreeComponentsOp(IRDLOperation):
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'reindexed',
+                    'batch': 'element',
+                },
+                1: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'reindexed',
+                    'batch': 'element',
+                },
+                2: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'reindexed',
+                    'batch': 'element',
+                },
+            },
+        )
+
     def __init__(
         self,
         component0: SSAValue | Operation,
@@ -509,9 +769,35 @@ class MontgomeryMultiplyOp(IRDLOperation):
     name = "fhelium_rns.montgomery_multiply"
     lhs = operand_def(RnsBundleType)
     rhs = operand_def(RnsBundleType)
-    parameters = operand_def(RnsParametersType)
+    parameters = operand_def()
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'reindexed',
+                    'batch': 'element',
+                },
+                1: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'reindexed',
+                    'batch': 'element',
+                },
+                2: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'reindexed',
+                    'batch': 'element',
+                },
+            },
+        )
 
     def __init__(
         self,
@@ -539,30 +825,40 @@ class HybridModUpDigitOp(IRDLOperation):
 
     name = "fhelium_rns.hybrid_modup_digit"
     source = operand_def(RnsBundleType)
-    parameters = operand_def(RnsParametersType)
-    plan = operand_def(KeySwitchPlanType)
+    parameters = var_operand_def()
     result = result_def(RnsBundleType)
     digit_index = attr_def(IntegerAttr)
     traits = traits_def(Pure())
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'mixing',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
+
     def __init__(
         self,
         source: SSAValue | Operation,
-        parameters: SSAValue | Operation,
-        plan: SSAValue | Operation,
+        parameters: Sequence[SSAValue | Operation],
         result_type: Attribute,
         *,
-        digit_index: int | IntegerAttr,
+        attributes: Mapping[str, Attribute] | None = None,
+        digit_index: int = 0,
     ) -> None:
         super().__init__(
-            operands=[source, parameters, plan],
+            operands=[source, parameters],
             result_types=[result_type],
             attributes={
-                "digit_index": (
-                    IntegerAttr(digit_index, 64)
-                    if isinstance(digit_index, int)
-                    else digit_index
-                )
+                **(attributes or {}),
+                "digit_index": IntegerAttr(digit_index, 64),
             },
         )
 
@@ -586,32 +882,49 @@ class KeySwitchDigitProductOp(IRDLOperation):
 
     name = "fhelium_rns.key_switch_digit_product"
     digit = operand_def(RnsBundleType)
-    key = operand_def(EvaluationKeyResourceType)
-    parameters = operand_def(RnsParametersType)
-    plan = operand_def(KeySwitchPlanType)
+    key = operand_def()
+    parameters = operand_def()
     result = result_def(RnsBundleType)
     key_digit_index = attr_def(IntegerAttr)
+    key_role = opt_attr_def(StringAttr)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'reindexed',
+                    'batch': 'element',
+                },
+                1: {
+                    'coefficient': 'element',
+                    'limb': 'reindexed',
+                    'component': 'element',
+                    'batch': 'reindexed',
+                },
+            },
+        )
 
     def __init__(
         self,
         digit: SSAValue | Operation,
         key: SSAValue | Operation,
         parameters: SSAValue | Operation,
-        plan: SSAValue | Operation,
         result_type: Attribute,
         *,
-        key_digit_index: int | IntegerAttr,
+        key_digit_index: int,
+        key_row_start: int = 0,
     ) -> None:
         super().__init__(
-            operands=[digit, key, parameters, plan],
+            operands=[digit, key, parameters],
             result_types=[result_type],
             attributes={
-                "key_digit_index": (
-                    IntegerAttr(key_digit_index, 64)
-                    if isinstance(key_digit_index, int)
-                    else key_digit_index
-                )
+                "key_digit_index": IntegerAttr(key_digit_index, 64),
+                "key_row_start": IntegerAttr(key_row_start, 64),
             },
         )
 
@@ -634,9 +947,29 @@ class AddMontgomeryLazyOp(IRDLOperation):
     name = "fhelium_rns.add_montgomery_lazy"
     lhs = operand_def(RnsBundleType)
     rhs = operand_def(RnsBundleType)
-    parameters = operand_def(RnsParametersType)
+    parameters = operand_def()
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'reindexed',
+                },
+                1: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'reindexed',
+                },
+            },
+        )
 
     def __init__(
         self,
@@ -666,21 +999,36 @@ class ModDownQpToQOp(IRDLOperation):
 
     name = "fhelium_rns.moddown_qp_to_q"
     value = operand_def(RnsBundleType)
-    parameters = operand_def(RnsParametersType)
-    plan = operand_def(KeySwitchPlanType)
+    parameters = var_operand_def()
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'mixing',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
 
     def __init__(
         self,
         value: SSAValue | Operation,
-        parameters: SSAValue | Operation,
-        plan: SSAValue | Operation,
+        parameters: Sequence[SSAValue | Operation],
         result_type: Attribute,
+        *,
+        attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         super().__init__(
-            operands=[value, parameters, plan],
+            operands=[value, parameters],
             result_types=[result_type],
+            attributes=attributes,
         )
 
 
@@ -702,23 +1050,36 @@ class ModDownNttQpToQOp(IRDLOperation):
 
     name = "fhelium_rns.moddown_ntt_qp_to_q"
     value = operand_def(RnsBundleType)
-    parameters = operand_def(RnsParametersType)
-    ntt_plan = operand_def()
-    plan = operand_def(KeySwitchPlanType)
+    parameters = var_operand_def()
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'mixing',
+                    'limb': 'mixing',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
 
     def __init__(
         self,
         value: SSAValue | Operation,
-        parameters: SSAValue | Operation,
-        ntt_plan: SSAValue | Operation,
-        plan: SSAValue | Operation,
+        parameters: Sequence[SSAValue | Operation],
         result_type: Attribute,
+        *,
+        attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         super().__init__(
-            operands=[value, parameters, ntt_plan, plan],
+            operands=[value, parameters],
             result_types=[result_type],
+            attributes=attributes,
         )
 
 
@@ -735,10 +1096,24 @@ class CoefficientAutomorphismOp(IRDLOperation):
 
     name = "fhelium_rns.coefficient_automorphism"
     value = operand_def(RnsBundleType)
-    parameters = operand_def(RnsParametersType)
+    parameters = operand_def()
     result = result_def(RnsBundleType)
     galois_element = attr_def(IntegerAttr)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'reindexed',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
 
     def __init__(
         self,
@@ -767,7 +1142,7 @@ class CoefficientAutomorphismOp(IRDLOperation):
 
 class _ResidueConversionOp(IRDLOperation):
     value = operand_def(RnsBundleType)
-    parameters = operand_def(RnsParametersType)
+    parameters = operand_def()
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
 
@@ -794,6 +1169,20 @@ class StandardToMontgomeryOp(_ResidueConversionOp):
 
     name = "fhelium_rns.standard_to_montgomery"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
+
 
 @irdl_op_definition
 class MontgomeryToStandardOp(_ResidueConversionOp):
@@ -804,6 +1193,20 @@ class MontgomeryToStandardOp(_ResidueConversionOp):
     coefficients, prime rows, depth, basis, and CKKS scale are preserved."""
 
     name = "fhelium_rns.montgomery_to_standard"
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
 
 
 @irdl_op_definition
@@ -817,21 +1220,33 @@ class RestrictDepthOp(IRDLOperation):
 
     name = "fhelium_rns.restrict_depth"
     value = operand_def(RnsBundleType)
-    parameters = operand_def(RnsParametersType)
     result = result_def(RnsBundleType)
     target_depth = attr_def(IntegerAttr)
     traits = traits_def(Pure())
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'reindexed',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
+
     def __init__(
         self,
         value: SSAValue | Operation,
-        parameters: SSAValue | Operation,
         result_type: Attribute,
         *,
         target_depth: int | IntegerAttr,
     ) -> None:
         super().__init__(
-            operands=[value, parameters],
+            operands=[value],
             result_types=[result_type],
             attributes={
                 "target_depth": (
@@ -859,6 +1274,20 @@ class ReinterpretScaleOp(IRDLOperation):
     scale = attr_def(FloatAttr)
     traits = traits_def(Pure())
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
+
     def __init__(
         self,
         value: SSAValue | Operation,
@@ -882,6 +1311,7 @@ _RNS_OPERATION_TYPES = (
     AddStandardOp,
     SubtractStandardOp,
     NegateStandardOp,
+    SumStandardBatchOp,
     AddPlaintextOp,
     MultiplyPlaintextOp,
     MontgomeryWeightedSumOp,
@@ -905,6 +1335,7 @@ _RNS_OPERATION_TYPES = (
 
 _RNS_ATTRIBUTES: dict[type[Operation], tuple[str, ...]] = {
     AddPlaintextOp: ("polynomial_domain",),
+    SumStandardBatchOp: ("dim",),
     MontgomeryWeightedSumOp: ("term_count",),
     MontgomeryWeightedSumsOp: ("term_count", "group_count"),
     RescaleDropLeadingPrimesOp: (
@@ -915,7 +1346,7 @@ _RNS_ATTRIBUTES: dict[type[Operation], tuple[str, ...]] = {
     ),
     ExtractComponentOp: ("component",),
     HybridModUpDigitOp: ("digit_index",),
-    KeySwitchDigitProductOp: ("key_digit_index",),
+    KeySwitchDigitProductOp: ("key_digit_index", "key_role"),
     CoefficientAutomorphismOp: ("galois_element",),
     RestrictDepthOp: ("target_depth",),
     ReinterpretScaleOp: ("scale",),
@@ -944,9 +1375,6 @@ FHEliumRns = Dialect(
     [
         RnsBundleType,
         RnsParametersType,
-        RescalePlanType,
-        KeySwitchPlanType,
-        EvaluationKeyResourceType,
     ],
 )
 """Logical RNS operations and resource types."""
@@ -955,14 +1383,13 @@ FHEliumRns = Dialect(
 __all__ = [
     "AddStandardOp",
     "AddPlaintextOp",
+    "SumStandardBatchOp",
     "AddMontgomeryLazyOp",
     "CoefficientAutomorphismOp",
-    "EvaluationKeyResourceType",
     "ExtractComponentOp",
     "NegateStandardOp",
     "HybridModUpDigitOp",
     "KeySwitchDigitProductOp",
-    "KeySwitchPlanType",
     "ModDownQpToQOp",
     "ModDownNttQpToQOp",
     "MontgomeryToStandardOp",
@@ -976,7 +1403,6 @@ __all__ = [
     "SubtractStandardOp",
     "FHEliumRns",
     "RescaleDropLeadingPrimesOp",
-    "RescalePlanType",
     "RestrictDepthOp",
     "ReinterpretScaleOp",
     "RnsBundleType",

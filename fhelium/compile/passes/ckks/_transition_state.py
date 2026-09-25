@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from fhelium.ir.dialects import logical
+from fhelium.ir.dialects._common import OpenStateType
+from .._operation_transforms import display_name
+
 from collections.abc import Mapping
 
 from xdsl.dialects.builtin import (
@@ -14,7 +18,6 @@ from xdsl.rewriter import Rewriter
 
 from fhelium.ir import Program
 from fhelium.ir.dialects import ckks
-from fhelium.ir.dialects._common import OpenStateType
 
 
 _CKKS_VALUE_BRIDGE_TYPES = frozenset(
@@ -487,7 +490,101 @@ def reconcile_transition_paths(
     return inserted
 
 
+_PRESERVE_ENCRYPTED_TYPES = (
+    logical.AddEncryptedEncryptedOp,
+    logical.AddEncryptedPublicOp,
+    logical.AddPublicEncryptedOp,
+    logical.SubtractEncryptedEncryptedOp,
+    logical.SubtractEncryptedPublicOp,
+    logical.SubtractPublicEncryptedOp,
+    logical.NegateEncryptedOp,
+)
+_MULTIPLY_TYPES = (
+    logical.MultiplyEncryptedEncryptedOp,
+    logical.MultiplyEncryptedPublicOp,
+    logical.MultiplyPublicEncryptedOp,
+)
+
+
+def infer_logical_representation(
+    value: SSAValue,
+    memo: dict[SSAValue, tuple[str, str]],
+) -> tuple[str, str]:
+    """Infer the representation selected by the logical CKKS route."""
+
+    cached = memo.get(value)
+    if cached is not None:
+        return cached
+    try:
+        representation = representation_pair(
+            value, operation="logical representation assignment"
+        )
+    except ValueError:
+        representation = None
+    if representation is not None:
+        memo[value] = representation
+        return representation
+    owner = value.owner
+    if not isinstance(owner, Operation):
+        raise ValueError(
+            "Logical encrypted input representation remains unassigned"
+        )
+    if isinstance(owner, UnrealizedConversionCastOp):
+        representation = infer_logical_representation(owner.inputs[0], memo)
+    elif isinstance(owner, logical.RollEncryptedOp):
+        representation = ("coefficient", "standard")
+    elif isinstance(owner, _PRESERVE_ENCRYPTED_TYPES):
+        encrypted = tuple(
+            operand
+            for operand in owner.operands
+            if isinstance(operand.type, logical.EncryptedType)
+        )
+        representations = tuple(
+            infer_logical_representation(operand, memo) for operand in encrypted
+        )
+        distinct = set(representations)
+        if not representations:
+            raise ValueError(
+                f"{display_name(owner)} lacks one matching encrypted "
+                "representation"
+            )
+        if len(distinct) == 1:
+            representation = representations[0]
+        elif distinct == {
+            ("coefficient", "standard"),
+            ("ntt", "montgomery"),
+        }:
+            representation = ("coefficient", "standard")
+        else:
+            raise ValueError(
+                f"{display_name(owner)} has incompatible encrypted "
+                "representations"
+            )
+    elif isinstance(owner, _MULTIPLY_TYPES):
+        representation = ("ntt", "montgomery")
+    else:
+        raise ValueError(
+            f"{display_name(owner)} does not define an encrypted representation"
+        )
+    if isinstance(value.type, OpenStateType):
+        state = dict(value.type.state.data)
+        state.update(
+            {
+                "polynomial_domain": StringAttr(representation[0]),
+                "residue_representation": StringAttr(representation[1]),
+            }
+        )
+        updated = Rewriter.replace_value_with_new_type(
+            value,
+            value.type.with_state(state),  # type: ignore[arg-type]
+        )
+        memo[updated] = representation
+    memo[value] = representation
+    return representation
+
+
 __all__ = [
+    "infer_logical_representation",
     "compatible_states",
     "exclusive_to",
     "is_ckks_value_bridge",

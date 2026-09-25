@@ -8,6 +8,7 @@ from ..._pipeline import (
 
 from fhelium.config import CkksConfig
 
+import json
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 
@@ -54,8 +55,8 @@ class _LoweringResult:
 
 
 def lower_ckks_program(
-    program: Program,
-    config: CkksConfig,
+    compilation,
+    config: CkksConfig | None,
     *,
     registry: CkksLoweringRegistry = DEFAULT_CKKS_LOWERINGS,
     selections: Mapping[str, str] | None = None,
@@ -63,6 +64,7 @@ def lower_ckks_program(
 ) -> _LoweringResult:
     """Apply selected CKKS lowerings while preserving other mixed-level IR."""
 
+    program = compilation.program
     requested = dict(selections or {})
     if any(
         not isinstance(operation_name, str)
@@ -111,9 +113,16 @@ def lower_ckks_program(
             type(operation),
             requested.get(operation.name),
         )
+        represented = operation.attributes.get("ckks_config")
+        selected_config = (
+            CkksConfig.parse(json.loads(represented.data))
+            if isinstance(represented, StringAttr)
+            else config
+        )
         lowered = registry.lower(
             operation,
-            config,
+            selected_config,
+            compilation,
             requested=definition.name,
         )
         Rewriter.replace_op(
@@ -121,6 +130,9 @@ def lower_ckks_program(
             lowered.operations,
             new_results=(lowered.result,),
         )
+        for symbol, description in lowered.material_descriptions.items():
+            if symbol not in program.material_descriptions:
+                program.set_material_description(symbol, description)
         transformed += 1
         inserted += len(lowered.operations)
         decisions.append(

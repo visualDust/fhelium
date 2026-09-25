@@ -1,17 +1,15 @@
 # Customize a Compile pass and pipeline
 
-**Example source:** [`examples/19_customize_compile_pass.py`](https://github.com/VisualDust/fhelium/blob/main/examples/19_customize_compile_pass.py)
+**Example source:** [`examples/14_compile_custom_pass.py`](https://github.com/VisualDust/fhelium/blob/main/examples/14_compile_custom_pass.py)
 
-Example 19 implements a caller-defined Compile pass that recognizes a captured `torch.matmul` with a compile-time square matrix and rewrites it as a baby-step/giant-step (BSGS) encrypted matrix-vector schedule. The source applies an illustrative elementwise square after the linear result, adding one ciphertext-ciphertext multiplication. Caller-selected passes then place relinearization and rescales, assign depths and actual scales, lower the schedule into RNS/NTT operations, link materials and evaluation keys, and execute it through the Backend.
+Example 14 implements a caller-defined Compile pass that recognizes a captured `torch.matmul` with a compile-time square matrix and rewrites it as a baby-step/giant-step (BSGS) encrypted matrix-vector schedule. The source applies an illustrative elementwise square after the linear result, adding one ciphertext-ciphertext multiplication. Caller-selected passes then place relinearization and rescales, assign depths and actual scales, lower the schedule into RNS/NTT operations, link materials and evaluation keys, and execute it through the Backend.
 
-The example demonstrates a transformation and execution architecture. Its CPU
-execution validates the selected matrix-multiplication schedule for the shown
-inputs.
+The example demonstrates a transformation and execution architecture. Its CPU execution validates the selected matrix-multiplication schedule for the shown inputs.
 
 ## Run the example
 
 ```bash
-python examples/19_customize_compile_pass.py
+python examples/14_compile_custom_pass.py
 ```
 
 The output presents three Programs:
@@ -30,7 +28,7 @@ def matrix_vector(x):
     return linear * linear
 ```
 
-`_WEIGHT` is a module-level Tensor. PyTorch FX captures it as a graph-external `fhelium.material.ref`, and FHElium stores its detached snapshot in the request's `ConstantBundle`. PyTorch FX preserves encrypted matmul as a structural `torch.call`; the custom pass assigns its FHElium meaning.
+`_WEIGHT` is a module-level Tensor. PyTorch FX captures it as a graph-external `fhelium.material.ref`, and FHElium retains it in `Compilation.material_bindings`. PyTorch FX preserves encrypted matmul as a structural `torch.call`; the custom pass assigns its FHElium meaning.
 
 A runtime matrix argument would not have a compile-time Tensor payload. This example therefore restricts the pattern to one captured square matrix material multiplied by one encrypted vector.
 
@@ -69,9 +67,8 @@ For the example's `n=8` and `b=3`, the encrypted schedule uses baby rotations `1
 `LowerConstantMatmulToBsgsPass` performs the following work:
 
 1. find `torch.call` with target `torch.matmul`;
-2. locate the matrix's `MaterialRefOp` and Tensor snapshot in `ConstantBundle`;
-3. compute the eight cyclic diagonals, their group-specific adjustments, and
-   periodic copies covering the configured CKKS slot count;
+2. locate the matrix's `MaterialRefOp` and Tensor in `Compilation.material_bindings`;
+3. compute the eight cyclic diagonals, their group-specific adjustments, and periodic copies covering the configured CKKS slot count;
 4. store those derived Tensors under readable material symbols;
 5. emit reusable baby rotations;
 6. emit semantic pointwise multiplication and addition for each giant group;
@@ -99,68 +96,33 @@ The custom pass emits only shared semantic operations and material references:
 - `fhelium_semantic.add`;
 - `fhelium.material.ref`.
 
-It does not introduce a dedicated BSGS execution architecture. Existing passes classify encrypted/public operand roles, resolve logical rotation steps to caller-bound key operands, prepare each diagonal as a multiplication-ready plaintext, and lower the encrypted schedule to shared CKKS, RNS, and NTT operations.
+The subsequent passes classify encrypted/public operand roles, resolve logical rotation steps to caller-bound key operands, prepare each diagonal as a multiplication-ready plaintext, and lower the encrypted schedule to shared CKKS, RNS, and NTT operations.
 
-The selected `InsertRelinearizationPass` materializes the square activation's
-three-component result as a two-component ciphertext. Independently, the
-selected `LateRescalePass` consolidates the BSGS plaintext-product rescales
-within each add tree. A rotation is a barrier in this conservative policy
-because moving a rescale across key switching changes the active-Q key-switch
-work and error. The three giant groups therefore produce three rescales rather
-than eight; the square activation contributes one additional rescale.
-`AssignCkksDepthsPass` then reads those concrete transitions, and
-`AssignCkksScalesPass` computes each actual scale using the complete dropped
-Q-group product.
+The selected `InsertRelinearizationPass` materializes the square activation's three-component result as a two-component ciphertext. Independently, the selected `LateRescalePass` consolidates the BSGS plaintext-product rescales within each add tree. A rotation is a barrier in this conservative policy because moving a rescale across key switching changes the active-Q key-switch work and error. The three giant groups therefore produce three rescales rather than eight; the square activation contributes one additional rescale. `AssignCkksDepthsPass` then reads those concrete transitions, and `AssignCkksScalesPass` computes each actual scale using the complete dropped Q-group product.
 
 This keeps BSGS as one caller-selected algebraic transformation while preserving other matrix-multiplication representations.
 
 ## Clear and encrypted checks
 
-The example evaluates the same BSGS formula with clear float64 PyTorch tensors,
-applies the elementwise square, and compares it with the captured
-`(_WEIGHT @ x) ** 2` computation. This check catches diagonal indexing,
-rotation-sign, and post-matvec dataflow mistakes in the example schedule.
+The example evaluates the same BSGS formula with clear float64 PyTorch tensors, applies the elementwise square, and compares it with the captured `(_WEIGHT @ x) ** 2` computation. This check catches diagonal indexing, rotation-sign, and post-matvec dataflow mistakes in the example schedule.
 
-The eight-element input and diagonals are repeated periodically across all
-configured slots. This makes a full-ring CKKS rotation agree with the intended
-eight-element cyclic rotation instead of padding the remaining slots with
-zeros. The example encrypts that tiled input, calls
-`ProgramExecutable.run(ciphertext)`, decrypts the returned `Ciphertext`, and
-compares every decoded slot with the tiled clear result.
+The eight-element input and diagonals are repeated periodically across all configured slots. This makes a full-ring CKKS rotation agree with the intended eight-element cyclic rotation instead of padding the remaining slots with zeros. The example encrypts that tiled input, calls `ProgramExecutable.run(ciphertext)`, decrypts the returned `Ciphertext`, and compares every decoded slot with the tiled clear result.
 
-The Backend workspace receives the generated rotation keys as ordinary key
-objects and owns the device resource materializer:
+The example prepares numerical tables and key data separately from the Program:
 
 ```python
-rotation_keys = tuple(
-    engine.create_rotation_key(step, secret_key, device=device)
-    for step in rotation_steps
+fh_compile.prepare_material_bindings(
+    compiled,
+    resources=device_resources,
+    keys=(*rotation_keys, *((relinearization_key,) if relinearization_key is not None else ())),
 )
-
-relinearization_key = engine.create_relinearization_key(
-    secret_key,
-    device=device,
-)
-
-backend = OperationBackend(
-    keys=(*rotation_keys, relinearization_key),
-    materializer=device_resources,
-)
-
+backend = OperationBackend()
 executable = backend.link(compiled)
 ```
 
-The key-binding pass reads the structured rotation step from each Program key
-operand and matches it to `RotationKey.rotation_step`. The example therefore
-does not reproduce the Program's local resource-symbol spelling. Materials are
-read from the Compilation's `ConstantBundle`; caller code does not extract and
-pass that bundle back into a pipeline. The linked `ResourceBindings` table is
-created inside build-local linking state.
+The automatic preparation step adds parameters and key data to `Compilation.material_bindings`, leaving captured matrix materials in place. Backend linking reads this dictionary without generation or description-based correctness checks.
 
-Backend implementations still consume and return Tensor payloads. The
-executable owns the public Program boundary: it unwraps the input ciphertext,
-runs the linked Tensor operations, and reconstructs the output ciphertext from
-the concrete result state assigned by Compile passes.
+Backend implementations still consume and return Tensor payloads. The executable owns the public Program boundary: it unwraps the input ciphertext, runs the linked Tensor operations, and reconstructs the output ciphertext from the concrete result state assigned by Compile passes.
 
 ## Transformation domain
 
@@ -171,13 +133,11 @@ The transformation rule in this example is defined for:
 - one-dimensional encrypted semantic input;
 - a caller-selected baby-step width.
 
-Dynamic matrices, rectangular matrices, batched matmul, transposed layouts, and
-other packing conventions require transformation rules that represent their
-own operand and layout semantics.
+Dynamic matrices, rectangular matrices, batched matmul, transposed layouts, and other packing conventions require transformation rules that represent their own operand and layout semantics.
 
 ::: details Source
 
-<<< @/../examples/19_customize_compile_pass.py
+<<< @/../examples/14_compile_custom_pass.py
 
 :::
 

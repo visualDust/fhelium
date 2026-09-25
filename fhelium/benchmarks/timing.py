@@ -25,7 +25,7 @@ class CudaMemoryBaseline:
 
 
 def _cuda_device(device: DeviceLike) -> torch.device | None:
-    """Resolve an indexed CUDA device while retaining legacy ``None`` behavior."""
+    """Resolve an indexed CUDA device, using the current device for ``None``."""
 
     if not torch.cuda.is_available():
         return None

@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from ..._pipeline import (
     PassResult,
     PassStats,
@@ -17,7 +23,7 @@ from xdsl.ir import Attribute, SSAValue
 from xdsl.rewriter import Rewriter
 
 from fhelium.config import CkksConfig
-from fhelium.ir import Program, value_role
+from fhelium.ir import value_role
 from fhelium.ir.dialects import ckks
 from fhelium.ir.dialects._common import OpenStateType
 from ._transition_state import is_same_dialect_ckks_cast
@@ -112,22 +118,40 @@ class AssignCkksScalesPass:
     actual Q prime selected by its input depth.
     """
 
-    entry_scale: float
+    entry_scale: float | None = None
     name: str = field(default="assign-ckks-scales", init=False)
 
     def __post_init__(self) -> None:
+        if self.entry_scale is None:
+            return
         object.__setattr__(
             self,
             "entry_scale",
             _positive_scale(self.entry_scale, label="entry_scale"),
         )
 
-    def run(
-        self,
-        program: Program,
-        shared_data: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
+        program = compilation.program
+        shared_data = compilation.workspace
+        partial = self.entry_scale is None
+        if partial:
+            pending = [
+                value
+                for operation in program.walk()
+                for value in operation.results
+                if value_role(value) == "encrypted"
+                and _represented_scale(value) is None
+            ]
+            if not pending:
+                return PassResult.unchanged(program)
         config = shared_data.get(CkksConfig)
+        if partial and not isinstance(config, CkksConfig):
+            return PassResult.unchanged(
+                program,
+                diagnostics=(
+                    "CKKS scale propagation awaits mathematical parameters",
+                ),
+            )
         if not isinstance(config, CkksConfig):
             raise ValueError(
                 "CKKS scale assignment requires CkksConfig in the Compile "
@@ -178,7 +202,16 @@ class AssignCkksScalesPass:
 
         for argument in tuple(block.args):
             if value_role(argument) == "encrypted":
-                record(argument, self.entry_scale)
+                entry = (
+                    self.entry_scale
+                    if self.entry_scale is not None
+                    else _represented_scale(argument)
+                )
+                if entry is None:
+                    if partial:
+                        continue
+                    raise ValueError("Encrypted input lacks scale")
+                record(argument, entry)
             else:
                 represented = _represented_scale(argument)
                 if represented is not None:
@@ -232,6 +265,15 @@ class AssignCkksScalesPass:
                 matched += 1
                 continue
             if not operation.results:
+                continue
+            if partial and all(
+                _represented_scale(value) is not None
+                for value in operation.results
+            ):
+                for value in operation.results:
+                    known = _represented_scale(value)
+                    if known is not None:
+                        scales[value] = known
                 continue
 
             scale: float | None = None

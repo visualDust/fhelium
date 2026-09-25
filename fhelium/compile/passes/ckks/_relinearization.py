@@ -2,6 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
+from typing import cast
+
+from ..._materials import material_symbol
+
 from ..._pipeline import (
     PassResult,
     PassStats,
@@ -10,10 +20,10 @@ from ..._pipeline import (
 from dataclasses import dataclass
 
 from xdsl.ir import Attribute, Operation, SSAValue, Use
-from xdsl.dialects.builtin import UnrealizedConversionCastOp
+from xdsl.dialects.builtin import StringAttr, UnrealizedConversionCastOp
 
 from fhelium.ir import Program
-from fhelium.ir.dialects import ckks
+from fhelium.ir.dialects import ckks, core
 from .._operation_transforms import (
     ciphertext_type,
     display_name,
@@ -93,6 +103,7 @@ def _classify_relinearization_use(use: Use) -> tuple[bool, tuple[Use, ...]]:
 def _materialize_relinearization(
     operation: Operation,
     *,
+    program: Program,
     edge: Use | None = None,
 ) -> tuple[int, SSAValue]:
     opaque_cast = (
@@ -144,6 +155,11 @@ def _materialize_relinearization(
                 domain="ntt",
                 residues="montgomery",
             ),
+            attributes={
+                name: value
+                for name, value in operation.attributes.items()
+                if name in {"ckks_config", "ntt_backend"}
+            },
         )
         ntt.result.name_hint = f"{display_name(operation)}_ntt"
         insert(ntt)
@@ -160,16 +176,33 @@ def _materialize_relinearization(
         residues="montgomery",
         components=2,
     )
+    key = core.MaterialRefOp(
+        ckks.EvaluationKeyType(),
+        symbol=material_symbol(operation, "relinearization-key"),
+    )
+    program.set_material_description(
+        cast(StringAttr, key.symbol).data, {"kind": "RelinearizationKey"}
+    )
+    if edge is None or opaque_cast is not None:
+        block.insert_op_before(key, insertion_point)
+    else:
+        block.insert_op_before(key, consumer)
     relinearized = ckks.RelinearizeOp(
         source,
+        key.value,
         result_type,
         output_domain="ntt",
+        attributes={
+            name: value
+            for name, value in operation.attributes.items()
+            if name in {"ckks_config", "ntt_backend"}
+        },
     )
     relinearized.result.name_hint = f"{display_name(operation)}_relinearized"
     insert(relinearized)
     if edge is not None and opaque_cast is None:
         consumer.operands[operand_index] = relinearized.result
-    return inserted + 1, relinearized.result
+    return inserted + 2, relinearized.result
 
 
 def _place_relinearizations(program: Program, *, late: bool) -> PassResult:
@@ -304,12 +337,14 @@ def _place_relinearizations(program: Program, *, late: bool) -> PassResult:
         ):
             for use in frontiers:
                 created, result = _materialize_relinearization(
-                    operation, edge=use
+                    operation, program=program, edge=use
                 )
                 inserted += created
                 rewritten_roots.append(result)
             continue
-        created, result = _materialize_relinearization(operation)
+        created, result = _materialize_relinearization(
+            operation, program=program
+        )
         inserted += created
         rewritten_roots.append(result)
 
@@ -335,11 +370,9 @@ class InsertRelinearizationPass:
 
     name: str = "insert-relinearization"
 
-    def run(
-        self,
-        program: Program,
-        workspace: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
+        program = compilation.program
+        workspace = compilation.workspace
         del workspace
         return _place_relinearizations(program, late=False)
 
@@ -350,11 +383,9 @@ class LateRelinearizationPass:
 
     name: str = "late-relinearization"
 
-    def run(
-        self,
-        program: Program,
-        workspace: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
+        program = compilation.program
+        workspace = compilation.workspace
         del workspace
         return _place_relinearizations(program, late=True)
 

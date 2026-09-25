@@ -1,9 +1,6 @@
 # Execution buffers and CUDA Graphs
 
-`fhelium.runtime` provides device-independent value signatures, reusable
-fixed-address storage, CUDA-event copy handles, and CUDA Graph capture for a
-rank-local Python callable. Every path consumes ordinary FHElium values and
-calls the standard evaluator/native-operator stack.
+`fhelium.runtime` provides device-independent value signatures, reusable fixed-address storage, CUDA-event copy handles, and CUDA Graph capture for a rank-local Python callable. Buffers supply ordinary Tensor and FHElium values to Eager, manually linked Programs, or compiled callables. CUDA Graph capture records the prepared GPU launch sequence over stable storage.
 
 ## Execution stack
 
@@ -13,10 +10,10 @@ graph TB
     SIG[ValueTreeSignature]
     BUF[ReusableValueBuffer]
     COPY[CopyHandle<br/>CUDA event and source lifetime]
-    EAGER[Ordinary eager callable]
+    EAGER[Eager or prepared Compile callable]
     GRAPH[CudaGraphProgram]
     TORCH[PyTorch allocator, streams, and CUDAGraph]
-    NATIVE[FHElium torch.ops kernels]
+    NATIVE[Native and generated GPU kernels]
 
     APP --> SIG --> BUF
     BUF --> COPY
@@ -24,14 +21,11 @@ graph TB
     BUF --> GRAPH --> TORCH --> NATIVE
 ```
 
-The application decides what constitutes one program, which inputs are dynamic,
-which resources are captured as static program state, when payloads move, and whether an eager
-call or graph replay is appropriate.
+The application decides what constitutes one program, which inputs are dynamic, which resources are captured as static program state, when payloads move, and whether direct invocation or graph replay is appropriate.
 
 ## Device-independent value signatures
 
-`ValueTreeSignature` recursively describes supported lists, tuples,
-dictionaries, raw tensors, and FHElium values.
+`ValueTreeSignature` recursively describes supported lists, tuples, dictionaries, raw tensors, and FHElium values.
 
 A `TensorSignature` records:
 
@@ -39,15 +33,9 @@ A `TensorSignature` records:
 - dtype and tensor layout;
 - `requires_grad`.
 
-A `ValueSignature` additionally records the serialization type and schema,
-normalized stored arithmetic metadata, and ordered tensor-leaf
-signatures. That metadata includes fields such as depth, scale, representation,
-domain, basis, `prime_ids`, and key specialization where present. It does not
-record CKKS parameter provenance.
+A `ValueSignature` additionally records the serialization type and schema, normalized stored arithmetic metadata, and ordered tensor-leaf signatures. That metadata includes fields such as depth, scale, representation, domain, basis, `prime_ids`, and key specialization where present. It does not record CKKS parameter provenance.
 
-Device is intentionally excluded. A compatible CPU source and CUDA source can
-feed the same fixed CUDA buffer because the buffer, rather than the signature,
-owns target residency.
+Device is intentionally excluded. A compatible CPU source and CUDA source can feed the same fixed CUDA buffer because the buffer, rather than the signature, owns target residency.
 
 ```mermaid
 graph LR
@@ -62,19 +50,13 @@ graph LR
     VTS -. excludes .-> TARGET
 ```
 
-Validation walks the complete candidate tree before the first copy. A structure,
-tensor topology, or value-state mismatch therefore cannot leave a reusable
-buffer partially updated.
+Validation walks the complete candidate tree before the first copy. A structure, tensor topology, or value-state mismatch therefore cannot leave a reusable buffer partially updated.
 
 ## Fixed-address value buffers
 
-`ReusableValueBuffer.like(example, device=...)` allocates an independent tree
-whose tensor structure and value metadata match `example`. Its tensor addresses
-remain stable while `copy_from` replaces payload bytes.
+`ReusableValueBuffer.like(example, device=...)` allocates an independent tree whose tensor structure and value metadata match `example`. Its tensor addresses remain stable while `copy_from` replaces payload bytes.
 
-The buffer reconstructs ordinary `torch.Tensor` and FHElium value objects around
-its owned storage. An eager evaluator consumes `buffer.value`; no special
-buffer-aware arithmetic API is required.
+The buffer reconstructs ordinary `torch.Tensor` and FHElium value objects around its owned storage. An Eager callable or prepared Compile interface consumes `buffer.value` through its ordinary arguments.
 
 ```mermaid
 sequenceDiagram
@@ -82,7 +64,7 @@ sequenceDiagram
     participant Sig as ValueTreeSignature
     participant Buf as ReusableValueBuffer
     participant Torch as PyTorch copy and stream runtime
-    participant Eval as Eager FHElium callable
+    participant Eval as Eager or Compile callable
 
     App->>Sig: validate complete source tree
     Sig-->>Buf: matching ordered tensor leaves
@@ -91,23 +73,13 @@ sequenceDiagram
     App->>Eval: call with buffer.value
 ```
 
-Buffer construction rejects ambiguous multi-device examples without an indexed
-target, unsupported leaves, and aliased representative storage. `pin_memory`
-requires a CPU target and creates pinned host staging suitable for non-blocking
-host-to-device copies.
+Buffer construction rejects ambiguous multi-device examples without an indexed target, unsupported leaves, and aliased representative storage. `pin_memory` requires a CPU target and creates pinned host staging suitable for non-blocking host-to-device copies.
 
-A `ReusableValueBuffer` owns fixed storage identified by a value
-signature. Deployment code associates buffers with models and requests and
-chooses tile order, prefetch, and eviction policy. Double buffering uses two
-independent buffers.
+A `ReusableValueBuffer` owns fixed storage identified by a value signature. Deployment code associates buffers with models and requests and chooses tile order, prefetch, and eviction policy. Double buffering uses two independent buffers.
 
 ## Copy handles and stream ordering
 
-A CPU-target copy completes synchronously and returns a handle with no CUDA
-event. A CUDA-target copy can be enqueued on a caller-selected stream. Its
-`CopyHandle` retains the submitted source tensor leaves until the recorded
-event completes, preventing the source storage from being released or replaced
-while a DMA operation may still read it.
+A CPU-target copy completes synchronously and returns a handle with no CUDA event. A CUDA-target copy can be enqueued on a caller-selected stream. Its `CopyHandle` retains the submitted source tensor leaves until the recorded event completes, preventing the source storage from being released or replaced while a DMA operation may still read it.
 
 ```mermaid
 sequenceDiagram
@@ -124,21 +96,13 @@ sequenceDiagram
     Event-->>Host: done() or synchronize()
 ```
 
-`wait_on(stream)` inserts a stream dependency without blocking the CPU.
-`synchronize()` blocks the caller and releases retained source references.
-Supplying a stream from another CUDA device is an error.
+`wait_on(stream)` inserts a stream dependency without blocking the CPU. `synchronize()` blocks the caller and releases retained source references. Supplying a stream from another CUDA device is an error.
 
-When overwriting a buffer, the application must provide ordering against prior
-readers. A copy-completion event proves that the new payload is ready; it does
-not prove that an earlier evaluator has stopped reading the old payload.
+When overwriting a buffer, the application must provide ordering against prior readers. A copy-completion event proves that the new payload is ready; it does not prove that an earlier evaluator has stopped reading the old payload.
 
 ## CUDA Graph capture
 
-`CudaGraphProgram.capture(function, example_inputs=...)` specializes one Python
-callable to a fixed input structure and CUDA device. Parameters captured through a
-closure, `functools.partial`, or a callable object are static program state.
-`example_inputs` define dynamic positional values backed by one retained
-`ReusableValueBuffer`.
+`CudaGraphProgram.capture(function, example_inputs=...)` specializes one Python callable to a fixed input structure and CUDA device. Parameters captured through a closure, `functools.partial`, or a callable object are static program state. `example_inputs` define dynamic positional values backed by one retained `ReusableValueBuffer`.
 
 Capture proceeds as follows:
 
@@ -146,7 +110,7 @@ Capture proceeds as follows:
 flowchart LR
     EX[Validate CUDA examples]
     WBUF[Fresh warmup buffers]
-    WARM[Side-stream eager warmup]
+    WARM[Side-stream callable warmup]
     CBUF[Retained input buffer]
     CAP[torch.cuda.CUDAGraph capture]
     OUT[Retained output tree]
@@ -156,29 +120,17 @@ flowchart LR
     EX --> WBUF --> WARM --> CBUF --> CAP --> OUT --> REPLAY --> READY
 ```
 
-Warmup uses fresh storage so lazy backend initialization does not mutate the
-addresses retained for capture. The captured callable ultimately invokes the
-same FHElium `torch.ops` CUDA kernels as eager evaluation; CUDA Graph records
-those launches and their fixed storage addresses.
+Warmup uses fresh storage so lazy backend initialization does not mutate the addresses retained for capture. The captured callable invokes its prepared native or generated kernels; CUDA Graph records those launches and their fixed storage addresses. Prepare the desired Compile specialization before capture, and warm any lazy device-code compilation as described in [prepared host execution](prepared-host-execution.md).
 
-Dynamic keyword arguments and arbitrary Python control objects are not captured.
-Adapt a dynamic keyword-only tensor into a positional input and keep dynamic
-control flow outside the graph.
+Dynamic keyword arguments and arbitrary Python control objects are not captured. Adapt a dynamic keyword-only tensor into a positional input and keep dynamic control flow outside the graph.
 
 ## Replay and output ownership
 
-The convenience replay path validates and copies new inputs, orders graph launch
-after the copy, and returns the retained output object. The advanced path
-separates `copy_inputs_from` from `replay_prepared`, allowing transfer and
-compute streams to be scheduled by the application.
+The convenience replay path validates and copies new inputs, orders graph launch after the copy, and returns the retained output object. The advanced path separates `copy_inputs_from` from `replay_prepared`, allowing transfer and compute streams to be scheduled by the application.
 
-The default output is borrowed storage. The next replay overwrites it. A caller
-that must retain a result uses `copy_output=True` or copies the result through
-another mechanism.
+The default output is borrowed storage. The next replay overwrites it. A caller that must retain a result uses `copy_output=True` or copies the result through another mechanism.
 
-One `CudaGraphProgram` owns one input/output storage set and does not support
-concurrent replay. Independent concurrent workers require independent program
-instances.
+One `CudaGraphProgram` owns one input/output storage set and does not support concurrent replay. Independent concurrent workers require independent program instances.
 
 ```mermaid
 graph LR
@@ -238,8 +190,7 @@ Execution changes should cover:
 - borrowed-output overwrite and owned-output copying;
 - close behavior with pending copies or replay work.
 
-The focused suites are `tests/runtime/test_execution_buffer.py` and
-`tests/runtime/test_cuda_graph_execution.py`.
+The focused suites are `tests/runtime/test_execution_buffer.py` and `tests/runtime/test_cuda_graph_execution.py`.
 
 ## Continue
 

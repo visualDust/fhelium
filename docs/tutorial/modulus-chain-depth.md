@@ -1,22 +1,20 @@
 # Modulus-chain depth
 
-**Example source:** [`examples/04_modulus_chain_depth.py`](https://github.com/VisualDust/fhelium/blob/main/examples/04_modulus_chain_depth.py)
+**Example source:** [`examples/03_eager_modulus_chain.py`](https://github.com/VisualDust/fhelium/blob/main/examples/03_eager_modulus_chain.py)
 
-This example derives several exact Q chains from one preset and compares their
-maximum public depth, modulus size, active RNS rows, selected execution dtype,
-and ciphertext storage.
+This example derives several exact Q chains from one preset and compares their maximum public depth, modulus size, active RNS rows, selected execution dtype, and ciphertext storage.
 
 ## Run the example
 
 ```bash
-python examples/04_modulus_chain_depth.py \
+python examples/03_eager_modulus_chain.py \
   --preset slots32768-scale40-depth34-int64
 ```
 
 Select maximum depths:
 
 ```bash
-python examples/04_modulus_chain_depth.py \
+python examples/03_eager_modulus_chain.py \
   --preset slots32768-scale40-depth34-int64 \
   --depths 16,24,33
 ```
@@ -36,11 +34,9 @@ $$
 (G_0,G_1,\ldots,G_D),
 $$
 
-then `max_depth == D`. Public values use depths from zero through $D$, and
-`G_D` is the ordinary terminal Q group.
+then `max_depth == D`. Public values use depths from zero through $D$, and `G_D` is the ordinary terminal Q group.
 
-The example's `prefix_config` function constructs a shorter exact parameter set
-by retaining the requested public-group prefix and the same terminal Q group:
+The example's `prefix_config` function constructs a shorter exact parameter set by retaining the requested public-group prefix and the same terminal Q group:
 
 ```python
 CkksConfig(
@@ -54,22 +50,17 @@ CkksConfig(
 )
 ```
 
-No count override regenerates an existing configuration. Each constructed
-`CkksConfig` records its complete Q groups and P primes.
+No count override regenerates an existing configuration. Each constructed `CkksConfig` records its complete Q groups and P primes.
 
 ## 2. One depth may contain several RNS rows
 
-One public rescale from depth $d$ removes the complete group $G_d$ and divides
-actual scale by
+One public rescale from depth $d$ removes the complete group $G_d$ and divides actual scale by
 
 $$
 M_d=\prod_{q\in G_d}q.
 $$
 
-A one-prime group and a two-prime group both consume one depth. They have
-different active row counts and may select different native execution formats.
-Use `config.rescale_divisor(d)` for the group product and
-`config.active_q_moduli(d)` for the active prime sequence.
+A one-prime group and a two-prime group both consume one depth. They have different active row counts and may select different native execution formats. Use `config.rescale_divisor(d)` for the group product and `config.active_q_moduli(d)` for the active prime sequence.
 
 ## 3. Q and P have different roles
 
@@ -77,9 +68,7 @@ Use `config.rescale_divisor(d)` for the group product and
 - P contains special primes used temporarily by hybrid key switching.
 - QP appends all P rows to the active Q basis without changing depth.
 
-`config.total_modulus_bits` is the bit length of the exact complete QP product.
-When security-budget enforcement is enabled, it must not exceed
-`config.maximum_modulus_bits`.
+`config.total_modulus_bits` is the bit length of the exact complete QP product. When security-budget enforcement is enabled, it must not exceed `config.maximum_modulus_bits`.
 
 ## 4. Depth-zero values are largest
 
@@ -88,21 +77,17 @@ ciphertext = engine.encrypt_message([1, 2, 3, 4], depth=0)
 print(ciphertext.data.nbytes)
 ```
 
-At depth zero, every Q group is active. Later depths contain fewer Q rows. For
-a two-component ciphertext, payload storage is approximately
+At depth zero, every Q group is active. Later depths contain fewer Q rows. For a two-component ciphertext, payload storage is approximately
 
 $$
 2\,L_Q\,N\,W,
 $$
 
-where $L_Q$ is the active Q-row count and $W$ is the residue element size.
-Evaluation keys and operation temporaries have additional axes and lifetimes.
+where $L_Q$ is the active Q-row count and $W$ is the residue element size. Evaluation keys and operation temporaries have additional axes and lifetimes.
 
 ## 5. Choose depth from the circuit
 
-Count the public rescale transitions on the intended execution path and reserve
-the required margin. Then validate precision, message range, security budget,
-key storage, and latency with the exact groups:
+Count the public rescale transitions on the intended execution path and reserve the required margin. Then validate precision, message range, security budget, key storage, and latency with the exact groups:
 
 - more public groups provide more transitions;
 - more prime rows increase early-depth ciphertext and prepared-plaintext size;
@@ -110,7 +95,7 @@ key storage, and latency with the exact groups:
 - group products determine the scale removed by each rescale.
 
 ::: details Source
-<<< @/../examples/04_modulus_chain_depth.py
+<<< @/../examples/03_eager_modulus_chain.py
 :::
 
 ## Related concepts and guides

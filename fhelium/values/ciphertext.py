@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import copy
 from dataclasses import dataclass
 from typing import Any, Self
 
@@ -216,7 +217,7 @@ class Ciphertext(TensorResident):
     def clone(self) -> Ciphertext:
         """Return a metadata-equivalent ciphertext with independent storage."""
 
-        return self.with_data(self.data.clone())
+        return self._with_resident_tensors((self.data.clone(),))
 
     def with_data(self, data: torch.Tensor) -> Ciphertext:
         """Construct the same semantic layout around replacement storage.
@@ -265,14 +266,17 @@ class Ciphertext(TensorResident):
     def _with_resident_tensors(
         self, tensors: tuple[torch.Tensor, ...]
     ) -> Ciphertext:
-        return self.with_data(tensors[0])
+        result = copy(self)
+        result.data = tensors[0]
+        return result
 
     def slice_limbs(self, start: int, stop: int) -> Ciphertext:
-        """Return a storage-sharing view over ``[start:stop]`` RNS limbs.
+        """Return a storage-sharing RNS row interval and its prime IDs.
 
-        This is a local tensor operation, not a placement decision.  In-place
-        arithmetic on the returned value also modifies the corresponding rows
-        of this ciphertext.
+        ``[start, stop)`` indexes stored limb positions, not global prime IDs.
+        Component and batch axes, depth, scale, and representation state are
+        preserved; the result represents part of the same basis, not a rescaled
+        value. In-place arithmetic also modifies the corresponding source rows.
         """
 
         if not 0 <= start < stop <= self.limb_count:
@@ -281,15 +285,9 @@ class Ciphertext(TensorResident):
                 f"0 <= start < stop <= {self.limb_count}; "
                 f"got start={start}, stop={stop}"
             )
-        return Ciphertext(
-            data=self.data[..., start:stop, :],
-            depth=self.depth,
-            scale=self.scale,
-            prime_ids=self.prime_ids[start:stop],
-            polynomial_domain=self.polynomial_domain,
-            modulus_basis=self.modulus_basis,
-            residue_representation=self.residue_representation,
-        )
+        result = self._with_resident_tensors((self.data[..., start:stop, :],))
+        result.prime_ids = self.prime_ids[start:stop]
+        return result
 
     @classmethod
     def stack_batch(
@@ -336,8 +334,35 @@ class Ciphertext(TensorResident):
                     "Ciphertext.stack_batch received incompatible value at "
                     f"index {index}: mismatches={mismatches}"
                 )
-        return first.with_data(
-            torch.stack(tuple(value.data for value in values), dim=1)
+        return first._with_resident_tensors(
+            (torch.stack(tuple(value.data for value in values), dim=1),)
+        )
+
+    def slice_batch(self, start: int, stop: int, *, dim: int = 0) -> Ciphertext:
+        """Return a storage-sharing interval along one logical batch axis.
+
+        ``[start, stop)`` must be a nonempty interval within the selected axis.
+        ``dim`` indexes ``batch_shape`` and accepts negative dimensions. The
+        axis is retained even for a one-item interval. Depth, scale, prime IDs,
+        and polynomial and residue representations are preserved. Mutations
+        through the returned view also update the corresponding source data.
+        """
+
+        if not self.is_batched:
+            raise ValueError("Cannot slice a batch axis of an unbatched value")
+        logical_dim = dim if dim >= 0 else dim + len(self.batch_shape)
+        if not 0 <= logical_dim < len(self.batch_shape):
+            raise IndexError(
+                f"Batch dimension {dim} is outside shape {tuple(self.batch_shape)}"
+            )
+        if not 0 <= start < stop <= self.batch_shape[logical_dim]:
+            raise ValueError(
+                "Ciphertext batch slice must satisfy "
+                f"0 <= start < stop <= {self.batch_shape[logical_dim]}; "
+                f"got start={start}, stop={stop}"
+            )
+        return self._with_resident_tensors(
+            (self.data.narrow(logical_dim + 1, start, stop - start),)
         )
 
     def select_batch(self, index: int, *, dim: int = 0) -> Ciphertext:
@@ -353,7 +378,9 @@ class Ciphertext(TensorResident):
                 f"Batch dimension {dim} is outside shape "
                 f"{tuple(self.batch_shape)}"
             )
-        return self.with_data(self.data.select(logical_dim + 1, index))
+        return self._with_resident_tensors(
+            (self.data.select(logical_dim + 1, index),)
+        )
 
     def unbind_batch(self, *, dim: int = 0) -> tuple[Ciphertext, ...]:
         """Return storage-sharing views along one logical batch axis."""
@@ -367,7 +394,8 @@ class Ciphertext(TensorResident):
                 f"{tuple(self.batch_shape)}"
             )
         return tuple(
-            self.with_data(data) for data in self.data.unbind(logical_dim + 1)
+            self._with_resident_tensors((data,))
+            for data in self.data.unbind(logical_dim + 1)
         )
 
     def replace_(self, other: Ciphertext) -> Ciphertext:

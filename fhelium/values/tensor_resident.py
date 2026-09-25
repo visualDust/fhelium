@@ -28,7 +28,12 @@ class TensorResident(ABC):
 
     @abstractmethod
     def _with_resident_tensors(self, tensors: tuple[torch.Tensor, ...]) -> Self:
-        """Reconstruct this value around replacement tensors."""
+        """Assemble an internal storage result while preserving value metadata.
+
+        Callers supply fields produced by a storage or view operation that
+        preserves the value's representation. This does not validate newly
+        supplied public data or revalidate mutable metadata.
+        """
 
     @property
     def device(self) -> torch.device:

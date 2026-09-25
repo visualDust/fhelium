@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from ..._pipeline import (
     DecisionRecord,
     PassResult,
@@ -16,7 +22,6 @@ from xdsl.dialects.builtin import StringAttr
 
 from fhelium.ir import (
     EXECUTION_IMPLEMENTATION_ATTRIBUTE,
-    Program,
     operation_name,
 )
 from .._operation_transforms import program_operations_and_known_region_owners
@@ -58,12 +63,10 @@ class AssignImplementationsPass:
             MappingProxyType(selections),
         )
 
-    def run(
-        self,
-        program: Program,
-        workspace: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
         """Annotate exact operation-name matches and report every assignment."""
+        program = compilation.program
+        workspace = compilation.workspace
 
         del workspace
         matched = transformed = skipped = 0

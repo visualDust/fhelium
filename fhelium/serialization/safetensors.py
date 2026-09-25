@@ -51,10 +51,9 @@ def save_value(
 ) -> ValueFileMetadata:
     """Atomically save one value to the caller-selected file path.
 
-    This function provides a versioned file representation, not a namespace,
-    cache, encryption-at-rest policy, or storage manager. Secret-key material
-    requires explicit opt-in and remains unencrypted unless the caller wraps
-    this API in an appropriate security layer.
+    The file uses the versioned ValueEnvelope representation. Saving a secret
+    key requires ``allow_secret=True``. The file stores plaintext key data;
+    callers must protect the destination and apply any required encryption.
     """
 
     envelope = ValueEnvelope.from_value(value)
@@ -64,20 +63,6 @@ def save_value(
             "allow_secret=True only when the selected path has an appropriate "
             "at-rest security policy."
         )
-    destination = Path(path).expanduser()
-    parent = destination.parent
-    if not parent.exists():
-        raise FileNotFoundError(
-            f"Value file parent directory does not exist: {parent}"
-        )
-    if not parent.is_dir():
-        raise NotADirectoryError(parent)
-    if destination.exists():
-        if destination.is_dir():
-            raise IsADirectoryError(destination)
-        if not overwrite:
-            raise FileExistsError(destination)
-
     logical_tensors, payload_tensors, tensor_metadata = _pack_tensors(
         envelope.tensors
     )
@@ -104,6 +89,34 @@ def save_value(
         ),
     }
 
+    _write_safetensors(
+        payload_tensors, safetensors_metadata, path, overwrite=overwrite
+    )
+    return metadata
+
+
+def _write_safetensors(
+    payload_tensors: dict[str, torch.Tensor],
+    safetensors_metadata: dict[str, str],
+    path: str | os.PathLike[str],
+    *,
+    overwrite: bool,
+) -> None:
+    """Write one safetensors payload through a caller-directory temporary file."""
+    destination = Path(path).expanduser()
+    parent = destination.parent
+    if not parent.exists():
+        raise FileNotFoundError(
+            f"Value file parent directory does not exist: {parent}"
+        )
+    if not parent.is_dir():
+        raise NotADirectoryError(parent)
+    if destination.exists():
+        if destination.is_dir():
+            raise IsADirectoryError(destination)
+        if not overwrite:
+            raise FileExistsError(destination)
+
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.",
         suffix=".tmp",
@@ -124,7 +137,6 @@ def save_value(
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
-    return metadata
 
 
 def inspect_value(

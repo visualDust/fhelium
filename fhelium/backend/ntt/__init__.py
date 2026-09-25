@@ -1,23 +1,13 @@
-"""NTT plans, parameter tables, and configured schedule executors.
+"""NTT numerical implementations, table preparation, and context-owned transforms.
 
-``NttContext`` composes one RNS context with a selected policy, parameter
-tables, and schedule executor. ``NativeNttImplementation`` implements NTT IR
-operations and delegates each transform through that context.
+NttContext provides policy-specific Tensor tables. NativeNttImplementation
+prepares operations over supplied Tensor operands and shares native calls with
+context transforms. Compile can select a schedule before preparing execution.
 """
 
-from fhelium.backend.ntt.context import NttContext
-from fhelium.backend.ntt.executors.compact_radix2 import (
-    CompactRadix2NttBackend,
-)
-from fhelium.backend.ntt.executors.indexed_radix2 import (
-    IndexedRadix2NttBackend,
-)
-from fhelium.backend.ntt.executors.power_of_two_radix import (
-    CompactPowerOfTwoRadixNttBackend,
-)
-from fhelium.backend.ntt.factory import create_ntt_backend
-from fhelium.backend.ntt.interface import NttBackend
-from fhelium.backend.ntt.tables import (
+from .context import NttContext
+from .operations import NativeNttImplementation
+from .tables import (
     CompactPowerOfTwoRadixTables,
     CompactRadix2Tables,
     IndexedRadix2Tables,
@@ -26,15 +16,11 @@ from fhelium.backend.ntt.tables import (
 )
 
 __all__ = [
-    "CompactPowerOfTwoRadixNttBackend",
     "CompactPowerOfTwoRadixTables",
-    "CompactRadix2NttBackend",
     "CompactRadix2Tables",
-    "IndexedRadix2NttBackend",
     "IndexedRadix2Tables",
-    "NttBackend",
+    "NativeNttImplementation",
     "NttContext",
     "NttTables",
-    "create_ntt_backend",
     "prepare_ntt_tables",
 ]

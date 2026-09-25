@@ -1,71 +1,66 @@
 # Ownership and runtime responsibilities
 
-Correct CKKS arithmetic is only one part of a reliable system. The application
-must also know who owns engines, values, keys, process groups, streams, files,
-and retention policy.
+Correct CKKS arithmetic is only one part of a reliable system. The application must also know who owns engines, values, keys, process groups, streams, files, and retention policy.
 
 ## The rank-local ownership unit
 
 ```mermaid
 flowchart LR
     PROCESS["one process / rank"]
-    ENGINE["one eager Engine"]
+    ENGINE["Eager Engine"]
+    COMPILE["Compilation and linked executable"]
+    BINDINGS["Tensor bindings and named handles"]
     DEVICES["lazy per-device resources"]
     VALUES["placed local values and keys"]
     PROCESS --> ENGINE --> DEVICES
     ENGINE --> VALUES
+    PROCESS --> COMPILE --> BINDINGS
+    BINDINGS --> VALUES
 ```
 
-One Engine may use CPU and CUDA resources in the same process. Tensor placement
-selects the resource bundle and native dispatcher implementation for each
-operation. Key placement remains caller-controlled unless automatic key
-replication is enabled.
+One Engine may use CPU and CUDA resources in the same process. Factories follow PyTorch placement defaults or a supplied device. Tensor placement selects the resource bundle and native dispatcher implementation for each operation. Key placement remains caller-controlled unless automatic key replication is enabled.
 
-Each rank owns a process-local `fhelium.eager.Engine`. Placement plans and process groups
-connect local `Ciphertext` values across ranks. These process-local semantics
-support world-size-one execution, data parallelism, additive-term parallelism
-(including rotation offsets), and RNS-limb pipelines.
+Each rank owns its local execution services and values. Immediate execution can use an `Engine`; manual or callable Compile can use a linked Program with supplied Tensor materials and non-Tensor handles. Placement plans and process groups connect local values across ranks. These process-local semantics support world-size-one execution, data parallelism, additive-term parallelism (including rotation offsets), and RNS-limb pipelines.
 
 ## Ownership table
 
 | Object or mechanism | Created by | Lifetime owner | Movement or replacement |
 | --- | --- | --- | --- |
-| `fhelium.eager.Engine` | Each process | Application | Not transported between ranks |
-| `Plaintext` / `Ciphertext` | Engine or application | Application | `.to(...)`, typed collective, or managed buffer |
-| Keys | Application through an engine or loader | Security/workload policy | Load, broadcast, buffer, or residency operation |
+| `fhelium.eager.Engine` | Application using immediate execution | Application | Process-local configuration and lazy device services |
+| Public values, including `CompressedPlaintext` | Eager, executable adapters, or application | Application | `.to(...)`, typed collective, or managed buffer |
+| `Compilation` | Capture, construction, or a Pipeline | Compile caller | Program transforms with shared workspace and Tensor-binding mappings |
+| Tensor material bindings | Capture, preparation, or caller assignment | Compilation and caller | Replace assignments for later linking; compatible content updates remain live |
+| Backend workspace | Application or execution provider | Backend instance | Replace named non-Tensor handle bindings through a new workspace |
+| Executable or callable specialization | Linking or callable preparation | Application or callable cache | Relink bindings or prepare another input specialization |
+| Keys | Application through a data provider or loader | Security/workload policy | Load, broadcast, buffer, or residency operation |
 | Process group | `torch.distributed` launcher/init | Application | Never embedded in a value or engine |
 | CUDA stream/event | Application or PyTorch | Application | Passed by the application to execution helpers |
 | Serialized path | Application | Storage policy | Not remembered by the value |
 | `ArtifactRef` | `ArtifactStore` | Application | Tensor-free; `store.get(ref)` reconstructs the checked generation |
-| CUDA Graph program | Application/program cache | Application | Captures a deterministic rank-local callable |
+| CUDA Graph program | Application/program cache | Application | Captures a supported rank-local CUDA callable |
 
 ## Why values are dense and local
 
-A value owns ordinary tensor storage and cryptographic metadata:
+A value combines ordinary Tensor storage with the metadata required by its representation:
 
 ```text
 Ciphertext.data -> [component, *batch, limb, coefficient_or_ntt_index]
 Plaintext.data  -> [*batch, limb, coefficient_or_ntt_index] when RNS encoded
+CompressedPlaintext.data -> [*batch, limb, unique_index]
+CompressedPlaintext.implicit_data -> [*batch, limb] for strided-sparse layout
 Key.data        -> key-specific dense axes
 ```
 
-The batch prefix represents independent homogeneous messages inside one local
-value. Process rank and placement remain application/subsystem metadata, and
-the application chooses whether to evaluate the batch or loop over unbatched
-members.
+The batch prefix represents independent homogeneous messages inside one local value. Process rank and placement remain application/subsystem metadata, and the application chooses whether to evaluate the batch or loop over unbatched members.
 
-Engine binding, process rank and group, sharding or replication, movement
-history, persistence paths, and cache or eviction policy remain metadata owned
-by the application or the responsible subsystem.
+Engine binding, process rank and group, sharding or replication, movement history, persistence paths, and cache or eviction policy remain metadata owned by the application or the responsible subsystem.
 
 ### Benefits
 
-- Local layout remains compatible with PyTorch allocators, streams, and native
-  dispatch.
+- Local layout remains compatible with PyTorch allocators, streams, and native dispatch.
 - A world-size-one program uses the same local semantics as a distributed one.
 - Different parallel strategies can use the same value types.
-- Serialization and transport can reconstruct values without recreating
-  a hidden runtime.
+- Serialization and transport can reconstruct values without recreating a hidden runtime.
 
 ### Cost
 
@@ -73,12 +68,10 @@ The workload must decide:
 
 - which rank owns each logical object or partial result;
 - which keys are present on each rank;
-- whether communication means transport, addition, or structural
-  reconstruction;
+- whether communication means transport, addition, or structural reconstruction;
 - where an operation requiring every active row forces reconstruction and synchronization.
 
-That cost is intentional: these decisions cannot be inferred safely from
-shape alone.
+That cost is intentional: these decisions cannot be inferred safely from shape alone.
 
 ## Mechanism versus policy
 
@@ -109,15 +102,11 @@ Examples of the mechanism/policy separation:
 | Direct value serialization | Namespace, key-management service (KMS), access-control list (ACL), and remote storage |
 | Residency handle, requested transition, hold, lease | Stage and tile residency schedule |
 
-A useful ownership test asks whether the behavior remains correct for every
-model, user, request, and deployment. Behavior that varies across those
-contexts belongs to workload or product policy.
+A useful ownership test asks whether the behavior remains correct for every model, user, request, and deployment. Behavior that varies across those contexts belongs to workload or product policy.
 
 ## Lifetime is separate from meaning
 
-A value preserves its cryptographic meaning when it moves among pageable CPU,
-pinned CPU, and CUDA storage. Interchangeability additionally requires matching
-parameter provenance, depths, scales, prime IDs, and key identities.
+A value preserves its cryptographic meaning when it moves among pageable CPU, pinned CPU, and CUDA storage. Interchangeability additionally requires matching parameter provenance, depths, scales, prime IDs, and key identities.
 
 ```mermaid
 graph LR
@@ -128,25 +117,16 @@ graph LR
     LIFE -->|policy controls| RES
 ```
 
-This separation enables CPU-to-GPU staging without teaching runtime values
-about model/request lifetimes.
+This separation enables CPU-to-GPU staging without teaching runtime values about model/request lifetimes.
 
-## Responsibility checklist
+## Responsibility relationships
 
-Before adding a feature, ask:
-
-1. Does it change CKKS meaning? Define the semantics in `core` or `engine`.
-2. Is it reusable movement, synchronization, or capture? Consider
-   `distributed` or `execution`.
-3. Does it choose resources for a model, request, user, or cache budget? Keep it
-   in the experimental namespace or an application.
-4. Does it depend on a packing algorithm? Keep it with the workload/compiler.
-5. Does it require a native tensor primitive? Define a state-aware operator
-   and validate the cross-layer ABI.
+CKKS meaning is expressed by value state and operation semantics; an Eager method applies the corresponding transition immediately. Compile transforms represented operations and specializes their execution conditions. Runtime and distributed mechanisms provide movement, synchronization, and lifetime management. Workload algorithms choose packing, retention, and resource placement. Backend implementations execute numerical operations through their Tensor operands and native or generated calls.
 
 ## Related pages
 
 - [System overview](system-overview.md)
+- [Open compiler stack](../open-compiler-stack.md)
 - [Rank-local SPMD model](../distributed/spmd-model.md)
 - [Residency lifetimes](../execution/residency-lifetimes.md)
 - [Serialization and artifacts](../execution/serialization-and-artifacts.md)

@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from dataclasses import dataclass
 
 import pytest
@@ -22,7 +28,7 @@ def _operation_names(program: ir.Program) -> tuple[str, ...]:
     return tuple(ir.operation_name(operation) for operation in program.walk())
 
 
-def _semantic_to_ckks_passes() -> tuple[ir.Pass, ...]:
+def _semantic_to_ckks_passes() -> tuple[fh_compile.Pass, ...]:
     return (
         fh_compile.EliminateDeadValuesPass(),
         fh_compile.LowerSemanticToLogicalPass(),
@@ -104,13 +110,14 @@ def test_compile_partially_lowers_understood_operations() -> None:
     def mixed(secret: torch.Tensor, public: torch.Tensor) -> torch.Tensor:
         return torch.sin(secret) + public
 
-    result = fh_compile.compile(
-        mixed,
-        inputs={
-            "secret": fh_compile.encrypted(),
-            "public": fh_compile.message(),
-        },
-        pipeline=fh_compile.Pipeline(_semantic_to_ckks_passes()),
+    result = fh_compile.Pipeline(_semantic_to_ckks_passes()).run(
+        fh_compile.capture(
+            mixed,
+            inputs={
+                "secret": fh_compile.encrypted(),
+                "public": fh_compile.message(),
+            },
+        )
     )
 
     names = _operation_names(result.program)
@@ -119,7 +126,7 @@ def test_compile_partially_lowers_understood_operations() -> None:
     assert "fhelium_ckks.add_plaintext" in names
 
 
-def test_lower_ckks_pass_waits_for_config_in_compile_workspace() -> None:
+def test_arithmetic_lowering_preserves_unbound_parameter_placeholders() -> None:
     def add(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         return left + right
 
@@ -131,19 +138,23 @@ def test_lower_ckks_pass_waits_for_config_in_compile_workspace() -> None:
     )
     workspace = fh_compile.CompileWorkspace()
 
-    result = fh_compile.compile(
-        add,
-        inputs={
-            "left": fh_compile.encrypted(),
-            "right": fh_compile.encrypted(),
-        },
-        pipeline=pipeline,
-        workspace=workspace,
+    result = pipeline.run(
+        fh_compile.capture(
+            add,
+            inputs={
+                "left": fh_compile.encrypted(),
+                "right": fh_compile.encrypted(),
+            },
+            workspace=workspace,
+        )
     )
 
     assert result.workspace is workspace
-    assert "fhelium_ckks.add" in _operation_names(result.program)
-    assert "fhelium_rns.add_standard" not in _operation_names(result.program)
+    assert "fhelium_rns.add_standard" in _operation_names(result.program)
+    assert any(
+        isinstance(op, ir.dialects.core.MaterialRefOp)
+        for op in result.program.walk()
+    )
 
 
 def test_pass_can_select_ckks_config_after_ckks_ir_exists() -> None:
@@ -157,11 +168,9 @@ def test_pass_can_select_ckks_config_after_ckks_ir_exists() -> None:
     class SelectConfigFromCkksProgram:
         name: str = "select-config-from-ckks-program"
 
-        def run(
-            self,
-            program: ir.Program,
-            workspace: dict[object, object],
-        ) -> fh_compile.PassResult:
+        def run(self, compilation: "Compilation") -> fh_compile.PassResult:
+            program = compilation.program
+            workspace = compilation.workspace
             assert "fhelium_ckks.add" in _operation_names(program)
             assert workspace["caller/value"] is caller_value
             workspace[CkksConfig] = config
@@ -176,14 +185,15 @@ def test_pass_can_select_ckks_config_after_ckks_ir_exists() -> None:
         )
     )
 
-    result = fh_compile.compile(
-        add,
-        inputs={
-            "left": fh_compile.encrypted(),
-            "right": fh_compile.encrypted(),
-        },
-        pipeline=pipeline,
-        workspace=workspace,
+    result = pipeline.run(
+        fh_compile.capture(
+            add,
+            inputs={
+                "left": fh_compile.encrypted(),
+                "right": fh_compile.encrypted(),
+            },
+            workspace=workspace,
+        )
     )
 
     assert result.workspace is workspace
@@ -193,16 +203,13 @@ def test_pass_can_select_ckks_config_after_ckks_ir_exists() -> None:
 
 def test_backend_assignment_is_partial_and_persists_in_program_text() -> None:
     source = _rotation_program((1,))
-    result = fh_compile.compile(
-        source,
-        pipeline=fh_compile.Pipeline(
-            (
-                fh_compile.AssignImplementationsPass(
-                    {"fhelium_ckks.rotate": "native-direct-rotate"}
-                ),
-            )
-        ),
-    )
+    result = fh_compile.Pipeline(
+        (
+            fh_compile.AssignImplementationsPass(
+                {"fhelium_ckks.rotate": "native-direct-rotate"}
+            ),
+        )
+    ).run(fh_compile.Compilation(source))
 
     rotation = next(
         operation
@@ -229,39 +236,34 @@ def test_backend_assignment_rejects_conflict_unless_overwrite_is_selected() -> (
     None
 ):
     source = _rotation_program((1,))
-    first = fh_compile.compile(
-        source,
-        pipeline=fh_compile.Pipeline(
+    first = (
+        fh_compile.Pipeline(
             (
                 fh_compile.AssignImplementationsPass(
                     {"fhelium_ckks.rotate": "first"}
                 ),
             )
-        ),
-    ).program
-    with pytest.raises(ValueError):
-        fh_compile.compile(
-            first,
-            pipeline=fh_compile.Pipeline(
-                (
-                    fh_compile.AssignImplementationsPass(
-                        {"fhelium_ckks.rotate": "second"}
-                    ),
-                )
-            ),
         )
-
-    replaced = fh_compile.compile(
-        first,
-        pipeline=fh_compile.Pipeline(
+        .run(fh_compile.Compilation(source))
+        .program
+    )
+    with pytest.raises(ValueError):
+        fh_compile.Pipeline(
             (
                 fh_compile.AssignImplementationsPass(
-                    {"fhelium_ckks.rotate": "second"},
-                    overwrite=True,
+                    {"fhelium_ckks.rotate": "second"}
                 ),
             )
-        ),
-    )
+        ).run(fh_compile.Compilation(first))
+
+    replaced = fh_compile.Pipeline(
+        (
+            fh_compile.AssignImplementationsPass(
+                {"fhelium_ckks.rotate": "second"},
+                overwrite=True,
+            ),
+        )
+    ).run(fh_compile.Compilation(first))
     rotation = next(
         operation
         for operation in replaced.program.walk()
@@ -296,10 +298,9 @@ def _rotation_program(
         key_type = ir.dialects.ckks.EvaluationKeyType().with_state(
             {"rotation_step": IntegerAttr(shift, 64)}
         )
-        key_reference = ir.dialects.core.ResourceRefOp(
+        key_reference = ir.dialects.core.MaterialRefOp(
             key_type,
             symbol=symbol,
-            kind="rotation-key",
         )
         rotation = ir.dialects.ckks.RotateOp(
             block.args[0],

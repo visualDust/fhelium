@@ -2,5 +2,17 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npm run build",
   "cleanUrls": true,
-  "outputDirectory": ".vitepress/dist"
+  "outputDirectory": ".vitepress/dist",
+  "redirects": [
+    {
+      "source": "/tutorial/support-and-security",
+      "destination": "/developer/security",
+      "permanent": true
+    },
+    {
+      "source": "/tutorial/support-and-security.html",
+      "destination": "/developer/security",
+      "permanent": true
+    }
+  ]
 }

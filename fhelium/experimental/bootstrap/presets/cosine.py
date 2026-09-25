@@ -2,15 +2,13 @@ r"""Preconfigured full-slot callables using cosine double-angle reduction.
 
 Each function returns a
 :class:`fhelium.experimental.bootstrap.FullSlotBootstrap`.
-The functions are conveniences rather than registered runtime objects; callers
-may inspect, replace, or directly construct every component.
+Callers may inspect, replace, or directly construct every component.
 
 The versioned `logn16` names identify component profiles. Their
 documented end-to-end configuration is derived from
 `Preset.slots32768_scale50_depth27_int64` and
 `galois_generator=5`. Construction validates transform slot counts,
-structural-base/default-scale proximity, and depth; it does not certify an
-encrypted input range or application error budget.
+structural-base/default-scale proximity, and depth.
 """
 
 from __future__ import annotations

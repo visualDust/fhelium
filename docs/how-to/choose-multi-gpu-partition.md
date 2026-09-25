@@ -1,13 +1,14 @@
 # Choose a multi-GPU partition
 
-Choose a partition from the mathematical relationship among rank-local values,
-then evaluate communication, keys, memory, and load balance. Do not infer a
-partition from ciphertext shape alone.
+Choose a partition from the mathematical relationship among rank-local values, then evaluate communication, keys, memory, and load balance. Do not infer a partition from ciphertext shape alone.
+
+## Prerequisites
+
+Have a single-rank calculation with known packing, key inventory, depth/scale schedule, and a clear-message reference. The rank-local calculation may use Eager, a linked Program, or a prepared callable; partition its mathematical work before selecting rank-local execution optimizations.
 
 ## 1. Start from a correct single-rank evaluator
 
-Keep a synchronized single-GPU eager implementation with a cleartext oracle.
-Record its:
+Keep a synchronized single-rank implementation with a cleartext oracle. Record its:
 
 - operation and rotation counts;
 - depth schedule;
@@ -16,7 +17,7 @@ Record its:
 - peak allocated/reserved memory;
 - decrypt error.
 
-This is the baseline and fallback.
+This establishes the baseline mathematical result and execution cost.
 
 ## 2. Identify independent work
 
@@ -39,8 +40,7 @@ flowchart TD
 
 ## 3. Evaluate data parallelism
 
-Choose independent ciphertext data parallelism when each rank owns a separate
-request/sample.
+Choose independent ciphertext data parallelism when each rank owns a separate request/sample.
 
 Plan:
 
@@ -60,8 +60,7 @@ Advantages:
 - no ciphertext reduction;
 - simple scaling and failure localization.
 
-Check whether weights/keys are replicated and whether root encryption or output
-gather becomes the bottleneck.
+Check whether weights/keys are replicated and whether root encryption or output gather becomes the bottleneck.
 
 ## 4. Evaluate additive-term parallelism
 
@@ -98,13 +97,9 @@ Costs:
 
 ## 5. Evaluate limb parallelism cautiously
 
-Choose limb parallelism only when a single value/key is too large and the
-program contains enough row-local work to amortize scatter/gather barriers.
+Choose limb parallelism only when a single value/key is too large and the program contains enough row-local work to amortize scatter/gather barriers.
 
-Create contiguous `prime_ids` ranges, scatter them, perform only
-operations with documented partial-layout semantics, and reconstruct every
-expected active row before rescale, rotation, key switching, relinearization, or
-decryption.
+Choose consecutive intervals on the source's stored limb axis and pass them as `limb_ranges` to `scatter_ciphertext_limbs`. The interface slices the source and its declared prime IDs; the application determines the partition. Perform only operations with documented partial-layout semantics, and reconstruct every expected active row before rescale, rotation, key switching, relinearization, or decryption.
 
 Repeated complete-row reconstruction points can erase local row-depth gains.
 
@@ -133,13 +128,11 @@ Run the same worker under:
 4. uneven work distribution;
 5. an empty-work rank that still participates in collectives.
 
-Compare every final result to the same oracle and report maximum error per rank
-or at the reconstructed root.
+Compare every final result to the same oracle and report maximum error per rank or at the reconstructed root.
 
 ## 8. Keep graph capture local
 
-If the local evaluator has a fixed schedule, capture one `CudaGraphProgram` per
-rank. Leave dynamic input/key provisioning and typed final reduction eager.
+If the local evaluator has a fixed schedule, capture one `CudaGraphProgram` per rank. Leave dynamic input/key provisioning and typed final reduction eager.
 
 ## 9. Report the complete result
 
@@ -153,6 +146,10 @@ Record:
 - load imbalance;
 - correctness;
 - startup and process-group setup.
+
+## Verify the outcome
+
+Each rank must own a defined input region or contribution, enter the same collective protocol, and produce the single-rank mathematical result after combination. Compare decoded messages under the same error criterion when the distributed summation schedule changes. See `examples/21_distributed_batch_inputs.py` through `examples/24_distributed_collective_ir.py` for input, partial-result, row-shard, and IR collective procedures.
 
 ## Related documentation
 

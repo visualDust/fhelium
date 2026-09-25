@@ -28,7 +28,7 @@ from fhelium.backend.resources import (
     ResourceBindings,
     ResourceRequirement,
 )
-from fhelium.compile import Compilation, CompileWorkspace, ConstantBundle
+from fhelium.compile import Compilation
 from fhelium.compile import Pipeline
 from fhelium.ir import Program
 from fhelium.ir.dialects import core, distributed, semantic
@@ -111,9 +111,7 @@ def test_compile_constant_is_linked_without_mutating_compile_workspace() -> (
     bias = torch.tensor([2, 4], dtype=torch.int64)
     compilation = Compilation(
         _material_add_program(),
-        CompileWorkspace(
-            {ConstantBundle: ConstantBundle({"model/bias": bias})}
-        ),
+        material_bindings={"model/bias": bias},
     )
     executable = backend.link(compilation)
 
@@ -124,20 +122,23 @@ def test_compile_constant_is_linked_without_mutating_compile_workspace() -> (
     assert ResourceBindings not in compilation.workspace
 
 
-def test_backend_material_override_replaces_the_compile_constant() -> None:
+def test_replacing_a_material_binding_takes_effect_on_relink() -> None:
     compile_bias = torch.tensor([2, 4], dtype=torch.int64)
     backend_bias = torch.tensor([10, 20], dtype=torch.int64)
     backend = OperationBackend(
         OperationImplementationRegistry((_TensorAddImplementation(),)),
-        material_overrides={"model/bias": backend_bias},
     )
     compilation = Compilation(
         _material_add_program(),
-        CompileWorkspace(
-            {ConstantBundle: ConstantBundle({"model/bias": compile_bias})}
-        ),
+        material_bindings={"model/bias": compile_bias},
     )
 
+    original = backend.link(compilation)
+    compilation.material_bindings["model/bias"] = backend_bias
+    torch.testing.assert_close(
+        original.run(torch.tensor([1, 3], dtype=torch.int64)),
+        torch.tensor([3, 7]),
+    )
     result = backend.link(compilation).run(
         torch.tensor([1, 3], dtype=torch.int64)
     )
@@ -159,9 +160,10 @@ def test_incomplete_linking_pipeline_cannot_return_a_stale_executable() -> None:
     bias = torch.tensor([2, 4], dtype=torch.int64)
     backend = OperationBackend(
         OperationImplementationRegistry((_TensorAddImplementation(),)),
-        material_overrides={"model/bias": bias},
     )
-    compilation = Compilation(_material_add_program())
+    compilation = Compilation(
+        _material_add_program(), material_bindings={"model/bias": bias}
+    )
     compilation.workspace[ProgramExecutable] = backend.link(compilation)
 
     with pytest.raises(RuntimeError, match="did not produce"):

@@ -3,31 +3,21 @@
 `fhelium.experimental.mpc` provides tensor operations for collective CKKS key generation, evaluation-key generation, collective decryption arithmetic, and public-key switching arithmetic. The functions operate on core FHElium keys and values plus raw engine tensors. The current implementation accepts a local CPU or CUDA `fhelium.eager.Engine`.
 
 > [!CAUTION]
-> The supported arithmetic scope is correctness for compatible values. The
-> current API provides no authentication, transcript binding, secure transport,
-> malicious-party security, output-query control, reviewed output-error sampler,
-> supported smudging/useful-precision parameter profile, privacy guarantee, or
-> validated security composition for
-> the secret-dependent output operations. Use synthetic data and throwaway keys.
+> The supported arithmetic scope is correctness for compatible values. The current API provides no authentication, transcript binding, secure transport, malicious-party security, output-query control, reviewed output-error sampler, supported smudging/useful-precision parameter profile, privacy guarantee, or validated security composition for the secret-dependent output operations. Use synthetic data and throwaway keys.
 
 In this guide, **honest execution** means that every application actor follows the stated message order with matching CKKS parameters, request, and payload data. This term describes reproducible control flow; it carries no semi-honest security claim.
 
-Collective key generation (CKG) creates the collective public key. Two-round
-relinearization-key generation (RKG) creates public evaluation material for
-three-to-two-component relinearization.
+Collective key generation (CKG) creates the collective public key. Two-round relinearization-key generation (RKG) creates public evaluation material for three-to-two-component relinearization.
 
-The repository example is `examples/23_multiparty_ckks.py`. It
-holds two in-process party records representing two cryptographic parties,
-exercises the complete public
-API, and never constructs the aggregate secret. The local process provides no
-trust-domain or process isolation between those records.
+The repository example is `examples/26_experimental_multiparty.py`. It holds two in-process party records representing two cryptographic parties, exercises the complete public API, and never constructs the aggregate secret. The local process provides no trust-domain or process isolation between those records.
+
+## Prerequisites
+
+Use synthetic messages, throwaway keys, matching CKKS parameters, and the application-owned state sequence below. Read the security limitations before constructing any secret-dependent output request.
 
 ## Separate arithmetic from application state
 
-The `fhelium.experimental.mpc` namespace is a stateless arithmetic layer.
-Every function receives its operands as arguments and returns either a raw tensor
-message or a FHElium value. The application owns the protocol state around
-those calls.
+The `fhelium.experimental.mpc` namespace is a stateless arithmetic layer. Every function receives its operands as arguments and returns either a raw tensor message or a FHElium value. The application owns the protocol state around those calls.
 
 | `fhelium.experimental.mpc` operation | Application responsibility |
 | --- | --- |
@@ -38,7 +28,7 @@ those calls.
 | Sum a nonempty sequence of shares | Require exactly one accepted logical contribution from every expected party |
 | Return core `PublicKey`, `RelinearizationKey`, `RotationKey`, `ConjugationKey`, `Plaintext`, or `Ciphertext` values | Associate each result with the correct collective epoch and authorize its use |
 
-The state names below are application labels for a dictionary, enum, or append-only application log. They do not define a FHElium `Party`, `Session`, `Coordinator`, transport, or persistence class.
+The state names below are application labels for a dictionary, enum, or append-only application log.
 
 ## Freeze the collective descriptor
 
@@ -113,10 +103,7 @@ Let:
 
 `sample_common_uniform(..., count=None)` returns an unbatched `[limb, N]` tensor. Every explicit positive `count`, including `count=1`, retains the leading count axis.
 
-FHElium validates the structural state needed by these operations, but runtime
-values do not record CKKS parameter provenance or a multiparty epoch. The
-application must establish parameter compatibility and collective lineage
-before invoking the protocol functions.
+FHElium validates the structural state needed by these operations, but runtime values do not record CKKS parameter provenance or a multiparty epoch. The application must establish parameter compatibility and collective lineage before invoking the protocol functions.
 
 ## Run the collective state machine
 
@@ -172,9 +159,7 @@ collective_public_key = mpc.aggregate_ckg(
 )
 ```
 
-Each party caches `ckg_share_i` before attempting delivery. A transport retry
-retransmits that cached payload byte for byte. Calling `ckg_share` again samples
-a new internal error and therefore creates a different logical message.
+Each party caches `ckg_share_i` before attempting delivery. A transport retry retransmits that cached payload byte for byte. Calling `ckg_share` again samples a new internal error and therefore creates a different logical message.
 
 The result is a core Q `PublicKey`:
 
@@ -247,8 +232,7 @@ A failed RKG request leaves the collective epoch active. Retry it under a new `r
 
 ## Generate rotation and conjugation keys
 
-Each Galois-key request is a one-round child operation under an active epoch.
-Use one fresh common QP digit tensor for one requested key.
+Each Galois-key request is a one-round child operation under an active epoch. Use one fresh common QP digit tensor for one requested key.
 
 ```python
 rotation_step = 3
@@ -295,15 +279,11 @@ conjugation_key = mpc.aggregate_conjugation_key(
 )
 ```
 
-A later workload may request another rotation under the same collective
-public key. Treat it as a new material request with a new request identity and
-common tensor. The `fhelium.experimental.mpc` namespace performs no hidden
-on-demand collective key generation.
+A later workload may request another rotation under the same collective public key. Treat it as a new material request with a new request identity and common tensor. The `fhelium.experimental.mpc` namespace performs no hidden on-demand collective key generation.
 
 ## Evaluate with core FHElium APIs
 
-The aggregate functions return runtime values. The evaluator uses them directly
-with `fhelium.eager.Engine` and needs no party secret share.
+The aggregate functions return runtime values. The evaluator uses them directly with `fhelium.eager.Engine` and needs no party secret share.
 
 For example:
 
@@ -319,9 +299,7 @@ squared = engine.rescale_to_next_depth(relinearized)
 
 Both secret-dependent output functions require a two-component coefficient-domain, standard-residue Q ciphertext. Relinearize a three-component multiplication result before opening an output request.
 
-Preserve parameter provenance and the epoch association externally. Runtime
-values do not prove that a ciphertext and key use compatible parameters or
-arose from the same collective secret.
+Preserve parameter provenance and the epoch association externally. Runtime values do not prove that a ciphertext and key use compatible parameters or arose from the same collective secret.
 
 ## Open an unsafe collective-decryption request
 
@@ -331,8 +309,7 @@ $$
 d_i(X)=c_1(X)s_i(X)+e_i(X).
 $$
 
-Bind one source ciphertext and one output request identity before any party
-computes a share. Each party supplies its own compact coefficient error:
+Bind one source ciphertext and one output request identity before any party computes a share. Each party supplies its own compact coefficient error:
 
 ```python
 decryption_share_i = mpc.unsafe_collective_decryption_share(
@@ -358,9 +335,7 @@ The fusion recipient receives every individual secret-dependent share and obtain
 
 ## Open an unsafe public-key-switch request
 
-Protocol 4 moves the output arithmetic to a compatible destination public key.
-The application request binds the source ciphertext and destination Q
-`PublicKey`. Party $i$ computes:
+Protocol 4 moves the output arithmetic to a compatible destination public key. The application request binds the source ciphertext and destination Q `PublicKey`. Party $i$ computes:
 
 $$
 \begin{aligned}
@@ -424,7 +399,7 @@ CKG, RKG, and Galois share functions sample internal errors on every invocation.
 Run the example from the repository root:
 
 ```bash
-python examples/23_multiparty_ckks.py --preset slots8192-scale40-depth7-int64
+python examples/26_experimental_multiparty.py --preset slots8192-scale40-depth7-int64
 ```
 
 The example holds two party-local `SecretKey` objects in one Python process so it can demonstrate the complete arithmetic dataflow. It never sums them, installs an aggregate secret, or uses an aggregate secret for verification. Its fixed/canceling Protocol-3/4 coefficient tensors are named and documented as correctness fixtures.
@@ -441,11 +416,7 @@ Map the local structures to independent processes as follows:
 | Direct `aggregate_*` call | Aggregator call after validating request metadata and the complete logical roster |
 | Local destination key pair | Destination-owned key pair; only its Q public key enters Protocol 4 |
 
-The `fhelium.experimental.mpc` namespace supplies no raw-message serializer or
-transport. An application may move integer payloads through its chosen
-mechanism and restore the required dtype, shape, contiguity, and engine device
-before invoking its functions. Never send a party secret share or RKG
-ephemeral through a generic key-broadcast path.
+The `fhelium.experimental.mpc` namespace supplies no raw-message serializer or transport. An application may move integer payloads through its chosen mechanism and restore the required dtype, shape, contiguity, and engine device before invoking its functions. Never send a party secret share or RKG ephemeral through a generic key-broadcast path.
 
 A party's internal ranks and devices may collaborate to compute one logical contribution. Rank count never substitutes for party count, and FHElium distributed collectives do not supply cryptographic membership or message authentication.
 
@@ -459,10 +430,7 @@ Use this scenario to study collective-key setup, ciphertext compatibility, layou
 
 ### Multiplication, rotation, and later material requests
 
-Three parties complete CKG, one two-round RKG request, and one rotation-key
-request. The evaluator multiplies, relinearizes, rescales, and rotates a
-synthetic tensor. A later workload requests a second rotation under the same
-epoch using new request metadata and common randomness.
+Three parties complete CKG, one two-round RKG request, and one rotation-key request. The evaluator multiplies, relinearizes, rescales, and rotates a synthetic tensor. A later workload requests a second rotation under the same epoch using new request metadata and common randomness.
 
 Use this scenario to study evaluation-key equations, hybrid-digit layouts, material-generation cost, and workload-driven key inventories.
 
@@ -480,9 +448,7 @@ Use this scenario to study Protocol-4 algebra, depth/scale preservation, and des
 
 ## Security and protocol coverage
 
-The exported experimental protocols cover the synthetic-data workflows above.
-The following capabilities require additional protocol design, security
-analysis, and implementation before they can be used:
+The exported experimental protocols cover the synthetic-data workflows above. The following capabilities require additional protocol design, security analysis, and implementation before they can be used:
 
 - production deployment or real private data;
 - malicious or adaptive parties;
@@ -511,7 +477,8 @@ analysis, and implementation before they can be used:
 - [ ] Protocol-3/4 caller tensors and their lack of security parameters are recorded in the application security review.
 - [ ] No aggregate collective `SecretKey` is constructed.
 
-Continue with the [multiparty CKKS API](../api/fhelium/experimental/mpc.md),
-[keyset provisioning guide](provision-keyset.md),
-[value-state diagnosis guide](diagnose-value-state-mismatch.md), and
-[key lifecycle concepts](../concepts/ckks/key-lifecycle.md).
+Continue with the [multiparty CKKS API](../api/fhelium/experimental/mpc.md), [keyset provisioning guide](provision-keyset.md), [value-state diagnosis guide](diagnose-value-state-mismatch.md), and [key lifecycle concepts](../concepts/ckks/key-lifecycle.md).
+
+## Verify the outcome
+
+Complete the synthetic state sequence with one accepted contribution per party and compare the resulting arithmetic with the clear reference. Arithmetic correctness does not establish output privacy, transcript security, or a deployment-ready multiparty protocol.

@@ -2,7 +2,6 @@
 
 from fhelium.values.ciphertext import Ciphertext
 from fhelium.values.compressed_plaintext import (
-    COMPRESSED_PLAINTEXT_FORMAT_VERSION,
     CompressedPlaintext,
 )
 from fhelium.values.keys import (
@@ -27,7 +26,6 @@ from fhelium.values.state import (
 from fhelium.values.tensor_resident import TensorResident
 
 __all__ = [
-    "COMPRESSED_PLAINTEXT_FORMAT_VERSION",
     "Ciphertext",
     "CompressedPlaintext",
     "CompressedPlaintextLayout",

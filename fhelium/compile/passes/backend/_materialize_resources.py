@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from ..._pipeline import (
     PassResult,
 )
@@ -13,7 +19,6 @@ from fhelium.backend.resources import (
     ResourceBindings,
     ResourceMaterializer,
 )
-from fhelium.ir import Program
 
 from ._operations import program_resource_requirements
 
@@ -25,11 +30,9 @@ class MaterializeResourcesPass:
     materializer: ResourceMaterializer
     name: str = "materialize-backend-resources"
 
-    def run(
-        self,
-        program: Program,
-        shared_data: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
+        program = compilation.program
+        shared_data = compilation.workspace
         dispatch_table = shared_data.get(ProgramDispatchTable)
         if not isinstance(dispatch_table, ProgramDispatchTable):
             raise RuntimeError(

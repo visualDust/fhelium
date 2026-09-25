@@ -12,15 +12,9 @@ from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.ir.dialects import rns
 from fhelium.native.wrapper import ckks_ops, rns_ops
 
-from fhelium.backend.rns._operand_state import (
-    _active_depth,
-    _operand_basis,
-)
-from fhelium.backend.rns.context import RnsContext
 
-
-class _OperandResourceImplementation:
-    """Declare that resources arrive as operation operands in IR order."""
+class _TensorOperandImplementation:
+    """Receive numerical data as ordinary Tensor operands."""
 
     def resource_requirements(
         self, invocation: OperationInvocation
@@ -30,7 +24,7 @@ class _OperandResourceImplementation:
 
 
 @dataclass(frozen=True)
-class NativeRnsLinearImplementation(_OperandResourceImplementation):
+class NativeRnsLinearImplementation(_TensorOperandImplementation):
     """Execute standard-range RNS add, subtract, and negate operations."""
 
     name: str = "native-rns-linear"
@@ -49,91 +43,72 @@ class NativeRnsLinearImplementation(_OperandResourceImplementation):
         *,
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
-        lhs = values[0]
-        resource = cast(RnsContext, resources[0].value)
-        include_p = _operand_basis(invocation) == "QP"
+        del resources
+        lhs, parameters = values[0], values[-1]
         if invocation.operation_type is rns.NegateStandardOp:
-            output_data = lhs if in_place else lhs.clone()
-            output_data.neg_()
-            depth = _active_depth(
-                lhs,
-                resource,
-                include_p=include_p,
+            result = lhs if in_place else lhs.clone()
+            moduli = parameters[0] // 2
+            result.neg_().remainder_(
+                moduli.view(*([1] * (result.ndim - 2)), -1, 1)
             )
-            active_moduli = resource.basis_parameters(
-                depth, include_p=include_p
-            ).modulus_tensor
-            output_data.remainder_(
-                active_moduli.view(
-                    *([1] * (output_data.ndim - 2)),
-                    active_moduli.numel(),
-                    1,
-                )
-            )
-            return (output_data,)
+            return (result,)
         rhs = values[1]
+        operation = (
+            rns_ops.add_standard
+            if invocation.operation_type is rns.AddStandardOp
+            else rns_ops.sub_standard
+        )
+        mutate = (
+            rns_ops.add_standard_
+            if invocation.operation_type is rns.AddStandardOp
+            else rns_ops.sub_standard_
+        )
         try:
-            lhs.view(
-                -1,
-                lhs.size(-2),
-                lhs.size(-1),
-            )
-            rhs.view(
-                -1,
-                rhs.size(-2),
-                rhs.size(-1),
-            )
+            lhs.view(-1, lhs.size(-2), lhs.size(-1))
+            rhs.view(-1, rhs.size(-2), rhs.size(-1))
         except RuntimeError:
             if in_place:
-                method = (
-                    resource.add_standard_
-                    if invocation.operation_type is rns.AddStandardOp
-                    else resource.sub_standard_
-                )
-                for component in range(lhs.size(0)):
-                    method(
-                        lhs[component],
-                        rhs[component],
-                        include_p=include_p,
-                    )
+                for index in range(lhs.size(0)):
+                    mutate(lhs[index], rhs[index], parameters)
                 return (lhs,)
-            method = (
-                resource.add_standard
-                if invocation.operation_type is rns.AddStandardOp
-                else resource.sub_standard
-            )
             return (
                 torch.stack(
                     tuple(
-                        method(
-                            lhs[component],
-                            rhs[component],
-                            include_p=include_p,
-                        )
-                        for component in range(lhs.size(0))
-                    ),
-                    dim=0,
+                        operation(a, b, parameters)
+                        for a, b in zip(lhs, rhs, strict=True)
+                    )
                 ),
             )
-        else:
-            if not in_place:
-                method = (
-                    resource.add_standard
-                    if invocation.operation_type is rns.AddStandardOp
-                    else resource.sub_standard
-                )
-                return (method(lhs, rhs, include_p=include_p),)
-            method = (
-                resource.add_standard_
-                if invocation.operation_type is rns.AddStandardOp
-                else resource.sub_standard_
-            )
-            method(lhs, rhs, include_p=include_p)
-        return (lhs,)
+        if in_place:
+            mutate(lhs, rhs, parameters)
+            return (lhs,)
+        return (operation(lhs, rhs, parameters),)
 
 
 @dataclass(frozen=True)
-class NativeRnsTransitionImplementation(_OperandResourceImplementation):
+class NativeBatchSumImplementation(_TensorOperandImplementation):
+    """Reduce one leading batch axis with standard-residue modular addition."""
+
+    name: str = "native-batch-sum"
+    supports_in_place: bool = False
+    operation_types: tuple[type[Operation], ...] = (rns.SumStandardBatchOp,)
+
+    def execute(
+        self,
+        invocation: OperationInvocation,
+        values: tuple[torch.Tensor, ...],
+        resources: tuple[BoundResource, ...],
+        *,
+        in_place: bool,
+    ) -> tuple[torch.Tensor, ...]:
+        del resources, in_place
+        source, parameters = values
+        dim = cast(int, invocation.attributes["dim"])
+        return (rns_ops.sum_standard_batch(source, dim, parameters),)
+
+
+@dataclass(frozen=True)
+class NativeRnsTransitionImplementation(_TensorOperandImplementation):
     """Execute residue conversion, depth restriction, and scale metadata ops."""
 
     name: str = "native-rns-transition"
@@ -158,21 +133,14 @@ class NativeRnsTransitionImplementation(_OperandResourceImplementation):
             rns.StandardToMontgomeryOp,
             rns.MontgomeryToStandardOp,
         }:
-            resource = cast(RnsContext, resources[0].value)
+            parameters = values[1]
             data = source if in_place else source.clone()
-            include_p = _operand_basis(invocation) == "QP"
             if invocation.operation_type is rns.StandardToMontgomeryOp:
-                resource.to_montgomery_(
-                    data,
-                    include_p=include_p,
-                )
+                rns_ops.to_montgomery_(data, parameters)
             else:
-                resource.from_montgomery_(
-                    data,
-                    include_p=include_p,
-                )
+                rns_ops.from_montgomery_(data, parameters)
             return (data,)
-        if resources:
+        if invocation.operation_type is rns.RestrictDepthOp:
             expected_prime_ids = invocation.result_prime_ids[0]
             if expected_prime_ids is None:
                 raise ValueError(
@@ -196,7 +164,7 @@ class NativeRnsTransitionImplementation(_OperandResourceImplementation):
 
 
 @dataclass(frozen=True)
-class NativePlaintextArithmeticImplementation(_OperandResourceImplementation):
+class NativePlaintextArithmeticImplementation(_TensorOperandImplementation):
     """Execute prepared plaintext addition and multiplication."""
 
     name: str = "native-plaintext-arithmetic"
@@ -214,65 +182,43 @@ class NativePlaintextArithmeticImplementation(_OperandResourceImplementation):
         *,
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
-        ciphertext, plaintext = values
-        resource = cast(RnsContext, resources[0].value)
-        include_p = _operand_basis(invocation) == "QP"
-        parameters = resource.rns_parameters_for(
-            ciphertext,
-            include_p=include_p,
-        )
+        del resources
+        ciphertext, plaintext, parameters = values
         if invocation.operation_type is rns.AddPlaintextOp:
             if (
                 invocation.attributes.get("polynomial_domain", "coefficient")
                 == "ntt"
             ):
-                component0 = resource.add_lazy(
-                    ciphertext[0],
-                    plaintext,
-                    include_p=include_p,
+                component = rns_ops.add_lazy(
+                    ciphertext[0], plaintext, parameters
                 )
                 if in_place:
-                    ciphertext[0].copy_(component0)
+                    ciphertext[0].copy_(component)
                     return (ciphertext,)
-                return (
-                    torch.cat((component0.unsqueeze(0), ciphertext[1:]), dim=0),
-                )
-            if in_place:
+            elif in_place:
                 ckks_ops.add_prepared_plaintext_component_(
-                    ciphertext[0],
-                    plaintext,
-                    parameters,
+                    ciphertext[0], plaintext, parameters
                 )
                 return (ciphertext,)
-            component0 = ckks_ops.add_prepared_plaintext_component(
-                ciphertext[0],
-                plaintext,
-                parameters,
-            )
-            return (
-                torch.cat((component0.unsqueeze(0), ciphertext[1:]), dim=0),
-            )
+            else:
+                component = ckks_ops.add_prepared_plaintext_component(
+                    ciphertext[0], plaintext, parameters
+                )
+            return (torch.cat((component.unsqueeze(0), ciphertext[1:]), dim=0),)
         if plaintext.shape[:-2].numel() == 1:
-            return (
-                resource.montgomery_mul(
-                    ciphertext,
-                    plaintext,
-                    include_p=include_p,
-                ),
-            )
-        products = [
-            resource.montgomery_mul(
-                ciphertext[component],
-                plaintext,
-                include_p=include_p,
-            )
-            for component in range(ciphertext.size(0))
-        ]
-        return (torch.stack(products, dim=0),)
+            return (rns_ops.montgomery_mul(ciphertext, plaintext, parameters),)
+        return (
+            torch.stack(
+                tuple(
+                    rns_ops.montgomery_mul(component, plaintext, parameters)
+                    for component in ciphertext
+                )
+            ),
+        )
 
 
 @dataclass(frozen=True)
-class NativeMontgomeryWeightedSumImplementation(_OperandResourceImplementation):
+class NativeMontgomeryWeightedSumImplementation(_TensorOperandImplementation):
     r"""Compute one or more $\sum_t c_t p_t$ results without term products."""
 
     name: str = "native-montgomery-weighted-sum"
@@ -290,35 +236,31 @@ class NativeMontgomeryWeightedSumImplementation(_OperandResourceImplementation):
         *,
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
-        del in_place
+        del resources, in_place
         count = cast(int, invocation.attributes["term_count"])
-        ciphertexts = values[:count]
-        plaintexts = values[count:]
-        resource = cast(RnsContext, resources[0].value)
-        parameters = resource.rns_parameters_for(
-            ciphertexts[0],
-            include_p=_operand_basis(invocation) == "QP",
+        ciphertexts, plaintexts, parameters = (
+            values[:count],
+            values[count:-1],
+            values[-1],
         )
         if invocation.operation_type is rns.MontgomeryWeightedSumsOp:
-            group_count = cast(int, invocation.attributes["group_count"])
-            grouped = rns_ops.montgomery_weighted_sums(
-                list(ciphertexts),
-                list(plaintexts),
-                group_count,
-                parameters,
+            return (
+                rns_ops.montgomery_weighted_sums(
+                    list(ciphertexts),
+                    list(plaintexts),
+                    cast(int, invocation.attributes["group_count"]),
+                    parameters,
+                ),
             )
-            return (grouped,)
         return (
             rns_ops.montgomery_weighted_sum(
-                list(ciphertexts),
-                list(plaintexts),
-                parameters,
+                list(ciphertexts), list(plaintexts), parameters
             ),
         )
 
 
 @dataclass(frozen=True)
-class NativeMontgomeryMultiplyImplementation(_OperandResourceImplementation):
+class NativeMontgomeryMultiplyImplementation(_TensorOperandImplementation):
     """Multiply two logical NTT/Montgomery polynomial bundles."""
 
     name: str = "native-montgomery-multiply"
@@ -333,20 +275,13 @@ class NativeMontgomeryMultiplyImplementation(_OperandResourceImplementation):
         *,
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
-        del in_place
-        lhs, rhs = values
-        resource = cast(RnsContext, resources[0].value)
-        return (
-            resource.montgomery_mul(
-                lhs,
-                rhs,
-                include_p=_operand_basis(invocation) == "QP",
-            ),
-        )
+        del invocation, resources, in_place
+        lhs, rhs, parameters = values
+        return (rns_ops.montgomery_mul(lhs, rhs, parameters),)
 
 
 @dataclass(frozen=True)
-class NativeRnsStructureImplementation(_OperandResourceImplementation):
+class NativeRnsStructureImplementation(_TensorOperandImplementation):
     """Extract and assemble logical RNS component bundles."""
 
     name: str = "native-rns-structure"
@@ -389,93 +324,8 @@ class NativeRnsStructureImplementation(_OperandResourceImplementation):
         return (torch.stack(values, dim=0),)
 
 
-def _rns_resource(
-    resources: tuple[BoundResource, ...],
-) -> RnsContext:
-    return cast(RnsContext, resources[0].value)
-
-
 @dataclass(frozen=True)
-class NativeHybridModUpImplementation(_OperandResourceImplementation):
-    """Execute one represented hybrid-digit ModUp using concrete RNS tables."""
-
-    name: str = "native-hybrid-modup"
-    supports_in_place: bool = False
-    operation_types: tuple[type[Operation], ...] = (rns.HybridModUpDigitOp,)
-
-    def execute(
-        self,
-        invocation: OperationInvocation,
-        values: tuple[torch.Tensor, ...],
-        resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
-    ) -> tuple[torch.Tensor, ...]:
-        del in_place
-        if len(values) != 1:
-            raise ValueError("Hybrid ModUp requires one source polynomial")
-        source = values[0]
-        resource = _rns_resource(resources)
-        depth = _active_depth(source, resource, include_p=False)
-        digit_specs = resource.rns_layout.digit_specs(depth)
-        digit_index = int(invocation.attributes["digit_index"])  # type: ignore[arg-type]
-        if digit_index >= len(digit_specs):
-            raise IndexError(
-                "Hybrid ModUp digit index is outside the active layout"
-            )
-        digit_spec = digit_specs[digit_index]
-        source_rows = digit_spec.component_row_ids
-        mixed = source[..., source_rows[0] : source_rows[-1] + 1, :].clone()
-        digit_width = len(source_rows)
-        if digit_width > 1:
-            if digit_width > 8:
-                raise ValueError(
-                    "native-hybrid-modup supports digit widths through eight"
-                )
-            row_parameters = resource.row_parameters(digit_spec.prime_ids)
-            normalizers = row_parameters.mixed_radix_normalizers
-            propagation = row_parameters.mixed_radix_propagation_coefficients
-            if normalizers is None or propagation is None:
-                raise RuntimeError(
-                    "Hybrid ModUp is missing mixed-radix parameter tables"
-                )
-            modulus_lo, modulus_hi, neg_inv_lo, neg_inv_hi = (
-                row_parameters.montgomery_reduction_parameters
-            )
-            mixed = rns_ops.mixed_radix_decompose(
-                mixed,
-                normalizers.contiguous(),
-                propagation.contiguous(),
-                modulus_lo.contiguous(),
-                modulus_hi.contiguous(),
-                neg_inv_lo.contiguous(),
-                neg_inv_hi.contiguous(),
-            )
-        active_basis = resource.basis_parameters(depth, include_p=True)
-        basis_extension = resource.row_parameters(
-            digit_spec.prime_ids
-        ).basis_extension_coefficients
-        if basis_extension is None:
-            basis_extension = torch.empty(
-                0,
-                0,
-                dtype=source.dtype,
-                device=source.device,
-            )
-        start = active_basis.parameter_row_start
-        stop = start + len(active_basis.prime_ids)
-        return (
-            rns_ops.mixed_radix_basis_extend_to_montgomery(
-                mixed,
-                basis_extension[:, start:stop],
-                active_basis.native_parameters,
-                len(active_basis.prime_ids),
-            ),
-        )
-
-
-@dataclass(frozen=True)
-class NativeMontgomeryAccumulateImplementation(_OperandResourceImplementation):
+class NativeMontgomeryAccumulateImplementation(_TensorOperandImplementation):
     """Accumulate equal-layout Montgomery bundles modulo twice each prime."""
 
     name: str = "native-montgomery-accumulate"
@@ -490,83 +340,12 @@ class NativeMontgomeryAccumulateImplementation(_OperandResourceImplementation):
         *,
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
-        del in_place
-        if len(values) != 2:
-            raise ValueError("Montgomery accumulation requires two values")
-        lhs, rhs = values
-        resource = _rns_resource(resources)
-        return (
-            resource.add_lazy(
-                lhs,
-                rhs,
-                include_p=_operand_basis(invocation) == "QP",
-            ),
-        )
-
-
-@dataclass(frozen=True)
-class NativeCoefficientAutomorphismImplementation(
-    _OperandResourceImplementation
-):
-    """Apply one coefficient-domain Galois automorphism through the native op."""
-
-    name: str = "native-coefficient-automorphism"
-    supports_in_place: bool = False
-    operation_types: tuple[type[Operation], ...] = (
-        rns.CoefficientAutomorphismOp,
-    )
-
-    def execute(
-        self,
-        invocation: OperationInvocation,
-        values: tuple[torch.Tensor, ...],
-        resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
-    ) -> tuple[torch.Tensor, ...]:
-        del in_place
-        if len(values) != 1:
-            raise ValueError("Coefficient automorphism requires one value")
-        source = values[0]
-        resource = _rns_resource(resources)
-        ring_dimension = source.size(-1)
-        modulus = 2 * ring_dimension
-        galois_element = int(invocation.attributes["galois_element"]) % modulus  # type: ignore[arg-type]
-        source_index = torch.arange(
-            ring_dimension, device=source.device, dtype=torch.int64
-        )
-        mapped = (galois_element * source_index) % modulus
-        destination = mapped % ring_dimension
-        sign = 1 - 2 * (((mapped // ring_dimension) & 1) != 0).to(torch.int8)
-        gather = torch.empty(
-            ring_dimension, dtype=torch.int32, device=source.device
-        )
-        gather[destination] = source_index.to(torch.int32)
-        source_sign = torch.empty(
-            ring_dimension, dtype=torch.int8, device=source.device
-        )
-        source_sign[destination] = sign
-        twice_modulus = resource.twice_modulus_for_basis(
-            _active_depth(
-                source,
-                resource,
-                include_p=_operand_basis(invocation) == "QP",
-            ),
-            include_p=_operand_basis(invocation) == "QP",
-        )
-        return (
-            ckks_ops.apply_coefficient_galois_automorphism(
-                source,
-                gather,
-                source_sign,
-                twice_modulus,
-            ),
-        )
+        del invocation, resources, in_place
+        lhs, rhs, parameters = values
+        return (rns_ops.add_lazy(lhs, rhs, parameters),)
 
 
 __all__ = [
-    "NativeCoefficientAutomorphismImplementation",
-    "NativeHybridModUpImplementation",
     "NativeMontgomeryAccumulateImplementation",
     "NativeMontgomeryMultiplyImplementation",
     "NativeMontgomeryWeightedSumImplementation",

@@ -1,15 +1,17 @@
 # Stream resources with bounded CUDA memory
 
-Use this procedure when operation-ready plaintexts or evaluation keys do not fit
-comfortably in CUDA memory. First choose whether you need fixed physical
-buffers, managed value residency, or both.
+Use this procedure when operation-ready plaintexts or evaluation keys do not fit comfortably in CUDA memory. First choose whether you need fixed physical buffers, managed value residency, or both.
+
+## Prerequisites
+
+Have a correct evaluator and measured sizes for its operation-ready weights, evaluation keys, and temporaries. Prepare or link the calculation, then allocate the staging buffers and define their asynchronous lifetimes.
 
 ## 1. Inventory live memory
 
 Separate:
 
 ```text
-engine plans and tables
+device-local numerical tables and execution plans
 ciphertext activations
 operation-ready plaintext weights
 evaluation keys
@@ -18,8 +20,7 @@ temporaries
 PyTorch allocated vs reserved bytes
 ```
 
-Measure live bytes by category where possible. Do not assume the largest Python
-collection is the largest encoded/RNS materialization.
+Measure live bytes by category where possible. Do not assume the largest Python collection is the largest encoded/RNS materialization.
 
 ## 2. Classify resource lifetimes
 
@@ -32,8 +33,7 @@ For every weight/key, label its intended lifetime:
 - one asynchronous copy;
 - one active kernel read.
 
-This determines whether a value deserves persistent CUDA residency, a host
-hold, or a short lease/window selected by the application.
+This determines whether a value deserves persistent CUDA residency, a host hold, or a short lease/window selected by the application.
 
 ## 3. Choose the mechanism
 
@@ -47,40 +47,26 @@ hold, or a short lease/window selected by the application.
 ### Use `ResidencyManager` when
 
 - managed values need opaque stable handles within one local manager;
-- valid pageable, pinned, or indexed CUDA locations need accounting, with
-  strict admission budgets on selected locations where appropriate;
+- valid pageable, pinned, or indexed CUDA locations need accounting, with strict admission budgets on selected locations where appropriate;
 - model/request/phase retention matters;
-- the application can issue `ensure`, `move`, `drop`, and `discard`
-  transitions or inspectable low-level plans.
+- the application can issue `ensure`, `move`, `drop`, and `discard` transitions or inspectable low-level plans.
 
 ### Add `ResidencyController` when
 
 - the manager already owns the values and remains the sole state authority;
-- the application can state `(handle, location)` working-set endpoints
-  and reservation headroom more directly than a transition sequence;
-- deterministic policy-selected reclaim should remain visible in an immutable
-  `ResidencyDecision`; and
-- admission should occur either through reviewed `decide` then `scope` calls or
-  the combined `use` context.
+- the application can state `(handle, location)` working-set endpoints and reservation headroom more directly than a transition sequence;
+- deterministic policy-selected reclaim should remain visible in an immutable `ResidencyDecision`; and
+- admission should occur either through reviewed `decide` then `scope` calls or the combined `use` context.
 
 ### Compose Residency and reusable buffers in application stage code
 
-Application stage/tile code may select the active logical window with a manual
-`ResidencyPlan` or automatic `ResidencyRequest`, lease those managed values,
-and copy them into one or two fixed CUDA buffers. The manager and
-buffer retain separate ownership identities, accounting, and completion
-lifetimes. FHElium does not treat a mutable reusable buffer as a managed
-materialization and provides no automatic Residency/buffer ownership bridge.
+Application stage/tile code may select the active logical window with a manual `ResidencyPlan` or automatic `ResidencyRequest`, lease those managed values, and copy them into one or two fixed CUDA buffers. The manager and buffer retain separate ownership identities, accounting, and completion lifetimes. FHElium does not treat a mutable reusable buffer as a managed materialization and provides no automatic Residency/buffer ownership bridge.
 
 ## 4. Prepare host masters
 
-For real host-to-device (H2D) overlap, prepare pinned host materializations where appropriate.
-Pageable memory may require staging and should not be assumed to provide fully
-asynchronous transfer.
+For real host-to-device (H2D) overlap, prepare pinned host materializations where appropriate. Pageable memory may require staging and should not be assumed to provide fully asynchronous transfer.
 
-Keep value state stable across host and device materializations. A tile at a
-different depth, prime layout, or rotation step must use a different signature
-or buffer.
+Keep value state stable across host and device materializations. A tile at a different depth, prime layout, or rotation step must use a different signature or buffer.
 
 ## 5. Build a double-buffer schedule
 
@@ -94,8 +80,7 @@ compute tile 1 on B
 reuse A only after its reader-complete event
 ```
 
-Use `CopyHandle.wait_on(compute_stream)` for device-side dependencies. Record a
-consumer-complete event before allowing the next write to the same buffer.
+Use `CopyHandle.wait_on(compute_stream)` for device-side dependencies. Record a consumer-complete event before allowing the next write to the same buffer.
 
 ## 6. Add logical holds and leases
 
@@ -115,30 +100,20 @@ active evaluator:
   lease remains until CUDA consumers finish
 ```
 
-A hold does not replace an active lease and exposes no concrete values.
-`ensure(...)` prepares a location but does not protect an idle materialization
-in the same way as an evaluator lease. Supply every CUDA consumer stream when
-acquiring or register additional streams on the lease; release then records
-completion events rather than requiring a full-device synchronization.
+A hold does not replace an active lease and exposes no concrete values. `ensure(...)` prepares a location but does not protect an idle materialization in the same way as an evaluator lease. Supply every CUDA consumer stream when acquiring or register additional streams on the lease; release then records completion events rather than requiring a full-device synchronization.
 
 Choose admission separately from the lease:
 
-- use manager primitives or a manual `ResidencyPlan` when the application owns
-  the transition order;
-- use `controller.decide(request)` when the application owns the endpoint
-  requirements but wants deterministic reclaim selection;
-- inspect `decision.evictions`, `decision.explored_states`, and predicted peaks
-  before entering `controller.scope(decision, ...)`; or
+- use manager primitives or a manual `ResidencyPlan` when the application owns the transition order;
+- use `controller.decide(request)` when the application owns the endpoint requirements but wants deterministic reclaim selection;
+- inspect `decision.evictions`, `decision.explored_states`, and predicted peaks before entering `controller.scope(decision, ...)`; or
 - use `controller.use(...)` when a separate review step is unnecessary.
 
-`decide` executes no residency action, reservation, lease, or reconstruction
-source. Scope entry checks the decision's `expected_state_version` before the
-first mutation. `acquire` remains already-ready-only in both workflows.
+`decide` executes no residency action, reservation, lease, or reconstruction source. Scope entry checks the decision's `expected_state_version` before the first mutation. `acquire` remains already-ready-only in both workflows.
 
 ## 7. Choose a lookahead window
 
-Start with one current tile plus one next tile. Increase lookahead only if H2D
-transfer is exposed and memory permits it. A larger window can:
+Start with one current tile plus one next tile. Increase lookahead only if H2D transfer is exposed and memory permits it. A larger window can:
 
 - improve overlap;
 - reduce residency transitions;
@@ -159,15 +134,11 @@ Test with:
 - a forced mismatch before any copy;
 - early cleanup only after completion is observed.
 
-Wrong synchronization can produce stale or mixed evaluator inputs without an
-immediate exception.
+Wrong synchronization can produce stale or mixed evaluator inputs without an immediate exception.
 
 ## 9. Account beyond the residency manager
 
-A manager tracks managed backing-storage charges and reservations at
-every observed location. A configured per-location budget adds strict
-admission to those charges; an unbudgeted location reports the same accounting
-with `budget_bytes=None`. Track:
+A manager tracks managed backing-storage charges and reservations at every observed location. A configured per-location budget adds strict admission to those charges; an unbudgeted location reports the same accounting with `budget_bytes=None`. Track:
 
 ```text
 logical payload / unique managed storage
@@ -179,11 +150,7 @@ CUDA Graph memory
 activation and temporary peaks
 ```
 
-Use a scoped `MemoryReservation` for measured unmanaged output or workspace
-headroom. It consumes remaining budget where one is configured and remains a
-visible reservation at an unbudgeted location. Offload can reduce manager used
-bytes without reducing PyTorch reserved or NVML usage. Use those process-wide
-measurements to select location budgets and additional unmanaged headroom.
+Use a scoped `MemoryReservation` for measured unmanaged output or workspace headroom. It consumes remaining budget where one is configured and remains a visible reservation at an unbudgeted location. Offload can reduce manager used bytes without reducing PyTorch reserved or NVML usage. Use those process-wide measurements to select location budgets and additional unmanaged headroom.
 
 Leave measured safety headroom.
 
@@ -199,8 +166,11 @@ Report:
 - correctness;
 - synchronization rule.
 
-Select the window that satisfies the memory cap with acceptable transfer and
-latency overhead.
+Select the window that satisfies the memory cap with acceptable transfer and latency overhead.
+
+## Verify the outcome
+
+Run several tiles with changing data, compare decoded outputs with the all-resident reference, and report peak manager charges and process memory separately. `examples/17_runtime_double_buffer.py`, `examples/19_residency_manual.py`, and `examples/20_residency_automatic.py` provide the three concrete execution patterns.
 
 ## Related documentation
 

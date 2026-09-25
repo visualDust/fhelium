@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from io import StringIO
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from xdsl.dialects.builtin import ModuleOp, StringAttr
+from xdsl.dialects.builtin import DictionaryAttr, ModuleOp, StringAttr
 from xdsl.dialects.func import FuncOp
 from xdsl.ir import Attribute, Block, Operation, Region
 from xdsl.parser import Parser
@@ -39,6 +40,47 @@ class Program:
             raise TypeError("Program requires an xDSL ModuleOp")
         module.verify()
         self.module = module
+
+    @property
+    def material_descriptions(self) -> dict[str, dict[str, object]]:
+        """Return saved material annotations, independently of live bindings.
+
+        Descriptions are open JSON objects. They explain data to callers and
+        preparation tools; numerical execution does not validate against them.
+        Mutate descriptions with :meth:`set_material_description`.
+        """
+        descriptions = self.module.attributes.get(
+            "fhelium.material_descriptions"
+        )
+        if descriptions is None:
+            return {}
+        if not isinstance(descriptions, DictionaryAttr):
+            raise TypeError(
+                "Material descriptions must be a dictionary attribute"
+            )
+        result: dict[str, dict[str, object]] = {}
+        for symbol, encoded in descriptions.data.items():
+            if not isinstance(encoded, StringAttr):
+                raise TypeError("A material description must contain JSON text")
+            result[symbol] = json.loads(encoded.data)
+        return result
+
+    def set_material_description(
+        self, symbol: str, description: Mapping[str, object]
+    ) -> None:
+        """Set an annotation without checking binding identity or correctness."""
+        descriptions = self.material_descriptions
+        descriptions[symbol] = dict(description)
+        self.module.attributes["fhelium.material_descriptions"] = (
+            DictionaryAttr(
+                {
+                    name: StringAttr(
+                        json.dumps(value, sort_keys=True, allow_nan=False)
+                    )
+                    for name, value in descriptions.items()
+                }
+            )
+        )
 
     @classmethod
     def empty(

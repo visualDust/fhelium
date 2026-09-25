@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from xdsl.dialects.builtin import IntegerAttr, StringAttr
+from xdsl.dialects.builtin import ArrayAttr, IntegerAttr, StringAttr
 from xdsl.dialects.builtin import UnrealizedConversionCastOp
 from xdsl.dialects import scf
 from xdsl.dialects.func import ReturnOp
@@ -145,6 +145,14 @@ def ciphertext_type(
         state["residue_representation"] = StringAttr(residues)
     if components is not None:
         state["components"] = IntegerAttr(components, 64)
+        shape = state.get("shape")
+        if isinstance(shape, ArrayAttr) and len(shape) >= 3:
+            updated_shape = ArrayAttr(
+                (IntegerAttr(components, 64), *tuple(shape)[1:])
+            )
+            if updated_shape != shape:
+                state["shape"] = updated_shape
+                state.pop("strides", None)
     return ckks.CiphertextType().with_state(state)
 
 
@@ -155,14 +163,38 @@ def cast_before(
     *,
     name_hint: str,
 ) -> SSAValue:
-    """Materialize a visible type-changing edge immediately before an op."""
+    """Reuse a dominating transparent type edge or create one before an op.
 
+    Unrealized one-to-one casts carry no storage operation. Their input identity
+    is retained through lowering instead of manufacturing a fresh alias at every
+    consumer. Casts with attributes are kept as supplied.
+    """
     if value.type == result_type:
         return value
+    source = value
+    while (
+        type(source.owner) is UnrealizedConversionCastOp
+        and len(source.owner.inputs) == len(source.owner.outputs) == 1
+        and not source.owner.attributes
+    ):
+        source = source.owner.inputs[0]
+        if source.type == result_type:
+            return source
     block = operation.parent_block()
     if block is None:
         raise ValueError("operation is not attached to a block")
-    cast, result = UnrealizedConversionCastOp.cast_one(value, result_type)
+    for use in source.uses:
+        existing = use.operation
+        if (
+            type(existing) is UnrealizedConversionCastOp
+            and len(existing.inputs) == len(existing.outputs) == 1
+            and not existing.attributes
+            and existing.outputs[0].type == result_type
+            and existing.parent_block() is block
+            and existing.is_before_in_block(operation)
+        ):
+            return existing.outputs[0]
+    cast, result = UnrealizedConversionCastOp.cast_one(source, result_type)
     result.name_hint = name_hint
     block.insert_op_before(cast, operation)
     return result

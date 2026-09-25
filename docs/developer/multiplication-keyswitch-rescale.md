@@ -1,47 +1,29 @@
 # Multiplication, key switching, and rescale
 
-These paths combine many arithmetic stages and CKKS state transitions. They
-are frequent correctness and performance hotspots because they depend on
-active rows, hybrid digits, Q/QP conversion, NTT/Montgomery representation, and
-large evaluation keys.
+Ciphertext multiplication forms a component convolution, key switching changes the secret-key relation, and rescale computes a rounded quotient over a complete Q depth group. Their implementations share RNS basis-conversion and NTT algorithms while preserving active rows, per-value scale, and residue representation.
 
-## Implementation stack
+## Numerical implementation path
 
 ```mermaid
 graph TB
-    API[eager Engine public operation]
-    STATE[Python metadata transition and key selection]
-    KS[HybridKeySwitcher]
-    RS[CkksRescaler]
-    RNS[RnsContext]
-    NTT[NttContext]
-    WRAP[Generated ckks_ops / rns_ops / ntt_ops wrappers]
-    DISP[torch.ops + PyTorch dispatcher]
-    CPU[C++ CPU primitives<br/>ATen + parallel_for]
-    CUDA[CUDA primitives<br/>current stream kernels]
-
-    API --> STATE
-    STATE --> KS
-    STATE --> RS
-    STATE --> RNS
-    STATE --> NTT
-    KS --> RNS
-    KS --> NTT
-    RS --> RNS
-    KS --> WRAP
-    RS --> WRAP
-    RNS --> WRAP
-    NTT --> WRAP --> DISP
-    DISP --> CPU
-    DISP --> CUDA
+    OP[Selected CKKS operation]
+    WHOLE[Whole multiplication or key switch]
+    LOWER[Compile CKKS-to-RNS/NTT lowering]
+    RNS[RNS ModUp, key products, ModDown, rescale]
+    NTT[Prepared NTT transitions]
+    WRAP[Generated native wrappers]
+    DEVICE[PyTorch CPU/CUDA registrations]
+    OP --> WHOLE
+    OP --> LOWER
+    WHOLE --> RNS
+    WHOLE --> NTT
+    LOWER --> RNS
+    LOWER --> NTT
+    RNS --> WRAP --> DEVICE
+    NTT --> WRAP
 ```
 
-The engine owns public state transitions and output construction.
-`HybridKeySwitcher` and `CkksRescaler` compose tensor stages in Python.
-Pointwise RNS arithmetic and NTT transitions enter the `fhelium_rns_ops` and
-`fhelium_ntt_ops` namespaces; Galois, key-switch accumulation, ModDown, and
-rescale kernels enter `fhelium_ckks_ops`. CPU and CUDA registrations implement
-the same schemas where the primitive is shared across devices.
+`backend/ckks/arithmetic.py` implements whole two-component convolution. `backend/ckks/key_switch.py` composes key-switch corrections, and `backend/ckks/rotation/` owns Galois selection and hoisted execution. Numerical ModUp, key products, ModDown, and prime-group rescale live under `backend/rns/`; transform execution lives under `backend/ntt/`. Eager supplies direct operation metadata, while manual and callable Compile use represented Program state. Both consume these numerical implementations.
 
 ## Plaintext multiplication
 
@@ -61,11 +43,7 @@ flowchart LR
     PT --> M1
 ```
 
-The output scale is multiplied, but depth is unchanged until a rescale. `multiply_plaintext` does not perform hidden forward or inverse NTTs;
-the caller or JIT places transitions around a multiplication region. Compatible
-products may be added in NTT form and converted to coefficient-domain standard
-residues once before rescale. Prepared plaintext reuse must match depth, scale,
-basis, prime IDs, domain, and residue representation exactly.
+The output scale is multiplied, but depth is unchanged until a rescale. `multiply_plaintext` does not perform hidden forward or inverse NTTs; the caller places transitions around a multiplication region directly or through selected Compile passes. Compatible products may be added in NTT form and converted to coefficient-domain standard residues once before rescale. Prepared plaintext reuse must match depth, scale, basis, prime IDs, domain, and residue representation exactly.
 
 ## Ciphertext multiplication
 
@@ -76,11 +54,7 @@ $$
 (c_0d_0,\;c_0d_1+c_1d_0,\;c_1d_1).
 $$
 
-The engine requires compatible two-component NTT/Montgomery inputs and returns
-a three-component NTT/Montgomery ciphertext. Relinearization is a later,
-key-switch stage. Fresh direct-CKKS operands enter at scale $\Delta$;
-the triplet carries scale $\Delta^2$, and rescale follows
-relinearization.
+Two-component multiplication requires compatible NTT/Montgomery inputs and returns a three-component NTT/Montgomery ciphertext. The result scale is the product $\Delta_c\Delta_d$; equal input scales give $\Delta^2$. Relinearization and rescale are separately represented transitions placed by the caller or selected scheduling passes.
 
 ## Relinearization
 
@@ -100,10 +74,7 @@ graph LR
     T --> OUT
 ```
 
-The original first two components are combined with corrections that replace
-the $s^2$ dependency represented by `e2`. Coefficient output inverses all
-required terms. NTT output inverses only `e2` for digit decomposition, retains
-the first two components as evaluations, and adds NTT-domain corrections.
+The original first two components are combined with corrections that replace the $s^2$ dependency represented by `e2`. Coefficient output inverses all required terms. NTT output inverses only `e2` for digit decomposition, retains the first two components as evaluations, and adds NTT-domain corrections.
 
 ## Hybrid key-switch pipeline
 
@@ -122,16 +93,11 @@ flowchart TB
     S --> D --> MR --> MU --> N --> KP --> ACC --> IN --> MD --> COR
 ```
 
-Each stage has distinct row, basis, and representation requirements. Fusing stages may
-be useful, but a fused operator must preserve the same observable state and
-residue-range assumptions.
+Each stage has distinct row, basis, and representation requirements. Fusing stages may be useful, but a fused operator must preserve the same observable state and residue-range assumptions.
 
 ## Hybrid digits across depths
 
-All Q primes, including the terminal group, are partitioned into contiguous
-digits by their products. Each digit takes the longest next Q prefix whose
-product is below the special modulus P; a single prime at or above P occupies
-its own digit. At later depths, consumed Q groups shorten or remove digits.
+All Q primes, including the terminal group, are partitioned into contiguous digits by their products. Each digit takes the longest next Q prefix whose product is below the special modulus P; a single prime at or above P occupies its own digit. At later depths, consumed Q groups shorten or remove digits.
 
 ```mermaid
 graph LR
@@ -147,19 +113,13 @@ graph LR
     D1 --> E1
 ```
 
-`RnsDigitSpec` keeps both the active digit index and stable depth-zero
-`key_digit_index` used to select the correct evaluation-key axis. A local digit
-index is not necessarily the key tensor index.
+`RnsDigitSpec` keeps both the active digit index and stable depth-zero `key_digit_index` used to select the correct evaluation-key axis. A local digit index is not necessarily the key tensor index.
 
-The partition determines the evaluation key's digit axis. Key generation,
-Compile lowering, and execution derive that axis from the same decomposition.
-Changing the partition requires regenerating the key.
+The partition determines the evaluation key's digit axis. Key generation, Compile lowering, and execution derive that axis from the same decomposition. Changing the partition requires regenerating the key.
 
 ## Rotation and hoisting
 
-Rotation applies a Galois automorphism and then key-switches the transformed
-secret dependency. For several steps on the same input component, preparation
-can be shared:
+Rotation applies a Galois automorphism and then key-switches the transformed secret dependency. For several steps on the same input component, preparation can be shared:
 
 ```mermaid
 flowchart TB
@@ -174,25 +134,15 @@ flowchart TB
     PREP --> RN
 ```
 
-Step-specific work and outputs remain. Hoist chunking must account for live
-prepared digits, accumulators, rotated outputs, and key residency.
+Step-specific work and outputs remain. Hoist chunking must account for live prepared digits, accumulators, rotated outputs, and key residency.
 
-The native product accumulator can gather the prepared digit's NTT indices while
-reading it. This combines the rotation-specific permutation with multiplication
-by the key, avoiding a separate permuted-digit tensor. It changes neither the
-key's row order nor the destination accumulator order.
+The native product accumulator can gather the prepared digit's NTT indices while reading it. This combines the rotation-specific permutation with multiplication by the key, avoiding a separate permuted-digit tensor. It changes neither the key's row order nor the destination accumulator order.
 
 ### Keeping key-switch outputs in NTT representation
 
-`Engine.rotate_with_key(..., output_domain="ntt")`,
-`Engine.rotate_many_with_keys(..., output_domain="ntt")`, `relinearize`,
-`switch_key`, `conjugate`, and the corresponding CKKS operation attributes
-request NTT/Montgomery outputs. The default remains coefficient/standard. Both
-choices preserve Q rows, depth and actual scale.
+`Engine.rotate_with_key(..., output_domain="ntt")`, `Engine.rotate_many_with_keys(..., output_domain="ntt")`, `relinearize`, `switch_key`, `conjugate`, and the corresponding CKKS operation attributes request NTT/Montgomery outputs. The default remains coefficient/standard. Both choices preserve Q rows, depth and actual scale.
 
-The logical `rns.ModDownNttQpToQOp` removes P without inverting the Q rows. For
-QP NTT data $\widehat{x}$, let $r\in[0,P)$ be the coefficient representative
-reconstructed from the P residues. Then
+The logical `rns.ModDownNttQpToQOp` removes P without inverting the Q rows. For QP NTT data $\widehat{x}$, let $r\in[0,P)$ be the coefficient representative reconstructed from the P residues. Then
 
 $$
 \widehat{y}_{q_i}
@@ -200,39 +150,17 @@ $$
 +\operatorname{NTT}_{q_i}(-rP^{-1})\pmod{q_i}.
 $$
 
-This is coefficient-domain ModDown followed by forward NTT. The implementation
-inverts only P rows, builds the correction in Q, and adds its forward transform
-to the retained Q evaluations multiplied by $P^{-1}$. Shared rotations also
-transform the input's $c_0$ once and permute those evaluations for each output.
-The consumer can multiply these results by NTT plaintexts without another
-coefficient-to-NTT transition. Output representation is a caller-selected part
-of the operation, independent of CPU or CUDA execution.
+This is coefficient-domain ModDown followed by forward NTT. The implementation inverts only P rows, builds the correction in Q, and adds its forward transform to the retained Q evaluations multiplied by $P^{-1}$. Shared rotations also transform the input's $c_0$ once and permute those evaluations for each output. The consumer can multiply these results by NTT plaintexts without another coefficient-to-NTT transition. Output representation is a caller-selected part of the operation, independent of CPU or CUDA execution.
 
-An independent `rotate_with_key` may also consume NTT/Montgomery input. The
-automorphism permutes both components in NTT representation; only the second
-component is inverted for hybrid decomposition and key switching. When NTT
-output is requested, the permuted first component remains in NTT and receives
-the NTT-domain correction directly. This form is useful when both the producer
-and consumer already use NTT values, but it is not assumed to be the fastest
-form on every CPU and GPU workload.
+An independent `rotate_with_key` may also consume NTT/Montgomery input. The automorphism permutes both components in NTT representation; only the second component is inverted for hybrid decomposition and key switching. When NTT output is requested, the permuted first component remains in NTT and receives the NTT-domain correction directly. This form is useful when both the producer and consumer already use NTT values, but it is not assumed to be the fastest form on every CPU and GPU workload.
 
-For independent rotations with coefficient input, the $c_0$ contribution is
-added to the coefficient correction before its forward NTT. Linearity gives
-$\operatorname{NTT}(c_0+\delta)$ instead of separate transforms of $c_0$ and
-$\delta$. The compact radix-2 implementation folds multiplication of the retained
-Q evaluations by $P^{-1}$ and addition of the correction into the final NTT write.
+For independent rotations with coefficient input, the $c_0$ contribution is added to the coefficient correction before its forward NTT. Linearity gives $\operatorname{NTT}(c_0+\delta)$ instead of separate transforms of $c_0$ and $\delta$. The compact radix-2 implementation folds multiplication of the retained Q evaluations by $P^{-1}$ and addition of the correction into the final NTT write.
 
-The same NTT policy also supports streaming digit consumption: the last NTT
-stages directly multiply the digit by both evaluation-key components and add
-the products to QP accumulators. The digit scratch is disposable; its completed
-NTT values are not written back. Each scratch is released before the next digit
-is prepared. Other NTT policies retain their separate transform and product
-implementation, with the same CKKS operation semantics.
+The same NTT policy also supports streaming digit consumption: the last NTT stages directly multiply the digit by both evaluation-key components and add the products to QP accumulators. The digit scratch is disposable; its completed NTT values are not written back. Each scratch is released before the next digit is prepared. Other NTT policies retain their separate transform and product implementation, with the same CKKS operation semantics.
 
 ## Rescale
 
-For the leading active Q depth group $G_l$, let
-$M_l=\prod_{q\in G_l}q$:
+For the leading active Q depth group $G_l$, let $M_l=\prod_{q\in G_l}q$:
 
 $$
 c'\approx\operatorname{round}(c/M_l)\pmod{Q_{l+1}}.
@@ -248,17 +176,9 @@ flowchart LR
     IN --> DROP --> ROUND --> INV --> OUT
 ```
 
-The implementation must select constants using configured prime identities, not
-an ambiguous compact row position. Output metadata must increase depth, remove
-all IDs in the dropped group, reduce row count by that group's size, and update
-scale by $M_l$.
+The implementation must select constants using configured prime identities, not an ambiguous compact row position. Output metadata must increase depth, remove all IDs in the dropped group, reduce row count by that group's size, and update scale by $M_l$.
 
-NTT/Montgomery input can remain in that representation. The implementation
-inverts only the dropped row to obtain the rounding value, forms the quotient
-correction on surviving Q rows, transforms that correction, and adds it to the
-surviving evaluations multiplied by $M_l^{-1}$. This is congruent to
-coefficient rescale followed by a forward NTT without inverting the surviving
-input rows.
+NTT/Montgomery input can remain in that representation. The implementation inverts only the dropped row to obtain the rounding value, forms the quotient correction on surviving Q rows, transforms that correction, and adds it to the surviving evaluations multiplied by $M_l^{-1}$. This is congruent to coefficient rescale followed by a forward NTT without inverting the surviving input rows.
 
 ## Correctness hazards
 
@@ -291,11 +211,12 @@ source build and installed wheel
 world size 1 and 2+ if transport/partition is involved
 ```
 
-Decrypt after every legal materialization step to localize the first
-incorrect stage.
+Decrypt after every legal materialization step to localize the first incorrect stage.
 
 ## Continue
 
+- [Encoding, randomness, and key construction](encoding-randomness-and-keys.md)
+- [Tensor materials and operation preparation](materials-and-preparation.md)
 - [Scale and depth lifecycle](../concepts/ckks/scale-and-depth-lifecycle.md)
 - [RNS and NTT architecture](rns-and-ntt.md)
 - [Native operator workflow](native-operator-workflow.md)
@@ -308,8 +229,8 @@ incorrect stage.
 | --- | --- |
 | Public multiplication, relinearization, rotation, and plaintext calls | `fhelium/eager/_engine.py` |
 | Hybrid decomposition, ModUp, key products, and ModDown | `fhelium/backend/rns/`, `fhelium/backend/ckks/rotation/` |
-| Whole-operation streaming implementations | `fhelium/backend/ckks/operations.py` |
-| Rescale resources and quotient construction | `fhelium/backend/ckks/resources.py`, `fhelium/backend/ckks/operations.py` |
+| Whole-operation streaming implementations | `fhelium/backend/ckks/arithmetic.py`, `fhelium/backend/ckks/key_switch.py` |
+| Rescale resources and quotient construction | `fhelium/backend/rns/tables.py`, `fhelium/backend/rns/rescale.py` |
 | RNS/NTT arithmetic and active parameters | `fhelium/backend/rns/context.py`, `fhelium/backend/ntt/` |
 | CKKS-local operator schemas | `csrc/ops/ckks/ckks.cpp` |
 | CPU CKKS tensor primitives | `csrc/ops/ckks/cpu/ckks_cpu.cpp` |

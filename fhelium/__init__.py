@@ -11,7 +11,6 @@ from fhelium.config import (
     compatible_ntt_backends,
 )
 from fhelium.values import (
-    COMPRESSED_PLAINTEXT_FORMAT_VERSION,
     Ciphertext,
     CompressedPlaintext,
     CompressedPlaintextLayout,
@@ -43,7 +42,6 @@ from . import errors
 __all__ = [
     "__version__",
     "DEFAULT_CPU_NTT_BACKEND",
-    "COMPRESSED_PLAINTEXT_FORMAT_VERSION",
     "DEFAULT_NTT_BACKEND",
     "SUPPORTED_NTT_BACKENDS",
     "Ciphertext",

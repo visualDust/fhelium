@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from ..._pipeline import (
     PassResult,
     PassStats,
@@ -9,116 +15,24 @@ from ..._pipeline import (
 
 from dataclasses import dataclass
 
-from xdsl.dialects.builtin import StringAttr, UnrealizedConversionCastOp
-from xdsl.ir import Operation, SSAValue
-from xdsl.rewriter import Rewriter
+from xdsl.dialects.builtin import UnrealizedConversionCastOp
+from xdsl.ir import SSAValue
 
-from fhelium.ir import Program
 
 from fhelium.ir.dialects import ckks, logical
-from fhelium.ir.dialects._common import OpenStateType
 from .._operation_transforms import (
     cast_before,
     ciphertext_type,
     display_name,
     program_operations,
 )
-from ._transition_state import representation_pair
+from ._transition_state import infer_logical_representation
 
 _MULTIPLY_ENCRYPTED_INDICES: dict[type[object], tuple[int, ...]] = {
     logical.MultiplyEncryptedEncryptedOp: (0, 1),
     logical.MultiplyEncryptedPublicOp: (0,),
     logical.MultiplyPublicEncryptedOp: (1,),
 }
-
-_PRESERVE_ENCRYPTED_TYPES = (
-    logical.AddEncryptedEncryptedOp,
-    logical.AddEncryptedPublicOp,
-    logical.AddPublicEncryptedOp,
-    logical.SubtractEncryptedEncryptedOp,
-    logical.SubtractEncryptedPublicOp,
-    logical.SubtractPublicEncryptedOp,
-    logical.NegateEncryptedOp,
-)
-_MULTIPLY_TYPES = tuple(_MULTIPLY_ENCRYPTED_INDICES)
-
-
-def _infer_logical_representation(
-    value: SSAValue,
-    memo: dict[SSAValue, tuple[str, str]],
-) -> tuple[str, str]:
-    """Infer the representation selected by the logical CKKS route."""
-
-    cached = memo.get(value)
-    if cached is not None:
-        return cached
-    try:
-        representation = representation_pair(
-            value, operation="logical representation assignment"
-        )
-    except ValueError:
-        representation = None
-    if representation is not None:
-        memo[value] = representation
-        return representation
-    owner = value.owner
-    if not isinstance(owner, Operation):
-        raise ValueError(
-            "Logical encrypted input representation remains unassigned"
-        )
-    if isinstance(owner, UnrealizedConversionCastOp):
-        representation = _infer_logical_representation(owner.inputs[0], memo)
-    elif isinstance(owner, logical.RollEncryptedOp):
-        representation = ("coefficient", "standard")
-    elif isinstance(owner, _PRESERVE_ENCRYPTED_TYPES):
-        encrypted = tuple(
-            operand
-            for operand in owner.operands
-            if isinstance(operand.type, logical.EncryptedType)
-        )
-        representations = tuple(
-            _infer_logical_representation(operand, memo)
-            for operand in encrypted
-        )
-        distinct = set(representations)
-        if not representations:
-            raise ValueError(
-                f"{display_name(owner)} lacks one matching encrypted "
-                "representation"
-            )
-        if len(distinct) == 1:
-            representation = representations[0]
-        elif distinct == {
-            ("coefficient", "standard"),
-            ("ntt", "montgomery"),
-        }:
-            representation = ("coefficient", "standard")
-        else:
-            raise ValueError(
-                f"{display_name(owner)} has incompatible encrypted "
-                "representations"
-            )
-    elif isinstance(owner, _MULTIPLY_TYPES):
-        representation = ("ntt", "montgomery")
-    else:
-        raise ValueError(
-            f"{display_name(owner)} does not define an encrypted representation"
-        )
-    if isinstance(value.type, OpenStateType):
-        state = dict(value.type.state.data)
-        state.update(
-            {
-                "polynomial_domain": StringAttr(representation[0]),
-                "residue_representation": StringAttr(representation[1]),
-            }
-        )
-        updated = Rewriter.replace_value_with_new_type(
-            value,
-            value.type.with_state(state),  # type: ignore[arg-type]
-        )
-        memo[updated] = representation
-    memo[value] = representation
-    return representation
 
 
 @dataclass(frozen=True)
@@ -132,12 +46,10 @@ class InsertMultiplyNttTransitionsPass:
 
     name: str = "insert-multiply-ntt-transitions"
 
-    def run(
-        self,
-        program: Program,
-        workspace: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
         """Insert missing transitions or return a legal no-op report."""
+        program = compilation.program
+        workspace = compilation.workspace
 
         del workspace
         matched = transformed = inserted = skipped = 0
@@ -152,7 +64,7 @@ class InsertMultiplyNttTransitionsPass:
             representations: dict[int, tuple[str, str]] = {}
             for index in encrypted_indices:
                 try:
-                    representation = _infer_logical_representation(
+                    representation = infer_logical_representation(
                         operation.operands[index],
                         inferred_representations,
                     )

@@ -10,6 +10,7 @@ export interface DepthConfiguration {
 export interface WorkloadMeasurement {
   referenceMs: number
   fheliumMs: number
+  fheliumJitMs: number
 }
 
 export interface PlatformMeasurement {
@@ -50,19 +51,19 @@ export const platformMeasurements = [
     hardware: 'RTX PRO 6000 Blackwell',
     workload: '256×256 dense matrix–vector',
     reference: 'Liberate 0.9.0',
-    measured: 'FHElium 0.20',
+    measured: 'FHElium',
     results: {
       7: {
-        ptCt: { referenceMs: 74.198835, fheliumMs: 6.319321 },
-        ctCt: { referenceMs: 108.054670, fheliumMs: 7.761033 },
+        ptCt: { referenceMs: 74.198835, fheliumMs: 8.964460, fheliumJitMs: 4.999339 },
+        ctCt: { referenceMs: 108.054670, fheliumMs: 10.046077, fheliumJitMs: 5.965834 },
       },
       16: {
-        ptCt: { referenceMs: 126.610228, fheliumMs: 22.992083 },
-        ctCt: { referenceMs: 192.366163, fheliumMs: 29.634773 },
+        ptCt: { referenceMs: 126.610228, fheliumMs: 19.904646, fheliumJitMs: 17.816226 },
+        ctCt: { referenceMs: 192.366163, fheliumMs: 23.570510, fheliumJitMs: 20.812153 },
       },
       34: {
-        ptCt: { referenceMs: 454.819441, fheliumMs: 104.901555 },
-        ctCt: { referenceMs: 621.227444, fheliumMs: 126.321445 },
+        ptCt: { referenceMs: 454.819441, fheliumMs: 72.091918, fheliumJitMs: 70.671163 },
+        ctCt: { referenceMs: 621.227444, fheliumMs: 86.249296, fheliumJitMs: 84.517840 },
       },
     },
   },
@@ -72,19 +73,19 @@ export const platformMeasurements = [
     hardware: 'RTX PRO 6000 Blackwell',
     workload: '256×256 dense matrix–vector',
     reference: 'Liberate 0.9.0',
-    measured: 'FHElium 0.20',
+    measured: 'FHElium',
     results: {
       7: {
-        ptCt: { referenceMs: 116.622137, fheliumMs: 4.395659 },
-        ctCt: { referenceMs: 210.891075, fheliumMs: 5.830780 },
+        ptCt: { referenceMs: 116.622137, fheliumMs: 6.226670, fheliumJitMs: 4.023083 },
+        ctCt: { referenceMs: 210.891075, fheliumMs: 8.155194, fheliumJitMs: 5.213323 },
       },
       16: {
-        ptCt: { referenceMs: 135.267199, fheliumMs: 13.830115 },
-        ctCt: { referenceMs: 249.927941, fheliumMs: 17.922600 },
+        ptCt: { referenceMs: 135.267199, fheliumMs: 12.774520, fheliumJitMs: 11.359318 },
+        ctCt: { referenceMs: 249.927941, fheliumMs: 16.733571, fheliumJitMs: 14.367518 },
       },
       34: {
-        ptCt: { referenceMs: 276.499770, fheliumMs: 60.912082 },
-        ctCt: { referenceMs: 395.654165, fheliumMs: 79.159949 },
+        ptCt: { referenceMs: 276.499770, fheliumMs: 46.397627, fheliumJitMs: 45.317555 },
+        ctCt: { referenceMs: 395.654165, fheliumMs: 60.771623, fheliumJitMs: 59.373772 },
       },
     },
   },
@@ -94,19 +95,19 @@ export const platformMeasurements = [
     hardware: 'Threadripper PRO 9965WX',
     workload: '16×16 dense matrix–vector',
     reference: 'OpenFHE 1.4.2',
-    measured: 'FHElium 0.20',
+    measured: 'FHElium',
     results: {
       7: {
-        ptCt: { referenceMs: 91.315008, fheliumMs: 38.383031 },
-        ctCt: { referenceMs: 147.203014, fheliumMs: 44.701132 },
+        ptCt: { referenceMs: 91.315008, fheliumMs: 29.765600, fheliumJitMs: 27.969600 },
+        ctCt: { referenceMs: 147.203014, fheliumMs: 47.861400, fheliumJitMs: 43.619000 },
       },
       16: {
-        ptCt: { referenceMs: 401.927965, fheliumMs: 160.119467 },
-        ctCt: { referenceMs: 707.881538, fheliumMs: 175.684921 },
+        ptCt: { referenceMs: 401.927965, fheliumMs: 103.084900, fheliumJitMs: 100.686700 },
+        ctCt: { referenceMs: 707.881538, fheliumMs: 161.159100, fheliumJitMs: 158.581800 },
       },
       34: {
-        ptCt: { referenceMs: 1_435.338548, fheliumMs: 628.465334 },
-        ctCt: { referenceMs: 2_454.963876, fheliumMs: 809.544331 },
+        ptCt: { referenceMs: 1_435.338548, fheliumMs: 523.535200, fheliumJitMs: 523.493100 },
+        ctCt: { referenceMs: 2_454.963876, fheliumMs: 736.290100, fheliumJitMs: 729.616000 },
       },
     },
   },

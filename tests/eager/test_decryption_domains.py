@@ -52,27 +52,26 @@ def test_decryption_phase_matches_across_input_domains(
     secret_before = secret.data.clone()
     rns_context = engine._rns_context_for(torch.device("cpu"))
     ntt_context = engine._ntt_context_for(torch.device("cpu"))
-    includes_p = modulus_basis == "QP"
+    ids = coefficient.prime_ids
+    tables = dict(
+        parameters=rns_context.rns_parameters_for_prime_ids(ids),
+        forward=ntt_context.tensor_operands(ids, inverse=False),
+        inverse=ntt_context.tensor_operands(ids, inverse=True),
+        key_row_start=0,
+        ntt_backend=ntt_context.ntt_backend_name,
+    )
 
     coefficient_phase = _decrypt_tensor_to_coefficient_standard_rns(
         coefficient.data,
         secret.data,
-        depth=coefficient.depth,
-        includes_p=includes_p,
-        secret_key_basis=secret.modulus_basis,
         input_domain="coefficient",
-        rns_context=rns_context,
-        ntt_context=ntt_context,
+        **tables,
     )
     ntt_phase = _decrypt_tensor_to_coefficient_standard_rns(
         ntt.data,
         secret.data,
-        depth=ntt.depth,
-        includes_p=includes_p,
-        secret_key_basis=secret.modulus_basis,
         input_domain="ntt",
-        rns_context=rns_context,
-        ntt_context=ntt_context,
+        **tables,
     )
 
     assert torch.equal(ntt_phase, coefficient_phase)
@@ -82,7 +81,9 @@ def test_decryption_phase_matches_across_input_domains(
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda:0"])
-def test_delayed_rescale_decrypts_actual_scale_independently_of_default(device: str) -> None:
+def test_delayed_rescale_decrypts_actual_scale_independently_of_default(
+    device: str,
+) -> None:
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
     config = fh.CkksConfig.parse(
@@ -93,9 +94,15 @@ def test_delayed_rescale_decrypts_actual_scale_independently_of_default(device: 
     secret = engine.create_secret_key(device=device)
     public = engine.create_public_key(secret, device=device)
     relin = engine.create_relinearization_key(secret, device=device)
-    message = torch.linspace(0.5, 0.8, engine.num_slots, dtype=torch.float64, device=device)
-    source = engine.encrypt_message(message, public, scale=2.0**50, output_domain="ntt", device=device)
-    squared = engine.relinearize(engine.multiply(source, source), relin, output_domain="ntt")
+    message = torch.linspace(
+        0.5, 0.8, engine.num_slots, dtype=torch.float64, device=device
+    )
+    source = engine.encrypt_message(
+        message, public, scale=2.0**50, output_domain="ntt", device=device
+    )
+    squared = engine.relinearize(
+        engine.multiply(source, source), relin, output_domain="ntt"
+    )
     cubed = engine.multiply(squared, source)
     assert cubed.depth == 0
     assert cubed.scale == 2.0**150

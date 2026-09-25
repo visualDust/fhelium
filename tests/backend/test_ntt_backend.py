@@ -1,30 +1,29 @@
 from __future__ import annotations
 
-from fhelium.legacy.engine import CkksEngine
-
 import gc
 
 import pytest
 import torch
 
+from fhelium.backend.assembly import create_builtin_operation_registry
+from fhelium.backend.rns.format import RnsExecutionFormat
 from fhelium.config import CkksConfig, Preset
 from fhelium.config.ntt import (
     CompactFixedRadixPolicy,
     compatible_ntt_backends,
     resolve_ntt_backend_policy,
 )
-from fhelium.backend.assembly import create_builtin_operation_registry
-from fhelium.backend.rns.format import RnsExecutionFormat
 from fhelium.ir.dialects import ntt as ntt_dialect
+from fhelium.legacy.engine import CkksEngine
 from fhelium.legacy.engine.ntt.plans import (
     CompactPowerOfTwoRadixNttPlan,
     IndexedRadix2NttPlan,
 )
-from fhelium.legacy.engine.rns.montgomery import MontgomeryParameters
 from fhelium.legacy.engine.ntt.tables import (
     CompactPowerOfTwoRadixTables,
     CompactRadix2Tables,
 )
+from fhelium.legacy.engine.rns.montgomery import MontgomeryParameters
 from fhelium.native.wrapper import ntt_diagnostic_ops, ntt_ops
 
 INDEXED_BACKEND = "radix2_indexed"
@@ -72,7 +71,7 @@ def test_native_ntt_registration_uses_selected_executor_identity() -> None:
         ntt_dialect.CoefficientStandardToNttMontgomeryOp,
         ntt_dialect.CoefficientMontgomeryToNttMontgomeryOp,
         ntt_dialect.NttMontgomeryToCoefficientStandardOp,
-        ntt_dialect.InverseMontgomeryOp,
+        ntt_dialect.NttMontgomeryToCoefficientMontgomeryOp,
     ):
         assert registry.available(operation_type) == (INDEXED_BACKEND,)
 
@@ -149,7 +148,9 @@ def test_cpu_indexed_ntt_uses_the_same_exact_schema_and_representation(
     config, tables, parameters = _cpu_indexed_runtime(preset)
     dtype = RnsExecutionFormat.select(config.moduli).dtype
     plan, forward_twiddles, inverse_twiddles = tables
-    generator = torch.Generator().manual_seed(20260811 + config.total_modulus_bits)
+    generator = torch.Generator().manual_seed(
+        20260811 + config.total_modulus_bits
+    )
     active_limb_count = 3
     standard = (
         torch.stack(

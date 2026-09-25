@@ -1,10 +1,6 @@
 # Concepts
 
-Concepts explain the mental models that remain useful across APIs and
-implementations. FHElium's foundation consists of two use models,
-shared CKKS value and operation semantics, and a Backend execution interface.
-Eager evaluates one requested operation at a time. Compile represents and
-transforms a Program before linking it for execution.
+Concepts explain the mental models that remain useful across APIs and implementations. FHElium's foundation consists of two use models, shared CKKS value and operation semantics, and a Backend execution interface. Eager evaluates one requested operation at a time. Compile represents and transforms a Program before linking it for execution. Manual Program/Compilation/Pipeline execution and callable specialization are equally supported paths through that Compile machinery.
 
 ## Core model
 
@@ -20,7 +16,11 @@ graph TB
     end
 
     subgraph Compile
+        MANUAL[Manual Compilation and Pipeline]
+        CALLABLE[Callable capture and specialization]
         PROGRAM[Partially specified Program]
+        MANUAL --> PROGRAM
+        CALLABLE --> PROGRAM
         PASSES[Analysis and transformation passes]
         LINK[Implementation and resource linking]
         EXEC[ProgramExecutable]
@@ -28,18 +28,21 @@ graph TB
     end
 
     BACKEND[Registered Backend implementation]
-    NATIVE[Python, CPU, CUDA, or provider execution]
+    NATIVE[Whole or lower-level native execution]
+    GENERATED[Selected generated kernels]
     RUNTIME[Runtime observation and execution mechanisms]
     DIST[Application-controlled SPMD]
     STORAGE[Artifacts and live Residency]
 
     APP --> ENGINE
-    APP --> PROGRAM
+    APP --> MANUAL
+    APP --> CALLABLE
     VALUES --> ENGINE
     VALUES --> EXEC
     TRANSITION --> BACKEND
     EXEC --> BACKEND
     BACKEND --> NATIVE
+    BACKEND --> GENERATED
     APP --> RUNTIME
     APP --> DIST
     APP --> STORAGE
@@ -48,11 +51,7 @@ graph TB
     STORAGE -. supplies live values and resources .-> BACKEND
 ```
 
-Eager and Compile differ in when CKKS state and scheduling decisions are made.
-They converge on registered implementations that consume Tensor payloads and
-concrete arithmetic resources. Runtime, distributed execution, persistence,
-and Residency compose with these paths without becoming hidden properties of a
-ciphertext or Program.
+Eager and Compile differ in when CKKS state and scheduling decisions are made. They converge on registered implementations that consume Tensor operands and non-Tensor execution handles. A Compilation keeps one live material-binding dictionary alongside its Program, workspace, and pass reports; linking prepares host calls to selected native or generated implementations. Runtime, distributed execution, persistence, and Residency compose with these paths without becoming hidden properties of a ciphertext or Program.
 
 ## Choose a starting point
 
@@ -74,7 +73,7 @@ ciphertext or Program.
   />
   <DocCard
     title="Compose a Compile pipeline"
-    description="Understand caller-selected capture, transformation, lowering, implementation assignment, linking, and runtime specialization."
+    description="Understand manual and callable Compile, shared transformation state, Tensor materials, implementation selection, linking, and specialization."
     href="/concepts/open-compiler-stack"
   />
   <DocCard

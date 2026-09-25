@@ -11,7 +11,7 @@ may carry its own actual scale $\Delta$.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import ClassVar, Literal, cast
 
 from xdsl.dialects.builtin import ArrayAttr, FloatAttr, IntegerAttr, StringAttr
@@ -41,8 +41,17 @@ from .._operation_catalog import (
     required_string_attribute,
     unsupported_attributes,
 )
+from ..ckks_state import output_residues, transform_state
 from ._common import OpenStateType, ValueRole
 from .core import MessageType
+from .._dependencies import (
+    DependencyKind,
+    OperationDependencies,
+    ValueDependency,
+    operand_dependencies,
+    operand_relations,
+    string_fact,
+)
 
 
 @irdl_attr_definition
@@ -63,7 +72,7 @@ class PlaintextType(OpenStateType):
 
 @irdl_attr_definition
 class EvaluationKeyType(OpenStateType):
-    """Caller-bound CKKS evaluation-key resource and compatibility state."""
+    """Evaluation-key Tensor with partial digit, row, and polynomial state."""
 
     name = "fhelium_ckks.evaluation_key"
 
@@ -74,9 +83,34 @@ class CompressedPlaintextType(OpenStateType):
 
     name = "fhelium_ckks.compressed_plaintext"
 
-    @property
-    def value_role(self) -> ValueRole:
-        return "plaintext"
+    ROLE: ClassVar[ValueRole] = "plaintext"
+
+
+@irdl_op_definition
+class PrepareCompressedPlaintextOp(IRDLOperation):
+    r"""Prepare compressed NTT rows from a periodic slot message.
+
+    For U=2r (at least four for generator 3), R=N/U and a period-r message,
+    the encoded polynomial has the form p(X)=a(X^R). The operation performs
+    the U-point inverse embedding, stochastic rounding at the corresponding
+    full-ring random-stream positions, RNS reduction and a U-point NTT with
+    roots psi_N^R for NTT output. Coefficient output omits the transform and
+    returns strided-sparse compact data plus zero implicit rows; NTT output
+    uses contiguous repetition. Both use Montgomery residues and preserve
+    the supplied depth, prime rows and actual scale.
+    """
+
+    name = "fhelium_ckks.prepare_compressed_plaintext"
+    message = operand_def(MessageType)
+    parameters = var_operand_def()
+    results_ = var_result_def()
+    traits = traits_def()
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'slot': 'mixing', 'batch': 'element'}}
+        )
 
 
 @irdl_op_definition
@@ -93,9 +127,16 @@ class EncodeOp(IRDLOperation):
 
     name = "fhelium_ckks.encode"
     message = operand_def(MessageType)
+    parameters = var_operand_def()
     result = result_def(PlaintextType)
     depth = attr_def(IntegerAttr)
     scale = attr_def(FloatAttr)
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'slot': 'mixing', 'batch': 'element'}}
+        )
 
 
 @irdl_op_definition
@@ -110,9 +151,16 @@ class DecodeOp(IRDLOperation):
 
     name = "fhelium_ckks.decode"
     plaintext = operand_def(PlaintextType)
+    parameters = var_operand_def()
     result = result_def(MessageType)
     is_real = attr_def(IntegerAttr)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'coefficient': 'mixing', 'batch': 'element'}}
+        )
 
 
 @irdl_op_definition
@@ -127,10 +175,17 @@ class IntegerCoefficientsToRnsOp(IRDLOperation):
 
     name = "fhelium_ckks.integer_coefficients_to_rns"
     plaintext = operand_def(PlaintextType)
+    parameters = var_operand_def()
     result = result_def(PlaintextType)
     modulus_basis = attr_def(StringAttr)
     depth = attr_def(IntegerAttr)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'coefficient': 'element', 'batch': 'element'}}
+        )
 
 
 @irdl_op_definition
@@ -143,15 +198,44 @@ class EncryptOp(IRDLOperation):
     $c_0=k_0v+a+e_0$ and $c_1=k_1v+e_1$ modulo every active prime.  The output
     has two components and keeps the plaintext depth and actual scale.
     ``output_domain`` selects coefficient/standard or NTT/Montgomery Q or QP
-    residues. ``key_symbol`` identifies the bound public-key resource."""
+    residues. The second operand supplies the public-key Tensor."""
 
     name = "fhelium_ckks.encrypt"
     plaintext = operand_def(PlaintextType)
+    key = operand_def()
+    parameters = var_operand_def()
     result = result_def(CiphertextType)
-    key_symbol = attr_def(StringAttr)
     output_domain = attr_def(
         StringAttr, default_value=StringAttr("coefficient")
     )
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe plaintext addition and multiplication by the public key."""
+        domain = string_fact(self, "output_domain")
+        position: DependencyKind = (
+            "element"
+            if domain == "coefficient"
+            else "mixing"
+            if domain == "ntt"
+            else "unknown"
+        )
+        return OperationDependencies(
+            (
+                ValueDependency(
+                    0, 0, {"coefficient": position, "batch": "element"}
+                ),
+                ValueDependency(
+                    0,
+                    1,
+                    {
+                        "coefficient": "mixing",
+                        "limb": "reindexed",
+                        "component": "element",
+                        "batch": "reindexed",
+                    },
+                ),
+            )
+        )
 
 
 @irdl_op_definition
@@ -164,19 +248,40 @@ class DecryptOp(IRDLOperation):
     RNS, then reconstructs the centered integer class from all active Q
     rows.  The result is an approximate coefficient plaintext at the ciphertext's
     depth and actual scale. ``input_domain`` records whether the ciphertext
-    payload arrives in coefficient/standard or NTT/Montgomery form, and
-    ``key_symbol`` selects the secret key."""
+    payload arrives in coefficient/standard or NTT/Montgomery form, and the second operand supplies the secret-key Tensor."""
 
     name = "fhelium_ckks.decrypt"
     ciphertext = operand_def(CiphertextType)
+    key = operand_def()
+    parameters = var_operand_def()
     result = result_def(PlaintextType)
-    key_symbol = attr_def(StringAttr)
     input_domain = attr_def(StringAttr)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'mixing',
+                    'limb': 'mixing',
+                    'component': 'mixing',
+                    'batch': 'element',
+                },
+                1: {
+                    'coefficient': 'mixing',
+                    'limb': 'mixing',
+                    'component': 'reindexed',
+                    'batch': 'reindexed',
+                },
+            },
+        )
 
 
 class _UnaryCiphertextOp(IRDLOperation):
     value = operand_def(CiphertextType)
+    parameters = var_operand_def()
     result = result_def(CiphertextType)
     traits = traits_def(Pure())
 
@@ -185,10 +290,11 @@ class _UnaryCiphertextOp(IRDLOperation):
         value: SSAValue | Operation,
         result_type: Attribute | None = None,
         *,
+        parameters: Sequence[SSAValue | Operation] = (),
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         super().__init__(
-            operands=[value],
+            operands=[value, parameters],
             result_types=[result_type or SSAValue.get(value).type],
             attributes=attributes,
         )
@@ -197,6 +303,7 @@ class _UnaryCiphertextOp(IRDLOperation):
 class _BinaryCiphertextOp(IRDLOperation):
     lhs = operand_def(CiphertextType)
     rhs = operand_def(CiphertextType)
+    parameters = var_operand_def()
     result = result_def(CiphertextType)
     traits = traits_def(Pure())
 
@@ -206,10 +313,11 @@ class _BinaryCiphertextOp(IRDLOperation):
         rhs: SSAValue | Operation,
         result_type: Attribute | None = None,
         *,
+        parameters: Sequence[SSAValue | Operation] = (),
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         super().__init__(
-            operands=[lhs, rhs],
+            operands=[lhs, rhs, parameters],
             result_types=[result_type or SSAValue.get(lhs).type],
             attributes=attributes,
         )
@@ -225,6 +333,20 @@ class NegateOp(_UnaryCiphertextOp):
     polynomial domain, and Montgomery state are unchanged."""
 
     name = "fhelium_ckks.negate"
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
 
 
 @irdl_op_definition
@@ -244,6 +366,7 @@ class RotateOp(IRDLOperation):
     name = "fhelium_ckks.rotate"
     value = operand_def(CiphertextType)
     key = operand_def(EvaluationKeyType)
+    parameters = var_operand_def()
     result = result_def(CiphertextType)
     output_domain = attr_def(
         StringAttr, default_value=StringAttr("coefficient")
@@ -251,12 +374,33 @@ class RotateOp(IRDLOperation):
     input_domain = attr_def(StringAttr, default_value=StringAttr("coefficient"))
     traits = traits_def(Pure())
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'mixing',
+                    'limb': 'mixing',
+                    'component': 'mixing',
+                    'batch': 'element',
+                },
+                1: {
+                    'coefficient': 'mixing',
+                    'limb': 'mixing',
+                    'component': 'mixing',
+                    'batch': 'reindexed',
+                },
+            },
+        )
+
     def __init__(
         self,
         value: SSAValue | Operation,
         key: SSAValue | Operation,
         result_type: Attribute | None = None,
         *,
+        parameters: Sequence[SSAValue | Operation] = (),
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         attrs = dict(attributes or {})
@@ -282,7 +426,7 @@ class RotateOp(IRDLOperation):
                 }
             )
         super().__init__(
-            operands=[value, key],
+            operands=[value, key, parameters],
             result_types=[result_type],
             attributes=attrs,
         )
@@ -305,11 +449,32 @@ class RotateManyOp(IRDLOperation):
     name = "fhelium_ckks.hoisted_rotate_many"
     value = operand_def(CiphertextType)
     keys = var_operand_def(EvaluationKeyType)
+    parameters = var_operand_def()
     outputs = var_result_def(CiphertextType)
+    irdl_options = (AttrSizedOperandSegments(as_property=True),)
     output_domain = attr_def(
         StringAttr, default_value=StringAttr("coefficient")
     )
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe each rotation's reads from the ciphertext and its key."""
+        return OperationDependencies(
+            tuple(
+                ValueDependency(
+                    result,
+                    operand,
+                    {
+                        "coefficient": "mixing",
+                        "limb": "mixing",
+                        "component": "mixing",
+                        "batch": "element" if operand == 0 else "reindexed",
+                    },
+                )
+                for result in range(len(self.results))
+                for operand in (0, 1 + result)
+            )
+        )
 
     def __init__(
         self,
@@ -318,11 +483,16 @@ class RotateManyOp(IRDLOperation):
         result_types: tuple[CiphertextType, ...],
         *,
         output_domain: Literal["coefficient", "ntt"] = "coefficient",
+        parameters: Sequence[SSAValue | Operation] = (),
+        attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         super().__init__(
-            operands=(value, keys),
+            operands=(value, keys, parameters),
             result_types=(result_types,),
-            attributes={"output_domain": StringAttr(output_domain)},
+            attributes={
+                **(attributes or {}),
+                "output_domain": StringAttr(output_domain),
+            },
         )
 
     def verify_(self) -> None:
@@ -362,12 +532,38 @@ class GroupedRotationWeightedSumOp(IRDLOperation):
     value = operand_def(CiphertextType)
     keys = var_operand_def(EvaluationKeyType)
     plaintexts = var_operand_def(PlaintextType)
+    parameters = var_operand_def()
     result = result_def(CiphertextType)
     baby_steps = attr_def(ArrayAttr[IntegerAttr])
     term_count = attr_def(IntegerAttr)
     group_count = attr_def(IntegerAttr)
     traits = traits_def(Pure())
     irdl_options = (AttrSizedOperandSegments(as_property=True),)
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe the rotated input, evaluation keys and plaintext weights."""
+        count = 1 + len(self.keys) + len(self.plaintexts)
+        return OperationDependencies(
+            tuple(
+                ValueDependency(
+                    0,
+                    index,
+                    {
+                        "coefficient": "mixing"
+                        if index <= len(self.keys)
+                        else "element",
+                        "limb": "mixing"
+                        if index <= len(self.keys)
+                        else "element",
+                        "component": "mixing"
+                        if index <= len(self.keys)
+                        else "reindexed",
+                        "batch": "reindexed",
+                    },
+                )
+                for index in range(count)
+            )
+        )
 
     def __init__(
         self,
@@ -378,9 +574,10 @@ class GroupedRotationWeightedSumOp(IRDLOperation):
         *,
         baby_steps: tuple[int, ...],
         group_count: int,
+        parameters: Sequence[SSAValue | Operation] = (),
     ) -> None:
         super().__init__(
-            operands=(value, keys, plaintexts),
+            operands=(value, keys, plaintexts, parameters),
             result_types=[result_type],
             attributes={
                 "baby_steps": ArrayAttr(
@@ -415,8 +612,60 @@ class GroupedRotationWeightedSumOp(IRDLOperation):
             )
 
 
+@irdl_op_definition
+class SumBatchOp(IRDLOperation):
+    r"""Reduce one ciphertext batch axis by modular addition.
+
+    For components $c_j^{(k)}$ over the selected axis of length $n$, the
+    result is $c'_j=\sum_{k<n}c_j^{(k)}\bmod Q$ with every partial sum
+    evaluated modulo the active primes.  The operation removes the selected
+    logical batch axis from the value shape; depth, actual scale, prime rows,
+    component count, polynomial domain, and residue representation are
+    unchanged."""
+
+    name = "fhelium_ckks.sum_batch"
+    value = operand_def(CiphertextType)
+    parameters = var_operand_def()
+    result = result_def(CiphertextType)
+    axis = attr_def(IntegerAttr)
+    traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'mixing',
+                },
+            },
+        )
+
+    def __init__(
+        self,
+        value: SSAValue | Operation,
+        result_type: Attribute,
+        *,
+        axis: int | IntegerAttr,
+        parameters: Sequence[SSAValue | Operation] = (),
+    ) -> None:
+        super().__init__(
+            operands=[value, parameters],
+            result_types=[result_type],
+            attributes={
+                "axis": (
+                    IntegerAttr(axis, 64) if isinstance(axis, int) else axis
+                )
+            },
+        )
+
+
 class _RepresentationOp(IRDLOperation):
     value = operand_def()
+    parameters = var_operand_def()
     result = result_def()
     traits = traits_def(Pure())
 
@@ -425,24 +674,22 @@ class _RepresentationOp(IRDLOperation):
         value: SSAValue | Operation,
         result_type: Attribute | None = None,
         *,
+        parameters: Sequence[SSAValue | Operation] = (),
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         source_type = SSAValue.get(value).type
         if result_type is None and isinstance(source_type, OpenStateType):
             updates: dict[str, Attribute] = {}
-            if self.name == "fhelium_ckks.to_ntt":
+            if self.name in {"fhelium_ckks.to_ntt", "fhelium_ckks.from_ntt"}:
+                domain, residues = transform_state(
+                    "forward"
+                    if self.name == "fhelium_ckks.to_ntt"
+                    else "inverse",
+                    ciphertext=isinstance(source_type, CiphertextType),
+                )
                 updates = {
-                    "polynomial_domain": StringAttr("ntt"),
-                    "residue_representation": StringAttr("montgomery"),
-                }
-            elif self.name == "fhelium_ckks.from_ntt":
-                updates = {
-                    "polynomial_domain": StringAttr("coefficient"),
-                    "residue_representation": StringAttr(
-                        "standard"
-                        if isinstance(source_type, CiphertextType)
-                        else "montgomery"
-                    ),
+                    "polynomial_domain": StringAttr(domain),
+                    "residue_representation": StringAttr(residues),
                 }
             elif self.name == "fhelium_ckks.to_montgomery_residues":
                 updates = {"residue_representation": StringAttr("montgomery")}
@@ -451,7 +698,7 @@ class _RepresentationOp(IRDLOperation):
             if updates:
                 result_type = source_type.with_state(updates)
         super().__init__(
-            operands=[value],
+            operands=[value, parameters],
             result_types=[result_type or source_type],
             attributes=attributes,
         )
@@ -481,6 +728,20 @@ class ToNttOp(_RepresentationOp):
 
     name = "fhelium_ckks.to_ntt"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'mixing',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
+
 
 @irdl_op_definition
 class FromNttOp(_RepresentationOp):
@@ -493,6 +754,20 @@ class FromNttOp(_RepresentationOp):
 
     name = "fhelium_ckks.from_ntt"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'mixing',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
+
 
 @irdl_op_definition
 class ToMontgomeryResiduesOp(_RepresentationOp):
@@ -504,6 +779,20 @@ class ToMontgomeryResiduesOp(_RepresentationOp):
 
     name = "fhelium_ckks.to_montgomery_residues"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
+
 
 @irdl_op_definition
 class ToStandardResiduesOp(_RepresentationOp):
@@ -514,6 +803,20 @@ class ToStandardResiduesOp(_RepresentationOp):
     scale are preserved."""
 
     name = "fhelium_ckks.to_standard_residues"
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
 
 
 @irdl_op_definition
@@ -528,6 +831,26 @@ class AddOp(_BinaryCiphertextOp):
 
     name = "fhelium_ckks.add"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'reindexed',
+                },
+                1: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'reindexed',
+                },
+            },
+        )
+
 
 @irdl_op_definition
 class SubtractOp(_BinaryCiphertextOp):
@@ -539,6 +862,26 @@ class SubtractOp(_BinaryCiphertextOp):
     result represents the slotwise difference."""
 
     name = "fhelium_ckks.subtract"
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'reindexed',
+                },
+                1: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'reindexed',
+                },
+            },
+        )
 
 
 @irdl_op_definition
@@ -554,9 +897,30 @@ class MultiplyOp(_BinaryCiphertextOp):
 
     name = "fhelium_ckks.multiply"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'mixing',
+                    'batch': 'reindexed',
+                },
+                1: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'mixing',
+                    'batch': 'reindexed',
+                },
+            },
+        )
+
 
 class _RealScalarCiphertextOp(IRDLOperation):
     ciphertext = operand_def(CiphertextType)
+    parameters = var_operand_def()
     result = result_def(CiphertextType)
     scalar = attr_def(FloatAttr)
     scalar_scale = attr_def(FloatAttr)
@@ -566,12 +930,13 @@ class _RealScalarCiphertextOp(IRDLOperation):
         ciphertext: SSAValue | Operation,
         result_type: Attribute | None = None,
         *,
+        parameters: Sequence[SSAValue | Operation] = (),
         scalar: FloatAttr,
         scalar_scale: FloatAttr,
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         super().__init__(
-            operands=[ciphertext],
+            operands=[ciphertext, parameters],
             result_types=[result_type or SSAValue.get(ciphertext).type],
             attributes={
                 **({} if attributes is None else attributes),
@@ -595,6 +960,20 @@ class AddScalarOp(_RealScalarCiphertextOp):
 
     name = "fhelium_ckks.add_scalar"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
+
 
 @irdl_op_definition
 class MultiplyScalarOp(_RealScalarCiphertextOp):
@@ -609,6 +988,20 @@ class MultiplyScalarOp(_RealScalarCiphertextOp):
 
     name = "fhelium_ckks.multiply_scalar"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
+
 
 @irdl_op_definition
 class MultiplyIntegerScalarOp(IRDLOperation):
@@ -621,20 +1014,36 @@ class MultiplyIntegerScalarOp(IRDLOperation):
 
     name = "fhelium_ckks.multiply_integer_scalar"
     ciphertext = operand_def(CiphertextType)
+    parameters = var_operand_def()
     result = result_def(CiphertextType)
     scalar = attr_def(IntegerAttr)
     traits = traits_def(Pure())
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
 
     def __init__(
         self,
         ciphertext: SSAValue | Operation,
         result_type: Attribute | None = None,
         *,
+        parameters: Sequence[SSAValue | Operation] = (),
         scalar: IntegerAttr,
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         super().__init__(
-            operands=[ciphertext],
+            operands=[ciphertext, parameters],
             result_types=[result_type or SSAValue.get(ciphertext).type],
             attributes={
                 **({} if attributes is None else attributes),
@@ -646,6 +1055,8 @@ class MultiplyIntegerScalarOp(IRDLOperation):
 class _CiphertextPlaintextOp(IRDLOperation):
     ciphertext = operand_def(CiphertextType)
     plaintext = operand_def(PlaintextType)
+    parameters = var_operand_def()
+    parameters = var_operand_def()
     result = result_def(CiphertextType)
     traits = traits_def(Pure())
 
@@ -655,10 +1066,11 @@ class _CiphertextPlaintextOp(IRDLOperation):
         plaintext: SSAValue | Operation,
         result_type: Attribute | None = None,
         *,
+        parameters: Sequence[SSAValue | Operation] = (),
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         super().__init__(
-            operands=[ciphertext, plaintext],
+            operands=[ciphertext, plaintext, parameters],
             result_types=[result_type or SSAValue.get(ciphertext).type],
             attributes=attributes,
         )
@@ -675,6 +1087,26 @@ class AddPlaintextOp(_CiphertextPlaintextOp):
 
     name = "fhelium_ckks.add_plaintext"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'reindexed',
+                },
+                1: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'reindexed',
+                    'batch': 'reindexed',
+                },
+            },
+        )
+
 
 @irdl_op_definition
 class MultiplyPlaintextOp(_CiphertextPlaintextOp):
@@ -688,25 +1120,85 @@ class MultiplyPlaintextOp(_CiphertextPlaintextOp):
 
     name = "fhelium_ckks.multiply_plaintext"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'reindexed',
+                },
+                1: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'reindexed',
+                    'batch': 'reindexed',
+                },
+            },
+        )
+
 
 class _CiphertextCompressedPlaintextOp(IRDLOperation):
     ciphertext = operand_def(CiphertextType)
     plaintext = operand_def(CompressedPlaintextType)
+    parameters = var_operand_def()
     result = result_def(CiphertextType)
     inplace = opt_attr_def(IntegerAttr)
 
 
 @irdl_op_definition
 class AddCompressedPlaintextOp(_CiphertextCompressedPlaintextOp):
-    r"""Add a compressed plaintext to ciphertext component zero.
+    r"""Add a compact plaintext to component zero without expanding its rows.
 
-    The compressed layout supplies selected or repeated prepared plaintext values
-    without materializing a full polynomial bundle.  The implementation computes
-    the same active-prime modular addition as ``AddPlaintextOp`` for $c_0$ and
-    leaves later components unchanged.  Depth, actual scale, domain, and residue
-    representation are preserved."""
+    Coefficient/standard ciphertext and coefficient/Montgomery plaintext give
+    c'_0=c_0+REDC(pR). NTT/Montgomery operands give c'_0=c_0+pR. Other
+    components, depth, scale, prime rows and representation are preserved.
+    Sparse layouts supply a separate [*batch, limb, 1] implicit-value Tensor.
+    """
 
     name = "fhelium_ckks.add_compressed_plaintext"
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe direct ciphertext reads and compact plaintext expansion."""
+        relations = [
+            ValueDependency(
+                0,
+                0,
+                {
+                    "coefficient": "element",
+                    "limb": "element",
+                    "component": "element",
+                    "batch": "reindexed",
+                },
+            ),
+            ValueDependency(
+                0,
+                1,
+                {
+                    "coefficient": "reindexed",
+                    "limb": "element",
+                    "component": "reindexed",
+                    "batch": "reindexed",
+                },
+            ),
+        ]
+        if string_fact(self, "compression_layout") == "strided_sparse":
+            relations.append(
+                ValueDependency(
+                    0,
+                    2,
+                    {
+                        "coefficient": "reindexed",
+                        "limb": "element",
+                        "component": "reindexed",
+                        "batch": "reindexed",
+                    },
+                )
+            )
+        return OperationDependencies(tuple(relations))
 
 
 @irdl_op_definition
@@ -714,14 +1206,59 @@ class MultiplyCompressedPlaintextOp(_CiphertextCompressedPlaintextOp):
     r"""Multiply ciphertext components by compressed NTT plaintext data.
 
     The compressed layout expands logically to a prepared NTT/Montgomery
-    plaintext $p$.  Each result component represents $c_jp$ modulo every
+    plaintext $p$. Cyclic, contiguous and strided-sparse layouts are supported;
+    sparse implicit rows enter as separate Tensor operands. Each result component represents $c_jp$ modulo every
     active prime, computed without materializing that expansion.  Component count
     and depth remain; output actual scale is $\Delta_c\Delta_p$."""
 
     name = "fhelium_ckks.multiply_compressed_plaintext"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe direct ciphertext reads and compact plaintext expansion."""
+        relations = [
+            ValueDependency(
+                0,
+                0,
+                {
+                    "coefficient": "element",
+                    "limb": "element",
+                    "component": "element",
+                    "batch": "reindexed",
+                },
+            ),
+            ValueDependency(
+                0,
+                1,
+                {
+                    "coefficient": "reindexed",
+                    "limb": "element",
+                    "component": "reindexed",
+                    "batch": "reindexed",
+                },
+            ),
+        ]
+        if string_fact(self, "compression_layout") == "strided_sparse":
+            relations.append(
+                ValueDependency(
+                    0,
+                    2,
+                    {
+                        "coefficient": "reindexed",
+                        "limb": "element",
+                        "component": "reindexed",
+                        "batch": "reindexed",
+                    },
+                )
+            )
+        return OperationDependencies(tuple(relations))
 
-class _OutputDomainCiphertextOp(_UnaryCiphertextOp):
+
+class _OutputDomainCiphertextOp(IRDLOperation):
+    value = operand_def(CiphertextType)
+    key = operand_def()
+    parameters = var_operand_def()
+    result = result_def(CiphertextType)
+    traits = traits_def(Pure())
     output_domain = attr_def(
         StringAttr, default_value=StringAttr("coefficient")
     )
@@ -729,8 +1266,10 @@ class _OutputDomainCiphertextOp(_UnaryCiphertextOp):
     def __init__(
         self,
         value: SSAValue | Operation,
+        key: SSAValue | Operation,
         result_type: Attribute | None = None,
         *,
+        parameters: Sequence[SSAValue | Operation] = (),
         output_domain: Literal["coefficient", "ntt"] = "coefficient",
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
@@ -752,7 +1291,11 @@ class _OutputDomainCiphertextOp(_UnaryCiphertextOp):
                     ),
                 }
             )
-        super().__init__(value, result_type, attributes=attrs)
+        super().__init__(
+            operands=[value, key, parameters],
+            result_types=[result_type],
+            attributes=attrs,
+        )
 
     def verify_(self) -> None:
         if self.output_domain.data not in {"coefficient", "ntt"}:
@@ -774,13 +1317,33 @@ class RelinearizeOp(_OutputDomainCiphertextOp):
 
     name = "fhelium_ckks.relinearize"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'mixing',
+                    'limb': 'mixing',
+                    'component': 'mixing',
+                    'batch': 'element',
+                },
+                1: {
+                    'coefficient': 'mixing',
+                    'limb': 'mixing',
+                    'component': 'mixing',
+                    'batch': 'reindexed',
+                },
+            },
+        )
+
 
 @irdl_op_definition
 class SwitchKeyOp(_OutputDomainCiphertextOp):
     r"""Change the secret-key relation of a CT2 ciphertext.
 
     The input is a coefficient-domain standard-Q CT2 ciphertext.  For phase
-    $c_0+c_1s_{\mathrm{src}}$, the key named by ``key_symbol`` maps
+    $c_0+c_1s_{\mathrm{src}}$, the supplied key Tensor maps
     the $c_1s_{\mathrm{src}}$ term to corrections $(d_0,d_1)$ satisfying the
     destination relation.  The result $(c_0+d_0,d_1)$ decrypts under
     $s_{\mathrm{dst}}$ to the same approximate message, apart from key-switch
@@ -789,34 +1352,26 @@ class SwitchKeyOp(_OutputDomainCiphertextOp):
     preserved."""
 
     name = "fhelium_ckks.switch_key"
-    key_symbol = attr_def(StringAttr)
 
-    def __init__(
-        self,
-        value: SSAValue | Operation,
-        result_type: Attribute | None = None,
-        *,
-        key_symbol: str | StringAttr,
-        output_domain: Literal["coefficient", "ntt"] = "coefficient",
-        attributes: Mapping[str, Attribute] | None = None,
-    ) -> None:
-        attrs = dict(attributes or {})
-        attrs["key_symbol"] = (
-            StringAttr(key_symbol)
-            if isinstance(key_symbol, str)
-            else key_symbol
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'mixing',
+                    'limb': 'mixing',
+                    'component': 'mixing',
+                    'batch': 'element',
+                },
+                1: {
+                    'coefficient': 'mixing',
+                    'limb': 'mixing',
+                    'component': 'mixing',
+                    'batch': 'reindexed',
+                },
+            },
         )
-        super().__init__(
-            value,
-            result_type,
-            output_domain=output_domain,
-            attributes=attrs,
-        )
-
-    def verify_(self) -> None:
-        super().verify_()
-        if not self.key_symbol.data:
-            raise VerifyException("CKKS switch-key symbol must be non-empty")
 
 
 @irdl_op_definition
@@ -831,6 +1386,26 @@ class ConjugateOp(_OutputDomainCiphertextOp):
     output. CT2 shape, depth, actual scale, and active Q rows are preserved."""
 
     name = "fhelium_ckks.conjugate"
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'mixing',
+                    'limb': 'mixing',
+                    'component': 'mixing',
+                    'batch': 'element',
+                },
+                1: {
+                    'coefficient': 'mixing',
+                    'limb': 'mixing',
+                    'component': 'mixing',
+                    'batch': 'reindexed',
+                },
+            },
+        )
 
 
 @irdl_op_definition
@@ -848,6 +1423,7 @@ class RescaleOp(IRDLOperation):
     name = "fhelium_ckks.rescale"
 
     value = operand_def(CiphertextType)
+    parameters = var_operand_def()
     result = result_def(CiphertextType)
     rounding = opt_attr_def(StringAttr)
     input_domain = attr_def(StringAttr, default_value=StringAttr("coefficient"))
@@ -856,11 +1432,35 @@ class RescaleOp(IRDLOperation):
     )
     traits = traits_def(Pure())
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe the rounded quotient in its represented polynomial domain."""
+        domain = string_fact(
+            self, "input_domain", state_name="polynomial_domain"
+        )
+        position: DependencyKind = (
+            "element"
+            if domain == "coefficient"
+            else "mixing"
+            if domain == "ntt"
+            else "unknown"
+        )
+        return operand_dependencies(
+            self,
+            (0,),
+            {
+                "coefficient": position,
+                "limb": "mixing",
+                "component": "element",
+                "batch": "element",
+            },
+        )
+
     def __init__(
         self,
         value: SSAValue | Operation,
         result_type: Attribute | None = None,
         *,
+        parameters: Sequence[SSAValue | Operation] = (),
         rounding: str | StringAttr = "nearest",
         polynomial_domain: Literal["coefficient", "ntt"] = "coefficient",
         attributes: Mapping[str, Attribute] | None = None,
@@ -884,7 +1484,7 @@ class RescaleOp(IRDLOperation):
                 }
             )
         super().__init__(
-            operands=[value],
+            operands=[value, parameters],
             result_types=[result_type],
             attributes=attrs,
         )
@@ -921,6 +1521,20 @@ class ModSwitchOp(_UnaryCiphertextOp):
     name = "fhelium_ckks.mod_switch"
     target_depth = attr_def(IntegerAttr)
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'reindexed',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
+
 
 @irdl_op_definition
 class ReinterpretScaleOp(_UnaryCiphertextOp):
@@ -934,6 +1548,20 @@ class ReinterpretScaleOp(_UnaryCiphertextOp):
 
     name = "fhelium_ckks.reinterpret_scale"
     scale = attr_def(FloatAttr)
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
 
 
 class _PrepareOp(IRDLOperation):
@@ -956,6 +1584,12 @@ class PrepareAddMessageOp(_PrepareOp):
 
     name = "fhelium_ckks.prepare.add.message"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'slot': 'mixing', 'batch': 'element'}}
+        )
+
 
 @irdl_op_definition
 class PrepareAddPlaintextOp(_PrepareOp):
@@ -967,6 +1601,10 @@ class PrepareAddPlaintextOp(_PrepareOp):
     message arithmetic is performed before ``AddPlaintextOp``."""
 
     name = "fhelium_ckks.prepare.add.plaintext"
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(self, {0: {'batch': 'element'}})
 
 
 @irdl_op_definition
@@ -991,6 +1629,12 @@ class PrepareMultiplyMessageOp(_PrepareOp):
 
     name = "fhelium_ckks.prepare.multiply.message"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'slot': 'mixing', 'batch': 'element'}}
+        )
+
 
 @irdl_op_definition
 class PrepareMultiplyPlaintextOp(_PrepareOp):
@@ -1002,6 +1646,10 @@ class PrepareMultiplyPlaintextOp(_PrepareOp):
     does not multiply or rescale."""
 
     name = "fhelium_ckks.prepare.multiply.plaintext"
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(self, {0: {'batch': 'element'}})
 
 
 @irdl_op_definition
@@ -1131,9 +1779,9 @@ def _rotation_output_state_diagnostics(
         return ("output_domain must be 'coefficient' or 'ntt'",)
     expected = {
         "polynomial_domain": domain,
-        "residue_representation": "montgomery"
-        if domain == "ntt"
-        else "standard",
+        "residue_representation": output_residues(
+            cast(Literal["coefficient", "ntt"], domain)
+        ),
     }
     diagnostics: list[str] = []
     for index, result in enumerate(operation.results):
@@ -1189,7 +1837,7 @@ def _prepare_specification(
 def _rescale_specification(operation: Operation) -> tuple[str, ...]:
     diagnostics = list(flat_operation(operation))
     unsupported = unsupported_attributes(
-        operation, ("rounding", "input_domain", "output_domain")
+        operation, ("rounding", "input_domain", "output_domain", "drop_count")
     )
     if unsupported:
         diagnostics.append(f"unsupported attributes {list(unsupported)}")
@@ -1213,7 +1861,7 @@ def _rescale_specification(operation: Operation) -> tuple[str, ...]:
             if isinstance(operand.type, PlaintextType)
             else None
         )
-        for operand in operation.operands
+        for operand in operation.operands[:1]
     )
     if actual_roles != expected_roles:
         diagnostics.append(
@@ -1224,9 +1872,7 @@ def _rescale_specification(operation: Operation) -> tuple[str, ...]:
 
 def _decrypt_specification(operation: Operation) -> tuple[str, ...]:
     diagnostics = list(flat_operation(operation))
-    unsupported = unsupported_attributes(
-        operation, ("key_symbol", "input_domain")
-    )
+    unsupported = unsupported_attributes(operation, ("input_domain",))
     if unsupported:
         diagnostics.append(f"unsupported attributes {list(unsupported)}")
     domain = required_string_attribute(operation, "input_domain")
@@ -1236,6 +1882,18 @@ def _decrypt_specification(operation: Operation) -> tuple[str, ...]:
 
 
 OPERATION_SPECS: tuple[OperationSpec, ...] = (
+    registered_operation_spec(
+        PrepareCompressedPlaintextOp,
+        "ckks",
+        effect="rng-write",
+        validator=flat_with_attributes(
+            "depth",
+            "scale",
+            "ring_dimension",
+            "min_modulus",
+            "polynomial_domain",
+        ),
+    ),
     registered_operation_spec(
         EncodeOp,
         "ckks",
@@ -1257,7 +1915,7 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         "ckks",
         effect="rng-write",
         validator=lambda operation: (
-            *flat_with_attributes("key_symbol", "output_domain")(operation),
+            *flat_with_attributes("output_domain")(operation),
             *_rotation_output_state_diagnostics(cast(EncryptOp, operation)),
         ),
     ),
@@ -1265,6 +1923,11 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         DecryptOp,
         "ckks",
         validator=_decrypt_specification,
+    ),
+    registered_operation_spec(
+        SumBatchOp,
+        "ckks",
+        validator=flat_with_attributes("axis"),
     ),
     *(
         registered_operation_spec(op, "ckks", validator=flat_operation)
@@ -1319,12 +1982,14 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
     registered_operation_spec(
         AddCompressedPlaintextOp,
         "ckks",
-        validator=flat_with_attributes("inplace"),
+        validator=flat_with_attributes(
+            "inplace", "compression_layout", "polynomial_domain"
+        ),
     ),
     registered_operation_spec(
         MultiplyCompressedPlaintextOp,
         "ckks",
-        validator=flat_with_attributes("inplace"),
+        validator=flat_with_attributes("inplace", "compression_layout"),
     ),
     registered_operation_spec(
         RelinearizeOp,
@@ -1345,7 +2010,7 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         "ckks",
         validator=_with_ciphertext_components(
             lambda operation: (
-                *flat_with_attributes("key_symbol", "output_domain")(operation),
+                *flat_with_attributes("output_domain")(operation),
                 *_rotation_output_state_diagnostics(
                     cast(SwitchKeyOp, operation)
                 ),
@@ -1419,6 +2084,7 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
 FHEliumCkks = Dialect(
     "fhelium_ckks",
     [
+        PrepareCompressedPlaintextOp,
         EncodeOp,
         DecodeOp,
         IntegerCoefficientsToRnsOp,
@@ -1433,6 +2099,7 @@ FHEliumCkks = Dialect(
         ToMontgomeryResiduesOp,
         ToStandardResiduesOp,
         AddOp,
+        SumBatchOp,
         SubtractOp,
         MultiplyOp,
         AddScalarOp,
@@ -1467,6 +2134,7 @@ FHEliumCkks = Dialect(
 
 __all__ = [
     "AddOp",
+    "SumBatchOp",
     "AddScalarOp",
     "AddPlaintextOp",
     "AddCompressedPlaintextOp",
@@ -1475,6 +2143,7 @@ __all__ = [
     "ConjugateOp",
     "DecodeOp",
     "DecryptOp",
+    "PrepareCompressedPlaintextOp",
     "EncodeOp",
     "EncryptOp",
     "EvaluationKeyType",

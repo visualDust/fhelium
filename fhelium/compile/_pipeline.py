@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol, Self, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from ._compilation import Compilation
 
 from fhelium.ir import Program
 
@@ -126,29 +129,6 @@ class PassReport:
 
 
 @runtime_checkable
-class _PipelineCompilation(Protocol):
-    """Structural interface implemented by Compilation."""
-
-    @property
-    def program(self) -> Program: ...
-
-    @property
-    def workspace(self) -> dict[object, object]: ...
-
-    @property
-    def reports(self) -> tuple[PassReport, ...]: ...
-
-    def _with_pipeline_result(
-        self,
-        program: Program,
-        reports: tuple[PassReport, ...],
-    ) -> Self: ...
-
-
-CompilationT = TypeVar("CompilationT", bound=_PipelineCompilation)
-
-
-@runtime_checkable
 class Pass(Protocol):
     """Define one locally applicable transformation or analysis step."""
 
@@ -160,11 +140,10 @@ class Pass(Protocol):
 
     def run(
         self,
-        program: Program,
-        shared_data: dict[Any, Any],
+        compilation: Compilation,
         /,
     ) -> PassResult:
-        """Inspect or transform a Program and report the outcome."""
+        """Inspect or transform the current Compilation and report the outcome."""
 
         ...
 
@@ -194,17 +173,19 @@ class Pipeline:
 
     def run(
         self,
-        compilation: CompilationT,
-    ) -> CompilationT:
+        compilation: Compilation,
+    ) -> Compilation:
         """Clone and transform one Compilation while retaining its workspace."""
 
-        if not isinstance(compilation, _PipelineCompilation):
+        from ._compilation import Compilation
+
+        if not isinstance(compilation, Compilation):
             raise TypeError("Pipeline input must be a Compilation")
-        current = compilation.program.clone()
-        shared_data = compilation.workspace
-        reports: list[PassReport] = []
+        current = compilation._with_pipeline_result(
+            compilation.program.clone(), ()
+        )
         for program_pass in self.passes:
-            result = program_pass.run(current, shared_data)
+            result = program_pass.run(current)
             if not isinstance(result, PassResult):
                 raise TransformError(
                     f"Pass {program_pass.name!r} returned "
@@ -217,16 +198,14 @@ class Pipeline:
                     f"Pass {program_pass.name!r} returned structurally "
                     f"invalid IR: {error}"
                 ) from error
-            reports.append(
-                PassReport(
-                    program_pass.name,
-                    result.stats,
-                    tuple(result.diagnostics),
-                    tuple(result.decisions),
-                )
+            report = PassReport(
+                program_pass.name,
+                result.stats,
+                tuple(result.diagnostics),
+                tuple(result.decisions),
             )
-            current = result.program
-        return compilation._with_pipeline_result(current, tuple(reports))
+            current = current._with_pipeline_result(result.program, (report,))
+        return current
 
     def then(self, *passes: Pass) -> Pipeline:
         """Append passes in order."""

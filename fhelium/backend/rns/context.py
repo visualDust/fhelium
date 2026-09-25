@@ -5,12 +5,8 @@ from __future__ import annotations
 import torch
 
 from fhelium.config.ckks import CkksConfig
-from fhelium.backend.rns.decomposition import (
-    HybridRnsDecomposition,
-)
 from fhelium.backend.rns.montgomery import MontgomeryParameters
 from fhelium.backend.rns.format import RnsExecutionFormat
-from fhelium.backend.rns.chain import RnsChain
 from fhelium.backend.rns.layout import RnsLayout
 from fhelium.backend.rns.parameters import (
     RnsParameterStore,
@@ -62,33 +58,17 @@ class RnsContext:
         )
 
         if rns_layout is None:
-            self.rns_chain = RnsChain(
-                num_q_primes=self.config.num_q_primes,
-                num_p_primes=self.config.num_p_primes,
-                q_depth_group_sizes=tuple(
-                    len(group) for group in self.config.q_depth_groups
-                ),
+            rns_layout = RnsLayout.from_config(self.config)
+        elif (
+            rns_layout.chain.num_q_primes != self.config.num_q_primes
+            or rns_layout.chain.num_p_primes != self.config.num_p_primes
+        ):
+            raise ValueError(
+                "RNS layout Q/P rows differ from the CKKS configuration"
             )
-            self.hybrid_decomposition = HybridRnsDecomposition(
-                self.rns_chain,
-                self.config.q_moduli,
-                self.config.p_moduli,
-            )
-            self.rns_layout = RnsLayout(
-                self.rns_chain,
-                self.hybrid_decomposition,
-            )
-        else:
-            if (
-                rns_layout.chain.num_q_primes != self.config.num_q_primes
-                or rns_layout.chain.num_p_primes != self.config.num_p_primes
-            ):
-                raise ValueError(
-                    "RNS layout Q/P rows differ from the CKKS configuration"
-                )
-            self.rns_layout = rns_layout
-            self.rns_chain = rns_layout.chain
-            self.hybrid_decomposition = rns_layout.hybrid_decomposition
+        self.rns_layout = rns_layout
+        self.rns_chain = rns_layout.chain
+        self.hybrid_decomposition = rns_layout.hybrid_decomposition
 
         # =============================================
 
@@ -733,21 +713,12 @@ class RnsContext:
         moduli = tuple(
             int(self.montgomery_parameters.moduli[index]) for index in prime_ids
         )
-        if max_abs is None:
-            max_abs = int(torch.max(torch.abs(coefficients)).item())
-        if max_abs < min(moduli) and coefficients.dtype == self.dtype:
-            return self.lift_centered_coefficients(
-                coefficients,
-                depth,
-                include_p=include_p,
-            )
-        modulus_tensor = torch.tensor(
-            moduli,
-            dtype=coefficients.dtype,
-            device=coefficients.device,
-        ).view(*([1] * (coefficients.ndim - 1)), -1, 1)
-        return torch.remainder(coefficients.unsqueeze(-2), modulus_tensor).to(
-            self.dtype
+        parameters = self.rns_parameters_for_prime_ids(prime_ids)
+        return lift_integer_coefficients_exact(
+            coefficients,
+            parameters[0],
+            min_modulus=min(moduli),
+            max_abs=max_abs,
         )
 
     def add_standard(
@@ -862,3 +833,25 @@ class RnsContext:
             f"row_count_qp_depth0="
             f"{len(self.rns_layout.prime_ids(0, include_p=True))})"
         )
+
+
+def lift_integer_coefficients_exact(
+    coefficients: torch.Tensor,
+    twice_modulus: torch.Tensor,
+    *,
+    min_modulus: int,
+    max_abs: int | None = None,
+) -> torch.Tensor:
+    """Lift machine integers into standard RNS rows, retaining native lazy representatives."""
+    if max_abs is None:
+        max_abs = int(torch.max(torch.abs(coefficients)).item())
+    if max_abs < min_modulus and coefficients.dtype == twice_modulus.dtype:
+        return rns_ops.lift_centered_coefficients(coefficients, twice_modulus)
+    moduli = (
+        (twice_modulus // 2)
+        .to(coefficients.dtype)
+        .view(*([1] * (coefficients.ndim - 1)), -1, 1)
+    )
+    return torch.remainder(coefficients.unsqueeze(-2), moduli).to(
+        twice_modulus.dtype
+    )

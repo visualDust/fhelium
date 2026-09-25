@@ -14,6 +14,7 @@ __global__ void forward_ntt_compact_stage_kernel(
   const int batch = blockIdx.z;
   const int j = blockIdx.y * kCudaBlockSize + threadIdx.x;
   const int N = static_cast<int>(a_acc.size(2));
+  if (j >= N / 2) return;
   const int logN = __ffs(N) - 1;
   const int t_log = logN - stage - 1;
   const int t = 1 << t_log;
@@ -230,7 +231,7 @@ void launch_forward_ntt_compact_grouped_stage_range_cuda(
     const int end_stage,
     cudaStream_t stream) {
   const auto N = a.size(2);
-  dim3 dim_grid_stage(transform_rows, (N / 2) / kCudaBlockSize, a.size(0));
+  dim3 dim_grid_stage(transform_rows, ((N / 2) + kCudaBlockSize - 1) / kCudaBlockSize, a.size(0));
 
   auto a_acc = FHELIUM_CUDA_ACCESSOR32(a, scalar_t, 3);
   const auto forward_twiddles_compact_acc =

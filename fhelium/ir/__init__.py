@@ -1,10 +1,15 @@
 """Represent and inspect permissive mixed-level FHElium programs.
 
-The package owns xDSL module structure, registered multi-depth dialects, open
+The package owns xDSL module structure, registered dialects, open
 FHElium value/reference types, read-only Program analyses, and formatting.
-It does not own frontend capture, numerical correctness, backend coverage, live
-runtime objects, or execution.
 """
+
+from ._dependencies import (
+    DependencyKind,
+    ValueDependency,
+    OperationDependencies,
+    operation_dependencies,
+)
 
 from . import dialects
 from ._analysis import (
@@ -73,6 +78,10 @@ def parse(text: str, *, source_name: str = "<unknown>") -> Program:
 
 
 __all__ = [
+    "DependencyKind",
+    "ValueDependency",
+    "OperationDependencies",
+    "operation_dependencies",
     "DIALECT_VERSION",
     "DIALECT_VERSION_ATTRIBUTE",
     "SCHEMA_VERSION",

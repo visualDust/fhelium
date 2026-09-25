@@ -1,115 +1,100 @@
 # FHElium examples
 
-The numbered examples are runnable companions to the documentation
-tutorials. Run them from the repository root in the same Python/PyTorch
-environment used to build FHElium:
+Each numbered file demonstrates one usage model or method. Related modules have consecutive numbers; the sequence is a catalog, not a mandatory course.
+
+Run from the repository root with the Python/PyTorch environment used to build FHElium. Start with a small CPU workflow or the corresponding CUDA invocation:
 
 ```bash
-python examples/01_basic_ckks_flow.py --preset slots8192-scale40-depth7-int64
-python examples/01_basic_ckks_flow.py --device cuda:0 \
-  --preset slots8192-scale40-depth7-int64
+python examples/01_eager_basics.py --preset slots8192-scale40-depth7-int64
+python examples/01_eager_basics.py --device cuda:0 --preset slots8192-scale40-depth7-int64
 ```
 
-Use `python examples/<file>.py --help` to inspect a script's configuration,
-device, and workload options. Some evidence-backed examples fix their CKKS
-configuration rather than expose it as a command-line option. General local
-examples default to CPU. CUDA-specific Graph, buffer, and Residency examples
-use a CUDA default and reject CPU with a parser error. Each example exposes
-its CKKS state and workload policy in a self-contained workflow.
+Scripts with configurable workloads expose `--help`. Examples 12–15 and 24 use fixed CPU demonstrations; Runtime and Residency examples 17–20 require CUDA. Experimental bootstrap 25 also requires CUDA and a substantially larger working set. General Eager scripts expose `--preset` and `--device`. Distributed scripts 21–23 expose `--preset` and select rank-local devices through `dist.init`: CUDA when available, otherwise CPU.
 
-For a practical reusable-buffer smoke run, keep Example 12's fixed
-`slots32768-scale40-depth34-int64` preset at depth `20` while reducing only
-its residency allocation:
+## 01–08 · Eager
 
-```bash
-python examples/12_reusable_value_buffer.py \
-  --num-tiles 4 --plaintexts-per-tile 4 --message-size 32
-```
-
-## Example index
-
-| File | Purpose |
+| Example | Demonstrates |
 | --- | --- |
-| [`01_basic_ckks_flow.py`](../docs/tutorial/basic-ckks-workflow.md) | Encrypt, add, multiply, relinearize, rescale, rotate, decrypt, and compare with cleartext |
-| [`02_key_materials.py`](../docs/tutorial/key-materials.md) | Inspect key layouts and optionally persist selected public/evaluation material |
-| [`03_plaintext_ciphertext_memory.py`](../docs/tutorial/value-memory-and-persistence.md) | Compare value sizes, move a live activation, and round-trip serialized value files |
-| [`04_modulus_chain_depth.py`](../docs/tutorial/modulus-chain-depth.md) | Relate configured chain depth, modulus width, active rows, security budget, and ciphertext size |
-| [`05_explicit_scale_management.py`](../docs/tutorial/explicit-scale-management.md) | Plan actual per-value scales against dropped Q primes and align level separately |
-| [`06_explicit_state_late_relinearization_ntt.py`](../docs/tutorial/late-relinearization-and-ntt-reuse.md) | Reuse NTT operands and delay relinearization under declared CKKS state constraints |
-| [`07_rotation_hoisting_benchmark.py`](../docs/tutorial/rotation-hoisting.md) | Compare independent rotations with grouped rotation hoisting |
-| [`08_spmd_independent_ciphertexts.py`](../docs/tutorial/spmd-independent-ciphertexts.md) | Scatter/evaluate/gather independent encrypted samples |
-| [`09_spmd_rotation_parallel_mxv.py`](../docs/tutorial/spmd-rotation-parallel-matvec.md) | Partition additive diagonal terms and reduce ciphertext partials |
-| [`10_spmd_limb_parallel_pipeline.py`](../docs/tutorial/spmd-limb-parallel-pipeline.md) | Partition RNS rows and reconstruct every expected active row at reconstruction points |
-| [`11_cuda_graph_matrix_vector.py`](../docs/tutorial/cuda-graph-matvec.md) | Capture a fixed evaluator and replay it with staged ciphertext inputs |
-| [`12_reusable_value_buffer.py`](../docs/tutorial/reusable-value-buffer.md) | Stream pinned-host plaintext tiles through fixed CUDA buffers |
-| [`13_explicit_residency.py`](../docs/tutorial/explicit-residency.md) | Manage opaque local handles with optional pinned/CUDA budgets, a scoped reservation, and an event-backed CUDA lease |
-| [`14_automatic_residency.py`](../docs/tutorial/automatic-residency.md) | Prepare and review deterministic reclaim and admission for a CUDA working set under a strict managed budget |
-| [`15_homogeneous_batching.py`](../docs/tutorial/homogeneous-batching.md) | Compare homogeneous message batches with unbatched loops |
-| [`16_compressed_plaintext.py`](../docs/tutorial/compressed-plaintext.md) | Validate lossless operation-ready plaintext compression and direct evaluation |
-| [`17_compose_and_execute.py`](../docs/tutorial/compose-and-execute-compile-pipeline.md) | Compose built-in passes, lower a captured rotated quadratic to Backend operations, link its keys and resources, and execute it |
-| [`18_ir_textual_program.py`](../docs/tutorial/ir-textual-program.md) | Parse and round-trip textual mixed-level IR, insert a caller-defined analysis pass, and inspect partial lowering |
-| [`19_customize_compile_pass.py`](../docs/tutorial/customize-compile-pass-and-pipeline.md) | Define a BSGS rewriting pass, compose a caller-selected pipeline, link its resources, and execute the resulting Program |
-| [`20_generate_python.py`](../docs/tutorial/generate-python.md) | Emit editable Eager API calls from CKKS IR and direct Backend implementation calls from a lowered Program |
-| [`21_rank_local_collective_ir.py`](../docs/tutorial/rank-local-collective-ir.md) | Compare specialized ciphertext reduction with generic rank-local all-reduce containing a visible CKKS-add region |
-| [`22_ckks_bootstrap_logn16.py`](../docs/tutorial/composable-ckks-bootstrap.md) | Refresh a depleted ciphertext with a versioned composable bootstrap factory |
-| [`23_multiparty_ckks.py`](../docs/tutorial/multiparty-ckks.md) | Exercise stateless multiparty arithmetic with two in-process party records, synthetic data, and throwaway keys |
+| [`01_eager_basics.py`](01_eager_basics.py) · [Tutorial](../docs/tutorial/basic-ckks-workflow.md) | Encrypt, evaluate, and decrypt one process-local computation |
+| [`02_eager_key_materials.py`](02_eager_key_materials.py) · [Tutorial](../docs/tutorial/key-materials.md) | Create typed keys from one secret and install selected evaluator capabilities |
+| [`03_eager_modulus_chain.py`](03_eager_modulus_chain.py) · [Tutorial](../docs/tutorial/modulus-chain-depth.md) | Inspect configured Q groups and the available depth budget |
+| [`04_eager_scale_management.py`](04_eager_scale_management.py) · [Tutorial](../docs/tutorial/explicit-scale-management.md) | Plan per-value scales and align depth independently |
+| [`05_eager_ntt_reuse.py`](05_eager_ntt_reuse.py) · [Tutorial](../docs/tutorial/late-relinearization-and-ntt-reuse.md) | Schedule reusable NTT operands and delay three-component reduction |
+| [`06_eager_rotation_hoisting.py`](06_eager_rotation_hoisting.py) · [Tutorial](../docs/tutorial/rotation-hoisting.md) | Request grouped rotations and compare with independent calls |
+| [`07_eager_batching.py`](07_eager_batching.py) · [Tutorial](../docs/tutorial/homogeneous-batching.md) | Use leading Tensor batch axes instead of an evaluation loop |
+| [`08_eager_compressed_plaintext.py`](08_eager_compressed_plaintext.py) · [Tutorial](../docs/tutorial/compressed-plaintext.md) | Evaluate losslessly compressed operation-ready plaintexts |
 
-The [tutorial catalog](../docs/tutorial/tutorials.md) groups these files into core
-evaluator, value/storage, performance, distributed, repeated-execution, and
-feature tracks.
+## 09–10 · Values, Serialization, and Artifacts
 
-## Run the SPMD examples
+| Example | Demonstrates |
+| --- | --- |
+| [`09_value_files.py`](09_value_files.py) · [Tutorial](../docs/tutorial/value-memory-and-persistence.md) | Move typed values and restore them from caller-owned files |
+| [`10_artifact_store.py`](10_artifact_store.py) · [Tutorial](../docs/tutorial/artifact-store.md) | Use logical names, collections, and generation-specific references |
 
-Every SPMD example also runs with world size one:
+## 11–16 · Compile
+
+| Example | Demonstrates |
+| --- | --- |
+| [`11_compile_jit.py`](11_compile_jit.py) · [Tutorial](../docs/tutorial/compile-jit.md) | Reuse a decorated function across input contents and static specializations |
+| [`12_compile_pipeline.py`](12_compile_pipeline.py) · [Tutorial](../docs/tutorial/compose-and-execute-compile-pipeline.md) | Select built-in transformation and scheduling passes before direct linking |
+| [`13_compile_textual_ir.py`](13_compile_textual_ir.py) · [Tutorial](../docs/tutorial/ir-textual-program.md) | Parse, inspect, transform, and print an open mixed-level Program |
+| [`14_compile_custom_pass.py`](14_compile_custom_pass.py) · [Tutorial](../docs/tutorial/customize-compile-pass-and-pipeline.md) | Implement one matrix-to-BSGS rewriting pass |
+| [`15_compile_python_codegen.py`](15_compile_python_codegen.py) · [Tutorial](../docs/tutorial/generate-python.md) | Export editable Eager and Backend Python at selected IR stages |
+| [`16_compile_material_persistence.py`](16_compile_material_persistence.py) · [Tutorial](../docs/tutorial/compile-material-persistence.md) | Name materials, save none/some/all data, and fill bindings after load |
+
+## 17–18 · Runtime
+
+| Example | Demonstrates |
+| --- | --- |
+| [`17_runtime_double_buffer.py`](17_runtime_double_buffer.py) · [Tutorial](../docs/tutorial/reusable-value-buffer.md) | Overlap pinned-host transfers with computation in fixed CUDA buffers |
+| [`18_runtime_cuda_graph.py`](18_runtime_cuda_graph.py) · [Tutorial](../docs/tutorial/cuda-graph-matvec.md) | Capture a fixed evaluator and replay with changing input data |
+
+## 19–20 · Residency
+
+| Example | Demonstrates |
+| --- | --- |
+| [`19_residency_manual.py`](19_residency_manual.py) · [Tutorial](../docs/tutorial/explicit-residency.md) | Plan placements and protect asynchronous readers with leases |
+| [`20_residency_automatic.py`](20_residency_automatic.py) · [Tutorial](../docs/tutorial/automatic-residency.md) | Inspect and execute automatic admission under managed memory pressure |
+
+## 21–24 · Distributed
+
+| Example | Demonstrates |
+| --- | --- |
+| [`21_distributed_batch_inputs.py`](21_distributed_batch_inputs.py) · [Tutorial](../docs/tutorial/spmd-independent-ciphertexts.md) | Split a global encrypted batch across ranks and restore sample order |
+| [`22_distributed_partial_results.py`](22_distributed_partial_results.py) · [Tutorial](../docs/tutorial/spmd-rotation-parallel-matvec.md) | Partition additive terms and reduce ciphertext partials |
+| [`23_distributed_rns_shards.py`](23_distributed_rns_shards.py) · [Tutorial](../docs/tutorial/spmd-limb-parallel-pipeline.md) | Partition one ciphertext by prime rows and reconstruct its full basis |
+| [`24_distributed_collective_ir.py`](24_distributed_collective_ir.py) · [Tutorial](../docs/tutorial/rank-local-collective-ir.md) | Express a collective using a specialized op or a generic combine region |
+
+## 25–26 · Experimental
+
+| Example | Demonstrates |
+| --- | --- |
+| [`25_experimental_bootstrap.py`](25_experimental_bootstrap.py) · [Tutorial](../docs/tutorial/composable-ckks-bootstrap.md) | Refresh a depleted ciphertext using a composable bootstrap preset |
+| [`26_experimental_multiparty.py`](26_experimental_multiparty.py) · [Tutorial](../docs/tutorial/multiparty-ckks.md) | Compose multiparty arithmetic with application-owned protocol state |
+
+## Entry points
+
+- **Eager versus Compile:** 01 executes operations immediately; 11 JIT-compiles a decorated function; 12 controls the complete pass sequence. Example 14 adds a custom transformation, rather than another default compilation wrapper.
+- **Persistence:** 09 owns individual file paths; 10 owns named artifact generations; 16 persists a Program with optional data. Key creation stays in 02.
+- **Repeated execution:** 17 schedules copies and buffer reuse; 18 captures and replays device execution. Residency 19–20 adds managed placement and admission.
+- **Distributed:** 21 gathers independent outputs, 22 reduces additive partials, 23 reconstructs disjoint RNS rows, and 24 describes a collective in Program IR.
+
+## Run distributed examples
+
+Examples 21–23 support world size one and one process per GPU:
 
 ```bash
-python examples/08_spmd_independent_ciphertexts.py
-python examples/09_spmd_rotation_parallel_mxv.py --size 8
-python examples/10_spmd_limb_parallel_pipeline.py
+python examples/21_distributed_batch_inputs.py --batch-size 7
+python examples/22_distributed_partial_results.py --size 8
+python examples/23_distributed_rns_shards.py
+
+torchrun --standalone --nproc-per-node=2 examples/21_distributed_batch_inputs.py --batch-size 7
+torchrun --standalone --nproc-per-node=2 examples/22_distributed_partial_results.py --size 8
+torchrun --standalone --nproc-per-node=2 examples/23_distributed_rns_shards.py
 ```
 
-Run one process per GPU with `torchrun`:
+Gather, ciphertext reduction, and RNS reconstruction express different mathematical relationships. Read the [SPMD model](../docs/concepts/distributed/spmd-model.md) before adapting the partition.
 
-```bash
-torchrun --standalone --nproc-per-node=2 \
-  examples/08_spmd_independent_ciphertexts.py
+## Experimental scope
 
-torchrun --standalone --nproc-per-node=2 \
-  examples/09_spmd_rotation_parallel_mxv.py --size 8
-
-torchrun --standalone --nproc-per-node=2 \
-  examples/10_spmd_limb_parallel_pipeline.py
-```
-
-Choose the collective from the mathematical relation among process-local
-values:
-
-| Relation | Correct operation | Example |
-| --- | --- | --- |
-| Independent logical ciphertexts | Scatter/gather typed values | 08 |
-| Disjoint additive terms of one result | Broadcast input, then typed ciphertext reduction | 09 |
-| Disjoint RNS rows of one value | Limb scatter/gather and structural reconstruction | 10 |
-
-Raw machine-integer all-reduce is not a valid ciphertext reduction, and limb
-reconstruction is not addition. Read the
-[SPMD model](../docs/concepts/distributed/spmd-model.md) before adapting these
-programs.
-
-## Feature examples
-
-Examples 17 through 20 cover Compile capture, textual IR, a custom BSGS pass,
-Backend execution, and editable Python emission. Example 21 shows a
-specialized-to-generic rank-local collective transformation. Examples 22 and
-23 are opt-in evaluation workflows. Bootstrap factories do not prove an
-application's encrypted input range or precision target. The current
-multiparty output operations have no supported privacy guarantee or
-production-security guarantee; read the
-[multiparty supported security scope](../docs/how-to/use-multiparty-ckks.md)
-and use synthetic data and throwaway keys. Read the
-[built-in Compile execution](../docs/tutorial/compose-and-execute-compile-pipeline.md),
-[custom Compile pass and pipeline](../docs/tutorial/customize-compile-pass-and-pipeline.md),
-[generated Python](../docs/tutorial/generate-python.md),
-[rank-local collective IR](../docs/tutorial/rank-local-collective-ir.md),
-[bootstrapping](../docs/tutorial/composable-ckks-bootstrap.md), or
-[multiparty](../docs/tutorial/multiparty-ckks.md) tutorial before adapting the
-corresponding workflow.
+Examples 25–26 remain last and opt-in. The bootstrap example does not prove an application's encrypted input range. The multiparty example uses synthetic data and throwaway keys; its output protocols have no supported privacy or production security guarantee. Read the linked tutorials before running them.

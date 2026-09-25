@@ -142,9 +142,8 @@ def _assert_decryption_error_distribution(
 ) -> None:
     """Check RMS and 99th-percentile CKKS error against ``N / scale``.
 
-    The Gaussian error distribution is unbounded, so a full-slot maximum is
-    not a stable numerical specification. Bit-for-bit CPU/CUDA residue comparison in
-    the caller detects isolated native corruption independently.
+    Gaussian sampling determines the distribution of slot errors. RMS and
+    the 99th percentile measure its magnitude relative to ``N / scale``.
     """
 
     if engine.device.type == "cuda":

@@ -7,21 +7,17 @@ from ._decryption import (
 )
 from ._encryption import NativeEncryptImplementation, encrypt_tensor
 from ._key_generation import CkksKeyGenerator, KeyGenerationResource
+from ._tables import DecryptReconstructionTables
 from ._resources import (
-    DECRYPT_RECONSTRUCTION_RESOURCE_KIND,
-    PUBLIC_KEY_RESOURCE_KIND,
     RANDOM_STREAM_RESOURCE_KIND,
-    SECRET_KEY_RESOURCE_KIND,
-    DecryptReconstructionResource,
+    RANDOM_STREAM_RESOURCE_SYMBOL,
 )
 
 __all__ = [
-    "DECRYPT_RECONSTRUCTION_RESOURCE_KIND",
-    "PUBLIC_KEY_RESOURCE_KIND",
     "RANDOM_STREAM_RESOURCE_KIND",
-    "SECRET_KEY_RESOURCE_KIND",
+    "RANDOM_STREAM_RESOURCE_SYMBOL",
     "NativeDecryptImplementation",
-    "DecryptReconstructionResource",
+    "DecryptReconstructionTables",
     "NativeEncryptImplementation",
     "CkksKeyGenerator",
     "KeyGenerationResource",

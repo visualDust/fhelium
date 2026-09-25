@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import copy
 from dataclasses import dataclass
 from typing import Self
 
@@ -46,10 +47,12 @@ class Plaintext(TensorResident):
       standard from Montgomery residues.
 
     Tensor payloads retain their input dtype, device, and storage at direct
-    construction; validation requires dense strided storage and the dtype
+    construction; encoded payloads require dense strided storage and the dtype
     constraints above. Engine operations additionally require the engine's
-    configured integral dtype, device, ring dimension, and complete ordered
-    ``prime_ids``. Construction does not clone an input tensor. :meth:`clone`
+    configured integral dtype, device, ring dimension, and matching prime-row
+    parameters. Row-local operations can use a sliced RNS interval; operations
+    requiring the complete active basis must receive every required row.
+    Construction does not clone an input tensor. :meth:`clone`
     allocates independent storage, while batch selection and unbinding return
     storage-sharing views.
 
@@ -75,11 +78,6 @@ class Plaintext(TensorResident):
         self.depth = validate_nonnegative_depth(
             self.depth, value_name="Plaintext"
         )
-        if (self.message is None) == (self.data is None):
-            raise ValueError(
-                "Plaintext must own exactly one representation: slots message "
-                "or encoded data"
-            )
         if self.representation not in (
             "slots",
             "integer_coefficients",
@@ -90,65 +88,57 @@ class Plaintext(TensorResident):
                 f"Unsupported Plaintext representation: {self.representation!r}"
             )
 
-        if self.data is None:
-            assert self.message is not None
-            if self.representation != "slots":
+        if self.representation == "slots":
+            if self.message is None or self.data is not None:
                 raise ValueError(
-                    "A Plaintext without encoded data must use representation='slots'"
+                    "Slots Plaintext requires message and no encoded data"
                 )
+            self.prime_ids = tuple(self.prime_ids)
             if (
                 self.polynomial_domain is not None
                 or self.modulus_basis is not None
                 or self.residue_representation is not None
+                or self.prime_ids
             ):
                 raise ValueError(
-                    "A slots-only Plaintext cannot declare polynomial_domain, "
-                    "modulus_basis, or residue_representation"
+                    "Slots Plaintext cannot declare polynomial or RNS state"
                 )
-            self.prime_ids = validate_prime_ids(
-                self.prime_ids,
-                value_name="slots Plaintext",
-                allow_empty=True,
-            )
-            if self.prime_ids:
-                raise ValueError(
-                    "A slots-only Plaintext cannot declare an RNS layout"
-                )
-            if self.message.ndim > 0 and self.message.size(-1) == 0:
-                raise ValueError("Plaintext slot axis cannot be empty")
-            if self.message.ndim > 0 and any(
-                extent == 0 for extent in self.message.shape[:-1]
-            ):
-                raise ValueError("Plaintext batch dimensions must be nonzero")
+            if self.message.numel() == 0:
+                raise ValueError("Plaintext slots cannot be empty")
             return
 
-        if self.representation == "slots":
+        if self.data is None or self.message is not None:
             raise ValueError(
-                "A Plaintext with encoded data cannot use representation='slots'"
+                "Encoded Plaintext requires data and no slots message"
             )
-        if not isinstance(self.data, torch.Tensor):
-            raise TypeError("Encoded Plaintext data must be a torch.Tensor")
-        if self.data.layout != torch.strided:
-            raise TypeError(
-                "Encoded Plaintext data must use dense strided storage"
-            )
-        if self.representation in (
-            "integer_coefficients",
-            "approximate_coefficients",
-        ):
-            if self.data.ndim < 1:
-                raise ValueError(
-                    "Coefficient Plaintext data must have layout "
-                    "[*batch, coeff], "
-                    f"got shape {tuple(self.data.shape)}"
+        if self.representation == "approximate_coefficients":
+            if not isinstance(self.data, torch.Tensor):
+                raise TypeError("Encoded Plaintext data must be a torch.Tensor")
+            if (
+                self.data.layout != torch.strided
+                or self.data.dtype != torch.float64
+            ):
+                raise TypeError(
+                    "approximate_coefficients Plaintext requires dense strided float64 data"
                 )
-            if self.data.size(-1) == 0:
-                raise ValueError("Plaintext coefficient axis cannot be empty")
+        else:
+            validate_integral_tensor(
+                self.data, value_name=self.representation + " Plaintext"
+            )
+        rns = self.representation == "rns"
+        if self.data.ndim < (2 if rns else 1):
+            layout = "[*batch, limb, coeff]" if rns else "[*batch, coeff]"
+            raise ValueError(
+                f"Plaintext data must have layout {layout}, got shape {tuple(self.data.shape)}"
+            )
+        if self.data.numel() == 0:
+            raise ValueError("Plaintext data cannot be empty")
+
+        if not rns:
+            self.prime_ids = tuple(self.prime_ids)
             if self.polynomial_domain != "coefficient":
                 raise ValueError(
-                    "Coefficient Plaintext data requires "
-                    "polynomial_domain='coefficient', got "
-                    f"{self.polynomial_domain!r}"
+                    "Coefficient Plaintext data requires polynomial_domain='coefficient'"
                 )
             if (
                 self.modulus_basis is not None
@@ -156,68 +146,21 @@ class Plaintext(TensorResident):
                 or self.prime_ids
             ):
                 raise ValueError(
-                    "Coefficient Plaintext data cannot declare an RNS "
-                    "modulus_basis, residue_representation, or prime_ids"
+                    "Coefficient Plaintext data cannot declare an RNS modulus_basis, residue_representation, or prime_ids"
                 )
-            self.prime_ids = validate_prime_ids(
-                self.prime_ids,
-                value_name="coefficient Plaintext",
-                allow_empty=True,
-            )
-            if self.representation == "integer_coefficients":
-                validate_integral_tensor(
-                    self.data,
-                    value_name="integer_coefficients Plaintext",
-                )
-            else:
-                if self.data.layout != torch.strided:
-                    raise TypeError(
-                        "approximate_coefficients Plaintext data must use "
-                        "dense strided storage"
-                    )
-                if self.data.dtype != torch.float64:
-                    raise TypeError(
-                        "approximate_coefficients Plaintext data must use float64"
-                    )
-                if not bool(torch.all(torch.isfinite(self.data)).item()):
-                    raise ValueError(
-                        "approximate_coefficients Plaintext data must be finite"
-                    )
-            if any(extent == 0 for extent in self.data.shape[:-1]):
-                raise ValueError("Plaintext batch dimensions must be nonzero")
             return
 
-        if self.data.ndim < 2:
-            raise ValueError(
-                "RNS Plaintext data must have layout [*batch, limb, coeff], "
-                f"got shape {tuple(self.data.shape)}"
-            )
-        if self.data.size(-2) == 0 or self.data.size(-1) == 0:
-            raise ValueError(
-                "RNS Plaintext limb and coefficient axes cannot be empty"
-            )
-        if (
-            self.data.dtype == torch.bool
-            or self.data.is_floating_point()
-            or self.data.is_complex()
-        ):
-            raise TypeError(
-                "RNS Plaintext data must use an integral scalar dtype"
-            )
         if self.polynomial_domain not in ("coefficient", "ntt"):
             raise ValueError(
-                "RNS Plaintext polynomial_domain must be 'coefficient' or "
-                f"'ntt': {self.polynomial_domain!r}"
+                f"RNS Plaintext polynomial_domain must be 'coefficient' or 'ntt': {self.polynomial_domain!r}"
             )
         if self.modulus_basis not in ("Q", "QP"):
             raise ValueError(
-                "RNS Plaintext modulus_basis must be 'Q' or 'QP': "
-                f"{self.modulus_basis!r}"
+                f"RNS Plaintext modulus_basis must be 'Q' or 'QP': {self.modulus_basis!r}"
             )
         if self.residue_representation not in ("standard", "montgomery"):
             raise ValueError(
-                "RNS Plaintext residue_representation must be 'standard' or "
-                f"'montgomery': {self.residue_representation!r}"
+                "RNS Plaintext residue_representation must be 'standard' or 'montgomery'"
             )
         if (
             self.polynomial_domain == "ntt"
@@ -227,16 +170,13 @@ class Plaintext(TensorResident):
                 "NTT-domain RNS Plaintext must use Montgomery residues"
             )
         self.prime_ids = validate_prime_ids(
-            self.prime_ids,
-            value_name="RNS Plaintext",
+            self.prime_ids, value_name="RNS Plaintext"
         )
         if self.data.size(-2) != len(self.prime_ids):
             raise ValueError(
                 "RNS Plaintext limb count does not match prime_ids: "
                 f"limbs={self.data.size(-2)}, prime_ids={self.prime_ids}"
             )
-        if any(extent == 0 for extent in self.data.shape[:-2]):
-            raise ValueError("Plaintext batch dimensions must be nonzero")
 
     @property
     def is_slots(self) -> bool:
@@ -253,6 +193,12 @@ class Plaintext(TensorResident):
     @property
     def is_rns(self) -> bool:
         return self.representation == "rns"
+
+    @property
+    def limb_count(self) -> int:
+        """Number of represented RNS rows; zero for non-RNS representations."""
+
+        return len(self.prime_ids)
 
     @property
     def batch_shape(self) -> torch.Size:
@@ -284,16 +230,8 @@ class Plaintext(TensorResident):
     def clone(self) -> Plaintext:
         """Return a metadata-equivalent value with independent tensor storage."""
 
-        return Plaintext(
-            message=None if self.message is None else self.message.clone(),
-            depth=self.depth,
-            scale=self.scale,
-            data=None if self.data is None else self.data.clone(),
-            representation=self.representation,
-            polynomial_domain=self.polynomial_domain,
-            modulus_basis=self.modulus_basis,
-            residue_representation=self.residue_representation,
-            prime_ids=self.prime_ids,
+        return self._with_resident_tensors(
+            tuple(tensor.clone() for tensor in self._resident_tensors)
         )
 
     @classmethod
@@ -322,6 +260,29 @@ class Plaintext(TensorResident):
         result.modulus_basis = modulus_basis
         result.residue_representation = residue_representation
         result.prime_ids = prime_ids
+        return result
+
+    def slice_limbs(self, start: int, stop: int) -> Plaintext:
+        """Return a storage-sharing RNS row interval and its prime IDs.
+
+        ``[start, stop)`` indexes stored limb positions, not global prime IDs.
+        All batch axes, depth, scale, and representation state are preserved;
+        the result represents part of the same basis, not a rescaled value.
+        Slots and non-RNS coefficient representations have no limb axis.
+        """
+
+        if not self.is_rns or self.data is None:
+            raise ValueError(
+                "Plaintext limb slicing requires RNS representation"
+            )
+        if not 0 <= start < stop <= self.limb_count:
+            raise ValueError(
+                "Plaintext limb slice must satisfy "
+                f"0 <= start < stop <= {self.limb_count}; "
+                f"got start={start}, stop={stop}"
+            )
+        result = self._with_resident_tensors((self.data[..., start:stop, :],))
+        result.prime_ids = self.prime_ids[start:stop]
         return result
 
     @classmethod
@@ -384,6 +345,35 @@ class Plaintext(TensorResident):
         stacked = torch.stack(tensors, dim=0)
         return first._with_resident_tensors((stacked,))
 
+    def slice_batch(self, start: int, stop: int, *, dim: int = 0) -> Plaintext:
+        """Return a storage-sharing interval along one logical batch axis.
+
+        ``[start, stop)`` must be a nonempty interval within the selected axis.
+        ``dim`` indexes ``batch_shape`` and accepts negative dimensions. The
+        axis is retained even for a one-item interval. The active slots, coefficient, or RNS representation is preserved.
+        Depth, scale, prime IDs, and representation state are unchanged.
+        """
+
+        if not self.is_batched:
+            raise ValueError("Cannot slice a batch axis of an unbatched value")
+        logical_dim = dim if dim >= 0 else dim + len(self.batch_shape)
+        if not 0 <= logical_dim < len(self.batch_shape):
+            raise IndexError(
+                f"Batch dimension {dim} is outside shape {tuple(self.batch_shape)}"
+            )
+        if not 0 <= start < stop <= self.batch_shape[logical_dim]:
+            raise ValueError(
+                "Plaintext batch slice must satisfy "
+                f"0 <= start < stop <= {self.batch_shape[logical_dim]}; "
+                f"got start={start}, stop={stop}"
+            )
+        return self._with_resident_tensors(
+            tuple(
+                tensor.narrow(logical_dim, start, stop - start)
+                for tensor in self._resident_tensors
+            )
+        )
+
     def select_batch(self, index: int, *, dim: int = 0) -> Plaintext:
         """Return a storage-sharing view selected from one batch axis."""
 
@@ -425,20 +415,12 @@ class Plaintext(TensorResident):
     def _with_resident_tensors(
         self, tensors: tuple[torch.Tensor, ...]
     ) -> Plaintext:
-        iterator = iter(tensors)
-        message = next(iterator) if self.message is not None else None
-        data = next(iterator) if self.data is not None else None
-        return Plaintext(
-            message=message,
-            depth=self.depth,
-            scale=self.scale,
-            data=data,
-            representation=self.representation,
-            polynomial_domain=self.polynomial_domain,
-            modulus_basis=self.modulus_basis,
-            residue_representation=self.residue_representation,
-            prime_ids=self.prime_ids,
-        )
+        result = copy(self)
+        if self.message is not None:
+            result.message = tensors[0]
+        else:
+            result.data = tensors[0]
+        return result
 
     def __str__(self) -> str:
         message_shape = (

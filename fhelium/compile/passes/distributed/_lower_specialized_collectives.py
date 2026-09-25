@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from ..._pipeline import (
     DecisionRecord,
     PassResult,
@@ -16,7 +22,6 @@ from xdsl.rewriter import Rewriter
 
 from fhelium.ir import (
     EXECUTION_IMPLEMENTATION_ATTRIBUTE,
-    Program,
 )
 from fhelium.ir.dialects import ckks, distributed
 
@@ -39,12 +44,10 @@ class LowerSpecializedCollectivesPass:
         if type(self.lower_ciphertext_add) is not bool:
             raise TypeError("lower_ciphertext_add must be bool")
 
-    def run(
-        self,
-        program: Program,
-        workspace: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
         """Expose CKKS add as the combine region of ciphertext all-reduce."""
+        program = compilation.program
+        workspace = compilation.workspace
 
         del workspace
         matches = tuple(
@@ -89,6 +92,7 @@ class LowerSpecializedCollectivesPass:
                 combine.args[0],
                 combine.args[1],
                 value_type,
+                parameters=tuple(operation.parameters),
             )
             combine.add_ops((addition, distributed.YieldOp(addition)))
             replacement = distributed.AllReduceOp(

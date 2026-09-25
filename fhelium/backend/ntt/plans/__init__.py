@@ -1,4 +1,4 @@
-"""Host-side construction of NTT schedules and twiddle tables."""
+"""Construct the twiddle and index arrays required by NTT table layouts."""
 
 from .compact_radix2 import CompactRadix2NttPlan
 from .indexed_radix2 import IndexedRadix2NttPlan

@@ -5,7 +5,6 @@ description: Engineering notes, project announcements, and release updates from 
 
 # Blog
 
-Engineering notes, project announcements, release updates, and other material
-that does not belong in the task-oriented documentation.
+Engineering notes, project announcements, release updates, and other material that does not belong in the task-oriented documentation.
 
 <BlogIndex />

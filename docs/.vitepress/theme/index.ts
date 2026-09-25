@@ -9,6 +9,7 @@ import BsgsMatvecPerformance from './components/BsgsMatvecPerformance.vue'
 import DocCard from './components/DocCard.vue'
 import DocGrid from './components/DocGrid.vue'
 import HomeControlExplorer from './components/HomeControlExplorer.vue'
+import HomeCompileTimeline from './components/HomeCompileTimeline.vue'
 import HomeHero from './components/HomeHero.vue'
 import HomeUsageTabs from './components/HomeUsageTabs.vue'
 import InstallCommand from './components/InstallCommand.vue'
@@ -42,6 +43,7 @@ export default {
     app.component('DocCard', DocCard)
     app.component('DocGrid', DocGrid)
     app.component('HomeControlExplorer', HomeControlExplorer)
+    app.component('HomeCompileTimeline', HomeCompileTimeline)
     app.component('HomeHero', HomeHero)
     app.component('HomeUsageTabs', HomeUsageTabs)
     app.component('InstallCommand', InstallCommand)

@@ -8,8 +8,8 @@ factory-like calls use CPU unless another device is selected.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 import math
+from collections.abc import Mapping, Sequence
 from operator import index as integer_index
 from threading import RLock
 from typing import Literal, cast, overload
@@ -17,8 +17,37 @@ from typing import Literal, cast, overload
 import torch
 from xdsl.ir import Operation
 
-from fhelium.config import CkksConfig, Preset
+from fhelium.backend.assembly import create_builtin_operation_registry
+from fhelium.backend.ckks import (
+    CkksKeyGenerator,
+)
+from fhelium.backend.ckks.crypto import reconstruct_q_coefficients_tensor
+from fhelium.backend.ckks.materialization import (
+    CkksDeviceResources,
+)
+from fhelium.backend.execution import (
+    OperationBackend,
+)
+from fhelium.backend.ntt.context import NttContext
+from fhelium.backend.rns.context import RnsContext
 from fhelium.backend.rns.format import RnsExecutionFormat
+from fhelium.backend.rns.layout import RnsLayout
+from fhelium.config import CkksConfig, Preset
+from fhelium.eager._key_inventory import KeyInventory
+from fhelium.eager._operation_dispatch import _EagerOperationDispatcher
+from fhelium.eager._validation import CkksValidator
+from fhelium.errors import MaximumDepthError
+from fhelium.ir.ckks_state import (
+    depth_prime_ids,
+    output_residues,
+    product_scale,
+    quotient_scale,
+    reinterpreted_scale,
+    transform_state,
+)
+from fhelium.ir.dialects import ckks, ntt, rns
+from fhelium.rng import Csprng
+from fhelium.utils.rotation import decompose_rotation_step
 from fhelium.values import (
     Ciphertext,
     CompressedPlaintext,
@@ -31,51 +60,11 @@ from fhelium.values import (
     SecretKey,
 )
 from fhelium.values._scale import coerce_scale
-from fhelium.utils.rotation import decompose_rotation_step
 from fhelium.values.state import (
     ModulusBasis,
     PolynomialDomain,
     ResidueRepresentation,
 )
-from fhelium.errors import MaximumDepthError, ScaleMismatchError
-from fhelium.backend.ckks import (
-    CkksKeyGenerator,
-    PUBLIC_KEY_RESOURCE_KIND,
-    SECRET_KEY_RESOURCE_KIND,
-)
-from fhelium.backend.ckks.crypto import reconstruct_q_coefficients_tensor
-from fhelium.backend.resources import (
-    BoundResource,
-    ResourceBindings,
-)
-from fhelium.backend.execution import (
-    OperationBackend,
-)
-from fhelium.backend.rns.chain import RnsChain
-from fhelium.backend.rns.decomposition import HybridRnsDecomposition
-from fhelium.backend.rns.layout import RnsLayout
-from fhelium.backend.ntt.context import NttContext
-from fhelium.backend.ntt.resources import (
-    NTT_RESOURCE_KIND,
-)
-from fhelium.backend.rns.context import RnsContext
-from fhelium.backend.rns.resources import (
-    RNS_RESOURCE_KIND,
-)
-from fhelium.backend.ckks.materialization import (
-    CkksDeviceResources,
-)
-from fhelium.backend.assembly import create_builtin_operation_registry
-from fhelium.backend.ckks.resources import (
-    KEY_SWITCH_PLAN_RESOURCE_KIND,
-    RESCALE_RESOURCE_KIND,
-    ckks_key_resource_kind,
-)
-from fhelium.eager._operation_dispatch import _EagerOperationDispatcher
-from fhelium.eager._validation import CkksValidator
-from fhelium.eager._key_inventory import KeyInventory
-from fhelium.ir.dialects import ckks, ntt, rns
-from fhelium.rng import Csprng
 
 
 def _ciphertext_result(
@@ -203,21 +192,7 @@ class Engine:
         self._dispatcher_lock = RLock()
         self._key_generator = CkksKeyGenerator()
         self.allow_automatic_key_generation = allow_automatic_key_generation
-        rns_chain = RnsChain(
-            num_q_primes=ckks_config.num_q_primes,
-            num_p_primes=ckks_config.num_p_primes,
-            q_depth_group_sizes=tuple(
-                len(group) for group in ckks_config.q_depth_groups
-            ),
-        )
-        self._rns_layout = RnsLayout(
-            rns_chain,
-            HybridRnsDecomposition(
-                rns_chain,
-                self.config.q_moduli,
-                self.config.p_moduli,
-            ),
-        )
+        self._rns_layout = RnsLayout.from_config(ckks_config)
         self._validator = CkksValidator(
             ckks_config,
             self._rns_layout,
@@ -253,6 +228,27 @@ class Engine:
         dispatcher = self._dispatcher_for(device)
         dispatcher.materialize_all()
         return dispatcher.backend
+
+    def rotation_key_steps(self, step: int) -> tuple[int, ...]:
+        """Describe a rotation's key path without generating or moving keys.
+
+        A direct installed key takes precedence. When automatic generation is
+        enabled, a missing direct key is represented by its normalized step.
+        Otherwise the path is decomposed using installed rotation steps only.
+        A zero rotation requires no key.
+        """
+
+        normalized = RotationKey.normalize_step(
+            step, ring_dimension=self.ring_dimension
+        )
+        if normalized == 0:
+            return ()
+        installed = self._keys.rotation_keys
+        if normalized in installed or self.allow_automatic_key_generation:
+            return (normalized,)
+        return tuple(
+            decompose_rotation_step(normalized, self.num_slots, installed)
+        )
 
     def _rns_context_for(
         self,
@@ -369,11 +365,9 @@ class Engine:
         self,
         operation_type: type[Operation],
         *inputs: torch.Tensor,
-        resource_kinds: Sequence[str] = (),
-        resources: Sequence[BoundResource] = (),
-        bindings: ResourceBindings | None = None,
         attributes: Mapping[str, object] | None = None,
         bases: Sequence[str | None] = (),
+        prime_ids: tuple[int, ...] = (),
         result_count: int = 1,
         implementation: str | None = None,
         in_place: bool = False,
@@ -381,44 +375,10 @@ class Engine:
         """Dispatch one operation through the input device's resource bundle."""
 
         dispatcher = self._dispatcher_for(inputs[0].device)
-        fixed: list[BoundResource] = []
-        for kind in resource_kinds:
-            if kind == "rns":
-                fixed.extend(
-                    dispatcher.resources(
-                        (("active-rns-parameters", RNS_RESOURCE_KIND),)
-                    )
-                )
-            elif kind == "ntt":
-                fixed.extend(
-                    dispatcher.resources(
-                        (("active-ntt-plan", NTT_RESOURCE_KIND),)
-                    )
-                )
-            elif kind == "rescale":
-                fixed.extend(
-                    dispatcher.resources(
-                        (("active-rescale-plan", RESCALE_RESOURCE_KIND),)
-                    )
-                )
-            elif kind == "key_switch":
-                fixed.extend(
-                    dispatcher.resources(
-                        (
-                            (
-                                "active-key-switch-plan",
-                                KEY_SWITCH_PLAN_RESOURCE_KIND,
-                            ),
-                        )
-                    )
-                )
-            else:
-                raise ValueError(f"Unknown Eager resource group {kind!r}")
-
-        selected_resources = (*fixed, *resources)
         if operation_type in {
             ckks.AddScalarOp,
             ckks.EncodeOp,
+            ckks.PrepareCompressedPlaintextOp,
             ckks.EncryptOp,
             ckks.MultiplyScalarOp,
         }:
@@ -426,10 +386,9 @@ class Engine:
                 return dispatcher.execute(
                     operation_type,
                     *inputs,
-                    resources=selected_resources,
-                    bindings=bindings,
                     attributes=attributes,
                     bases=bases,
+                    prime_ids=prime_ids,
                     result_count=result_count,
                     implementation=implementation,
                     in_place=in_place,
@@ -437,30 +396,13 @@ class Engine:
         return dispatcher.execute(
             operation_type,
             *inputs,
-            resources=selected_resources,
-            bindings=bindings,
             attributes=attributes,
             bases=bases,
+            prime_ids=prime_ids,
             result_count=result_count,
             implementation=implementation,
             in_place=in_place,
         )
-
-    def _key_switch_bindings(
-        self,
-        device: torch.device,
-        *keys: BoundResource,
-    ) -> ResourceBindings:
-        dispatcher = self._dispatcher_for(device)
-        key_switch = dispatcher.resources(
-            (
-                (
-                    "active-key-switch-plan",
-                    KEY_SWITCH_PLAN_RESOURCE_KIND,
-                ),
-            )
-        )
-        return ResourceBindings((*key_switch, *keys))
 
     def create_secret_key(
         self,
@@ -473,7 +415,7 @@ class Engine:
         The key generator samples ternary coefficients $s_j\in\{-1,0,1\}$, reduces
         them modulo every depth-zero Q row and optional P row, and stores
         $\operatorname{NTT}(s)R$ in Montgomery form.  This factory delegates to
-        ``CkksKeyGenerator.create_secret_key``; it does not issue an IR operation."""
+        ``CkksKeyGenerator.create_secret_key``."""
 
         target = torch.get_default_device() if device is None else device
         dispatcher = self._dispatcher_for(target)
@@ -684,53 +626,6 @@ class Engine:
             if token[0] != key_id
         }
 
-    def _key_resource(
-        self,
-        symbol: str,
-        key: PublicKey | SecretKey,
-    ) -> ResourceBindings:
-        kind = (
-            PUBLIC_KEY_RESOURCE_KIND
-            if isinstance(key, PublicKey)
-            else SECRET_KEY_RESOURCE_KIND
-        )
-        dispatcher = self._dispatcher_for(key.device)
-        token = id(key)
-        cached = dispatcher.operation_key_resources.get(symbol)
-        if cached is not None and cached[0] == token:
-            return ResourceBindings((cached[1],))
-        if cached is not None:
-            dispatcher.discard_resources((cached[1],))
-        if isinstance(key, PublicKey):
-            self._validator.validate_public_key(key)
-        else:
-            self._validator.validate_secret_key(key)
-        resource = BoundResource(
-            symbol,
-            kind,
-            key,
-        )
-        dispatcher.operation_key_resources[symbol] = (token, resource)
-        return ResourceBindings((resource,))
-
-    def bind_public_key(
-        self,
-        symbol: str,
-        key: PublicKey,
-    ) -> ResourceBindings:
-        """Bind validated public encryption material to a Program symbol."""
-
-        return self._key_resource(symbol, key)
-
-    def bind_secret_key(
-        self,
-        symbol: str,
-        key: SecretKey,
-    ) -> ResourceBindings:
-        """Bind validated decryption material to a Program symbol."""
-
-        return self._key_resource(symbol, key)
-
     def plaintext(
         self,
         message: Sequence[object] | torch.Tensor | complex | float | int,
@@ -803,6 +698,84 @@ class Engine:
             modulus_basis=None,
             residue_representation=None,
             prime_ids=(),
+        )
+
+    def prepare_compressed_plaintext(
+        self,
+        message: Sequence[object] | torch.Tensor | complex | float | int,
+        *,
+        depth: int = 0,
+        scale: float | None = None,
+        modulus_basis: Literal["Q", "QP"] = "Q",
+        polynomial_domain: Literal["coefficient", "ntt"] = "ntt",
+        device: torch.device | str | None = None,
+    ) -> CompressedPlaintext:
+        r"""Prepare compact Montgomery plaintext from one period of slots.
+
+        The last message axis is repeated semantically to fill N/2 slots. For
+        U=2r (at least four with generator 3) and R=N/U, p(X)=a(X^R) is encoded
+        using only U coefficients and U values per prime row. Random rounding
+        uses the full-ring coefficient word positions and advances by N words
+        per batch item. Coefficient output stores U coefficients with zero
+        implicit rows in strided-sparse layout. NTT output stores U values
+        in contiguous layout, each representing R repeated evaluations.
+        Depth, selected Q/QP rows and actual scale are retained. The reduced FFT can differ in floating-point roundoff from
+        encoding a fully expanded message near quantization thresholds.
+        """
+        from fhelium.backend.ckks.codec._periodic import periodic_extent
+
+        target = torch.get_default_device() if device is None else device
+        values = torch.as_tensor(message, device=target)
+        if values.ndim == 0:
+            values = values.reshape(1)
+        periodic_extent(
+            values.size(-1), self.config.N, self.config.galois_generator
+        )
+        actual_scale = coerce_scale(
+            self.config.default_scale if scale is None else scale,
+            value_name="encode scale",
+        )
+        if type(depth) is not int or not 0 <= depth <= self.max_depth:
+            raise ValueError(f"depth must be in [0, {self.max_depth}]")
+        if modulus_basis not in ("Q", "QP"):
+            raise ValueError("modulus_basis must be 'Q' or 'QP'")
+        if polynomial_domain not in ("coefficient", "ntt"):
+            raise ValueError("polynomial_domain must be coefficient or ntt")
+        ids = self._rns_layout.prime_ids(depth, include_p=modulus_basis == "QP")
+        output = cast(
+            torch.Tensor | tuple[torch.Tensor, torch.Tensor],
+            self._execute(
+                ckks.PrepareCompressedPlaintextOp,
+                values,
+                attributes={
+                    "depth": depth,
+                    "scale": actual_scale,
+                    "ring_dimension": self.config.N,
+                    "modulus_basis": modulus_basis,
+                    "polynomial_domain": polynomial_domain,
+                    "min_modulus": min(self.config.moduli[i] for i in ids),
+                },
+                result_count=2 if polynomial_domain == "coefficient" else 1,
+            ),
+        )
+        data, implicit = (
+            (output[0], output[1].squeeze(-1))
+            if isinstance(output, tuple)
+            else (output, None)
+        )
+        return CompressedPlaintext._from_fields(
+            data=data,
+            ring_dimension=self.config.N,
+            compression_layout="strided_sparse"
+            if polynomial_domain == "coefficient"
+            else "contiguous",
+            implicit_data=implicit,
+            depth=depth,
+            scale=actual_scale,
+            polynomial_domain=polynomial_domain,
+            modulus_basis=modulus_basis,
+            residue_representation="montgomery",
+            prime_ids=ids,
         )
 
     def integer_coefficients_to_rns(
@@ -928,8 +901,7 @@ class Engine:
         added to component zero.  Multiplication retains a supplied plaintext scale or
         uses the configured default for a message/static value; its scale later
         multiplies the ciphertext scale.  This Eager method composes ``ckks.EncodeOp``
-        and registered RNS/NTT transitions rather than emitting the Compile-only
-        ``ckks.Prepare*Op`` classes."""
+        and registered RNS/NTT transitions."""
 
         if type(ciphertext) is not Ciphertext:
             raise TypeError("prepare_public_operand requires Ciphertext")
@@ -1131,7 +1103,7 @@ class Engine:
                 operation_name="encrypt",
             ),
         )
-        symbol = "public-key"
+        self._validator.validate_public_key(key)
         if plaintext.is_slots:
             if plaintext.message is None:
                 raise ValueError("slots plaintext has no message Tensor")
@@ -1148,12 +1120,12 @@ class Engine:
             self._execute(
                 ckks.EncryptOp,
                 plaintext.data,
+                key.data,
                 attributes={
-                    "key_symbol": symbol,
+                    "modulus_basis": key.modulus_basis,
                     "depth": plaintext.depth,
                     "output_domain": output_domain,
                 },
-                bindings=self._key_resource(symbol, key),
             ),
         )
         basis = key.modulus_basis
@@ -1169,9 +1141,7 @@ class Engine:
             ),
             polynomial_domain=output_domain,
             modulus_basis=basis,
-            residue_representation=(
-                "standard" if output_domain == "coefficient" else "montgomery"
-            ),
+            residue_representation=output_residues(output_domain),
         )
 
     def decrypt(
@@ -1204,19 +1174,18 @@ class Engine:
             ),
         )
         self._validator.validate_ciphertext(ciphertext)
-        symbol = "secret-key"
+        self._validator.validate_secret_key(key)
         coefficients = cast(
             torch.Tensor,
             self._execute(
                 ckks.DecryptOp,
                 ciphertext.data,
+                key.data,
                 attributes={
-                    "key_symbol": symbol,
                     "depth": ciphertext.depth,
                     "modulus_basis": ciphertext.modulus_basis,
                     "input_domain": ciphertext.polynomial_domain,
                 },
-                bindings=self._key_resource(symbol, key),
             ),
         )
         return Plaintext._from_fields(
@@ -1277,20 +1246,25 @@ class Engine:
             device=device,
         )
 
-    def zero_plaintext_like(self, plaintext: Plaintext) -> Plaintext:
-        r"""Return the additive identity in the same plaintext representation.
+    @overload
+    def zero_plaintext_like(self, plaintext: Plaintext) -> Plaintext: ...
 
-        Every stored slot or polynomial coefficient is set to zero while depth, actual
-        scale, prime rows, polynomial domain, and Montgomery state are copied.  No
-        registered operation is dispatched."""
+    @overload
+    def zero_plaintext_like(
+        self, plaintext: CompressedPlaintext
+    ) -> CompressedPlaintext: ...
 
+    def zero_plaintext_like(
+        self, plaintext: Plaintext | CompressedPlaintext
+    ) -> Plaintext | CompressedPlaintext:
+        """Create independent zero storage in the input's represented state.
+
+        Compact explicit entries and sparse implicit rows are both zeroed.
+        Depth, scale, layout, prime rows, domain and residue form are retained.
+        """
         result = plaintext.clone()
-        if result.message is not None:
-            result.message.zero_()
-        elif result.data is not None:
-            result.data.zero_()
-        else:
-            raise ValueError("Plaintext has no materialized payload")
+        for tensor in result._resident_tensors:
+            tensor.zero_()
         return result
 
     def encrypt_zero_like(
@@ -1330,12 +1304,12 @@ class Engine:
         return result
 
     def install_evaluation_key(self, symbol: str, key: KeySwitchKey) -> None:
-        """Install one validated key under an evaluation-resource symbol."""
+        """Install one validated evaluation key under an inventory name."""
 
         previous = self._installed_evaluation_keys.get(symbol)
         if previous is not None and previous is not key:
             self._discard_key_replicas(previous)
-        self._bind_key(symbol, key)
+        self._validator.validate_key_switch_key(key)
         if isinstance(key, RelinearizationKey):
             self._keys.set_relinearization_key(key)
         elif isinstance(key, ConjugationKey):
@@ -1350,12 +1324,6 @@ class Engine:
         removed = self._installed_evaluation_keys.pop(symbol, None)
         if removed is not None:
             self._discard_key_replicas(removed)
-        for dispatcher in self._dispatchers.values():
-            cached_resource = dispatcher.evaluation_key_resources.pop(
-                symbol, None
-            )
-            if cached_resource is not None:
-                dispatcher.discard_resources((cached_resource[1],))
         if symbol == "relinearization-key" and isinstance(
             removed,
             RelinearizationKey,
@@ -1395,17 +1363,6 @@ class Engine:
         if key is self._keys.secret_key:
             return
         self._installed_evaluation_keys.clear()
-        for dispatcher in self._dispatchers.values():
-            replaced_resources = tuple(
-                resource
-                for _, resource in dispatcher.evaluation_key_resources.values()
-            ) + tuple(
-                resource
-                for _, resource in dispatcher.operation_key_resources.values()
-            )
-            dispatcher.evaluation_key_resources.clear()
-            dispatcher.operation_key_resources.clear()
-            dispatcher.discard_resources(replaced_resources)
         self._key_replicas.clear()
         self._keys.set_secret_key(key)
 
@@ -1422,13 +1379,6 @@ class Engine:
     def set_public_key(self, key: PublicKey | None) -> None:
         """Install or remove the public encryption key."""
 
-        for dispatcher in self._dispatchers.values():
-            replaced_resources = tuple(
-                resource
-                for _, resource in dispatcher.operation_key_resources.values()
-            )
-            dispatcher.operation_key_resources.clear()
-            dispatcher.discard_resources(replaced_resources)
         self._key_replicas.clear()
         self._keys.set_public_key(key)
 
@@ -1551,61 +1501,10 @@ class Engine:
         dispatcher = self._dispatcher_for(residues.device)
         return reconstruct_q_coefficients_tensor(
             residues,
-            depth=ciphertext.depth,
-            includes_p=ciphertext.includes_p,
-            rns_context=dispatcher.rns_context,
-            reconstruction=dispatcher.decrypt_reconstruction(),
+            *dispatcher.device_resources.reconstruction_operands(
+                ciphertext.depth
+            ),
         )
-
-    def _bind_key(self, symbol: str, key: KeySwitchKey) -> BoundResource:
-        dispatcher = self._dispatcher_for(key.device)
-        token = id(key)
-        cached = dispatcher.evaluation_key_resources.get(symbol)
-        if cached is not None and cached[0] == token:
-            return cached[1]
-        if cached is not None:
-            dispatcher.discard_resources((cached[1],))
-        self._validator.validate_key_switch_key(key)
-        kind = ckks_key_resource_kind(key)
-        resource = BoundResource(
-            symbol,
-            kind,
-            key,
-        )
-        dispatcher.evaluation_key_resources[symbol] = (token, resource)
-        return resource
-
-    def _key_bindings(
-        self,
-        keys: Mapping[str, KeySwitchKey],
-        *,
-        device: torch.device | None = None,
-        operation_name: str = "bind_evaluation_keys",
-    ) -> ResourceBindings:
-        selected = {
-            symbol: cast(
-                KeySwitchKey,
-                self._key_on_device(
-                    key,
-                    key.device if device is None else device,
-                    operation_name=operation_name,
-                ),
-            )
-            for symbol, key in keys.items()
-        }
-        return ResourceBindings(
-            tuple(
-                self._bind_key(symbol, key) for symbol, key in selected.items()
-            )
-        )
-
-    def bind_evaluation_keys(
-        self,
-        keys: Mapping[str, KeySwitchKey],
-    ) -> ResourceBindings:
-        """Return adapter-validated bindings for concrete semantic key slots."""
-
-        return self._key_bindings(keys)
 
     @staticmethod
     def _replace_plaintext_(target: Plaintext, source: Plaintext) -> Plaintext:
@@ -1633,7 +1532,7 @@ class Engine:
 
     @staticmethod
     def _operand_bases(
-        *values: Ciphertext | Plaintext,
+        *values: Ciphertext | Plaintext | CompressedPlaintext,
     ) -> tuple[str | None, ...]:
         return tuple(value.modulus_basis for value in values)
 
@@ -1661,7 +1560,7 @@ class Engine:
                 rns.AddStandardOp,
                 lhs.data,
                 rhs.data,
-                resource_kinds=("rns",),
+                prime_ids=lhs.prime_ids,
                 bases=bases,
                 in_place=inplace,
             ),
@@ -1713,6 +1612,7 @@ class Engine:
                     "scalar": float(scalar),
                     "scalar_scale": actual_scalar_scale,
                 },
+                prime_ids=ciphertext.prime_ids,
                 bases=self._operand_bases(ciphertext),
             ),
         )
@@ -1746,10 +1646,13 @@ class Engine:
         *,
         dim: int = 0,
     ) -> Ciphertext:
-        r"""Reduce one batch axis by pairwise modular ciphertext addition.
+        r"""Reduce one batch axis by modular ciphertext addition.
 
-        A tree of ``rns.AddStandardOp`` calls computes the sum over ``dim`` for every
-        component, prime row, and coefficient.  Pairing changes evaluation order but
+        ``rns.SumStandardBatchOp`` computes, for every component $j$, prime row
+        $q_i$, and coefficient, the sum of the selected axis with each partial
+        sum reduced to $[0,q_i)$:
+        $c'_j=\sum_k c^{(k)}_j\bmod q_i$.  The operation equals any association
+        order of standard modular additions.  Pairing changes evaluation order but
         not modular addition.  The selected batch axis is removed; CKKS depth, actual
         scale, rows, and representation remain unchanged."""
 
@@ -1760,37 +1663,19 @@ class Engine:
             raise IndexError(
                 f"Batch dimension {dim} is outside shape {batch.batch_shape}"
             )
-        current = batch
-        odd_tails: list[Ciphertext] = []
-        while current.batch_shape[logical_dim] > 1:
-            count = current.batch_shape[logical_dim]
-            pair_count = count // 2
-            data_dim = logical_dim + 1
-            if count % 2:
-                odd_tails.append(
-                    _ciphertext_result(
-                        current,
-                        current.data.select(data_dim, count - 1),
-                    )
-                )
-            lhs = _ciphertext_result(
-                current,
-                current.data.narrow(data_dim, 0, pair_count),
-            )
-            rhs = _ciphertext_result(
-                current,
-                current.data.narrow(data_dim, pair_count, pair_count),
-            )
-            current = self.add(lhs, rhs)
-        result = _ciphertext_result(
-            current,
-            current.data.select(logical_dim + 1, 0),
+        data_dim = logical_dim + 1
+        bases = self._operand_bases(batch)
+        data = cast(
+            torch.Tensor,
+            self._execute(
+                rns.SumStandardBatchOp,
+                batch.data,
+                attributes={"dim": data_dim},
+                prime_ids=batch.prime_ids,
+                bases=bases,
+            ),
         )
-        if current is batch:
-            result = _ciphertext_result(result, result.data.clone())
-        for tail in reversed(odd_tails):
-            result = self.add(result, tail)
-        return result
+        return _ciphertext_result(batch, data)
 
     def subtract(
         self,
@@ -1816,7 +1701,7 @@ class Engine:
                 rns.SubtractStandardOp,
                 lhs.data,
                 rhs.data,
-                resource_kinds=("rns",),
+                prime_ids=lhs.prime_ids,
                 bases=bases,
                 in_place=inplace,
             ),
@@ -1854,7 +1739,7 @@ class Engine:
             self._execute(
                 rns.NegateStandardOp,
                 value.data,
-                resource_kinds=("rns",),
+                prime_ids=value.prime_ids,
                 bases=bases,
                 in_place=inplace,
             ),
@@ -1905,6 +1790,9 @@ class Engine:
         if value.data is None:
             raise ValueError("NTT execution requires RNS Tensor data")
         is_ciphertext = type(value) is Ciphertext
+        result_domain, result_representation = transform_state(
+            "forward", ciphertext=is_ciphertext
+        )
         operation_type: type[Operation] = (
             ntt.CoefficientStandardToNttMontgomeryOp
             if is_ciphertext
@@ -1917,7 +1805,7 @@ class Engine:
             self._execute(
                 operation_type,
                 data,
-                resource_kinds=("ntt",),
+                prime_ids=value.prime_ids,
                 bases=bases,
                 in_place=True,
             )
@@ -1927,29 +1815,29 @@ class Engine:
                 self._execute(
                     operation_type,
                     value_data,
-                    resource_kinds=("ntt",),
+                    prime_ids=value.prime_ids,
                     bases=bases,
                     in_place=inplace,
                 ),
             )
         if inplace:
             value.data = data
-            value.polynomial_domain = "ntt"
-            value.residue_representation = "montgomery"
+            value.polynomial_domain = result_domain
+            value.residue_representation = result_representation
             return value
         result: Ciphertext | Plaintext = (
             _ciphertext_result(
                 cast(Ciphertext, value),
                 data,
-                polynomial_domain="ntt",
-                residue_representation="montgomery",
+                polynomial_domain=result_domain,
+                residue_representation=result_representation,
             )
             if is_ciphertext
             else _plaintext_result(
                 cast(Plaintext, value),
                 data,
-                polynomial_domain="ntt",
-                residue_representation="montgomery",
+                polynomial_domain=result_domain,
+                residue_representation=result_representation,
             )
         )
         return result
@@ -2004,17 +1892,19 @@ class Engine:
 
         Ciphertext components dispatch ``ntt.NttMontgomeryToCoefficientStandardOp``
         and end in coefficient/standard form.  A plaintext dispatches
-        ``ntt.InverseMontgomeryOp`` and ends in coefficient/Montgomery form.  The ring
+        ``ntt.NttMontgomeryToCoefficientMontgomeryOp`` and ends in coefficient/Montgomery form.  The ring
         element, depth, Q or QP rows, component shape, and actual scale are preserved."""
 
         if value.data is None:
             raise ValueError("NTT execution requires RNS Tensor data")
         is_ciphertext = type(value) is Ciphertext
-        result_representation = "standard" if is_ciphertext else "montgomery"
+        result_domain, result_representation = transform_state(
+            "inverse", ciphertext=is_ciphertext
+        )
         operation_type = (
             ntt.NttMontgomeryToCoefficientStandardOp
             if is_ciphertext
-            else ntt.InverseMontgomeryOp
+            else ntt.NttMontgomeryToCoefficientMontgomeryOp
         )
         value_data = cast(torch.Tensor, value.data)
         bases = self._operand_bases(value)
@@ -2023,7 +1913,7 @@ class Engine:
             self._execute(
                 operation_type,
                 data,
-                resource_kinds=("ntt",),
+                prime_ids=value.prime_ids,
                 bases=bases,
                 in_place=True,
             )
@@ -2033,28 +1923,28 @@ class Engine:
                 self._execute(
                     operation_type,
                     value_data,
-                    resource_kinds=("ntt",),
+                    prime_ids=value.prime_ids,
                     bases=bases,
                     in_place=inplace,
                 ),
             )
         if inplace:
             value.data = data
-            value.polynomial_domain = "coefficient"
+            value.polynomial_domain = result_domain
             value.residue_representation = result_representation
             return value
         result = (
             _ciphertext_result(
                 cast(Ciphertext, value),
                 data,
-                polynomial_domain="coefficient",
-                residue_representation="standard",
+                polynomial_domain=result_domain,
+                residue_representation=result_representation,
             )
             if is_ciphertext
             else _plaintext_result(
                 cast(Plaintext, value),
                 data,
-                polynomial_domain="coefficient",
+                polynomial_domain=result_domain,
                 residue_representation=result_representation,
             )
         )
@@ -2084,18 +1974,57 @@ class Engine:
 
         return self.ntt_domain_to_coefficient_domain(value, inplace=True)
 
+    @overload
+    def standard_residues_to_montgomery_residues(
+        self, plaintext: Plaintext, *, inplace: bool = False
+    ) -> Plaintext: ...
+
+    @overload
+    def standard_residues_to_montgomery_residues(
+        self, plaintext: CompressedPlaintext, *, inplace: bool = False
+    ) -> CompressedPlaintext: ...
+
     def standard_residues_to_montgomery_residues(
         self,
-        plaintext: Plaintext,
+        plaintext: Plaintext | CompressedPlaintext,
         *,
         inplace: bool = False,
-    ) -> Plaintext:
+    ) -> Plaintext | CompressedPlaintext:
         r"""Multiply each coefficient residue by its Montgomery radix.
 
         ``rns.StandardToMontgomeryOp`` maps $x_i$ to $x_iR_i\bmod q_i$ through
         ``native-rns-transition``.  The plaintext remains in coefficient domain with
         unchanged polynomial, Q or QP rows, depth, and actual scale."""
 
+        if isinstance(plaintext, CompressedPlaintext):
+            tensors = [plaintext.data]
+            if plaintext.implicit_data is not None:
+                tensors.append(plaintext.implicit_data.unsqueeze(-1))
+            transformed = tuple(
+                cast(
+                    torch.Tensor,
+                    self._execute(
+                        rns.StandardToMontgomeryOp,
+                        tensor,
+                        prime_ids=plaintext.prime_ids,
+                        in_place=inplace,
+                    ),
+                )
+                for tensor in tensors
+            )
+            storage = (transformed[0],) + (
+                (transformed[1].squeeze(-1),) if len(transformed) == 2 else ()
+            )
+            result = (
+                plaintext
+                if inplace
+                else plaintext._with_resident_tensors(storage)
+            )
+            if inplace:
+                result.data = storage[0]
+                result.implicit_data = storage[1] if len(storage) == 2 else None
+            result.residue_representation = "montgomery"
+            return result
         if plaintext.data is None:
             raise ValueError("Residue conversion requires RNS Tensor data")
         plaintext_data = cast(torch.Tensor, plaintext.data)
@@ -2105,7 +2034,7 @@ class Engine:
             self._execute(
                 rns.StandardToMontgomeryOp,
                 plaintext_data,
-                resource_kinds=("rns",),
+                prime_ids=plaintext.prime_ids,
                 bases=bases,
                 in_place=inplace,
             ),
@@ -2120,10 +2049,20 @@ class Engine:
             residue_representation="montgomery",
         )
 
+    @overload
+    def standard_residues_to_montgomery_residues_(
+        self, plaintext: Plaintext
+    ) -> Plaintext: ...
+
+    @overload
+    def standard_residues_to_montgomery_residues_(
+        self, plaintext: CompressedPlaintext
+    ) -> CompressedPlaintext: ...
+
     def standard_residues_to_montgomery_residues_(
         self,
-        plaintext: Plaintext,
-    ) -> Plaintext:
+        plaintext: Plaintext | CompressedPlaintext,
+    ) -> Plaintext | CompressedPlaintext:
         r"""Convert plaintext rows to Montgomery representation in place.
 
         This dispatches ``rns.StandardToMontgomeryOp`` and returns the input plaintext;
@@ -2134,18 +2073,61 @@ class Engine:
             inplace=True,
         )
 
+    @overload
+    def montgomery_residues_to_standard_residues(
+        self, plaintext: Plaintext, *, inplace: bool = False
+    ) -> Plaintext: ...
+
+    @overload
+    def montgomery_residues_to_standard_residues(
+        self, plaintext: CompressedPlaintext, *, inplace: bool = False
+    ) -> CompressedPlaintext: ...
+
     def montgomery_residues_to_standard_residues(
         self,
-        plaintext: Plaintext,
+        plaintext: Plaintext | CompressedPlaintext,
         *,
         inplace: bool = False,
-    ) -> Plaintext:
+    ) -> Plaintext | CompressedPlaintext:
         r"""Remove the Montgomery factor from each coefficient residue.
 
         ``rns.MontgomeryToStandardOp`` maps $x_iR_i$ to $x_i\bmod q_i$ through
         ``native-rns-transition``.  The plaintext polynomial, coefficient domain,
         Q or QP rows, depth, and actual scale are preserved."""
 
+        if isinstance(plaintext, CompressedPlaintext):
+            if plaintext.polynomial_domain != "coefficient":
+                raise ValueError(
+                    "Standard compressed plaintext requires coefficient-domain data"
+                )
+            tensors = [plaintext.data]
+            if plaintext.implicit_data is not None:
+                tensors.append(plaintext.implicit_data.unsqueeze(-1))
+            transformed = tuple(
+                cast(
+                    torch.Tensor,
+                    self._execute(
+                        rns.MontgomeryToStandardOp,
+                        tensor,
+                        prime_ids=plaintext.prime_ids,
+                        in_place=inplace,
+                    ),
+                )
+                for tensor in tensors
+            )
+            storage = (transformed[0],) + (
+                (transformed[1].squeeze(-1),) if len(transformed) == 2 else ()
+            )
+            result = (
+                plaintext
+                if inplace
+                else plaintext._with_resident_tensors(storage)
+            )
+            if inplace:
+                result.data = storage[0]
+                result.implicit_data = storage[1] if len(storage) == 2 else None
+            result.residue_representation = "standard"
+            return result
         if plaintext.data is None:
             raise ValueError("Residue conversion requires RNS Tensor data")
         plaintext_data = cast(torch.Tensor, plaintext.data)
@@ -2155,7 +2137,7 @@ class Engine:
             self._execute(
                 rns.MontgomeryToStandardOp,
                 plaintext_data,
-                resource_kinds=("rns",),
+                prime_ids=plaintext.prime_ids,
                 bases=bases,
                 in_place=inplace,
             ),
@@ -2170,10 +2152,20 @@ class Engine:
             residue_representation="standard",
         )
 
+    @overload
+    def montgomery_residues_to_standard_residues_(
+        self, plaintext: Plaintext
+    ) -> Plaintext: ...
+
+    @overload
+    def montgomery_residues_to_standard_residues_(
+        self, plaintext: CompressedPlaintext
+    ) -> CompressedPlaintext: ...
+
     def montgomery_residues_to_standard_residues_(
         self,
-        plaintext: Plaintext,
-    ) -> Plaintext:
+        plaintext: Plaintext | CompressedPlaintext,
+    ) -> Plaintext | CompressedPlaintext:
         r"""Convert plaintext rows to standard residues in place.
 
         This dispatches ``rns.MontgomeryToStandardOp`` and returns the input plaintext
@@ -2214,7 +2206,7 @@ class Engine:
 
         scale = coerce_scale(input_scale, value_name="input_scale")
         return coerce_scale(
-            scale / self.rescale_divisor(depth=depth),
+            quotient_scale(scale, self.rescale_divisor(depth=depth)),
             value_name="rescale output",
         )
 
@@ -2241,9 +2233,8 @@ class Engine:
                 depth=value.depth,
                 maximum_depth=self.max_depth,
             )
-        next_prime_ids = self._rns_layout.prime_ids(
-            value.depth + 1,
-            include_p=value.modulus_basis == "QP",
+        next_prime_ids = depth_prime_ids(
+            self.config, value.depth + 1, value.modulus_basis
         )
         drop_count = len(value.prime_ids) - len(next_prime_ids)
         dropped_modulus = math.prod(
@@ -2257,11 +2248,6 @@ class Engine:
             self._execute(
                 rns.RescaleDropLeadingPrimesOp,
                 value.data,
-                resource_kinds=(
-                    ("rescale", "rns", "ntt")
-                    if input_domain == "ntt"
-                    else ("rescale",)
-                ),
                 attributes={
                     "drop_count": drop_count,
                     "rounding": rounding,
@@ -2276,14 +2262,14 @@ class Engine:
             value.data = data
             value.depth += 1
             value.prime_ids = next_prime_ids
-            value.scale /= float(dropped_modulus)
+            value.scale = quotient_scale(value.scale, dropped_modulus)
             return value
         return _ciphertext_result(
             value,
             data,
             depth=value.depth + 1,
             prime_ids=next_prime_ids,
-            scale=value.scale / float(dropped_modulus),
+            scale=quotient_scale(value.scale, dropped_modulus),
         )
 
     def rescale_to_next_depth(
@@ -2343,9 +2329,8 @@ class Engine:
         selection directly, with the same mathematical transition represented in IR
         by ``rns.RestrictDepthOp``/``ckks.ModSwitchOp``."""
 
-        prime_ids = self._rns_layout.prime_ids(
-            target_depth,
-            include_p=value.modulus_basis == "QP",
+        prime_ids = depth_prime_ids(
+            self.config, target_depth, value.modulus_basis
         )
         result_rows = len(prime_ids)
         source_rows = value.data.size(-2)
@@ -2423,20 +2408,9 @@ class Engine:
         $x/\Delta'$.  Eager performs the metadata change directly; IR represents it
         with ``ckks.ReinterpretScaleOp``/``rns.ReinterpretScaleOp``."""
 
-        scale = coerce_scale(target_scale, value_name="target_scale")
-        if max_relative_change is not None:
-            relative_limit = float(max_relative_change)
-            if relative_limit < 0:
-                raise ValueError("max_relative_change must be non-negative")
-            change = max(value.scale / scale, scale / value.scale) - 1.0
-            if change > relative_limit:
-                raise ScaleMismatchError(
-                    operation="reinterpret_at_scale",
-                    lhs_name="current",
-                    lhs_scale=value.scale,
-                    rhs_name="target",
-                    rhs_scale=scale,
-                )
+        scale = reinterpreted_scale(
+            value.scale, target_scale, max_relative_change
+        )
         if inplace:
             value.scale = scale
             return value
@@ -2476,7 +2450,7 @@ class Engine:
         Depth and rows are retained, and actual scale becomes
         $\Delta_a\Delta_b$; relinearization and rescaling remain separate calls."""
 
-        result_scale = lhs.scale * rhs.scale
+        result_scale = product_scale(lhs.scale, rhs.scale)
         bases = self._operand_bases(lhs, rhs)
         data = cast(
             torch.Tensor,
@@ -2484,6 +2458,7 @@ class Engine:
                 ckks.MultiplyOp,
                 lhs.data,
                 rhs.data,
+                prime_ids=lhs.prime_ids,
                 bases=bases,
                 implementation="native-ct2-convolution",
             ),
@@ -2514,7 +2489,7 @@ class Engine:
             value_name="multiply_scalar scalar scale",
         )
         result_scale = coerce_scale(
-            ciphertext.scale * actual_scalar_scale,
+            product_scale(ciphertext.scale, actual_scalar_scale),
             value_name="multiply_scalar result",
         )
         data = cast(
@@ -2526,6 +2501,7 @@ class Engine:
                     "scalar": float(scalar),
                     "scalar_scale": actual_scalar_scale,
                 },
+                prime_ids=ciphertext.prime_ids,
                 bases=self._operand_bases(ciphertext),
             ),
         )
@@ -2548,6 +2524,7 @@ class Engine:
                 ckks.MultiplyIntegerScalarOp,
                 ciphertext.data,
                 attributes={"scalar": integer_index(scalar)},
+                prime_ids=ciphertext.prime_ids,
                 bases=self._operand_bases(ciphertext),
             ),
         )
@@ -2569,28 +2546,38 @@ class Engine:
         state and later components are preserved."""
 
         if isinstance(plaintext, CompressedPlaintext):
+            if (
+                plaintext.residue_representation != "montgomery"
+                or plaintext.polynomial_domain != ciphertext.polynomial_domain
+                or ciphertext.residue_representation
+                != (
+                    "montgomery"
+                    if ciphertext.polynomial_domain == "ntt"
+                    else "standard"
+                )
+            ):
+                raise ValueError(
+                    "Compressed addition requires matching domains and a Montgomery plaintext"
+                )
             inputs = [ciphertext.data, plaintext.data]
             if plaintext.implicit_data is not None:
-                inputs.append(plaintext.implicit_data)
+                inputs.append(plaintext.implicit_data.unsqueeze(-1))
             data = cast(
                 torch.Tensor,
                 self._execute(
                     ckks.AddCompressedPlaintextOp,
                     *inputs,
                     attributes={
-                        "compression_layout": plaintext.compression_layout
+                        "compression_layout": plaintext.compression_layout,
+                        "polynomial_domain": ciphertext.polynomial_domain,
                     },
-                    bases=(
-                        ciphertext.modulus_basis,
-                        plaintext.modulus_basis,
-                        *((None,) if len(inputs) == 3 else ()),
-                    ),
+                    prime_ids=ciphertext.prime_ids,
+                    in_place=inplace,
                 ),
             )
-            if inplace:
-                ciphertext.data = data
-                return ciphertext
-            return _ciphertext_result(ciphertext, data)
+            return (
+                ciphertext if inplace else _ciphertext_result(ciphertext, data)
+            )
         prepared = plaintext
         if prepared.data is None:
             raise ValueError("Plaintext addition requires RNS Tensor data")
@@ -2621,8 +2608,8 @@ class Engine:
                 rns.AddPlaintextOp,
                 ciphertext.data,
                 prepared_data,
-                resource_kinds=("rns",),
                 attributes={"polynomial_domain": ciphertext.polynomial_domain},
+                prime_ids=ciphertext.prime_ids,
                 bases=bases,
                 in_place=inplace,
             ),
@@ -2659,16 +2646,30 @@ class Engine:
         $\Delta_c\Delta_p$, with no implicit rescale."""
 
         if isinstance(plaintext, CompressedPlaintext):
-            result_scale = ciphertext.scale * plaintext.scale
+            if (
+                plaintext.residue_representation != "montgomery"
+                or plaintext.polynomial_domain != "ntt"
+            ):
+                raise ValueError(
+                    "Compressed plaintext multiplication requires NTT/Montgomery data"
+                )
+            result_scale = product_scale(ciphertext.scale, plaintext.scale)
             data = cast(
                 torch.Tensor,
                 self._execute(
                     ckks.MultiplyCompressedPlaintextOp,
                     ciphertext.data,
                     plaintext.data,
+                    *(
+                        (plaintext.implicit_data.unsqueeze(-1),)
+                        if plaintext.implicit_data is not None
+                        else ()
+                    ),
                     attributes={
                         "compression_layout": plaintext.compression_layout
                     },
+                    prime_ids=ciphertext.prime_ids,
+                    in_place=inplace,
                     bases=(
                         ciphertext.modulus_basis,
                         plaintext.modulus_basis,
@@ -2689,7 +2690,7 @@ class Engine:
             raise ValueError(
                 "Plaintext multiplication requires RNS Tensor data"
             )
-        result_scale = ciphertext.scale * plaintext.scale
+        result_scale = product_scale(ciphertext.scale, plaintext.scale)
         prepared_data = cast(torch.Tensor, prepared.data)
         bases = self._operand_bases(ciphertext, prepared)
         data = cast(
@@ -2698,7 +2699,7 @@ class Engine:
                 rns.MultiplyPlaintextOp,
                 ciphertext.data,
                 prepared_data,
-                resource_kinds=("rns",),
+                prime_ids=ciphertext.prime_ids,
                 bases=bases,
                 in_place=inplace,
             ),
@@ -2728,7 +2729,7 @@ class Engine:
     def sum_plaintext_products(
         self,
         ciphertexts: Sequence[Ciphertext],
-        plaintexts: Sequence[Plaintext],
+        plaintexts: Sequence[Plaintext | CompressedPlaintext],
     ) -> Ciphertext:
         r"""Compute a sum of prepared-plaintext products in one operation.
 
@@ -2750,6 +2751,13 @@ class Engine:
             raise ValueError(
                 "sum_plaintext_products requires equal non-empty sequences"
             )
+        if any(isinstance(p, CompressedPlaintext) for p in plaintexts):
+            return self.sum_ciphertexts(
+                [
+                    self.multiply_plaintext(c, p)
+                    for c, p in zip(ciphertexts, plaintexts, strict=True)
+                ]
+            )
         first_ciphertext = ciphertexts[0]
         first_plaintext = plaintexts[0]
         plaintext_data: list[torch.Tensor] = []
@@ -2766,8 +2774,8 @@ class Engine:
                 rns.MontgomeryWeightedSumOp,
                 *ciphertext_data,
                 *plaintext_data,
-                resource_kinds=("rns",),
                 attributes={"term_count": len(ciphertexts)},
+                prime_ids=first_ciphertext.prime_ids,
                 bases=self._operand_bases(*ciphertexts, *plaintexts),
             ),
         )
@@ -2780,7 +2788,7 @@ class Engine:
     def sum_plaintext_product_groups(
         self,
         ciphertexts: Sequence[Ciphertext],
-        plaintext_groups: Sequence[Sequence[Plaintext]],
+        plaintext_groups: Sequence[Sequence[Plaintext | CompressedPlaintext]],
     ) -> Ciphertext:
         r"""Apply several prepared-plaintext rows to shared ciphertext terms.
 
@@ -2811,6 +2819,17 @@ class Engine:
             raise ValueError(
                 "each plaintext group must contain one term per ciphertext"
             )
+        if any(
+            isinstance(p, CompressedPlaintext)
+            for group in plaintext_groups
+            for p in group
+        ):
+            return Ciphertext.stack_batch(
+                [
+                    self.sum_plaintext_products(ciphertexts, group)
+                    for group in plaintext_groups
+                ]
+            )
         first_ciphertext = ciphertexts[0]
         first_plaintext = plaintext_groups[0][0]
         plaintexts = tuple(
@@ -2829,11 +2848,11 @@ class Engine:
                 rns.MontgomeryWeightedSumsOp,
                 *(value.data for value in ciphertexts),
                 *plaintext_data,
-                resource_kinds=("rns",),
                 attributes={
                     "term_count": term_count,
                     "group_count": len(plaintext_groups),
                 },
+                prime_ids=first_ciphertext.prime_ids,
                 bases=self._operand_bases(*ciphertexts, *plaintexts),
             ),
         )
@@ -2847,7 +2866,7 @@ class Engine:
         self,
         ciphertext: Ciphertext,
         rotation_keys: Sequence[RotationKey | None],
-        plaintext_groups: Sequence[Sequence[Plaintext]],
+        plaintext_groups: Sequence[Sequence[Plaintext | CompressedPlaintext]],
     ) -> Ciphertext:
         r"""Apply prepared-plaintext rows to one direct rotation group.
 
@@ -2880,6 +2899,24 @@ class Engine:
             raise ValueError(
                 "each plaintext group must contain one term per rotation"
             )
+        if any(
+            isinstance(p, CompressedPlaintext)
+            for group in plaintext_groups
+            for p in group
+        ):
+            keys = [key for key in rotation_keys if key is not None]
+            rotated = iter(
+                self.rotate_many_with_keys(
+                    ciphertext, keys, output_domain="ntt"
+                )
+            )
+            terms = [
+                self.coefficient_domain_to_ntt_domain(ciphertext)
+                if key is None
+                else next(rotated)
+                for key in rotation_keys
+            ]
+            return self.sum_plaintext_product_groups(terms, plaintext_groups)
         selected_keys = [
             cast(
                 RotationKey,
@@ -2892,10 +2929,8 @@ class Engine:
             for key in rotation_keys
             if key is not None
         ]
-        key_resources = [
-            self._bind_key(f"rotation-key:{key.rotation_step}:{index}", key)
-            for index, key in enumerate(selected_keys)
-        ]
+        for key in selected_keys:
+            self._validator.validate_key_switch_key(key)
         plaintexts = tuple(
             plaintext for group in plaintext_groups for plaintext in group
         )
@@ -2915,10 +2950,13 @@ class Engine:
             self._execute(
                 ckks.GroupedRotationWeightedSumOp,
                 ciphertext.data,
+                *(key.data for key in selected_keys),
                 *plaintext_data,
-                resources=key_resources,
                 attributes={
                     "baby_steps": baby_steps,
+                    "rotation_steps": tuple(
+                        key.rotation_step for key in selected_keys
+                    ),
                     "term_count": term_count,
                     "group_count": len(plaintext_groups),
                 },
@@ -2953,7 +2991,6 @@ class Engine:
 
         if output_domain not in ("coefficient", "ntt"):
             raise ValueError("output_domain must be 'coefficient' or 'ntt'")
-        symbol = "relinearization-key"
         selected = key if key is not None else self.relinearization_key
         selected = cast(
             RelinearizationKey,
@@ -2963,13 +3000,13 @@ class Engine:
                 operation_name="relinearize",
             ),
         )
-        key_resource = self._bind_key(symbol, selected)
+        self._validator.validate_key_switch_key(selected)
         data = cast(
             torch.Tensor,
             self._execute(
                 ckks.RelinearizeOp,
                 value.data,
-                bindings=self._key_switch_bindings(value.device, key_resource),
+                selected.data,
                 bases=("Q",),
                 attributes={"output_domain": output_domain},
                 implementation="native-relinearize-streaming",
@@ -2979,9 +3016,7 @@ class Engine:
             value,
             data,
             polynomial_domain=output_domain,
-            residue_representation=(
-                "standard" if output_domain == "coefficient" else "montgomery"
-            ),
+            residue_representation=output_residues(output_domain),
         )
 
     def switch_key(
@@ -3004,22 +3039,20 @@ class Engine:
 
         if output_domain not in ("coefficient", "ntt"):
             raise ValueError("output_domain must be 'coefficient' or 'ntt'")
-        symbol = "key-switch-key:caller"
         selected = cast(
             KeySwitchKey,
             self._key_on_device(
                 key, value.device, operation_name="key switching"
             ),
         )
-        key_resource = self._bind_key(symbol, selected)
+        self._validator.validate_key_switch_key(selected)
         data = cast(
             torch.Tensor,
             self._execute(
                 ckks.SwitchKeyOp,
                 value.data,
-                bindings=self._key_switch_bindings(value.device, key_resource),
+                selected.data,
                 attributes={
-                    "key_symbol": symbol,
                     "output_domain": output_domain,
                 },
                 bases=("Q",),
@@ -3030,9 +3063,7 @@ class Engine:
             value,
             data,
             polynomial_domain=output_domain,
-            residue_representation=(
-                "standard" if output_domain == "coefficient" else "montgomery"
-            ),
+            residue_representation=output_residues(output_domain),
         )
 
     def rotate_with_key(
@@ -3079,15 +3110,15 @@ class Engine:
                 operation_name="rotate",
             ),
         )
-        symbol = f"rotation-key:{key.rotation_step}"
-        key_resource = self._bind_key(symbol, key)
+        self._validator.validate_key_switch_key(key)
         data = cast(
             torch.Tensor,
             self._execute(
                 ckks.RotateOp,
                 value.data,
-                resources=(key_resource,),
+                key.data,
                 attributes={
+                    "rotation_step": key.rotation_step,
                     "input_domain": value.polynomial_domain,
                     "output_domain": output_domain,
                 },
@@ -3099,9 +3130,7 @@ class Engine:
             value,
             data,
             polynomial_domain=output_domain,
-            residue_representation="montgomery"
-            if output_domain == "ntt"
-            else "standard",
+            residue_representation=output_residues(output_domain),
         )
 
     def rotate_by_step(
@@ -3259,15 +3288,16 @@ class Engine:
                 _ciphertext_result(identity, identity.data.clone())
                 for _ in entries
             ]
-        key_resources: list[BoundResource] = []
-        for index, key in enumerate(nonzero):
-            symbol = f"rotation-key:{key.rotation_step}:{index}"
-            key_resources.append(self._bind_key(symbol, key))
+        for key in nonzero:
+            self._validator.validate_key_switch_key(key)
         executed = self._execute(
             ckks.RotateManyOp,
             value.data,
-            resources=key_resources,
-            attributes={"output_domain": output_domain},
+            *(key.data for key in nonzero),
+            attributes={
+                "output_domain": output_domain,
+                "rotation_steps": tuple(key.rotation_step for key in nonzero),
+            },
             bases=("Q",),
             result_count=len(nonzero),
             implementation="native-rotate-many-hoisted",
@@ -3335,13 +3365,13 @@ class Engine:
                 selected, value.device, operation_name="conjugate"
             ),
         )
-        key_resource = self._bind_key("conjugation-key", selected)
+        self._validator.validate_key_switch_key(selected)
         data = cast(
             torch.Tensor,
             self._execute(
                 ckks.ConjugateOp,
                 value.data,
-                bindings=self._key_switch_bindings(value.device, key_resource),
+                selected.data,
                 bases=("Q",),
                 attributes={"output_domain": output_domain},
                 implementation="native-key-switch-streaming",
@@ -3351,9 +3381,7 @@ class Engine:
             value,
             data,
             polynomial_domain=output_domain,
-            residue_representation=(
-                "standard" if output_domain == "coefficient" else "montgomery"
-            ),
+            residue_representation=output_residues(output_domain),
         )
 
     def __str__(self) -> str:

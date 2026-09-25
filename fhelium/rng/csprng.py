@@ -140,7 +140,7 @@ class Csprng:
 
         self.total_num_channels = sum(self.shares)
         self.L = self.num_coefs // 4
-        ChaCha20Rng, RnsRandomStreams = _load_triton_csprng()
+        _, RnsRandomStreams = _load_triton_csprng()
         self.streams = RnsRandomStreams(
             num_coeffs=self.num_coefs,
             channel_counts=self.shares,
@@ -149,10 +149,19 @@ class Csprng:
             key=_normalize_key(seed),
             nonce=_normalize_nonce(nonce),
         )
-        self._round_stream = ChaCha20Rng(
+        from triton_csprng.chacha20 import make_chacha20_state
+
+        initial = make_chacha20_state(
+            num_blocks=1,
             key=self.streams.key_words,
             nonce=_derive_nonce(self.streams.nonce_words, 10_000),
             device=self.devices[0],
+        )
+        self.rounding_state = torch.cat(
+            (
+                initial.reshape(-1).to(torch.int64),
+                torch.zeros(1, dtype=torch.int64, device=self.devices[0]),
+            )
         )
 
     @property
@@ -237,4 +246,84 @@ class Csprng:
         self, coef: torch.Tensor, *, dtype: torch.dtype | None = None
     ) -> torch.Tensor:
         target_dtype = self.torch_dtype if dtype is None else dtype
-        return self._round_stream.stochastic_round(coef).to(target_dtype)
+        return stochastic_round_(coef, self.rounding_state).to(target_dtype)
+
+
+def stochastic_round_(
+    values: torch.Tensor, state: torch.Tensor, *, word_stride: int = 1
+) -> torch.Tensor:
+    """Round signed values using an advancing ChaCha20 word stream.
+
+    ``word_stride`` selects every corresponding word of a logically expanded
+    coefficient array and advances over the complete array, including omitted
+    zero coefficients. It does not repeat or reseed the random stream.
+
+    ``state`` holds the sixteen ChaCha20 state words followed by the position
+    within its current sixteen-word block, all stored as int64. Counter words
+    12 and 13 and position 16 advance in place. Key and nonce words are retained.
+    The high counter word may equal 2**32 only to mark an exhausted stream.
+    """
+    from triton_csprng.chacha20 import chacha20_blocks
+
+    if (
+        state.shape != (17,)
+        or state.dtype != torch.int64
+        or state.device != values.device
+    ):
+        raise ValueError(
+            "Rounding state requires an int64 [17] Tensor on the value device"
+        )
+    if type(word_stride) is not int or word_stride < 1:
+        raise ValueError("Rounding word_stride must be a positive integer")
+    count = values.numel() * word_stride
+    if not count:
+        return torch.empty_like(values, dtype=torch.int64)
+    position = state[16].clone()
+    low, high = state[12].clone(), state[13].clone()
+    last = low + (position + count - 1) // 16
+    torch.ops.aten._assert_async.msg(
+        high + (last >> 32) < 1 << 32, "ChaCha20 counter space is exhausted"
+    )
+    if word_stride == 1:
+        block_count = (count + 30) // 16
+        states = state[:16].expand(block_count, 16).clone()
+        counters = low + torch.arange(
+            block_count, dtype=torch.int64, device=values.device
+        )
+        states[:, 12] = counters & 0xFFFFFFFF
+        states[:, 13] = (high + (counters >> 32)) & 0xFFFFFFFF
+        blocks = chacha20_blocks(states.to(torch.uint32)).reshape(-1)
+        indices = position + torch.arange(
+            count, dtype=torch.int64, device=values.device
+        )
+        words = (
+            blocks.to(torch.int64)
+            .index_select(0, indices)
+            .reshape(values.shape)
+        )
+    else:
+        indices = (
+            position
+            + torch.arange(
+                values.numel(), dtype=torch.int64, device=values.device
+            )
+            * word_stride
+        )
+        counters = low + indices // 16
+        states = state[:16].expand(values.numel(), 16).clone()
+        states[:, 12] = counters & 0xFFFFFFFF
+        states[:, 13] = (high + (counters >> 32)) & 0xFFFFFFFF
+        blocks = chacha20_blocks(states.to(torch.uint32)).to(torch.int64)
+        words = blocks.gather(1, (indices % 16).unsqueeze(-1)).reshape(
+            values.shape
+        )
+    absolute = values.abs()
+    base = torch.floor(absolute)
+    threshold = ((absolute - base) * 4294967296.0).to(torch.int64)
+    rounded = base.to(torch.int64) + (words < threshold).to(torch.int64)
+    result = torch.where(values < 0, -rounded, rounded)
+    advance = low + (position + count) // 16
+    state[12].copy_(advance & 0xFFFFFFFF)
+    state[13].copy_(high + (advance >> 32))
+    state[16].copy_((position + count) % 16)
+    return result

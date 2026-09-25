@@ -2,10 +2,13 @@
 
 The experimental bootstrap component interfaces expose polynomial approximation, polynomial evaluation, linear-transform compilation and evaluation, and periodic reduction. Each component defines its coordinate, polynomial basis, tensor axes, arithmetic state, depth/scale recurrence, mutation behavior, and numerical range.
 
+## Prerequisites
+
+Begin with a working [bootstrap composition](compose-bootstrap-circuit.md) and choose one component to replace. State its input/output coordinates, polynomial basis or tensor axes, mutation behavior, and required depth and scale transitions.
+
 ## Polynomial approximation
 
-An approximator chooses coefficients but not the homomorphic multiplication
-DAG. Use ascending-degree coefficients and record the physical design interval:
+An approximator chooses coefficients but not the homomorphic multiplication DAG. Use ascending-degree coefficients and record the physical design interval:
 
 ```python
 class MyApproximator:
@@ -37,15 +40,11 @@ $$
 x=\frac{2t-(a+b)}{b-a}\in[-1,1].
 $$
 
-`PolynomialApproximation.evaluate_plaintext()` receives the normalized
-coordinate $x$. The caller performs the transformation from $t$. Its input may
-have any NumPy-broadcastable axes;
-its output preserves those axes.
+`PolynomialApproximation.evaluate_plaintext()` receives the normalized coordinate $x$. The caller performs the transformation from $t$. Its input may have any NumPy-broadcastable axes; its output preserves those axes.
 
 ## Polynomial evaluation
 
-Implement `required_depths()` and `evaluate()` to execute another multiplication
-DAG:
+Implement `required_depths()` and `evaluate()` to execute another multiplication DAG:
 
 ```python
 class MyEvaluator:
@@ -68,10 +67,7 @@ class MyEvaluator:
         )
 ```
 
-State the basis your evaluator accepts. The built-in evaluators consume a
-two-component coefficient-domain standard-RNS Q ciphertext with axes
-`[component, *batch, limb, coefficient]` and active `prime_ids`. Their
-ciphertext products require a relinearization key and perform
+State the basis your evaluator accepts. The built-in evaluators consume a two-component coefficient-domain standard-RNS Q ciphertext with axes `[component, *batch, limb, coefficient]` and active `prime_ids`. Their ciphertext products require a relinearization key and perform
 
 ```text
 coefficient/standard/Q/two components
@@ -81,18 +77,11 @@ coefficient/standard/Q/two components
   -> drop one complete Q group and retain the actual quotient scale
 ```
 
-A custom evaluator must report its actual scale recurrence, such as
-$\Delta_{\rm product}/M_d$ for the dropped Q-group product $M_d$. It must not claim
-`required_depths(polynomial) == d` unless every execution path advances by
-exactly $d$ depths.
-An evaluator may accept `relinearization_key=None` only on an execution path
-whose polynomial DAG contains no ciphertext product, such as a constant or
-linear built-in polynomial.
+A custom evaluator must report its actual scale recurrence, such as $\Delta_{\rm product}/M_d$ for the dropped Q-group product $M_d$. It must not claim `required_depths(polynomial) == d` unless every execution path advances by exactly $d$ depths. An evaluator may accept `relinearization_key=None` only on an execution path whose polynomial DAG contains no ciphertext product, such as a constant or linear built-in polynomial.
 
 ## Linear-transform compilation
 
-A compiler returns immutable stages. A stage stores whatever numerical data the
-matching evaluator understands:
+A compiler returns immutable stages. A stage stores whatever numerical data the matching evaluator understands:
 
 ```python
 from dataclasses import dataclass
@@ -111,9 +100,7 @@ class SparseCompiler:
         return (SparseStage(slots, matrix),)
 ```
 
-`reference()` is a plaintext oracle. Document its accepted axes and whether its
-input is a raw physical coordinate or a normalized coordinate. The built-in
-radix-2 reference uses shape `[slot]` and the convention
+`reference()` is a plaintext oracle. Document its accepted axes and whether its input is a raw physical coordinate or a normalized coordinate. The built-in radix-2 reference uses shape `[slot]` and the convention
 
 $$
 T(C(a))=Sa.
@@ -151,20 +138,14 @@ class SparseEvaluator:
         )
 ```
 
-The callbacks provide rotation-key decomposition and diagonal encoding/cache
-policy. A built-in diagonal stage encodes an unbatched `[limb, ntt_index]`
-Montgomery plaintext at the selected scale $\Delta_{p,j}$. For input scale
-$\Delta_j$ and dropped group product $M_j$, one stage returns
+The callbacks provide rotation-key decomposition and diagonal encoding/cache policy. A built-in diagonal stage encodes an unbatched `[limb, ntt_index]` Montgomery plaintext at the selected scale $\Delta_{p,j}$. For input scale $\Delta_j$ and dropped group product $M_j$, one stage returns
 
 $$
 \ell_{j+1}=\ell_j+1,\qquad
 \Delta_{j+1}=\frac{\Delta_j\Delta_{p,j}}{M_j}.
 $$
 
-The output remains two-component coefficient-domain standard RNS over Q, with
-unchanged batch axes and the complete leading `prime_ids` group removed. If a
-custom evaluator uses another recurrence or state transition, report the
-differing recurrence or transition.
+The output remains two-component coefficient-domain standard RNS over Q, with unchanged batch axes and the complete leading `prime_ids` group removed. If a custom evaluator uses another recurrence or state transition, report the differing recurrence or transition.
 
 For a cyclic-diagonal map
 
@@ -172,8 +153,7 @@ $$
 L(x)=\sum_kd_k\mathbin{\odot}\operatorname{Rot}_k(x),
 $$
 
-direct and BSGS evaluation are two schedules for the same linear map. A
-BSGS implementation should test the identity
+direct and BSGS evaluation are two schedules for the same linear map. A BSGS implementation should test the identity
 
 $$
 \operatorname{Rot}_g\left(
@@ -185,9 +165,7 @@ $$
 
 ## Periodic reduction (`modular_reduction`)
 
-A reduction component must distinguish raw and normalized coordinates. Let
-`input_bound` be $B$, raw input be $r$ with $|r|\le B$, and normalized input be
-$x=r/B$. The built-in output target is
+A reduction component must distinguish raw and normalized coordinates. Let `input_bound` be $B$, raw input be $r$ with $|r|\le B$, and normalized input be $x=r/B$. The built-in output target is
 
 $$
 \rho_B(x)=\frac{\sin(\pi Bx)}{\pi}.
@@ -234,28 +212,16 @@ The component interface specification must state:
 - the raw admissible interval and output target;
 - the polynomial basis and design interval;
 - `required_depths` and output actual scale;
-- whether `requires_relinearization` is true because evaluation performs a
-  ciphertext-ciphertext product;
-- whether ciphertext products or conjugation consume the supplied primitive
-  keys;
-- output depth, component count, domain, basis, residue representation, and
-  `prime_ids`;
+- whether `requires_relinearization` is true because evaluation performs a ciphertext-ciphertext product;
+- whether ciphertext products or conjugation consume the supplied primitive keys;
+- output depth, component count, domain, basis, residue representation, and `prime_ids`;
 - whether execution mutates or aliases an input.
 
-`FullSlotBootstrap` expects `fused_input_divisor` to be the numerical factor
-folded into CoeffsToSlots. Returning $B$ asserts that the reducer will receive
-$x$ and must not divide by $B$ again. The reducer is a slotwise stage and does
-not receive rotation keys. Its `evaluate()` method receives keyword-only
-`relinearization_key` and `conjugation_key` values. A custom reduction that
-does not multiply ciphertexts supports `relinearization_key=None`; built-in
-reductions reject `None`. The full-slot topology always has a conjugation key
-for branch splitting, so reducers may use that same primitive without a second
-key declaration.
+`FullSlotBootstrap` expects `fused_input_divisor` to be the numerical factor folded into CoeffsToSlots. Returning $B$ asserts that the reducer will receive $x$ and must not divide by $B$ again. The reducer is a slotwise stage and does not receive rotation keys. Its `evaluate()` method receives keyword-only `relinearization_key` and `conjugation_key` values. A custom reduction that does not multiply ciphertexts supports `relinearization_key=None`; built-in reductions reject `None`. The full-slot topology always has a conjugation key for branch splitting, so reducers may use that same primitive without a second key declaration.
 
 ## Full-slot integration requirements
 
-A component that is inserted into `FullSlotBootstrap` participates in this
-state sequence:
+A component that is inserted into `FullSlotBootstrap` participates in this state sequence:
 
 ```mermaid
 flowchart LR
@@ -277,10 +243,7 @@ $$
 \ell_{\rm out}=\ell_{\rm raise}+m_C+1+m_\rho+m_T.
 $$
 
-Its final scale follows the actual SlotsToCoeffs recurrence and may differ from
-`default_scale`. A component must not hide a depth, scale reinterpretation,
-basis extension, NTT transition, or range normalization from its declared
-state-transition specification.
+Its final scale follows the actual SlotsToCoeffs recurrence and may differ from `default_scale`. A component must not hide a depth, scale reinterpretation, basis extension, NTT transition, or range normalization from its declared state-transition specification.
 
 ## Test the behavior that matters
 
@@ -296,7 +259,8 @@ Test components independently before inserting them into a full bootstrap:
 - run full-slot end-to-end refresh across several seeds and admissible ranges;
 - measure the application's actual raw branch range and error distribution.
 
-Do not weaken a tolerance to accommodate unexplained error. First determine
-whether the implementation changed, the coordinate convention is wrong, or the
-original error model was unsound. No identity payload or complete-pipeline
-framework is required for these tests.
+Investigate a numerical failure using the implemented equations, coordinate convention, scale schedule, and observed error distribution.
+
+## Verify the outcome
+
+Substitute the component into the same topology, validate its clear mathematical result first, and then measure encrypted error across its stated range. Preserve the component’s state and coordinate contract when comparing it with another implementation.

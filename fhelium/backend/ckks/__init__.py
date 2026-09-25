@@ -1,25 +1,20 @@
-"""Provide CKKS Tensor algorithms, implementations, and execution resources.
+"""CKKS codecs, cryptography, arithmetic, and key-switch composition.
 
-Execution owners bind placement-specific arithmetic, random-stream, and key
-resources. Implementations do not own an Engine or a concrete device.
+Numerical implementations consume Tensor operands and supplied sampling handles.
+Data-provision APIs construct parameter tables and cryptographic key values.
 """
 
 from .codec import (
-    CKKS_CONFIG_RESOURCE_KIND,
-    CKKS_CONFIG_RESOURCE_SYMBOL,
-    RANDOM_STREAM_RESOURCE_KIND,
-    RANDOM_STREAM_RESOURCE_SYMBOL,
     NativeDecodeImplementation,
     NativeEncodeImplementation,
     NativeIntegerCoefficientsToRnsImplementation,
 )
 from .crypto import (
-    DECRYPT_RECONSTRUCTION_RESOURCE_KIND,
-    PUBLIC_KEY_RESOURCE_KIND,
-    SECRET_KEY_RESOURCE_KIND,
+    RANDOM_STREAM_RESOURCE_KIND,
+    RANDOM_STREAM_RESOURCE_SYMBOL,
     CkksKeyGenerator,
     NativeDecryptImplementation,
-    DecryptReconstructionResource,
+    DecryptReconstructionTables,
     NativeEncryptImplementation,
     KeyGenerationResource,
 )
@@ -29,21 +24,16 @@ from .materialization import (
 from .scalar import NativeScalarArithmeticImplementation
 
 __all__ = [
-    "DECRYPT_RECONSTRUCTION_RESOURCE_KIND",
-    "CKKS_CONFIG_RESOURCE_KIND",
-    "CKKS_CONFIG_RESOURCE_SYMBOL",
     "RANDOM_STREAM_RESOURCE_KIND",
     "RANDOM_STREAM_RESOURCE_SYMBOL",
     "CkksDeviceResources",
     "CkksKeyGenerator",
     "NativeDecodeImplementation",
     "NativeDecryptImplementation",
-    "DecryptReconstructionResource",
+    "DecryptReconstructionTables",
     "NativeEncodeImplementation",
     "NativeEncryptImplementation",
     "NativeIntegerCoefficientsToRnsImplementation",
     "NativeScalarArithmeticImplementation",
     "KeyGenerationResource",
-    "PUBLIC_KEY_RESOURCE_KIND",
-    "SECRET_KEY_RESOURCE_KIND",
 ]

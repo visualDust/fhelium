@@ -22,9 +22,7 @@ from fhelium.serialization import ValueEnvelope
 def engine() -> CkksEngine:
     if not torch.cuda.is_available():
         pytest.skip("CUDA is required")
-    return CkksEngine(
-        fh.Preset.slots8192_scale40_depth7_int64, device="cuda:0"
-    )
+    return CkksEngine(fh.Preset.slots8192_scale40_depth7_int64, device="cuda:0")
 
 
 def _deterministic_engine(seed: int) -> CkksEngine:
@@ -251,7 +249,9 @@ def test_decode_rejects_wrong_coefficient_ring_dimension(
         engine.decode(malformed)
 
 
-def test_approximate_coefficients_require_dense_finite_float64_tensor() -> None:
+def test_approximate_coefficients_validate_storage_without_scanning_contents() -> (
+    None
+):
     common = dict(
         message=None,
         depth=0,
@@ -269,10 +269,10 @@ def test_approximate_coefficients_require_dense_finite_float64_tensor() -> None:
     )
     with pytest.raises(TypeError, match="dense strided"):
         Plaintext(data=sparse, **common)
-    with pytest.raises(ValueError, match="finite"):
-        Plaintext(
-            data=torch.tensor([float("nan")], dtype=torch.float64), **common
-        )
+    data = torch.tensor([float("nan"), float("inf")], dtype=torch.float64)
+    value = Plaintext(data=data, **common)
+    assert value.data is data
+    torch.testing.assert_close(value.clone().data, data, equal_nan=True)
 
 
 @pytest.mark.gpu

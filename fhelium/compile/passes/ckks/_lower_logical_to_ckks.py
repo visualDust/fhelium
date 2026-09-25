@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from ..._pipeline import (
     PassResult,
     PassStats,
@@ -13,9 +19,10 @@ from xdsl.dialects.builtin import StringAttr, UnrealizedConversionCastOp
 from xdsl.ir import Attribute, Operation, SSAValue
 from xdsl.rewriter import Rewriter
 
-from fhelium.ir import Program
 
 from fhelium.ir.dialects import ckks, logical
+from fhelium.ir.dialects._common import OpenStateType
+from ._transition_state import infer_logical_representation
 from .._operation_transforms import (
     cast_before,
     ciphertext_type,
@@ -59,9 +66,12 @@ def _replace_with_result_cast(
 
     if len(operation.results) != 1:
         raise ValueError("logical-to-CKKS replacement requires one result")
-    cast, cast_result = UnrealizedConversionCastOp.cast_one(
-        result, operation.results[0].type
-    )
+    result_type = operation.results[0].type
+    if isinstance(result_type, OpenStateType) and isinstance(
+        result.type, OpenStateType
+    ):
+        result_type = result_type.with_state(result.type.state.data)
+    cast, cast_result = UnrealizedConversionCastOp.cast_one(result, result_type)
     cast_result.name_hint = operation.results[0].name_hint
     Rewriter.replace_op(
         operation,
@@ -81,17 +91,45 @@ class LowerLogicalToCkksPass:
 
     name: str = "lower-logical-to-ckks"
 
-    def run(
-        self,
-        program: Program,
-        workspace: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
         """Lower locally ready registered operations and report blockers."""
+        program = compilation.program
+        workspace = compilation.workspace
 
         del workspace
         matched = transformed = inserted = skipped = 0
         diagnostics: list[str] = []
         for operation in program_operations(program):
+            representation_cast = isinstance(
+                operation, UnrealizedConversionCastOp
+            )
+            if (
+                representation_cast
+                and len(operation.operands) == len(operation.results) == 1
+            ) or isinstance(operation, (ckks.ToNttOp, ckks.FromNttOp)):
+                source_type = operation.operands[0].type
+                target_type = operation.results[0].type
+                if isinstance(source_type, OpenStateType) and isinstance(
+                    target_type, OpenStateType
+                ):
+                    additions = {
+                        name: value
+                        for name, value in source_type.state.data.items()
+                        if (representation_cast or name != "strides")
+                        and (
+                            name not in target_type.state.data
+                            or target_type.state.data[name]
+                            == StringAttr("unknown")
+                        )
+                    }
+                    if additions:
+                        Rewriter.replace_value_with_new_type(
+                            operation.results[0],
+                            target_type.with_state(additions),
+                        )
+                        matched += 1
+                        transformed += 1
+                continue
             if isinstance(operation, logical.NegateEncryptedOp):
                 matched += 1
                 if len(operation.operands) != 1:
@@ -105,12 +143,7 @@ class LowerLogicalToCkksPass:
                 typed = cast_before(
                     operation,
                     source,
-                    ciphertext_type(
-                        source,
-                        domain="coefficient",
-                        residues="standard",
-                        components=2,
-                    ),
+                    ciphertext_type(source),
                     name_hint=f"{display_name(operation)}_ciphertext",
                 )
                 inserted += typed is not source
@@ -138,6 +171,19 @@ class LowerLogicalToCkksPass:
                 is_multiply = isinstance(
                     operation, logical.MultiplyEncryptedEncryptedOp
                 )
+                representations = []
+                for operand in operation.operands:
+                    try:
+                        representations.append(
+                            infer_logical_representation(operand, {})
+                        )
+                    except ValueError:
+                        representations.append((None, None))
+                align_coefficient = (
+                    not is_multiply
+                    and (None, None) not in representations
+                    and len(set(representations)) > 1
+                )
                 typed_operands: list[SSAValue] = []
                 for index, operand in enumerate(operation.operands):
                     if is_multiply and not _ntt_montgomery(operand):
@@ -152,24 +198,38 @@ class LowerLogicalToCkksPass:
                         operand,
                         ciphertext_type(
                             operand,
-                            domain="ntt" if is_multiply else "coefficient",
-                            residues=(
-                                "montgomery" if is_multiply else "standard"
-                            ),
-                            components=2,
+                            domain=representations[index][0],
+                            residues=representations[index][1],
+                            components=2 if is_multiply else None,
                         ),
                         name_hint=f"{display_name(operation)}_operand{index}",
                     )
                     inserted += typed is not operand
+                    if align_coefficient and representations[index][0] == "ntt":
+                        converted = ckks.FromNttOp(
+                            typed,
+                            ciphertext_type(
+                                typed, domain="coefficient", residues="standard"
+                            ),
+                        )
+                        owner = operation.parent_block()
+                        assert owner is not None
+                        owner.insert_op_before(converted, operation)
+                        typed = converted.result
+                        inserted += 1
                     typed_operands.append(typed)
                 if len(typed_operands) != 2:
                     continue
                 result_type = ciphertext_type(
                     typed_operands[0],
-                    domain="ntt" if is_multiply else "coefficient",
-                    residues="montgomery" if is_multiply else "standard",
-                    components=3 if is_multiply else 2,
+                    domain="ntt" if is_multiply else None,
+                    residues="montgomery" if is_multiply else None,
+                    components=3 if is_multiply else None,
                 )
+                if is_multiply:
+                    # Scale propagation derives s_left * s_right; the input
+                    # scale is not the product's scale.
+                    result_type = result_type.with_state({"scale": None})
                 attributes: dict[str, Attribute] = {}
                 replacement = target_type.create(
                     operands=typed_operands,
@@ -228,18 +288,35 @@ class LowerLogicalToCkksPass:
                     "typed NTT/Montgomery ciphertext"
                 )
                 continue
+            try:
+                input_domain, input_residues = infer_logical_representation(
+                    ciphertext, {}
+                )
+            except ValueError:
+                input_domain = input_residues = None
             typed_ciphertext = cast_before(
                 operation,
                 ciphertext,
                 ciphertext_type(
-                    ciphertext,
-                    domain="ntt" if is_multiply else "coefficient",
-                    residues="montgomery" if is_multiply else "standard",
-                    components=2,
+                    ciphertext, domain=input_domain, residues=input_residues
                 ),
                 name_hint=f"{display_name(operation)}_ciphertext",
             )
             inserted += typed_ciphertext is not ciphertext
+            if not is_multiply and input_domain == "ntt":
+                converted = ckks.FromNttOp(
+                    typed_ciphertext,
+                    ciphertext_type(
+                        typed_ciphertext,
+                        domain="coefficient",
+                        residues="standard",
+                    ),
+                )
+                owner = operation.parent_block()
+                assert owner is not None
+                owner.insert_op_before(converted, operation)
+                typed_ciphertext = converted.result
+                inserted += 1
             attributes: dict[str, Attribute] = {}
             if is_multiply:
                 replacement = ckks.MultiplyPlaintextOp.create(
@@ -280,6 +357,8 @@ class LowerLogicalToCkksPass:
                 skipped=skipped,
                 diagnostics=tuple(diagnostics),
             )
+        for function in program.functions:
+            function.update_function_type()
         return PassResult(
             program,
             PassStats(

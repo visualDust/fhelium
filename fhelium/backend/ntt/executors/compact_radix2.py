@@ -1,211 +1,26 @@
-"""Configured compact-table grouped radix-2 CUDA NTT schedule executor."""
+"""Prepare native compact radix2 calls over Tensor operands."""
 
-from __future__ import annotations
-
-import torch
-
-from fhelium.config.ntt import CompactRadix2Policy
-from fhelium.backend.ntt.interface import slice_ntt_parameter_rows
-from fhelium.backend.ntt.tables import CompactRadix2Tables
 from fhelium.native.wrapper import ntt_ops
 
+_OPERATIONS = {
+    'forward_montgomery_': ntt_ops.forward_ntt_montgomery_compact_grouped_smem_,
+    'forward_to_montgomery_': ntt_ops.forward_ntt_to_montgomery_compact_grouped_smem_,
+    'forward_to_montgomery': ntt_ops.forward_ntt_to_montgomery_compact_grouped_smem,
+    'inverse_montgomery_': ntt_ops.inverse_ntt_montgomery_compact_grouped_smem_,
+    'inverse_to_standard_lazy_': ntt_ops.inverse_ntt_to_standard_lazy_compact_grouped_smem_,
+    'inverse_to_standard_': ntt_ops.inverse_ntt_to_standard_compact_grouped_smem_,
+    'inverse_to_centered_': ntt_ops.inverse_ntt_to_centered_compact_grouped_smem_,
+}
 
-class CompactRadix2NttBackend:
-    """Compute butterfly indices in CUDA from compact twiddles."""
 
-    def __init__(
-        self,
-        *,
-        policy: CompactRadix2Policy,
-        ntt_tables: CompactRadix2Tables,
-        rns_params: torch.Tensor,
-    ) -> None:
-        self.policy = policy
-        self.name = policy.name
-        self.grouped_radix2_stage_count = policy.grouped_radix2_stage_count
-        self.rns_params = rns_params
-        self.forward_twiddles = ntt_tables.forward_twiddles
-        self.inverse_twiddles = ntt_tables.inverse_twiddles
-        self._native_input_cache: dict[
-            tuple[int, int, int, int], tuple[torch.Tensor, torch.Tensor]
-        ] = {}
+def prepare_transition(transition: str):
+    """Bind the native operation without retaining its Tensor inputs."""
+    operation = _OPERATIONS[transition]
+    if transition == "forward_to_montgomery":
+        return operation
 
-    def __str__(self) -> str:
-        return (
-            f"CompactRadix2NttBackend(name={self.name!r}, "
-            f"group_width={self.policy.group_width}, "
-            f"forward_twiddle_shape={tuple(self.forward_twiddles.shape)})"
-        )
+    def execute(operand, twiddles, params, grouped_stage_count):
+        operation(operand, twiddles, params, grouped_stage_count)
+        return operand
 
-    __repr__ = __str__
-
-    def _active_native_inputs(
-        self,
-        operand: torch.Tensor,
-        twiddles: torch.Tensor,
-        parameter_row_start: int,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        if operand.ndim < 2:
-            return slice_ntt_parameter_rows(
-                operand,
-                twiddles,
-                self.rns_params,
-                parameter_row_start,
-            )
-        cache_key = (
-            id(twiddles),
-            id(self.rns_params),
-            parameter_row_start,
-            operand.size(-2),
-        )
-        cached = self._native_input_cache.get(cache_key)
-        if cached is not None:
-            return cached
-        cached = slice_ntt_parameter_rows(
-            operand,
-            twiddles,
-            self.rns_params,
-            parameter_row_start,
-        )
-        self._native_input_cache[cache_key] = cached
-        return cached
-
-    def forward_montgomery_(
-        self, operand: torch.Tensor, parameter_row_start: int
-    ) -> None:
-        twiddles, params = self._active_native_inputs(
-            operand, self.forward_twiddles, parameter_row_start
-        )
-        ntt_ops.forward_ntt_montgomery_compact_grouped_smem_(
-            operand,
-            twiddles,
-            params,
-            self.grouped_radix2_stage_count,
-        )
-
-    def forward_to_montgomery_(
-        self, operand: torch.Tensor, parameter_row_start: int
-    ) -> None:
-        twiddles, params = self._active_native_inputs(
-            operand, self.forward_twiddles, parameter_row_start
-        )
-        ntt_ops.forward_ntt_to_montgomery_compact_grouped_smem_(
-            operand,
-            twiddles,
-            params,
-            self.grouped_radix2_stage_count,
-        )
-
-    def forward_to_montgomery(
-        self, operand: torch.Tensor, parameter_row_start: int
-    ) -> torch.Tensor:
-        twiddles, params = self._active_native_inputs(
-            operand, self.forward_twiddles, parameter_row_start
-        )
-        return ntt_ops.forward_ntt_to_montgomery_compact_grouped_smem(
-            operand,
-            twiddles,
-            params,
-            self.grouped_radix2_stage_count,
-        )
-
-    def forward_to_montgomery_add_scaled_(
-        self,
-        operand: torch.Tensor,
-        addend: torch.Tensor,
-        multiplier: torch.Tensor,
-        parameter_row_start: int,
-    ) -> None:
-        """Write NTT(standard operand) + addend * row multiplier in Montgomery form."""
-
-        twiddles, params = self._active_native_inputs(
-            operand, self.forward_twiddles, parameter_row_start
-        )
-        ntt_ops.forward_ntt_to_montgomery_compact_add_scaled_(
-            operand,
-            addend,
-            multiplier,
-            twiddles,
-            params,
-            self.grouped_radix2_stage_count,
-        )
-
-    def forward_montgomery_accumulate_key_(
-        self,
-        scratch: torch.Tensor,
-        key_digit: torch.Tensor,
-        accumulators: torch.Tensor,
-        parameter_row_start: int,
-    ) -> None:
-        """Consume one digit's NTT inside the tail and add both key products.
-
-        Scratch enters in coefficient/Montgomery form and is disposable on
-        return; its final NTT evaluations are never written to global memory.
-        The accumulators retain QP NTT/Montgomery representation.
-        """
-
-        twiddles, params = self._active_native_inputs(
-            scratch, self.forward_twiddles, parameter_row_start
-        )
-        ntt_ops.forward_ntt_montgomery_compact_keyswitch_accumulate_(
-            scratch,
-            twiddles,
-            params,
-            key_digit,
-            accumulators[0],
-            accumulators[1],
-            parameter_row_start,
-            self.grouped_radix2_stage_count,
-        )
-
-    def inverse_montgomery_(
-        self, operand: torch.Tensor, parameter_row_start: int
-    ) -> None:
-        twiddles, params = self._active_native_inputs(
-            operand, self.inverse_twiddles, parameter_row_start
-        )
-        ntt_ops.inverse_ntt_montgomery_compact_grouped_smem_(
-            operand,
-            twiddles,
-            params,
-            self.grouped_radix2_stage_count,
-        )
-
-    def inverse_to_standard_lazy_(
-        self, operand: torch.Tensor, parameter_row_start: int
-    ) -> None:
-        twiddles, params = self._active_native_inputs(
-            operand, self.inverse_twiddles, parameter_row_start
-        )
-        ntt_ops.inverse_ntt_to_standard_lazy_compact_grouped_smem_(
-            operand,
-            twiddles,
-            params,
-            self.grouped_radix2_stage_count,
-        )
-
-    def inverse_to_standard_(
-        self, operand: torch.Tensor, parameter_row_start: int
-    ) -> None:
-        twiddles, params = self._active_native_inputs(
-            operand, self.inverse_twiddles, parameter_row_start
-        )
-        ntt_ops.inverse_ntt_to_standard_compact_grouped_smem_(
-            operand,
-            twiddles,
-            params,
-            self.grouped_radix2_stage_count,
-        )
-
-    def inverse_to_centered_(
-        self, operand: torch.Tensor, parameter_row_start: int
-    ) -> None:
-        twiddles, params = self._active_native_inputs(
-            operand, self.inverse_twiddles, parameter_row_start
-        )
-        ntt_ops.inverse_ntt_to_centered_compact_grouped_smem_(
-            operand,
-            twiddles,
-            params,
-            self.grouped_radix2_stage_count,
-        )
+    return execute

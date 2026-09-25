@@ -28,6 +28,7 @@ from .._operation_catalog import (
     unsupported_attributes,
 )
 from ._common import OpenStateType, ValueRole
+from .._dependencies import OperationDependencies, operand_relations
 
 
 @irdl_attr_definition
@@ -95,12 +96,32 @@ class AddOp(_BinarySemanticOp):
 
     name = "fhelium_semantic.add"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {'tensor_position': 'reindexed'},
+                1: {'tensor_position': 'reindexed'},
+            },
+        )
+
 
 @irdl_op_definition
 class SubtractOp(_BinarySemanticOp):
     """Subtract the right semantic value pointwise from the left."""
 
     name = "fhelium_semantic.subtract"
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {'tensor_position': 'reindexed'},
+                1: {'tensor_position': 'reindexed'},
+            },
+        )
 
 
 @irdl_op_definition
@@ -109,12 +130,26 @@ class MultiplyOp(_BinarySemanticOp):
 
     name = "fhelium_semantic.multiply"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {'tensor_position': 'reindexed'},
+                1: {'tensor_position': 'reindexed'},
+            },
+        )
+
 
 @irdl_op_definition
 class NegateOp(_UnarySemanticOp):
     """Negate one semantic value pointwise."""
 
     name = "fhelium_semantic.negate"
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(self, {0: {'tensor_position': 'element'}})
 
 
 @irdl_op_definition
@@ -125,6 +160,10 @@ class RollOp(_UnarySemanticOp):
 
     shift = opt_attr_def(IntegerAttr)
     dimension = opt_attr_def(IntegerAttr)
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(self, {0: {'tensor_position': 'reindexed'}})
 
 
 def _roll_specification(operation: Operation) -> tuple[str, ...]:

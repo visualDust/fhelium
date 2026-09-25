@@ -1,18 +1,10 @@
-# Analyze and choose an NTT backend
+# Interpret NTT backend performance
 
-This guide is for a deployment where the target GPU and CKKS preset are known,
-but backend measurements are close, inconsistent, or different between raw
-NTT kernels and CKKS operations. It explains how to identify the limiting
-resource before selecting an `Engine(ntt_backend=...)` policy.
+This guide is for a deployment where the target GPU and CKKS preset are known, but backend measurements are close, inconsistent, or different between raw NTT kernels and CKKS operations. It explains how to identify the limiting resource before selecting an Eager NTT policy or a Compile implementation requirement.
 
-The recommendation commands currently run the retained internal
-`fhelium.legacy.engine.CkksEngine` diagnostic evaluator. They provide backend
-screening evidence, not current `fhelium.eager.Engine` performance evidence.
-Confirm the selected policy with the current Eager evaluator and the complete
-production workload.
+The recommendation commands currently run the retained internal `fhelium.legacy.engine.CkksEngine` diagnostic evaluator. They provide backend screening evidence, not current `fhelium.eager.Engine` performance evidence. Confirm the selected policy with the current Eager evaluator and the complete production workload.
 
-For the screening command, decision thresholds, and a complete example result,
-start with [Screen NTT backends on the target GPU](screen-ntt-backends.md).
+For the screening command, decision thresholds, and a complete example result, start with [Screen NTT backends on the target GPU](screen-ntt-backends.md).
 
 ## Establish the comparison definition
 
@@ -24,32 +16,15 @@ Hold these variables constant across candidates:
 - semantic operation and input representation;
 - warmup count, timed-run count, and repetition count.
 
-Strict high-radix backends only support compatible ring dimensions. If radix
-$R=2^b$ is strict, `logN` $L$ must satisfy $L \bmod b = 0$. An incompatible
-backend is not a slower candidate; it is a different, invalid factorization and
-is rejected.
+Strict high-radix backends only support compatible ring dimensions. If radix $R=2^b$ is strict, `logN` $L$ must satisfy $L \bmod b = 0$. The implementation rejects ring dimensions that violate this divisibility requirement.
 
-Run the screening suite first and retain its raw evidence:
+## Prerequisites
 
-```bash
-fhelium benchmark recommend ntt --suite kernel --preset slots32768-scale40-depth34-int64 \
-  --device cuda:0 --output results/kernel.json
-```
-
-Then run the CKKS primitive suite under the same environment:
-
-```bash
-fhelium benchmark recommend ntt --suite ckks-primitive --preset slots32768-scale40-depth34-int64 \
-  --device cuda:0 --output results/primitives.json
-```
-
-The JSON `evidence` array contains every operation/repetition timing rather than
-only the final rank.
+Produce the kernel and CKKS-primitive reports with [Screen NTT backends](screen-ntt-backends.md). Retain their `evidence` arrays, which contain operation/repetition timings, and an application measurement for the same environment. This guide interprets those observations and selects the next focused profiling experiment.
 
 ## Understand the score before interpreting it
 
-For backend $b$ and operation $o$, the recommender first computes a latency
-ratio against the best backend for that operation:
+For backend $b$ and operation $o$, the recommender first computes a latency ratio against the best backend for that operation:
 
 $$
 r_{b,o} = \frac{\operatorname{median}(t_{b,o})}
@@ -62,14 +37,9 @@ $$
 S_b = \exp\left(\frac{1}{|O|}\sum_{o\in O}\log r_{b,o}\right).
 $$
 
-This prevents a millisecond-scale operation from numerically drowning out a
-microsecond-scale operation solely because of units. It does **not** assert
-that all operations matter equally to your application. A rotation-heavy
-workload may need a different weighting, which is why the last decision must
-use an application benchmark.
+This prevents a millisecond-scale operation from numerically drowning out a microsecond-scale operation solely because of units. It does **not** assert that all operations matter equally to your application. A rotation-heavy workload may need a different weighting, which is why the last decision must use an application benchmark.
 
-A gap below 3% is treated as a near tie. If the stable fallback is in that set,
-the command selects it. High confidence additionally requires:
+A gap below 3% is treated as a near tie. If the stable fallback is in that set, the command selects it. High confidence additionally requires:
 
 - at least three repetitions and five timed runs per operation;
 - the same numerical winner in every repetition;
@@ -78,16 +48,11 @@ the command selects it. High confidence additionally requires:
 
 ## Map backend structure to GPU costs
 
-The backends produce the same power-of-two NTT result, but
-organize its factorization and stages differently:
+The backends produce the same power-of-two NTT result, but organize its factorization and stages differently:
 
-- `radix2_compact_group4_smem8`, `group8`, and `group16` fuse groups of radix-2
-  stages and use a compiled shared-memory region;
-- `radix4_compact`, `radix8_compact`, and `radix16_compact` use genuine strict
-  high-radix butterflies and require divisibility;
-- `radix2_indexed` stores expanded schedules, is the CPU production default,
-  and provides the cross-device validation baseline for compact CUDA policies;
-  CUDA deployment screening ordinarily compares the compact candidates.
+- `radix2_compact_group4_smem8`, `group8`, and `group16` fuse groups of radix-2 stages and use a compiled shared-memory region;
+- `radix4_compact`, `radix8_compact`, and `radix16_compact` use genuine strict high-radix butterflies and require divisibility;
+- `radix2_indexed` stores expanded schedules, is the CPU production default, and provides the cross-device validation baseline for compact CUDA policies; CUDA deployment screening ordinarily compares the compact candidates.
 
 For a strict radix $R=2^b$ transform with $N=2^L$, the number of radix digits is
 
@@ -101,10 +66,7 @@ $$
 H = \min\left(D, \left\lfloor\frac{S}{b}\right\rfloor\right).
 $$
 
-When $H>0$, those digits become one local region, giving approximately
-$D-H+1$ digit-kernel launches instead of $D$. This reduces global round trips,
-but it may also increase per-block resources. The compiled native policy owns
-this tuning; the recommendation command does not alter it.
+When $H>0$, those digits become one local region, giving approximately $D-H+1$ digit-kernel launches instead of $D$. This reduces global round trips, but it may also increase per-block resources. The compiled native policy owns this tuning; the recommendation command does not alter it.
 
 In the diagram, Cooperative Thread Array (CTA) means one CUDA thread block.
 
@@ -126,16 +88,11 @@ flowchart LR
     L[Key switch, RNG, pointwise RNS work] --> K
 ```
 
-*Figure 1. Backend choice changes launch, memory-traffic, and occupancy costs;
-CKKS operations then combine NTT latency with non-NTT work.*
+*Figure 1. Backend choice changes launch, memory-traffic, and occupancy costs; CKKS operations then combine NTT latency with non-NTT work.*
 
 ### Global-memory traffic and coalescing
 
-High radix reduces digit count, but a terminal low-stride butterfly can scatter
-neighboring threads across distant addresses. If sectors per requested byte
-increase, fewer launches may still lose to grouped radix-2. Shared-memory
-fusion is valuable when it keeps that low-stride region local and makes global
-loads/stores contiguous.
+High radix reduces digit count, but a terminal low-stride butterfly can scatter neighboring threads across distant addresses. If sectors per requested byte increase, fewer launches may still lose to grouped radix-2. Shared-memory fusion is valuable when it keeps that low-stride region local and makes global loads/stores contiguous.
 
 Inspect these profiler signals together:
 
@@ -144,15 +101,11 @@ Inspect these profiler signals together:
 - achieved bandwidth relative to the device peak;
 - forward and inverse traffic separately.
 
-A backend with similar arithmetic count but much higher sector traffic is
-memory-layout limited, not mathematically doing more NTT work.
+A backend with similar arithmetic count but much higher sector traffic is memory-layout limited, not mathematically doing more NTT work.
 
 ### Registers, shared memory, and CTA supply
 
-A larger butterfly exposes more temporaries. Higher registers per thread can
-reduce the number of resident CTAs. A larger shared tile can impose the same
-limit at block granularity.
-Compare:
+A larger butterfly exposes more temporaries. Higher registers per thread can reduce the number of resident CTAs. A larger shared tile can impose the same limit at block granularity. Compare:
 
 - registers per thread;
 - static/dynamic shared memory per block;
@@ -160,25 +113,17 @@ Compare:
 - eligible warps and issue-slot utilization;
 - blocks resident per Streaming Multiprocessor (SM).
 
-Do not optimize occupancy as an isolated percentage. Lower occupancy is a
-problem only when it prevents the kernel from hiding instruction or memory
-latency.
+Do not optimize occupancy as an isolated percentage. Lower occupancy is a problem only when it prevents the kernel from hiding instruction or memory latency.
 
 ### RNS row count and cache behavior
 
-One CKKS transform applies the same backend across multiple active Q/P prime
-rows. More rows increase parallel work and can improve GPU saturation, but they
-also enlarge the working set. A backend that wins a small kernel microbenchmark
-can change position when key switching adds P rows or when the active Q suffix
-shrinks at a later depth.
+One CKKS transform applies the same backend across multiple active Q/P prime rows. More rows increase parallel work and can improve GPU saturation, but they also enlarge the working set. A backend that wins a small kernel microbenchmark can change position when key switching adds P rows or when the active Q suffix shrinks at a later depth.
 
-If the production evaluator is dominated by a specific depth, reproduce its
-active rows instead of assuming depth-0 QP measurements are sufficient.
+If the production evaluator is dominated by a specific depth, reproduce its active rows instead of assuming depth-0 QP measurements are sufficient.
 
 ### Why GPU architecture changes the result
 
-The same 256-coefficient shared region can behave differently when devices have
-different:
+The same 256-coefficient shared region can behave differently when devices have different:
 
 - register-file and shared-memory capacity per SM;
 - warp/CTA residency limits;
@@ -186,9 +131,7 @@ different:
 - HBM/GDDR bandwidth and latency;
 - instruction throughput and scheduling rules.
 
-Therefore, a radix8 shared path can be a clear win on one GPU and lose to an
-all-global path on another. Architecture labels such as `sm_86`, `sm_90`, and
-`sm_120` are evidence, not sufficient explanations by themselves.
+Therefore, a radix8 shared path can be a clear win on one GPU and lose to an all-global path on another. Architecture labels such as `sm_86`, `sm_90`, and `sm_120` are evidence, not sufficient explanations by themselves.
 
 ## Explain kernel-versus-primitive disagreement
 
@@ -203,27 +146,13 @@ Use the pattern, not only the aggregate rank:
 | Repetition winner changes or CV is high | Thermal state, clock drift, competing work, first-use effects, or insufficient runs | Stabilize the machine and repeat; do not encode a winner. |
 | One backend fails correctness | Specification or implementation defect, not a performance result | Stop ranking and preserve the failing input/environment. |
 
-The legacy CKKS primitive suite times key use but excludes key generation. Its
-`multiply_relinearize` measurement includes multiplication and relinearization;
-`rotate_many_by_steps[4]` includes grouped decomposition/hoisting and four
-rotations. These measurement definitions are intentional because users
-experience the composed primitive, not an isolated internal NTT call. They do
-not substitute for a current Eager measurement.
+The legacy CKKS primitive suite times key use but excludes key generation. Its `multiply_relinearize` measurement includes multiplication and relinearization; `rotate_many_by_steps[4]` includes grouped decomposition/hoisting and four rotations. Measure the selected policy again in the Eager or Compile workload being deployed.
 
-One RTX A6000 measurement illustrates the final application check. For
-`logN = 15`, the CKKS primitive suite recommended
-`radix2_compact_group4_smem8`, while the staged graph-captured 128 x 128
-rotation-parallel matvec selected `radix8_compact`. The primitive result was a
-shortlist decision; the production evaluator changed NTT call composition,
-rotation schedule, diagonal policy, and live working set. Preserve both results
-under their actual measured scopes rather than treating either as a
-contradiction.
+One RTX A6000 measurement illustrates the final application check. For `logN = 15`, the CKKS primitive suite recommended `radix2_compact_group4_smem8`, while the staged graph-captured 128 x 128 rotation-parallel matvec selected `radix8_compact`. The primitive result was a shortlist decision; the production evaluator changed NTT call composition, rotation schedule, diagonal policy, and live working set. Preserve both results under their actual measured scopes rather than treating either as a contradiction.
 
 ## Profile only after the ranking poses a question
 
-Do not collect every metric for every backend first. Use the recommendation to
-form one contrast, such as “radix16 has fewer launches but loses inverse NTT to
-group8.” Then profile the two candidates with the same input rows and inspect:
+Do not collect every metric for every backend first. Use the recommendation to form one contrast, such as “radix16 has fewer launches but loses inverse NTT to group8.” Then profile the two candidates with the same input rows and inspect:
 
 1. kernel launch count and duration;
 2. registers and shared memory per launch;
@@ -231,9 +160,7 @@ group8.” Then profile the two candidates with the same input rows and inspect:
 4. L1/L2 sectors and DRAM bytes;
 5. instruction mix and issue stalls.
 
-Normalize traffic per transform and record whether the launch is a global digit
-or the fused shared region. Aggregate counters across unlike kernels can hide
-the actual bottleneck.
+Normalize traffic per transform and record whether the launch is a global digit or the fused shared region. Aggregate counters across unlike kernels can hide the actual bottleneck.
 
 ## Make the deployment decision
 
@@ -243,15 +170,12 @@ Use this order:
 2. Reject clearly slower candidates with the kernel suite.
 3. Use the primitive suite to select among plausible candidates.
 4. Keep the stable fallback for a near tie or inconsistent repetitions.
-5. Benchmark the full production evaluator with representative depths, batch
-   sizes, and rotation/key-switch schedule.
-6. Pass the chosen backend name to every constructed engine that must
-   reproduce the deployment.
-7. Archive the command, JSON evidence, GPU/software provenance, and application
-   benchmark together.
+5. Benchmark the full production evaluator with representative depths, batch sizes, and rotation/key-switch schedule.
+6. Record the selected Engine policy or Compile operation requirement for each deployed evaluator; inspect the linked implementations when using Compile.
+7. Archive the command, JSON evidence, GPU/software provenance, and application benchmark together.
 
-Do not turn one machine's winner into a library-wide default. A global default
-requires separate cross-GPU, cross-preset, primitive, and real-workload policy
-evidence. FHElium currently uses one static backend name across every
-supported `logN` and GPU—there is no per-`logN` table, hardware dispatch, or
-first-use autotuning—and this command deliberately makes no change to it.
+Apply the measured choice to the intended Engine configuration or Program NTT assignment. Compile selects individual NTT schedules from the operation's represented facts and caller constraints; record those assignments with the application measurement.
+
+## Verify the outcome
+
+The final choice should explain the measured bottleneck and improve a correctness-qualified application result at representative depths and batch sizes. A near tie or unstable ranking supports retaining the current policy rather than claiming a new winner. See [operation implementation controls](select-operation-implementation.md) for applying the decision.

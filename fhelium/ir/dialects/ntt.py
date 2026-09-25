@@ -8,58 +8,54 @@ representation stores a residue $x_i$ as
 $x_iR_i\bmod q_i$ for radix $R_i$.
 
 The four operations distinguish the complete source and destination residue
-representations needed by ciphertext and plaintext transitions. Their plan
-operand carries context-specialized NTT resources; concrete radix, device, and
-kernel choices remain backend implementation details.
+representations needed by ciphertext and plaintext transitions. The parameter operand carries the RNS arithmetic parameters. Additional
+Tensor operands carry transform tables after their layout is selected. An
+operation can leave its algorithm and execution implementation unassigned;
+selection does not change its residue transitions or frequency ordering.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from xdsl.ir import Attribute, Dialect, Operation, SSAValue
 from xdsl.irdl import (
     IRDLOperation,
-    irdl_attr_definition,
     irdl_op_definition,
     operand_def,
     result_def,
     traits_def,
+    var_operand_def,
 )
 from xdsl.traits import Pure
 
 from .._operation_catalog import (
     OperationSpec,
-    flat_without_attributes,
+    flat_with_attributes,
     registered_operation_spec,
 )
-from ._common import OpenStateType
 from .rns import RnsBundleType
-
-
-@irdl_attr_definition
-class NttPlanType(OpenStateType):
-    """CKKS-parameter-specific NTT tables and their logical row mapping."""
-
-    name = "fhelium_ntt.plan"
+from .._dependencies import OperationDependencies, operand_relations
 
 
 class _NttOp(IRDLOperation):
     value = operand_def(RnsBundleType)
-    plan = operand_def(NttPlanType)
+    parameters = operand_def()
+    tables = var_operand_def()
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
 
     def __init__(
         self,
         value: SSAValue | Operation,
-        plan: SSAValue | Operation,
+        parameters: SSAValue | Operation,
         result_type: Attribute,
         *,
+        tables: Sequence[SSAValue | Operation] = (),
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         super().__init__(
-            operands=[value, plan],
+            operands=[value, parameters, tables],
             result_types=[result_type],
             attributes=attributes,
         )
@@ -78,6 +74,20 @@ class CoefficientStandardToNttMontgomeryOp(_NttOp):
 
     name = "fhelium_ntt.coefficient_standard_to_ntt_montgomery"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'mixing',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
+
 
 @irdl_op_definition
 class CoefficientMontgomeryToNttMontgomeryOp(_NttOp):
@@ -89,6 +99,20 @@ class CoefficientMontgomeryToNttMontgomeryOp(_NttOp):
     rows, depth, component axes, and CKKS scale."""
 
     name = "fhelium_ntt.coefficient_montgomery_to_ntt_montgomery"
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'mixing',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
 
 
 @irdl_op_definition
@@ -103,9 +127,23 @@ class NttMontgomeryToCoefficientStandardOp(_NttOp):
 
     name = "fhelium_ntt.ntt_montgomery_to_coefficient_standard"
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'mixing',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
+
 
 @irdl_op_definition
-class InverseMontgomeryOp(_NttOp):
+class NttMontgomeryToCoefficientMontgomeryOp(_NttOp):
     r"""Compute the inverse negacyclic NTT and retain Montgomery residues.
 
     For every active prime $q_i$, the input
@@ -113,21 +151,42 @@ class InverseMontgomeryOp(_NttOp):
     $a_jR_i \bmod q_i$.  The prime-row set, depth, component axes, and CKKS
     scale remain unchanged."""
 
-    name = "fhelium_ntt.inverse_montgomery"
+    name = "fhelium_ntt.ntt_montgomery_to_coefficient_montgomery"
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'mixing',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
 
 
 _NTT_OPERATION_TYPES = (
     CoefficientStandardToNttMontgomeryOp,
     CoefficientMontgomeryToNttMontgomeryOp,
     NttMontgomeryToCoefficientStandardOp,
-    InverseMontgomeryOp,
+    NttMontgomeryToCoefficientMontgomeryOp,
 )
 
 OPERATION_SPECS: tuple[OperationSpec, ...] = tuple(
     registered_operation_spec(
         operation_type,
         "ntt",
-        validator=flat_without_attributes,
+        validator=flat_with_attributes(
+            "ntt_backend",
+            "ntt_algorithm",
+            "ntt_group_width",
+            "ntt_radix",
+            "ntt_table_layout",
+            "ckks_config",
+        ),
     )
     for operation_type in _NTT_OPERATION_TYPES
 )
@@ -139,17 +198,16 @@ FHEliumNtt = Dialect(
     [
         *_NTT_OPERATION_TYPES,
     ],
-    [NttPlanType],
+    [],
 )
-"""Logical NTT operations and plan type."""
+"""Logical NTT operations with Tensor parameter operands."""
 
 
 __all__ = [
     "FHEliumNtt",
     "CoefficientMontgomeryToNttMontgomeryOp",
     "CoefficientStandardToNttMontgomeryOp",
-    "InverseMontgomeryOp",
+    "NttMontgomeryToCoefficientMontgomeryOp",
     "NttMontgomeryToCoefficientStandardOp",
-    "NttPlanType",
     "OPERATION_SPECS",
 ]

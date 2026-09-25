@@ -1,9 +1,9 @@
-"""Native CKKS arithmetic with real and integer scalar constants."""
+"""Native CKKS scalar arithmetic over parameter and random-state Tensors."""
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
+import math
 from typing import cast
 
 import torch
@@ -11,66 +11,39 @@ from xdsl.ir import Operation
 
 from fhelium.backend.implementation import OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
-from fhelium.backend.rns._operand_state import _active_depth, _operand_basis
 from fhelium.backend.rns.context import RnsContext
-from fhelium.backend.rns.resources import RNS_RESOURCE_KIND
 from fhelium.ir.dialects import ckks
-from fhelium.rng import Csprng
-
-from .codec import RANDOM_STREAM_RESOURCE_KIND, RANDOM_STREAM_RESOURCE_SYMBOL
-
-_RNS_RESOURCE_SYMBOL = "active-rns-parameters"
+from fhelium.native.wrapper import rns_ops
+from fhelium.rng.csprng import stochastic_round_
 
 
-def _quantized_real_coefficients(
-    ciphertext: torch.Tensor,
+def scalar_operands(
     context: RnsContext,
-    random_stream: Csprng,
-    *,
-    scalar: float,
-    scalar_scale: float,
-    depth: int,
-    include_p: bool,
-) -> torch.Tensor:
-    """Return one standard-RNS coefficient for a scaled real scalar."""
-
-    scaled = scalar * scalar_scale
-    coefficient = random_stream.randround(
-        torch.tensor(
-            [scaled],
-            dtype=torch.float64,
-            device=ciphertext.device,
+    prime_ids: tuple[int, ...],
+    scalar: int | float,
+    scalar_scale: float | None,
+    rounding_state: torch.Tensor | None,
+) -> tuple[tuple[torch.Tensor, ...], dict[str, object]]:
+    """Supply row parameters or live rounding state without sampling noise."""
+    parameters = context.rns_parameters_for_prime_ids(prime_ids)
+    if scalar_scale is None:
+        rows = context.integer_scalar_parameters(int(scalar))[
+            prime_ids[0] : prime_ids[-1] + 1
+        ]
+        return (parameters, rows), {}
+    if rounding_state is None:
+        raise ValueError(
+            "Real-scalar preparation requires a rounding-state Tensor"
         )
+    centered = int(math.ceil(abs(float(scalar) * scalar_scale))) + 1 < min(
+        context.config.moduli[i] for i in prime_ids
     )
-    return context.lift_integer_coefficients_exact(
-        coefficient,
-        depth,
-        include_p=include_p,
-        max_abs=int(math.ceil(abs(scaled))) + 1,
-    )
-
-
-def _integer_montgomery_rows(
-    ciphertext: torch.Tensor,
-    context: RnsContext,
-    *,
-    scalar: int,
-    depth: int,
-    include_p: bool,
-) -> torch.Tensor:
-    """Return one Montgomery scalar in every active prime row."""
-
-    del ciphertext
-    basis = context.basis_parameters(depth, include_p=include_p)
-    return context.integer_scalar_parameters(scalar)[
-        basis.parameter_row_start:basis.parameter_row_stop
-    ]
-
+    return (parameters, rounding_state), {"centered_lift": centered}
 
 
 @dataclass(frozen=True)
 class NativeScalarArithmeticImplementation:
-    """Execute CKKS scalar arithmetic with existing RNS primitives."""
+    """Execute scalar multiplication and addition using shared RNS primitives."""
 
     name: str = "native-ckks-scalar-arithmetic"
     supports_in_place: bool = False
@@ -83,20 +56,7 @@ class NativeScalarArithmeticImplementation:
     def resource_requirements(
         self, invocation: OperationInvocation
     ) -> tuple[ResourceRequirement, ...]:
-        requirements = [
-            ResourceRequirement(_RNS_RESOURCE_SYMBOL, RNS_RESOURCE_KIND)
-        ]
-        if invocation.operation_type in {
-            ckks.AddScalarOp,
-            ckks.MultiplyScalarOp,
-        }:
-            requirements.append(
-                ResourceRequirement(
-                    RANDOM_STREAM_RESOURCE_SYMBOL,
-                    RANDOM_STREAM_RESOURCE_KIND,
-                )
-            )
-        return tuple(requirements)
+        return ()
 
     def execute(
         self,
@@ -106,55 +66,39 @@ class NativeScalarArithmeticImplementation:
         *,
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
-        del in_place
-        ciphertext = inputs[0]
-        context = cast(RnsContext, resources[0].value)
-        include_p = _operand_basis(invocation) == "QP"
-        depth = _active_depth(ciphertext, context, include_p=include_p)
-
+        del resources, in_place
+        ciphertext, parameters, auxiliary = inputs
         if invocation.operation_type is ckks.MultiplyIntegerScalarOp:
-            row_scalars = _integer_montgomery_rows(
-                ciphertext,
-                context,
-                scalar=int(cast(int, invocation.attributes["scalar"])),
-                depth=depth,
-                include_p=include_p,
-            )
             return (
-                context.montgomery_mul_row_scalars_standard(
-                    ciphertext,
-                    row_scalars,
-                    include_p=include_p,
+                rns_ops.montgomery_mul_row_scalars_standard(
+                    ciphertext, auxiliary, parameters
                 ),
             )
-
-        random_stream = cast(Csprng, resources[1].value)
-        residues = _quantized_real_coefficients(
-            ciphertext,
-            context,
-            random_stream,
-            scalar=float(cast(float, invocation.attributes["scalar"])),
-            scalar_scale=float(
-                cast(float, invocation.attributes["scalar_scale"])
-            ),
-            depth=depth,
-            include_p=include_p,
+        scaled = float(cast(float, invocation.attributes["scalar"])) * float(
+            cast(float, invocation.attributes["scalar_scale"])
         )
+        coefficient = stochastic_round_(
+            torch.tensor(
+                [scaled], dtype=torch.float64, device=ciphertext.device
+            ),
+            auxiliary,
+        ).to(parameters.dtype)
+        if invocation.attributes["centered_lift"]:
+            residues = rns_ops.lift_centered_coefficients(
+                coefficient, parameters[0]
+            )
+        else:
+            residues = torch.remainder(
+                coefficient.unsqueeze(-2), (parameters[0] // 2).view(-1, 1)
+            )
         if invocation.operation_type is ckks.AddScalarOp:
             output = ciphertext.clone()
-            context.add_standard_(
-                output[0, ..., :1],
-                residues,
-                include_p=include_p,
-            )
+            rns_ops.add_standard_(output[0, ..., :1], residues, parameters)
             return (output,)
-
-        context.to_montgomery_(residues, include_p=include_p)
+        rns_ops.to_montgomery_(residues, parameters)
         return (
-            context.montgomery_mul_row_scalars_standard(
-                ciphertext,
-                residues.squeeze(-1),
-                include_p=include_p,
+            rns_ops.montgomery_mul_row_scalars_standard(
+                ciphertext, residues.squeeze(-1), parameters
             ),
         )
 

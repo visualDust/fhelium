@@ -161,10 +161,8 @@ def test_three_component_ciphertext_can_be_rescaled_before_relinearization() -> 
     """Check this noisier operation order against one reproducible vector.
 
     Rescaling three components before relinearization drops the scale before
-    key-switch noise is added. Consequently a tolerance test over fresh random
-    keys is probabilistic rather than a stable numerical guarantee. The fixed
-    CSPRNG vector makes this a deterministic implementation-regression test;
-    it is not claimed as a worst-case CKKS noise bound.
+    key-switch noise is added. The fixed CSPRNG vector reproduces the resulting
+    decryption error for this operation order.
     """
 
     engine = _deterministic_engine(seed=0)
@@ -203,10 +201,8 @@ def test_three_component_ciphertext_can_be_rescaled_before_relinearization() -> 
 def test_qp_ciphertext_rescale_preserves_p_rows_and_message() -> None:
     """Check QP row retention against one reproducible numerical vector.
 
-    Fresh encryption/key noise makes a numerical tolerance over an unseeded
-    key a probabilistic test. The fixed vector keeps this focused on QP row
-    selection and rescale regression rather than claiming a worst-case CKKS
-    noise bound.
+    A fixed CSPRNG vector reproduces the encryption noise while the operation
+    drops the selected Q rows and retains P rows.
     """
 
     engine = _deterministic_engine(seed=0)

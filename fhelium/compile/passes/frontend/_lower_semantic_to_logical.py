@@ -2,20 +2,28 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from ..._pipeline import (
     PassResult,
     PassStats,
 )
 
 from dataclasses import dataclass
+from typing import cast
+import json
 
-from xdsl.dialects.builtin import UnrealizedConversionCastOp
+from xdsl.dialects.builtin import UnrealizedConversionCastOp, IntegerAttr
 from xdsl.ir import Operation, SSAValue
 from xdsl.rewriter import Rewriter
 
-from fhelium.ir import Program
 
 from fhelium.ir.dialects import logical, semantic
+from fhelium.ir.dialects import torch as torch_dialect
 from .._operation_transforms import (
     cast_before,
     display_name,
@@ -97,18 +105,70 @@ class LowerSemanticToLogicalPass:
 
     name: str = "lower-semantic-to-logical"
 
-    def run(
-        self,
-        program: Program,
-        workspace: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
         """Lower matching operation classes and report unchanged candidates."""
+        program = compilation.program
+        workspace = compilation.workspace
 
         del workspace
         matched = transformed = inserted = skipped = 0
         diagnostics: list[str] = []
         for operation in program_operations(program):
             if result_role(operation) != "encrypted":
+                targets = {
+                    semantic.AddOp: "torch.add",
+                    semantic.SubtractOp: "torch.sub",
+                    semantic.MultiplyOp: "torch.mul",
+                    semantic.NegateOp: "torch.neg",
+                    semantic.RollOp: "torch.roll",
+                }
+                target = targets.get(type(operation))
+                if target is None:
+                    continue
+                arguments = [
+                    {"kind": "ssa", "operand": index}
+                    for index in range(len(operation.operands))
+                ]
+                kwargs = []
+                if isinstance(operation, semantic.RollOp):
+                    kwargs = [
+                        [
+                            "shifts",
+                            {
+                                "kind": "literal",
+                                "value": int(
+                                    cast(
+                                        IntegerAttr, operation.shift
+                                    ).value.data
+                                ),
+                            },
+                        ],
+                        [
+                            "dims",
+                            {
+                                "kind": "literal",
+                                "value": int(operation.dimension.value.data)
+                                if operation.dimension is not None
+                                else None,
+                            },
+                        ],
+                    ]
+                descriptor = {
+                    "args": {"kind": "tuple", "items": arguments},
+                    "kwargs": {"kind": "mapping", "entries": kwargs},
+                }
+                replacement = torch_dialect.TensorCallOp(
+                    tuple(operation.operands),
+                    operation.results[0].type,
+                    kind="function",
+                    target=target,
+                    argument_descriptor=json.dumps(descriptor),
+                    role="message",
+                )
+                Rewriter.replace_op(operation, replacement)
+                matched += 1
+                transformed += 1
+                inserted += 1
                 continue
             if isinstance(operation, (semantic.NegateOp, semantic.RollOp)):
                 matched += 1

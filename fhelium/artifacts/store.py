@@ -10,11 +10,11 @@ import sqlite3
 import stat
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, TypeVar, overload
+from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 from uuid import uuid4
 from warnings import warn
 
@@ -53,12 +53,51 @@ from fhelium.errors import ArtifactError, UnsupportedArtifactStoreVersionError
 from fhelium.serialization import (
     ValueFileMetadata,
     inspect_value,
+    inspect_compilation,
+    load_compilation,
+    save_compilation,
     load_value,
     save_value,
 )
 
-T = TypeVar("T", bound=TensorResident)
-U = TypeVar("U", bound=TensorResident)
+if TYPE_CHECKING:
+    from fhelium.compile import Compilation
+
+T = TypeVar("T", bound="TensorResident | Compilation")
+U = TypeVar("U", bound="TensorResident | Compilation")
+
+
+def _inspect_payload(path: Path, value_type: str) -> ValueFileMetadata:
+    return (
+        inspect_compilation(path)
+        if value_type == "Compilation"
+        else inspect_value(path)
+    )
+
+
+def _load_payload(
+    path: Path,
+    value_type: str,
+    *,
+    device: torch.device | str,
+    expected_type: type[U] | None,
+) -> U:
+    if expected_type is not None and expected_type.__name__ != value_type:
+        raise TypeError(
+            f"Artifact contains {value_type}, expected {expected_type.__name__}"
+        )
+    if value_type == "Compilation":
+        return cast(U, load_compilation(path, device=device))
+    return cast(
+        U,
+        load_value(
+            path,
+            device=device,
+            expected_type=cast(type[TensorResident] | None, expected_type),
+        ),
+    )
+
+
 _BUSY_TIMEOUT_MILLISECONDS = 30_000
 _BOOTSTRAP_LOCK_NAME = ".store.lock"
 _MINIMUM_SQLITE_VERSION = (3, 37, 0)
@@ -578,6 +617,7 @@ class ArtifactStore:
         sensitivity: ArtifactSensitivity | None = None,
         allow_secret: bool = False,
         overwrite: bool = False,
+        include_materials: bool | Collection[str] = False,
     ) -> ArtifactRef[T]:
         """Persist and atomically publish a new active generation.
 
@@ -589,7 +629,10 @@ class ArtifactStore:
 
         Args:
             name: Normalized store-relative logical name.
-            value: Tensor-resident FHElium value.
+            value: FHElium value or Compilation.
+            include_materials: For a Compilation, save no, all, or selected
+                Tensor bindings. False saves only the Program. Arbitrary Tensor
+                contents are not classified for sensitivity.
             sensitivity: Descriptive public/confidential/secret label. It does
                 not provide encryption or access control.
             allow_secret: Explicitly permit unencrypted SecretKey persistence.
@@ -650,16 +693,21 @@ class ArtifactStore:
                     f"artifact_id={artifact_id!r}"
                 )
 
-            value_file = save_value(
-                value,
-                temporary_path,
-                allow_secret=allow_secret,
-            )
+            if isinstance(value, TensorResident):
+                value_file = save_value(
+                    value, temporary_path, allow_secret=allow_secret
+                )
+            else:
+                value_file = save_compilation(
+                    cast("Compilation", value),
+                    temporary_path,
+                    include_materials=include_materials,
+                )
             os.chmod(temporary_path, 0o600)
             _fsync_file(temporary_path)
             payload_sha256 = _sha256_file(temporary_path)
             created_at = datetime.now(UTC).isoformat()
-            inspected = inspect_value(temporary_path)
+            inspected = _inspect_payload(temporary_path, value_file.value_type)
             metadata = self._metadata_from_value_file(
                 name=name,
                 artifact_id=artifact_id,
@@ -744,16 +792,16 @@ class ArtifactStore:
         device: torch.device | str = "cpu",
         expected_type: None = None,
         verify_checksum: bool = True,
-    ) -> TensorResident | None: ...
+    ) -> TensorResident | Compilation | None: ...
 
     def get(
         self,
         ref_or_name: ArtifactRef[Any] | str,
         *,
         device: torch.device | str = "cpu",
-        expected_type: type[TensorResident] | None = None,
+        expected_type: type[TensorResident | Compilation] | None = None,
         verify_checksum: bool = True,
-    ) -> TensorResident | None:
+    ) -> TensorResident | Compilation | None:
         """Get a repository value while holding a catalog read snapshot.
 
         A logical name that has no current generation returns ``None``. An
@@ -806,12 +854,13 @@ class ArtifactStore:
                         f"Artifact {name!r} checksum mismatch: expected "
                         f"{metadata.ref.payload_sha256}, got {checksum}"
                     )
-            value_file = inspect_value(payload_path)
+            value_file = _inspect_payload(payload_path, metadata.ref.value_type)
             self._validate_value_file_metadata(
                 metadata, value_file, artifact_name=name
             )
-            value = load_value(
+            value = _load_payload(
                 payload_path,
+                metadata.ref.value_type,
                 device=device,
                 expected_type=expected_type,
             )
@@ -849,7 +898,7 @@ class ArtifactStore:
             )
             self._validate_value_file_metadata(
                 metadata,
-                inspect_value(payload_path),
+                _inspect_payload(payload_path, metadata.ref.value_type),
                 artifact_name=name,
             )
             connection.commit()
@@ -912,7 +961,7 @@ class ArtifactStore:
                 )
                 self._validate_value_file_metadata(
                     metadata,
-                    inspect_value(payload),
+                    _inspect_payload(payload, metadata.ref.value_type),
                     artifact_name=metadata.ref.name,
                 )
                 references.append(metadata.ref)
@@ -1185,16 +1234,16 @@ class ArtifactCollection:
         device: torch.device | str = "cpu",
         expected_type: None = None,
         verify_checksum: bool = True,
-    ) -> TensorResident | None: ...
+    ) -> TensorResident | Compilation | None: ...
 
     def get(
         self,
         ref_or_name: ArtifactRef[Any] | str,
         *,
         device: torch.device | str = "cpu",
-        expected_type: type[TensorResident] | None = None,
+        expected_type: type[TensorResident | Compilation] | None = None,
         verify_checksum: bool = True,
-    ) -> TensorResident | None:
+    ) -> TensorResident | Compilation | None:
         """Get a checked ref or optional collection-relative current value.
 
         A missing string name returns ``None``. A missing or replaced

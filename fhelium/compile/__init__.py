@@ -1,17 +1,26 @@
-"""Capture or import Programs, lower CKKS operations, and run compile passes.
+"""Capture, transform, and execute reusable FHE computations.
 
-The package carries one Program, caller-extensible `CompileWorkspace`, and
-ordered pass reports in a `Compilation`. The `passes.lowering` package maps CKKS
-operations to logical RNS/NTT composition for compile, eager, and JIT callers.
+The package carries one Program, its Tensor material bindings, caller-extensible
+`CompileWorkspace`, and ordered pass reports in a `Compilation`. The `passes.lowering` package maps CKKS
+operations to logical RNS/NTT composition in caller-composed pipelines.
 Frontend, CKKS, and lowering passes can stop at any represented IR abstraction level;
 callers may inspect or export that Program, continue through an external
-xDSL/MLIR pipeline, or bind backend resources. Compilation does not require
-eager execution or a JIT session.
+xDSL/MLIR pipeline, or bind backend resources. Low-level capture and Program
+transformation do not require live execution resources. The high-level
+``compile`` function produces a lazily prepared ``CompiledCallable`` whose
+Backend supplies implementations and resources.
 """
 
-from ._constants import ConstantBundle
+from ._callable import CompiledCallable
 from ._compilation import Compilation
-from ._workspace import CompileWorkspace
+from ._driver import compile
+from ._errors import (
+    CaptureError,
+    CompileError,
+    CompileInputError,
+    PlanningError,
+)
+from ._materials import prepare_material_bindings
 from ._pipeline import (
     DecisionRecord,
     Pass,
@@ -21,21 +30,22 @@ from ._pipeline import (
     Pipeline,
     TransformError,
 )
+from ._preparation import Specialization
+from ._specialization import (
+    ArgumentSignature,
+    CallSignature,
+    SpecializationMiss,
+)
+from ._workspace import CompileWorkspace
 from .codegen import (
     BackendPythonSource,
     EagerPythonSource,
     GeneratedPythonSource,
     PythonCodegenError,
 )
-from ._driver import compile
-from ._errors import (
-    CaptureError,
-    CompileError,
-    CompileInputError,
-    PlanningError,
-)
 from .frontend._capture import capture
 from .frontend._captured_callable import CapturedCallable
+from .frontend._eager_capture import capture_eager
 from .frontend._specs import (
     BatchMode,
     InputSpec,
@@ -46,78 +56,93 @@ from .frontend._specs import (
     plaintext,
     static,
 )
-from .passes.lowering import (
-    CkksLoweringDefinition,
-    CkksLoweringRegistry,
-    DEFAULT_CKKS_LOWERINGS,
-    LoweredCkksOperation,
-    lower_ckks_program,
-)
 from .passes import (
-    BindCkksKeysPass,
-    InitializeResourceBindingsPass,
-    AssignImplementationsPass,
-    AssignNttImplementationPass,
     AssignCkksDepthsPass,
     AssignCkksScalesPass,
+    AssignImplementationsPass,
+    AssignNttImplementationPass,
     EliminateDeadValuesPass,
     EmitBackendPythonPass,
     EmitEagerPythonPass,
-    HoistRotationsPass,
+    FuseOperationsPass,
+    RotationHoistingPass,
+    InitializeResourceBindingsPass,
     InsertMultiplyNttTransitionsPass,
     InsertPlaintextPreparationPass,
     InsertRelinearizationPass,
     InsertRescalePass,
     LateRelinearizationPass,
     LateRescalePass,
+    LinkProgramPass,
     LowerCkksToRnsNttPass,
     LowerLogicalToCkksPass,
     LowerMessagePlaintextPreparationPass,
     LowerSemanticToLogicalPass,
-    LinkProgramPass,
     MaterializeResourcesPass,
     ResolveBackendOperationsPass,
-    ValidateExecutionRepresentationsPass,
     ResolveRotationKeyOperandsPass,
-    SvgGraphVisualizationPass,
-    SvgGraphOutput,
+    ResolveTensorPlaceholdersPass,
+    ReuseIntermediatesPass,
+    SelectExecutionLoweringsPass,
+    SelectNttImplementationsPass,
     SvgGraphDirection,
     SvgGraphError,
     SvgGraphField,
+    SvgGraphOutput,
     SvgGraphPresentation,
     SvgGraphTheme,
+    SvgGraphVisualizationPass,
     SvgNodeSection,
     SvgOperationContext,
-    default_svg_operation_color_key,
+    ValidateExecutionRepresentationsPass,
     backend_linking_pipeline,
+    default_svg_operation_color_key,
+)
+from .passes.lowering import (
+    DEFAULT_CKKS_LOWERINGS,
+    CkksLoweringDefinition,
+    CkksLoweringRegistry,
+    LoweredCkksOperation,
+    lower_ckks_program,
 )
 
+from .passes.backend import PrepareOperationOperandsPass
+
 __all__ = [
-    "BindCkksKeysPass",
+    "PrepareOperationOperandsPass",
+    "ArgumentSignature",
+    "CallSignature",
+    "CompiledCallable",
+    "Specialization",
+    "SpecializationMiss",
+    "FuseOperationsPass",
+    "SelectExecutionLoweringsPass",
     "InitializeResourceBindingsPass",
     "AssignImplementationsPass",
     "AssignNttImplementationPass",
+    "SelectNttImplementationsPass",
     "AssignCkksDepthsPass",
     "AssignCkksScalesPass",
     "BatchMode",
     "CaptureError",
     "CapturedCallable",
     "Compilation",
+    "prepare_material_bindings",
     "CompileWorkspace",
     "CompileError",
     "CompileInputError",
-    "ConstantBundle",
     "CkksLoweringDefinition",
     "CkksLoweringRegistry",
     "DEFAULT_CKKS_LOWERINGS",
     "DecisionRecord",
     "EliminateDeadValuesPass",
+    "ReuseIntermediatesPass",
     "EmitBackendPythonPass",
     "EmitEagerPythonPass",
     "BackendPythonSource",
     "EagerPythonSource",
     "GeneratedPythonSource",
-    "HoistRotationsPass",
+    "RotationHoistingPass",
     "InputSpec",
     "InsertMultiplyNttTransitionsPass",
     "InsertPlaintextPreparationPass",
@@ -140,6 +165,7 @@ __all__ = [
     "PythonCodegenError",
     "MaterializeResourcesPass",
     "ResolveBackendOperationsPass",
+    "ResolveTensorPlaceholdersPass",
     "ValidateExecutionRepresentationsPass",
     "ResolveRotationKeyOperandsPass",
     "SlotExtent",
@@ -156,6 +182,7 @@ __all__ = [
     "TransformError",
     "backend_linking_pipeline",
     "capture",
+    "capture_eager",
     "compile",
     "default_svg_operation_color_key",
     "encrypted",
@@ -164,3 +191,7 @@ __all__ = [
     "plaintext",
     "static",
 ]
+
+from ._lower_and_fuse import default_lower_and_fuse_pipeline
+
+__all__ += ["default_lower_and_fuse_pipeline"]

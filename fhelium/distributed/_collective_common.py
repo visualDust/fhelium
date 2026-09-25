@@ -181,27 +181,30 @@ def _all_gather_descriptors(
     return cast(list[TransferDescriptor], descriptors)
 
 
-def _p2p_transfer_tensor(
+def _transfer_tensor(
     tensor: torch.Tensor,
     receive_copies: list[tuple[torch.Tensor, torch.Tensor]],
     *,
     receiving: bool,
     info: _GroupInfo,
 ) -> torch.Tensor:
-    if not receiving and not tensor.is_contiguous():
-        tensor = tensor.contiguous()
+    """Supply contiguous wire storage and retain any destination copy-back."""
+
     backend = str(torch.distributed.get_backend(info.group)).lower()
-    if backend != "nccl" or tensor.device.type == "cuda":
+    device = (
+        local_device()
+        if backend == "nccl" and tensor.device.type == "cpu"
+        else tensor.device
+    )
+    if tensor.device == device and tensor.is_contiguous():
         return tensor
     if receiving:
-        staging = torch.empty(
-            tensor.shape,
-            dtype=tensor.dtype,
-            device=local_device(),
-        )
+        staging = torch.empty(tensor.shape, dtype=tensor.dtype, device=device)
         receive_copies.append((tensor, staging))
         return staging
-    return tensor.to(local_device())
+    return tensor.to(
+        device=device, memory_format=torch.contiguous_format, copy=True
+    )
 
 
 def _wait_p2p_ops(
@@ -212,7 +215,7 @@ def _wait_p2p_ops(
     for request in requests:
         request.wait()
     for target, staging in receive_copies:
-        target.copy_(staging.cpu())
+        target.copy_(staging)
 
 
 def _broadcast_transfer_tensor(
@@ -221,25 +224,15 @@ def _broadcast_transfer_tensor(
     src: int,
     info: _GroupInfo,
 ) -> None:
-    """Broadcast one payload, staging CPU tensors for an NCCL group."""
+    """Broadcast a payload and write received data into its original view."""
 
-    backend = str(torch.distributed.get_backend(info.group)).lower()
-    if backend != "nccl" or tensor.device.type == "cuda":
-        torch.distributed.broadcast(tensor, src=src, group=info.group)
-        return
-
-    staging = (
-        tensor.to(local_device())
-        if info.global_rank == src
-        else torch.empty(
-            tensor.shape,
-            dtype=tensor.dtype,
-            device=local_device(),
-        )
+    receive_copies: list[tuple[torch.Tensor, torch.Tensor]] = []
+    transfer = _transfer_tensor(
+        tensor, receive_copies, receiving=info.global_rank != src, info=info
     )
-    torch.distributed.broadcast(staging, src=src, group=info.group)
-    if info.global_rank != src:
-        tensor.copy_(staging.cpu())
+    torch.distributed.broadcast(transfer, src=src, group=info.group)
+    for target, staging in receive_copies:
+        target.copy_(staging)
 
 
 def _workload_tensors(
@@ -266,18 +259,9 @@ def _all_gather_tensor(
     *,
     info: _GroupInfo,
 ) -> list[torch.Tensor]:
-    backend = str(torch.distributed.get_backend(info.group)).lower()
-    if backend == "nccl" and value.device.type == "cpu":
-        staging = value.to(local_device())
-        gathered_staging = [
-            torch.empty_like(staging) for _ in range(info.world_size)
-        ]
-        torch.distributed.all_gather(
-            gathered_staging,
-            staging,
-            group=info.group,
-        )
-        return [tensor.cpu() for tensor in gathered_staging]
-    gathered = [torch.empty_like(value) for _ in range(info.world_size)]
-    torch.distributed.all_gather(gathered, value, group=info.group)
+    transfer = _transfer_tensor(value, [], receiving=False, info=info)
+    gathered = [torch.empty_like(transfer) for _ in range(info.world_size)]
+    torch.distributed.all_gather(gathered, transfer, group=info.group)
+    if transfer.device != value.device:
+        return [tensor.to(value.device) for tensor in gathered]
     return gathered

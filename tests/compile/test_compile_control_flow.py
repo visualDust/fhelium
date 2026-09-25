@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from fhelium import compile as _compile
+
 import pytest
 
 from xdsl.dialects import arith, scf
@@ -44,8 +46,16 @@ def test_ckks_lowering_enters_known_scf_region() -> None:
     program, _ = _scf_negate_program()
 
     result = LowerCkksToRnsNttPass().run(
-        program,
-        {CkksConfig: CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)},
+        _compile.Compilation(
+            program,
+            _compile.CompileWorkspace(
+                {
+                    CkksConfig: CkksConfig.parse(
+                        Preset.slots8192_scale40_depth7_int64
+                    )
+                }
+            ),
+        )
     )
 
     assert result.stats.matched == 1
@@ -63,7 +73,7 @@ def test_implementation_assignment_enters_known_scf_region() -> None:
     program, negate = _scf_negate_program()
 
     result = AssignImplementationsPass({ckks.NegateOp.name: "test-negate"}).run(
-        program, {}
+        _compile.Compilation(program, _compile.CompileWorkspace({}))
     )
 
     assert result.stats.transformed == 1
@@ -87,7 +97,7 @@ def test_compile_does_not_enter_unknown_vendor_region() -> None:
             ckks.NegateOp.name: "must-not-enter",
             VendorRegionOp.name: "vendor-owner",
         }
-    ).run(program, {})
+    ).run(_compile.Compilation(program, _compile.CompileWorkspace({})))
 
     assert result.stats.matched == 1
     assert EXECUTION_IMPLEMENTATION_ATTRIBUTE not in negate.attributes
@@ -112,7 +122,9 @@ def _specialized_collective_program() -> Program:
 def test_specialized_collective_lowering_exposes_combine_region() -> None:
     program = _specialized_collective_program()
 
-    result = LowerSpecializedCollectivesPass().run(program, {})
+    result = LowerSpecializedCollectivesPass().run(
+        _compile.Compilation(program, _compile.CompileWorkspace({}))
+    )
 
     assert result.stats.transformed == 1
     assert not any(
@@ -131,11 +143,21 @@ def test_specialized_collective_lowering_exposes_combine_region() -> None:
 
 def test_ckks_lowering_enters_collective_combine_region() -> None:
     program = _specialized_collective_program()
-    LowerSpecializedCollectivesPass().run(program, {})
+    LowerSpecializedCollectivesPass().run(
+        _compile.Compilation(program, _compile.CompileWorkspace({}))
+    )
 
     result = LowerCkksToRnsNttPass().run(
-        program,
-        {CkksConfig: CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)},
+        _compile.Compilation(
+            program,
+            _compile.CompileWorkspace(
+                {
+                    CkksConfig: CkksConfig.parse(
+                        Preset.slots8192_scale40_depth7_int64
+                    )
+                }
+            ),
+        )
     )
 
     assert result.stats.transformed == 1
@@ -148,7 +170,9 @@ def test_collective_lowering_respects_implementation_constraint() -> None:
     program = _specialized_collective_program()
     AssignImplementationsPass(
         {distributed.AllReduceAddCiphertextOp.name: ("specialized-provider")}
-    ).run(program, {})
+    ).run(_compile.Compilation(program, _compile.CompileWorkspace({})))
 
     with pytest.raises(ValueError, match="preserve the operation"):
-        LowerSpecializedCollectivesPass().run(program, {})
+        LowerSpecializedCollectivesPass().run(
+            _compile.Compilation(program, _compile.CompileWorkspace({}))
+        )

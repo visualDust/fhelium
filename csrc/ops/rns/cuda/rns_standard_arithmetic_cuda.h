@@ -22,3 +22,7 @@ torch::Tensor rns_montgomery_mul_row_scalars_standard_cuda(
     const torch::Tensor residues,
     const torch::Tensor row_scalars,
     const torch::Tensor rns_params);
+
+torch::Tensor rns_sum_standard_batch_cuda(const torch::Tensor source,
+                                          const int64_t dim,
+                                          const torch::Tensor rns_params);

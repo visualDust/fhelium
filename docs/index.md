@@ -14,25 +14,23 @@ Build through the full FHE stack while choosing the level of control that fits e
 
 ## Usage models
 
-Choose a Program workflow, immediate execution with runtime mechanisms, or a
-rank-local distributed program.
+Choose a Program workflow, immediate execution with runtime mechanisms, or a rank-local distributed program.
 
 <HomeUsageTabs />
 
+## Just-in-time optimization
+
+The compiler captures a call, fuses connected operations into generated kernels, and prepares the program so repeated evaluations run with a fraction of the launch overhead. One BSGS matrix-vector call then finishes in about half the time.
+
+<HomeCompileTimeline />
+
+See [JIT compilation](/tutorial/compile-jit) for how the compiler does this.
+
 ## Measured performance
 
-The same conventional cyclic-diagonal BSGS formulation measures both packed
-plaintext-matrix × ciphertext-vector (**PT×CT**) and ciphertext-matrix ×
-ciphertext-vector (**CT×CT**) evaluation. <a href="/assets/fhelium-workload.py" download="fhelium-workload.py">View source</a>
+The same conventional cyclic-diagonal BSGS formulation measures both packed plaintext-matrix × ciphertext-vector (**PT×CT**) and ciphertext-matrix × ciphertext-vector (**CT×CT**) evaluation. <a href="/assets/fhelium-workload.py" download="fhelium-workload.py">View source</a>
 
 <BsgsMatvecPerformance />
-
-These retained measurements compare the named reference implementations with
-FHElium's 0.20-era workload configuration. The chart's `Depth 7`, `Depth 16`,
-and `Depth 34` labels identify maximum-chain-depth preset families whose ring
-dimensions are shown beside them, not the input depth of one run. The
-downloadable script is the current workload implementation rather than a
-historical source snapshot.
 
 ## Continue by task
 

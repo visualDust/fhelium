@@ -2,47 +2,43 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from functools import cached_property
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 
 import torch
-from xdsl.dialects import arith, scf
 from xdsl.dialects.builtin import (
     ArrayAttr,
     FloatAttr,
     IntegerAttr,
     StringAttr,
 )
-from xdsl.dialects.builtin import UnrealizedConversionCastOp
-from xdsl.dialects.func import ReturnOp
-from xdsl.ir import Attribute, Block, Operation, Region, SSAValue
+from xdsl.ir import Attribute, Block, Operation
 
 from fhelium.ir import (
     OperationEffect,
     Program,
     value_role,
 )
-from fhelium.ir.dialects import core, distributed
+from fhelium.ir.dialects import ckks
+from fhelium.values._validation import validate_integral_tensor
+
 from fhelium.values import (
     Ciphertext,
-    KeySwitchKey,
+    CompressedPlaintext,
     ModulusBasis,
     Plaintext,
     PlaintextRepresentation,
     PolynomialDomain,
-    PublicKey,
     ResidueRepresentation,
-    SecretKey,
 )
 
 from .implementation import (
     OperationImplementation,
     OperationImplementationRegistry,
     OperationInvocation,
-    RegionCallable,
-    RegionOperationImplementation,
     operation_invocation,
     requested_implementation,
 )
@@ -74,6 +70,7 @@ class OperationDispatch:
     requirements: tuple[ResourceRequirement, ...]
     effect: OperationEffect
     in_place: bool = False
+    prepared_regions: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,10 +99,8 @@ class OperationBackend:
         registry: OperationImplementationRegistry | None = None,
         workspace: BackendWorkspace | None = None,
         *,
-        keys: Iterable[PublicKey | SecretKey | KeySwitchKey] | None = None,
         named_resources: ResourceBindings | None = None,
         materializer: ResourceMaterializer | None = None,
-        material_overrides: Mapping[str, object] | None = None,
     ) -> None:
         base = BackendWorkspace() if workspace is None else workspace
         selected_workspace = BackendWorkspace(
@@ -114,14 +109,8 @@ class OperationBackend:
                 if named_resources is None
                 else named_resources
             ),
-            keys=tuple(base.keys if keys is None else keys),
             materializer=(
                 base.materializer if materializer is None else materializer
-            ),
-            material_overrides=(
-                base.material_overrides
-                if material_overrides is None
-                else material_overrides
             ),
         )
         object.__setattr__(
@@ -199,6 +188,7 @@ class OperationBackend:
         request = Compilation(
             compilation.program,
             linking_workspace,
+            material_bindings=dict(compilation.material_bindings),
         )
         result = selected_pipeline.run(request)
         executable = result.workspace.get(ProgramExecutable)
@@ -213,7 +203,13 @@ class OperationBackend:
 
 @dataclass(frozen=True)
 class ProgramExecutable:
-    """Execute one fixed Program with structured control-flow regions."""
+    """Execute host control flow prepared from one linked Program.
+
+    Calls and external bindings are resolved once. Generated local variables
+    preserve dataflow, and flat-block temporaries are released at last use.
+    ``host_source`` exposes the prepared control flow without serializing its
+    bound objects. Tensor storage and aliases retain ordinary PyTorch ownership.
+    """
 
     program: Program
     dispatch_table: ProgramDispatchTable
@@ -221,6 +217,19 @@ class ProgramExecutable:
     resource_indices: Mapping[Operation, tuple[int, ...]]
     bound_resources: Mapping[Operation, BoundResource]
     bound_materials: Mapping[Operation, object]
+    _call: Callable[..., tuple[object, ...]] = field(
+        init=False, repr=False, compare=False
+    )
+    host_source: str = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        from fhelium.compile.passes.backend._prepare_host import (
+            prepare_host_call,
+        )
+
+        call, source = prepare_host_call(self)
+        object.__setattr__(self, "_call", call)
+        object.__setattr__(self, "host_source", source)
 
     @property
     def manifest(self) -> Mapping[str, object]:
@@ -248,185 +257,55 @@ class ProgramExecutable:
             }
         )
 
+    @cached_property
+    def _entry_block(self) -> Block:
+        return self.program.single_block("main")
+
+    @cached_property
+    def _input_adapters(self) -> tuple[Callable[[object], object], ...]:
+        return tuple(
+            _prepare_boundary_input(
+                argument.type, label=f"Program input {index}"
+            )
+            for index, argument in enumerate(self._entry_block.args)
+        )
+
+    @cached_property
+    def _output_adapters(self) -> tuple[Callable[[object], object], ...]:
+        # Built only after the numerical execution in run. Incomplete output
+        # state remains an execution-time error, not a linking-time requirement.
+        return tuple(
+            _prepare_boundary_output(
+                result_type, label=f"Program result {index}"
+            )
+            for index, result_type in enumerate(
+                self.program.function("main").function_type.outputs
+            )
+        )
+
     def run(self, *inputs: object) -> object:
-        block = self.program.single_block("main")
+        block = self._entry_block
         if len(inputs) != len(block.args):
             raise ValueError(
                 f"Program executable requires {len(block.args)} inputs, "
                 f"got {len(inputs)}"
             )
         payloads = tuple(
-            _boundary_input(
-                argument.type,
-                value,
-                label=f"Program input {index}",
-            )
-            for index, (argument, value) in enumerate(
-                zip(block.args, inputs, strict=True)
-            )
+            adapt(value)
+            for adapt, value in zip(self._input_adapters, inputs, strict=True)
         )
-        outputs = self._run_block(block, payloads)
-        result_types = tuple(
-            self.program.function("main").function_type.outputs
-        )
+        return self._invoke(*payloads)
+
+    def _invoke(self, *payloads: object) -> object:
+        """Execute Tensor payloads already adapted by the calling interface."""
+        outputs = self._call(*payloads)
         public_outputs = tuple(
-            _boundary_output(
-                result_type,
-                output,
-                label=f"Program result {index}",
-            )
-            for index, (result_type, output) in enumerate(
-                zip(result_types, outputs, strict=True)
+            adapt(output)
+            for adapt, output in zip(
+                self._output_adapters, outputs, strict=True
             )
         )
         return public_outputs[0] if len(public_outputs) == 1 else public_outputs
-
-    def _run_region(
-        self,
-        region: Region,
-        arguments: tuple[object, ...],
-        enclosing_values: Mapping[SSAValue, object],
-    ) -> tuple[object, ...]:
-        blocks = tuple(region.blocks)
-        if len(blocks) != 1:
-            raise ValueError(
-                "Structured operation regions require one block; arbitrary "
-                "control-flow graphs are not supported"
-            )
-        return self._run_block(
-            blocks[0],
-            arguments,
-            enclosing_values=enclosing_values,
-        )
-
-    def _run_block(
-        self,
-        block: Block,
-        arguments: tuple[object, ...],
-        *,
-        enclosing_values: Mapping[SSAValue, object] | None = None,
-    ) -> tuple[object, ...]:
-        if len(arguments) != len(block.args):
-            raise ValueError(
-                f"Block requires {len(block.args)} inputs, got {len(arguments)}"
-            )
-        values: dict[SSAValue, object] = dict(enclosing_values or {})
-        values.update(zip(block.args, arguments, strict=True))
-
-        for operation in block.ops:
-            if isinstance(operation, UnrealizedConversionCastOp):
-                if len(operation.inputs) != 1 or len(operation.outputs) != 1:
-                    raise ValueError("Boundary casts must be one-to-one")
-                values[operation.outputs[0]] = values[operation.inputs[0]]
-                continue
-            if isinstance(operation, core.MaterialRefOp):
-                values[operation.value] = self.bound_materials[operation]
-                continue
-            if isinstance(operation, core.ResourceRefOp):
-                values[operation.value] = self.bound_resources[operation]
-                continue
-            if isinstance(operation, ReturnOp):
-                return tuple(values[value] for value in operation.arguments)
-            if isinstance(operation, scf.YieldOp):
-                return tuple(values[value] for value in operation.arguments)
-            if isinstance(operation, distributed.YieldOp):
-                return (values[operation.value],)
-            if isinstance(operation, scf.ForOp):
-                lower = _index_value(values[operation.lb])
-                upper = _index_value(values[operation.ub])
-                step = _index_value(values[operation.step])
-                carried = tuple(values[value] for value in operation.iter_args)
-                for index in range(lower, upper, step):
-                    carried = self._run_region(
-                        operation.body,
-                        (index, *carried),
-                        values,
-                    )
-                if len(carried) != len(operation.results):
-                    raise ValueError(
-                        "scf.for yielded a result count different from its "
-                        "loop-carried result count"
-                    )
-                values.update(zip(operation.results, carried, strict=True))
-                continue
-            if isinstance(operation, scf.IfOp):
-                selected = (
-                    operation.true_region
-                    if bool(values[operation.cond])
-                    else operation.false_region
-                )
-                branch_results = self._run_region(selected, (), values)
-                if len(branch_results) != len(operation.results):
-                    raise ValueError(
-                        "scf.if yielded a result count different from its "
-                        "declared result count"
-                    )
-                values.update(
-                    zip(operation.results, branch_results, strict=True)
-                )
-                continue
-            arithmetic = _execute_arithmetic(operation, values)
-            if arithmetic is not None:
-                values.update(zip(operation.results, arithmetic, strict=True))
-                continue
-
-            dispatch = self.dispatch_table.operations[operation]
-            payloads: list[torch.Tensor] = []
-            operand_resources: list[BoundResource] = []
-            for operand in operation.operands:
-                value = values[operand]
-                if isinstance(value, torch.Tensor):
-                    payloads.append(value)
-                elif isinstance(value, BoundResource):
-                    operand_resources.append(value)
-                else:
-                    raise TypeError(
-                        f"Operand for {operation.name!r} has unsupported "
-                        f"runtime type {type(value).__name__}"
-                    )
-            # ResourceRef operands preserve the operation declaration order;
-            # implementation-owned requirements follow in declaration order.
-            resources = (
-                *operand_resources,
-                *(
-                    self.resources[index]
-                    for index in self.resource_indices[operation]
-                ),
-            )
-            if operation.regions:
-                implementation = dispatch.implementation
-                if not isinstance(
-                    implementation, RegionOperationImplementation
-                ):
-                    raise TypeError(
-                        f"Implementation {implementation.name!r} does not "
-                        f"execute regions owned by {operation.name!r}"
-                    )
-                region_callables = tuple(
-                    _tensor_region_callable(self, region, values)
-                    for region in operation.regions
-                )
-                outputs = implementation.execute_regions(
-                    dispatch.invocation,
-                    tuple(payloads),
-                    resources,
-                    region_callables,
-                    in_place=dispatch.in_place,
-                )
-            else:
-                outputs = dispatch.implementation.execute(
-                    dispatch.invocation,
-                    tuple(payloads),
-                    resources,
-                    in_place=dispatch.in_place,
-                )
-            if len(outputs) != len(operation.results):
-                raise ValueError(
-                    f"Implementation {dispatch.implementation.name!r} returned "
-                    f"{len(outputs)} values for {len(operation.results)} results"
-                )
-            values.update(zip(operation.results, outputs, strict=True))
-        raise ValueError("Program has no return operation")
 
 
 def _boundary_kind(value_type: Attribute) -> str | None:
@@ -621,36 +500,53 @@ def _require_state_match(
         )
 
 
-def _boundary_input(
+def _identity_value(value: object) -> object:
+    return value
+
+
+def _prepare_boundary_input(
     value_type: Attribute,
-    value: object,
     *,
     label: str,
-) -> object:
+) -> Callable[[object], object]:
+    """Decode one fixed input type into a reusable public-value adapter."""
+
+    if isinstance(value_type, ckks.EvaluationKeyType):
+
+        def key_input(value: object) -> torch.Tensor:
+            from fhelium.values import KeySwitchKey
+
+            if isinstance(value, KeySwitchKey):
+                return value.data
+            if isinstance(value, torch.Tensor):
+                return value
+            raise TypeError(
+                f"{label} requires an evaluation-key Tensor or KeySwitchKey"
+            )
+
+        return key_input
     kind = _boundary_kind(value_type)
-    if kind is None:
-        return value
-    if kind == "ciphertext":
-        if not isinstance(value, Ciphertext):
-            raise TypeError(f"{label} requires a Ciphertext")
-        state = _state(value_type, label=label)
-        represented: tuple[tuple[str, object, object], ...] = (
-            ("depth", state.get("depth"), value.depth),
-            ("scale", state.get("scale"), value.scale),
-            ("prime_ids", state.get("prime_ids"), value.prime_ids),
-            (
-                "polynomial_domain",
-                state.get("polynomial_domain"),
-                value.polynomial_domain,
-            ),
-            ("basis", state.get("basis"), value.modulus_basis),
-            (
-                "residue_representation",
-                state.get("residue_representation"),
-                value.residue_representation,
-            ),
+    compressed = isinstance(value_type, ckks.CompressedPlaintextType)
+    if kind is None and not compressed:
+        return _identity_value
+    state = _state(value_type, label=label)
+    if kind == "ciphertext" or compressed:
+        checks: list[tuple[str, str, object]] = []
+        fields = (
+            ("depth", "depth"),
+            ("scale", "scale"),
+            ("prime_ids", "prime_ids"),
+            ("polynomial_domain", "polynomial_domain"),
+            ("basis", "modulus_basis"),
+            ("residue_representation", "residue_representation"),
         )
-        for name, attribute, actual in represented:
+        if compressed:
+            fields += (
+                ("compression_layout", "compression_layout"),
+                ("ring_dimension", "ring_dimension"),
+            )
+        for name, runtime_field in fields:
+            attribute = state.get(name)
             if attribute is None or (
                 isinstance(attribute, StringAttr)
                 and attribute.data == "unknown"
@@ -671,101 +567,237 @@ def _boundary_input(
                 )
             else:
                 raise ValueError(f"{label} has malformed {name!r} state")
-            _require_state_match(expected, actual, name, label=label)
+            checks.append((name, runtime_field, expected))
         components = _component_state(state, label=label)
         if components is not None:
-            _require_state_match(
-                components,
-                value.component_count,
-                "components",
-                label=label,
-            )
-        return value.data
+            checks.append(("components", "component_count", components))
+        fixed_checks = tuple(checks)
 
-    if not isinstance(value, Plaintext):
-        raise TypeError(f"{label} requires a Plaintext")
-    state = _state(value_type, label=label)
+        expected_type = CompressedPlaintext if compressed else Ciphertext
+
+        def polynomial_input(value: object) -> object:
+            if not isinstance(value, expected_type):
+                raise TypeError(f"{label} requires a {expected_type.__name__}")
+            for name, runtime_field, expected in fixed_checks:
+                actual = getattr(value, runtime_field)
+                if expected != actual:
+                    raise ValueError(
+                        f"{label} declares {name}={expected!r}, "
+                        f"but the runtime value has {actual!r}"
+                    )
+            return value.data
+
+        return polynomial_input
+
     representation_attribute = state.get("representation")
-    representation = (
+    represented = (
         representation_attribute.data
         if isinstance(representation_attribute, StringAttr)
         and representation_attribute.data != "unknown"
-        else value.representation
+        else None
     )
-    payload = value.message if representation == "slots" else value.data
-    if payload is None:
-        raise ValueError(f"{label} has no active Plaintext Tensor")
-    return payload
+
+    def plaintext_input(value: object) -> object:
+        if not isinstance(value, Plaintext):
+            raise TypeError(f"{label} requires a Plaintext")
+        representation = (
+            value.representation if represented is None else represented
+        )
+        payload = value.message if representation == "slots" else value.data
+        if payload is None:
+            raise ValueError(f"{label} has no active Plaintext Tensor")
+        return payload
+
+    return plaintext_input
 
 
-def _boundary_output(
+def _prepare_compressed_output(fields):
+    """Prepare public compressed results while checking each Tensor payload.
+
+    The first result validates and normalizes metadata. Later results reuse
+    those fields while checking extents and the optional implicit Tensor ABI.
+    This adapter is shared by ordinary and structured Compile outputs.
+    """
+    fields = dict(fields)
+    fields["prime_ids"] = tuple(fields["prime_ids"])
+    prepared = False
+
+    def wrap(data: object, implicit_data: object = None) -> CompressedPlaintext:
+        nonlocal prepared
+        if not prepared:
+            result = CompressedPlaintext(
+                data=cast(torch.Tensor, data),
+                implicit_data=cast(torch.Tensor | None, implicit_data),
+                **fields,
+            )
+            fields.update(
+                scale=result.scale,
+                depth=result.depth,
+                prime_ids=result.prime_ids,
+            )
+            prepared = True
+            return result
+        data = validate_integral_tensor(
+            data, value_name="Compressed plaintext output"
+        )
+        if (
+            data.ndim < 2
+            or not data.numel()
+            or data.size(-2) != len(fields["prime_ids"])
+        ):
+            raise ValueError(
+                "Compressed plaintext output has incompatible extents"
+            )
+        unique = data.size(-1)
+        if unique >= fields["ring_dimension"] or unique & (unique - 1):
+            raise ValueError(
+                "Compressed plaintext output has incompatible compact extent"
+            )
+        if fields["compression_layout"] == "strided_sparse":
+            implicit_data = validate_integral_tensor(
+                implicit_data,
+                value_name="Compressed plaintext output implicit_data",
+            )
+            if (
+                implicit_data.shape != data.shape[:-1]
+                or implicit_data.dtype != data.dtype
+                or implicit_data.device != data.device
+            ):
+                raise ValueError(
+                    "Compressed plaintext output implicit_data must match the payload's batch/limb shape, dtype and device"
+                )
+        elif implicit_data is not None:
+            raise ValueError(
+                "Only strided_sparse compressed output accepts implicit_data"
+            )
+        return CompressedPlaintext._from_fields(
+            data=data, implicit_data=implicit_data, **fields
+        )
+
+    return wrap
+
+
+def _prepare_boundary_output(
     value_type: Attribute,
-    value: object,
     *,
     label: str,
-) -> object:
+) -> Callable[[object], object]:
+    """Decode one result's represented state after its first execution."""
+
+    if isinstance(value_type, ckks.CompressedPlaintextType):
+        state = _state(value_type, label=label)
+        depth, scale, _, domain, basis, residues, prime_ids = _plaintext_state(
+            value_type, label=label
+        )
+        fields = {
+            "depth": depth,
+            "scale": scale,
+            "prime_ids": prime_ids,
+            "polynomial_domain": domain,
+            "modulus_basis": basis,
+            "residue_representation": residues,
+            "ring_dimension": _integer_state(
+                state, "ring_dimension", label=label
+            ),
+            "compression_layout": cast(
+                StringAttr, state["compression_layout"]
+            ).data,
+        }
+        return _prepare_compressed_output(fields)
     kind = _boundary_kind(value_type)
     if kind is None:
-        return value
-    if not isinstance(value, torch.Tensor):
-        raise TypeError(f"{label} requires a Tensor payload")
+        return _identity_value
     if kind == "ciphertext":
         depth, scale, prime_ids, domain, basis, residues, components = (
             _ciphertext_state(value_type, label=label)
         )
-        if components is not None:
-            actual_components = value.size(0) if value.ndim else 0
-            _require_state_match(
-                components,
-                actual_components,
-                "components",
-                label=label,
+
+        construct: Callable[..., Ciphertext] = Ciphertext
+        prepared_construct = Ciphertext._from_fields
+
+        def ciphertext_output(value: object) -> object:
+            nonlocal construct
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(f"{label} requires a Tensor payload")
+            if components is not None:
+                actual_components = value.size(0) if value.ndim else 0
+                _require_state_match(
+                    components, actual_components, "components", label=label
+                )
+            validate_integral_tensor(value, value_name=label)
+            if (
+                value.ndim < 3
+                or value.size(0) not in (2, 3)
+                or value.size(-2) != len(prime_ids)
+                or value.numel() == 0
+            ):
+                raise ValueError(f"{label} has incompatible ciphertext extents")
+            result = construct(
+                data=value,
+                depth=depth,
+                scale=scale,
+                prime_ids=prime_ids,
+                polynomial_domain=cast(PolynomialDomain, domain),
+                modulus_basis=cast(ModulusBasis, basis),
+                residue_representation=cast(ResidueRepresentation, residues),
             )
-        return Ciphertext(
-            data=value,
-            depth=depth,
-            scale=scale,
-            prime_ids=prime_ids,
-            polynomial_domain=cast(PolynomialDomain, domain),
-            modulus_basis=cast(ModulusBasis, basis),
-            residue_representation=cast(ResidueRepresentation, residues),
-        )
+            construct = prepared_construct
+            return result
+
+        return ciphertext_output
 
     depth, scale, representation, domain, basis, residues, prime_ids = (
         _plaintext_state(value_type, label=label)
     )
-    return Plaintext(
-        message=value if representation == "slots" else None,
-        depth=depth,
-        scale=scale,
-        data=None if representation == "slots" else value,
-        representation=cast(PlaintextRepresentation, representation),
-        polynomial_domain=cast(PolynomialDomain | None, domain),
-        modulus_basis=cast(ModulusBasis | None, basis),
-        residue_representation=cast(
-            ResidueRepresentation | None,
-            residues,
-        ),
-        prime_ids=prime_ids,
-    )
 
+    construct_plaintext: Callable[..., Plaintext] = Plaintext
+    prepared_plaintext = Plaintext._from_fields
 
-def _tensor_region_callable(
-    executable: ProgramExecutable,
-    region: Region,
-    enclosing_values: Mapping[SSAValue, object],
-) -> RegionCallable:
-    def run(arguments: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]:
-        outputs = executable._run_region(
-            region,
-            tuple(arguments),
-            enclosing_values,
+    def plaintext_output(value: object) -> object:
+        nonlocal construct_plaintext
+        if not isinstance(value, torch.Tensor):
+            raise TypeError(f"{label} requires a Tensor payload")
+        if representation != "slots":
+            if representation == "approximate_coefficients":
+                if (
+                    value.dtype != torch.float64
+                    or value.layout != torch.strided
+                ):
+                    raise TypeError(
+                        f"{label} requires strided float64 coefficients"
+                    )
+            else:
+                validate_integral_tensor(value, value_name=label)
+            if value.ndim < (2 if representation == "rns" else 1):
+                raise ValueError(f"{label} has incompatible plaintext extents")
+            if representation == "rns" and value.size(-2) != len(prime_ids):
+                raise ValueError(f"{label} has incompatible prime rows")
+        if value.numel() == 0:
+            raise ValueError(f"{label} has empty plaintext storage")
+        result = construct_plaintext(
+            message=value if representation == "slots" else None,
+            depth=depth,
+            scale=scale,
+            data=None if representation == "slots" else value,
+            representation=cast(PlaintextRepresentation, representation),
+            polynomial_domain=cast(PolynomialDomain | None, domain),
+            modulus_basis=cast(ModulusBasis | None, basis),
+            residue_representation=cast(ResidueRepresentation | None, residues),
+            prime_ids=prime_ids,
         )
-        if any(not isinstance(output, torch.Tensor) for output in outputs):
-            raise TypeError("Operation combine regions must return Tensors")
-        return tuple(outputs)  # type: ignore[return-value]
 
-    return run
+        construct_plaintext = prepared_plaintext
+        return result
+
+    return plaintext_output
+
+
+def _tensor_region_results(
+    outputs: tuple[object, ...],
+) -> tuple[torch.Tensor, ...]:
+    if any(not isinstance(output, torch.Tensor) for output in outputs):
+        raise TypeError("Operation combine regions must return Tensors")
+    return cast(tuple[torch.Tensor, ...], outputs)
 
 
 def _index_value(value: object) -> int:
@@ -774,55 +806,6 @@ def _index_value(value: object) -> int:
     if isinstance(value, torch.Tensor) and value.numel() == 1:
         return int(value.item())
     raise TypeError("Structured-control-flow indices must be integer values")
-
-
-def _execute_arithmetic(
-    operation: Operation,
-    values: Mapping[SSAValue, object],
-) -> tuple[object, ...] | None:
-    operands = tuple(values[value] for value in operation.operands)
-    if isinstance(operation, arith.ConstantOp):
-        value = operation.value
-        if isinstance(value, IntegerAttr | FloatAttr):
-            return (value.value.data,)
-        raise TypeError(
-            "Structured execution supports scalar arithmetic constants"
-        )
-    if isinstance(operation, arith.AddiOp):
-        return (_index_value(operands[0]) + _index_value(operands[1]),)
-    if isinstance(operation, arith.SubiOp):
-        return (_index_value(operands[0]) - _index_value(operands[1]),)
-    if isinstance(operation, arith.MuliOp):
-        return (_index_value(operands[0]) * _index_value(operands[1]),)
-    if isinstance(operation, arith.DivUIOp | arith.DivSIOp):
-        return (_index_value(operands[0]) // _index_value(operands[1]),)
-    if isinstance(operation, arith.RemUIOp | arith.RemSIOp):
-        return (_index_value(operands[0]) % _index_value(operands[1]),)
-    if isinstance(operation, arith.MinUIOp):
-        return (min(_index_value(operands[0]), _index_value(operands[1])),)
-    if isinstance(operation, arith.MaxUIOp):
-        return (max(_index_value(operands[0]), _index_value(operands[1])),)
-    if isinstance(operation, arith.IndexCastOp):
-        return (_index_value(operands[0]),)
-    if isinstance(operation, arith.SelectOp):
-        return (operands[1] if bool(operands[0]) else operands[2],)
-    if isinstance(operation, arith.CmpiOp):
-        lhs = _index_value(operands[0])
-        rhs = _index_value(operands[1])
-        predicates = (
-            lambda: lhs == rhs,
-            lambda: lhs != rhs,
-            lambda: lhs < rhs,
-            lambda: lhs <= rhs,
-            lambda: lhs > rhs,
-            lambda: lhs >= rhs,
-            lambda: lhs < rhs,
-            lambda: lhs <= rhs,
-            lambda: lhs > rhs,
-            lambda: lhs >= rhs,
-        )
-        return (predicates[operation.predicate.value.data](),)
-    return None
 
 
 __all__ = [

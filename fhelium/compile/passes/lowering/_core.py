@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from xdsl.ir import Operation, SSAValue
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile import Compilation
 
 from fhelium.config import CkksConfig
 from ....ir._operation_specs import (
@@ -21,9 +25,14 @@ class LoweredCkksOperation:
 
     operations: tuple[Operation, ...]
     result: SSAValue
+    material_descriptions: dict[str, dict[str, object]] = field(
+        default_factory=dict
+    )
 
 
-CkksLowering = Callable[[Operation, CkksConfig], LoweredCkksOperation]
+CkksLowering = Callable[
+    [Operation, CkksConfig | None, "Compilation"], LoweredCkksOperation
+]
 
 
 @dataclass(frozen=True)
@@ -154,7 +163,8 @@ class CkksLoweringRegistry:
     def lower(
         self,
         operation: Operation,
-        config: CkksConfig,
+        config: CkksConfig | None,
+        compilation: Compilation,
         *,
         requested: str | None = None,
     ) -> LoweredCkksOperation:
@@ -169,4 +179,4 @@ class CkksLoweringRegistry:
                 f"CKKS lowering rejected {operation.name!r}: "
                 f"{'; '.join(diagnostics)}"
             )
-        return definition.lower(operation, config)
+        return definition.lower(operation, config, compilation)

@@ -22,8 +22,8 @@ void launch_forward_ntt_montgomery_indexed_cuda(
   const auto logN = even_indices.size(0);
   const auto N = even_indices.size(1);
 
-  int dim_block = kCudaBlockSize;
-  dim3 dim_grid(C, N / kCudaBlockSize, B);
+  const int dim_block = std::min<int64_t>(kCudaBlockSize, N);
+  dim3 dim_grid(C, (N + kCudaBlockSize - 1) / kCudaBlockSize, B);
 
   auto a_acc = FHELIUM_CUDA_ACCESSOR32(a, scalar_t, 3);
   const auto even_acc = FHELIUM_CUDA_ACCESSOR32(even_indices, int, 2);

@@ -122,6 +122,10 @@ FAKE_TENSOR_SHAPE_RULES = {
         like_arg="lhs_components",
         shape_expression="(3, *lhs_components.shape[1:])",
     ),
+    "fhelium_rns_ops::sum_standard_batch": FakeTensorShapeRule(
+        like_arg="source",
+        shape_expression="(*source.shape[:dim], *source.shape[dim + 1:])",
+    ),
     "fhelium_rns_ops::mixed_radix_basis_extend_to_montgomery": FakeTensorShapeRule(
         like_arg="mixed_radix_components",
         shape_expression="(*mixed_radix_components.shape[:-2], destination_row_count, mixed_radix_components.size(-1))",

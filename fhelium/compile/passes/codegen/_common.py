@@ -64,6 +64,11 @@ class SourceNames:
             "runtime",
             "materials",
             "resources",
+            "min",
+            "max",
+            "bool",
+            "range",
+            "slice",
         }
         self._next_value = 0
 
