@@ -21,6 +21,7 @@ from fhelium.artifacts.artifact import (
 )
 from fhelium.errors import StaleArtifactReferenceError
 from fhelium.serialization import VALUE_SCHEMA_VERSION, supported_value_types
+from fhelium.serialization.compilation import COMPILATION_SCHEMA_VERSION
 
 CATALOG_NAME = "catalog.sqlite3"
 OBJECTS_DIRECTORY_NAME = "objects"
@@ -149,15 +150,16 @@ def _metadata_from_catalog_row(
             f"{artifact_schema_version!r}"
         )
     value_type = row["value_type"]
-    if (
-        not isinstance(value_type, str)
-        or value_type not in supported_value_types()
+    if not isinstance(value_type, str) or value_type not in (
+        *supported_value_types(),
+        "Compilation",
     ):
         raise ValueError(f"Unsupported artifact value_type: {value_type!r}")
     value_schema_version = row["value_schema_version"]
-    if (
-        type(value_schema_version) is not int
-        or value_schema_version != VALUE_SCHEMA_VERSION
+    if type(value_schema_version) is not int or value_schema_version != (
+        COMPILATION_SCHEMA_VERSION
+        if value_type == "Compilation"
+        else VALUE_SCHEMA_VERSION
     ):
         raise ValueError(
             f"Unsupported nested value schema version: {value_schema_version!r}"

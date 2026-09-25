@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from fhelium import compile as _compile
+
 import pytest
 from xdsl.dialects.builtin import (
     ArrayAttr,
@@ -78,8 +80,12 @@ def test_depth_and_scale_assignment_preserve_cast_target_representation() -> (
     program = ir.Program.from_function(block, (ntt,))
     workspace: dict[object, object] = {CkksConfig: _config()}
 
-    fh_compile.AssignCkksDepthsPass(0).run(program, workspace)
-    fh_compile.AssignCkksScalesPass(4.0).run(program, workspace)
+    fh_compile.AssignCkksDepthsPass(0).run(
+        _compile.Compilation(program, _compile.CompileWorkspace(workspace))
+    )
+    fh_compile.AssignCkksScalesPass(4.0).run(
+        _compile.Compilation(program, _compile.CompileWorkspace(workspace))
+    )
 
     state = cast.outputs[0].type.state.data  # type: ignore[attr-defined]
     assert state["polynomial_domain"] == StringAttr("ntt")
@@ -128,10 +134,13 @@ def test_rescale_analysis_preserves_ntt_montgomery_output() -> None:
     assert inferred.field("residue_representation") == ir.StateFact.known(
         "montgomery"
     )
-    fh_compile.ValidateExecutionRepresentationsPass().run(program, {})
+    fh_compile.ValidateExecutionRepresentationsPass().run(
+        _compile.Compilation(program, _compile.CompileWorkspace({}))
+    )
     fh_compile.LowerCkksToRnsNttPass().run(
-        program,
-        {CkksConfig: _config()},
+        _compile.Compilation(
+            program, _compile.CompileWorkspace({CkksConfig: _config()})
+        )
     )
     lowered = next(
         operation
@@ -163,8 +172,7 @@ def test_rescale_lowering_preserves_the_requested_prime_group() -> None:
     output_type = input_type.with_state(
         depth=IntegerAttr(1, 64),
         prime_ids=ArrayAttr(
-            IntegerAttr(index, 64)
-            for index in range(2, grouped.num_q_primes)
+            IntegerAttr(index, 64) for index in range(2, grouped.num_q_primes)
         ),
     )
     block = Block(arg_types=(input_type,))
@@ -173,7 +181,9 @@ def test_rescale_lowering_preserves_the_requested_prime_group() -> None:
     program = ir.Program.from_function(block, (output_type,))
 
     fh_compile.LowerCkksToRnsNttPass().run(
-        program, {CkksConfig: grouped}
+        _compile.Compilation(
+            program, _compile.CompileWorkspace({CkksConfig: grouped})
+        )
     )
 
     drops = [
@@ -199,7 +209,9 @@ def test_multiply_transition_reuses_one_ntt_value_across_consumers() -> None:
         block, (first.result.type, second.result.type)
     )
 
-    fh_compile.InsertMultiplyNttTransitionsPass().run(program, {})
+    fh_compile.InsertMultiplyNttTransitionsPass().run(
+        _compile.Compilation(program, _compile.CompileWorkspace({}))
+    )
 
     transitions = tuple(
         operation
@@ -234,14 +246,23 @@ def test_ntt_relinearization_lowering_keeps_real_ntt_dataflow() -> None:
     source_type = _ciphertext_type("ntt", "montgomery", components=3)
     result_type = _ciphertext_type("ntt", "montgomery", components=2)
     block = Block(arg_types=(source_type,))
-    relinearize = ir.dialects.ckks.RelinearizeOp(
-        block.args[0], result_type, output_domain="ntt"
+    key = ir.dialects.core.MaterialRefOp(
+        ir.dialects.ckks.EvaluationKeyType(), symbol="relinearization-key"
     )
-    block.add_ops((relinearize, ReturnOp(relinearize.result)))
+    relinearize = ir.dialects.ckks.RelinearizeOp(
+        block.args[0], key.value, result_type, output_domain="ntt"
+    )
+    block.add_ops((key, relinearize, ReturnOp(relinearize.result)))
     program = ir.Program.from_function(block, (result_type,))
 
-    fh_compile.LowerCkksToRnsNttPass().run(program, {CkksConfig: _config()})
-    fh_compile.ValidateExecutionRepresentationsPass().run(program, {})
+    fh_compile.LowerCkksToRnsNttPass().run(
+        _compile.Compilation(
+            program, _compile.CompileWorkspace({CkksConfig: _config()})
+        )
+    )
+    fh_compile.ValidateExecutionRepresentationsPass().run(
+        _compile.Compilation(program, _compile.CompileWorkspace({}))
+    )
 
     assert any(
         isinstance(operation, ir.dialects.rns.ModDownNttQpToQOp)
@@ -276,8 +297,9 @@ def test_ntt_lowering_selects_input_residue_conversion(
     program = ir.Program.from_function(block, (result_type,))
 
     fh_compile.LowerCkksToRnsNttPass().run(
-        program,
-        {CkksConfig: _config()},
+        _compile.Compilation(
+            program, _compile.CompileWorkspace({CkksConfig: _config()})
+        )
     )
 
     assert any(
@@ -294,15 +316,21 @@ def test_ntt_lowering_and_execution_gate_reject_unknown_representation() -> (
         depth=IntegerAttr(0, 64),
     )
     block = Block(arg_types=(unknown,))
+    key = ir.dialects.core.MaterialRefOp(
+        ir.dialects.ckks.EvaluationKeyType(), symbol="relinearization-key"
+    )
     relinearize = ir.dialects.ckks.RelinearizeOp(
         block.args[0],
+        key.value,
         _ciphertext_type("coefficient", "standard"),
     )
-    block.add_ops((relinearize, ReturnOp(relinearize.result)))
+    block.add_ops((key, relinearize, ReturnOp(relinearize.result)))
     program = ir.Program.from_function(block, (relinearize.result.type,))
 
     with pytest.raises(ValueError, match="requires concrete"):
-        fh_compile.ValidateExecutionRepresentationsPass().run(program, {})
+        fh_compile.ValidateExecutionRepresentationsPass().run(
+            _compile.Compilation(program, _compile.CompileWorkspace({}))
+        )
 
     transform_block = Block(arg_types=(unknown,))
     transform = ir.dialects.ckks.ToNttOp(transform_block.args[0])
@@ -312,8 +340,10 @@ def test_ntt_lowering_and_execution_gate_reject_unknown_representation() -> (
     )
     with pytest.raises(ValueError, match="requires concrete"):
         fh_compile.LowerCkksToRnsNttPass().run(
-            transform_program,
-            {CkksConfig: _config()},
+            _compile.Compilation(
+                transform_program,
+                _compile.CompileWorkspace({CkksConfig: _config()}),
+            )
         )
 
 
@@ -328,7 +358,9 @@ def test_multiply_transition_does_not_cast_unknown_state_to_coefficients() -> (
     block.add_ops((multiply, ReturnOp(multiply.result)))
     program = ir.Program.from_function(block, (multiply.result.type,))
 
-    result = fh_compile.InsertMultiplyNttTransitionsPass().run(program, {})
+    result = fh_compile.InsertMultiplyNttTransitionsPass().run(
+        _compile.Compilation(program, _compile.CompileWorkspace({}))
+    )
 
     assert result.stats.skipped == 1
     assert result.diagnostics
@@ -343,12 +375,11 @@ def test_decrypt_input_domain_is_registered_and_checked_by_execution_gate() -> (
 ):
     coefficient = _ciphertext_type("coefficient", "standard")
     plaintext = _plaintext_type("coefficient", "standard")
-    block = Block(arg_types=(coefficient,))
+    block = Block(arg_types=(coefficient, ir.dialects.core.MessageType()))
     decrypt = ir.dialects.ckks.DecryptOp.create(
-        operands=(block.args[0],),
+        operands=tuple(block.args),
         result_types=(plaintext,),
         attributes={
-            "key_symbol": StringAttr("secret-key"),
             "input_domain": StringAttr("coefficient"),
         },
     )
@@ -357,14 +388,12 @@ def test_decrypt_input_domain_is_registered_and_checked_by_execution_gate() -> (
     block.add_ops((decrypt, ReturnOp(decrypt.result)))
     program = ir.Program.from_function(block, (plaintext,))
     fh_compile.ValidateExecutionRepresentationsPass().run(
-        program,
-        {},
+        _compile.Compilation(program, _compile.CompileWorkspace({}))
     )
 
     decrypt.attributes["input_domain"] = StringAttr("ntt")
     assert specification.diagnostics(decrypt) == ()
     with pytest.raises(ValueError, match="expected one of"):
         fh_compile.ValidateExecutionRepresentationsPass().run(
-            program,
-            {},
+            _compile.Compilation(program, _compile.CompileWorkspace({}))
         )

@@ -19,6 +19,8 @@ from xdsl.dialects.builtin import (
 from xdsl.ir import Block, Operation
 
 from fhelium import Preset
+from fhelium.distributed import all_reduce_ciphertext
+from fhelium.eager import Engine
 from fhelium.backend.execution import OperationBackend
 from fhelium.backend.distributed import (
     TorchBroadcastImplementation,
@@ -172,10 +174,13 @@ def _gloo_operation_worker(
         )
 
         specialized = TorchCiphertextAddAllReduceImplementation(
-            lambda lhs, rhs: (lhs + rhs).remainder(17)
+            lambda lhs, rhs, modulus: (lhs + rhs).remainder(modulus)
         ).execute(
-            _invocation(distributed.AllReduceAddCiphertextOp, 1, 1),
-            (torch.tensor([15 if rank == 0 else 5], dtype=torch.int64),),
+            _invocation(distributed.AllReduceAddCiphertextOp, 2, 1),
+            (
+                torch.tensor([15 if rank == 0 else 5], dtype=torch.int64),
+                torch.tensor(17),
+            ),
             resources,
             in_place=False,
         )[0]
@@ -254,17 +259,11 @@ def _gloo_ckks_reduction_worker(
     try:
         config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
         rns_context = RnsContext(config, device="cpu")
-        rns_resource = BoundResource(
-            "rank-local-rns",
-            "rns-parameters",
-            rns_context,
-        )
         arithmetic_backend = OperationBackend(
             OperationImplementationRegistry((NativeRnsLinearImplementation(),)),
         )
         combine = prepare_ciphertext_add_combine(
             arithmetic_backend,
-            rns_resource,
         )
         group_resource = BoundResource(
             "world",
@@ -291,11 +290,15 @@ def _gloo_ckks_reduction_worker(
             symbol="world",
             kind="process-group",
         )
+        parameters = core.MaterialRefOp(core.MessageType(), symbol="parameters")
         reduction = distributed.AllReduceAddCiphertextOp(
             block.args[0],
             group,
+            parameters=(parameters.value,),
         )
-        block.add_ops((group, reduction, ReturnOp(reduction.result)))
+        block.add_ops(
+            (group, parameters, reduction, ReturnOp(reduction.result))
+        )
         program = Program.from_function(block, (value_type,))
         backend = OperationBackend(
             OperationImplementationRegistry(
@@ -319,8 +322,28 @@ def _gloo_ckks_reduction_worker(
             modulus_basis="Q",
             residue_representation="standard",
         )
-        result = _build(backend, program).run(source_value)
+        result = backend.link(
+            Compilation(
+                program,
+                material_bindings={
+                    "parameters": rns_context.rns_parameters_for_prime_ids(
+                        tuple(range(config.num_q_primes))
+                    )
+                },
+            )
+        ).run(source_value)
         assert isinstance(result, Ciphertext)
+        backing = torch.full(
+            (2, config.num_q_primes + 1, config.N), -1, dtype=source.dtype
+        )
+        view = backing[..., 1:, :]
+        view.copy_(source)
+        strided_value = source_value.with_data(view)
+        all_reduce_ciphertext(strided_value, engine=Engine(config))
+        assert strided_value.data is view
+        assert bool(torch.all(view == 3))
+        assert bool(torch.all(backing[..., 0, :] == -1))
+
         Path(output_directory, f"ckks-rank-{rank}.json").write_text(
             json.dumps(
                 {

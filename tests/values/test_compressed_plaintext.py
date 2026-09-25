@@ -52,7 +52,6 @@ def test_exact_value_round_trips_repetition_layouts(
     assert compressed.ring_dimension == 8
     assert compressed.repeat_count == 4
     assert compressed.compression_layout == compression_layout
-    assert compressed.compression_format_version == 1
     assert torch.equal(compressed.data, compact)
     assert torch.equal(compressed.to_plaintext().data, dense_data)
     assert compressed.data.untyped_storage().data_ptr() != (
@@ -108,20 +107,38 @@ def test_strided_sparse_layout_preserves_implicit_row_values() -> None:
     assert torch.equal(compressed.to_plaintext().data, dense_data)
 
 
-def test_compressed_plaintext_rejects_unknown_format_version() -> None:
+def test_serialization_rejects_unknown_compressed_format_version() -> None:
+    from dataclasses import replace
+    from fhelium.serialization import (
+        ValueEnvelope,
+        COMPRESSED_PLAINTEXT_FORMAT_VERSION,
+    )
+
+    compressed = fh.CompressedPlaintext(
+        data=torch.tensor([[11, 13], [17, 19]], dtype=torch.int64),
+        ring_dimension=8,
+        compression_layout="cyclic",
+        depth=0,
+        scale=2.0**40,
+        polynomial_domain="ntt",
+        modulus_basis="Q",
+        residue_representation="montgomery",
+        prime_ids=(0, 1),
+    )
+    envelope = ValueEnvelope.from_value(compressed)
+    assert (
+        envelope.metadata["compression_format_version"]
+        == COMPRESSED_PLAINTEXT_FORMAT_VERSION
+    )
+    restored = envelope.to_value()
+    assert isinstance(restored, fh.CompressedPlaintext)
+    torch.testing.assert_close(restored.data, compressed.data, rtol=0, atol=0)
+    unsupported = replace(
+        envelope,
+        metadata={**envelope.metadata, "compression_format_version": 2},
+    )
     with pytest.raises(ValueError, match="compression format version"):
-        fh.CompressedPlaintext(
-            data=torch.tensor([[11, 13], [17, 19]], dtype=torch.int64),
-            ring_dimension=8,
-            compression_layout="cyclic",
-            compression_format_version=2,
-            depth=0,
-            scale=2.0**40,
-            polynomial_domain="ntt",
-            modulus_basis="Q",
-            residue_representation="montgomery",
-            prime_ids=(0, 1),
-        )
+        unsupported.to_value()
 
 
 @pytest.fixture(
@@ -232,7 +249,7 @@ def test_add_plaintext_physical_paths_match_dense_exactly(
 
 
 @pytest.mark.gpu
-def test_strided_sparse_compressed_plaintext_is_not_a_multiply_operand(
+def test_coefficient_compressed_plaintext_is_not_a_multiply_operand(
     engine: Engine,
 ) -> None:
     ciphertext = engine.coefficient_domain_to_ntt_domain(

@@ -1,4 +1,23 @@
-"""Measure conventional packed BSGS matrix-vector evaluation in FHElium."""
+"""Measure conventional packed BSGS matrix-vector evaluation in FHElium.
+
+Eager runs directly. On CUDA, JIT compiles the same rank-local function and
+captures it with CudaGraphProgram; cross-rank ciphertext reduction remains
+outside capture. CPU JIT uses Compile without CUDA Graph. Both paths use the
+same live inputs, keys, diagonal tensors, and CKKS parameters. Timed CUDA
+replays include refreshing the graph input buffer. Setup, compilation, graph
+capture, encryption, decryption, and correctness checks are not timed.
+
+The homepage uses input depth zero, five warmups and sixty alternating samples
+per execution mode. GPU matrices are 256x256: two ranks use baby step 16;
+one rank uses 32 except Depth-16 PTxCT, which uses 16. GPU intermediates remain
+in NTT. CPU matrices are 16x16: PTxCT uses baby step 4 and coefficient-domain
+completion; CTxCT uses baby step 8 and NTT-domain completion.
+
+PTxCT diagonals use CompressedPlaintext with contiguous NTT repetition and
+2 * matrix_size stored values per prime row. Conversion checks the ordinary
+encoded plaintext bit-for-bit; multiplication reads the compact data directly.
+CTxCT diagonals remain encrypted ciphertexts.
+"""
 
 from __future__ import annotations
 
@@ -21,14 +40,112 @@ import torch
 import fhelium as fh
 import fhelium.distributed as dist
 from fhelium.eager import Engine
+from fhelium import compile as fc
 from fhelium.runtime import CudaGraphProgram
 
 Mode = Literal["pt-ct", "ct-ct"]
-PRESETS = {
-    7: fh.Preset.slots8192_scale40_depth7_int64,
-    16: fh.Preset.slots16384_scale40_depth16_int64,
-    34: fh.Preset.slots32768_scale40_depth34_int64,
+# Fixed benchmark chains: ordered rescale primes, terminal Q prime, then P.
+# Ring dimensions and Q/QP bit budgets match the retained references.
+# Preset defaults may evolve independently of these benchmark chains.
+BENCHMARK_PARAMETERS: dict[
+    int, tuple[int, tuple[int, ...], tuple[int, ...]]
+] = {
+    7: (
+        14,
+        (
+            1099510054913,
+            1099515691009,
+            1099508121601,
+            1099515789313,
+            1099507695617,
+            1099516280833,
+            1099506515969,
+            1152921504606748673,
+        ),
+        (1152921504606683137,),
+    ),
+    16: (
+        15,
+        (
+            1099510054913,
+            1099515691009,
+            1099507695617,
+            1099516280833,
+            1099506515969,
+            1099520606209,
+            1099504549889,
+            1099523555329,
+            1099503894529,
+            1099527946241,
+            1099503370241,
+            1099529060353,
+            1099498258433,
+            1099531223041,
+            1099469684737,
+            1099532009473,
+            1152921504606584833,
+        ),
+        (1152921504598720513, 1152921504597016577),
+    ),
+    34: (
+        16,
+        (
+            1099510054913,
+            1099515691009,
+            1099507695617,
+            1099516870657,
+            1099506515969,
+            1099521458177,
+            1099503894529,
+            1099522375681,
+            1099490000897,
+            1099523555329,
+            1099489607681,
+            1099525128193,
+            1099486855169,
+            1099526176769,
+            1099484889089,
+            1099529060353,
+            1099480956929,
+            1099535220737,
+            1099469684737,
+            1099536138241,
+            1099468767233,
+            1099537580033,
+            1099461820417,
+            1099538104321,
+            1099457495041,
+            1099540725761,
+            1099455004673,
+            1099540856833,
+            1099454218241,
+            1099591974913,
+            1099453431809,
+            1099629723649,
+            1099451465729,
+            1099630510081,
+            1152921504606584833,
+        ),
+        (
+            1152921504598720513,
+            1152921504597016577,
+            1152921504595968001,
+            1152921504592822273,
+        ),
+    ),
 }
+
+
+def _configuration(depth: int) -> fh.CkksConfig:
+    log_n, q_moduli, p_moduli = BENCHMARK_PARAMETERS[depth]
+    return fh.CkksConfig(
+        default_scale=float(1 << 40),
+        logN=log_n,
+        q_depth_groups=tuple((prime,) for prime in q_moduli),
+        p_moduli=p_moduli,
+    )
+
+
 CUDA_NTT_BACKENDS: dict[tuple[int, Mode], str] = {
     (7, "pt-ct"): "radix4_compact",
     (7, "ct-ct"): "radix2_compact_group4_smem8",
@@ -159,10 +276,10 @@ def _prepare_groups(
     input_depth: int,
     device: torch.device,
 ) -> tuple[
-    dict[int, fh.Plaintext],
+    dict[int, fh.CompressedPlaintext],
     dict[int, fh.Ciphertext],
 ]:
-    plaintext_groups: dict[int, fh.Plaintext] = {}
+    plaintext_groups: dict[int, fh.CompressedPlaintext] = {}
     ciphertext_groups: dict[int, fh.Ciphertext] = {}
     for giant_index in range(matrix.size(0) // baby_step):
         messages = [
@@ -177,17 +294,23 @@ def _prepare_groups(
         ]
         if mode == "pt-ct":
             if giant_index in local_giants:
-                plaintext_groups[giant_index] = fh.Plaintext.stack_batch(
-                    [
-                        engine.prepare_plaintext_for_multiplication(
-                            engine.encode(
-                                message,
-                                depth=input_depth,
-                                device=device,
+                plaintext_groups[giant_index] = (
+                    fh.CompressedPlaintext.stack_batch(
+                        [
+                            fh.CompressedPlaintext.from_plaintext(
+                                engine.prepare_plaintext_for_multiplication(
+                                    engine.encode(
+                                        message,
+                                        depth=input_depth,
+                                        device=device,
+                                    )
+                                ),
+                                unique_count=2 * matrix.size(0),
+                                compression_layout="contiguous",
                             )
-                        )
-                        for message in messages
-                    ]
+                            for message in messages
+                        ]
+                    )
                 )
             continue
         root_ciphertexts = None
@@ -226,10 +349,10 @@ def _evaluate_local(
     local_giants: tuple[int, ...],
     baby_step: int,
     rotation_keys: dict[int, fh.RotationKey],
-    plaintext_groups: dict[int, fh.Plaintext],
+    plaintext_groups: dict[int, fh.CompressedPlaintext],
     ciphertext_groups: dict[int, fh.Ciphertext],
     relinearization_key: fh.RelinearizationKey | None,
-    retained_domain: str,
+    retained_domain: Literal["coefficient", "ntt"],
 ) -> fh.Ciphertext:
     baby_rotations = engine.rotate_many_with_keys(
         source,
@@ -280,7 +403,7 @@ def _evaluate_local(
         if accumulator is None:
             accumulator = group
         else:
-            engine.add_(accumulator, group)
+            accumulator = engine.add(accumulator, group)
     if accumulator is None:
         raise RuntimeError("rank owns no BSGS giant group")
     return accumulator
@@ -296,11 +419,13 @@ def _run_case(
     runs: int,
     device: str,
     input_depth: int,
-    retained_domain: str,
+    retained_domain: Literal["coefficient", "ntt"],
+    execution: str,
+    cuda_graph: bool,
 ) -> dict[str, object] | None:
     if size % baby_step:
         raise ValueError("baby_step must divide matrix size")
-    graph_program: CudaGraphProgram[fh.Ciphertext] | None = None
+    graph_programs: dict[str, CudaGraphProgram[fh.Ciphertext]] = {}
     dist.init()
     try:
         world_size = dist.get_world_size()
@@ -313,7 +438,7 @@ def _run_case(
         local_giants = tuple(range(dist.get_rank(), giant_count, world_size))
         setup_started = time.perf_counter()
         engine = Engine(
-            PRESETS[depth],
+            _configuration(depth),
             ntt_backend=(
                 CUDA_NTT_BACKENDS[(depth, mode)]
                 if device == "cuda"
@@ -383,54 +508,116 @@ def _run_case(
                 retained_domain=retained_domain,
             )
 
-        replay_local = evaluate_local
-        if device == "cuda":
-            graph_program = CudaGraphProgram.capture(
-                evaluate_local,
-                example_inputs=(source,),
-                warmup=warmup,
+        names = ("eager", "jit") if execution == "both" else (execution,)
+        evaluators = {}
+        preparations = {}
+        compiled = None
+        for name in names:
+            prepare_started = time.perf_counter()
+            evaluator = evaluate_local
+            if name == "jit":
+                compiled = fc.compile(evaluate_local)
+                compiled.prepare(source)
+                evaluator = compiled
+            if name == "jit" and execution_device.type == "cuda" and cuda_graph:
+                graph = CudaGraphProgram.capture(
+                    evaluator, example_inputs=(source,), warmup=warmup
+                )
+                graph_programs[name] = graph
+                evaluator = graph.replay
+            evaluators[name] = evaluator
+            _sync(execution_device)
+            preparations[name] = _max_rank_ms(
+                (time.perf_counter() - prepare_started) * 1e3
             )
-            replay_local = graph_program.replay
 
-        def evaluate() -> fh.Ciphertext:
-            local = replay_local(source)
+        def evaluate(name: str) -> fh.Ciphertext:
+            local = evaluators[name](source)
             dist.reduce_ciphertext(local, dst=0, engine=engine)
             return local
 
-        last = None
+        last = {}
         for _ in range(warmup):
-            dist.barrier()
-            last = evaluate()
-            _sync(execution_device)
+            for name in names:
+                dist.barrier()
+                last[name] = evaluate(name)
+                _sync(execution_device)
         gc.collect()
-        samples = []
-        for _ in range(runs):
-            dist.barrier()
-            _sync(execution_device)
-            started = time.perf_counter()
-            last = evaluate()
-            _sync(execution_device)
-            samples.append(_max_rank_ms((time.perf_counter() - started) * 1e3))
-        assert last is not None
-        max_abs_error = 0.0
-        rms_error = 0.0
-        if dist.get_rank() == 0:
-            assert secret_key is not None
-            actual = engine.decrypt_message(
-                last,
-                secret_key,
-                is_real=True,
-            ).cpu()
-            expected = (matrix @ vector).repeat(engine.num_slots // size)
-            error = actual - expected
-            max_abs_error = float(error.abs().max())
-            rms_error = float(torch.sqrt(torch.mean(error.square())))
-        max_abs_error = _max_rank_ms(max_abs_error)
+        samples: dict[str, list[float]] = {name: [] for name in names}
+        for iteration in range(runs):
+            order = names if iteration % 2 == 0 else tuple(reversed(names))
+            for name in order:
+                dist.barrier()
+                _sync(execution_device)
+                started = time.perf_counter()
+                last[name] = evaluate(name)
+                _sync(execution_device)
+                samples[name].append(
+                    _max_rank_ms((time.perf_counter() - started) * 1e3)
+                )
         correctness_threshold = 5e-5 * max(1.0, size / 128)
-        if max_abs_error > correctness_threshold:
-            raise AssertionError(
-                f"max_abs_error={max_abs_error} exceeds "
-                f"correctness_threshold={correctness_threshold}"
+        measurements = {}
+        correctness_errors = []
+        for name in names:
+            max_abs_error = rms_error = 0.0
+            if dist.get_rank() == 0:
+                assert secret_key is not None
+                actual = engine.decrypt_message(
+                    last[name], secret_key, is_real=True
+                ).cpu()
+                expected = (matrix @ vector).repeat(engine.num_slots // size)
+                error = actual - expected
+                max_abs_error = float(error.abs().max())
+                rms_error = float(torch.sqrt(torch.mean(error.square())))
+            max_abs_error = _max_rank_ms(max_abs_error)
+            rms_error = _max_rank_ms(rms_error)
+            if (
+                not math.isfinite(max_abs_error)
+                or max_abs_error > correctness_threshold
+            ):
+                correctness_errors.append(
+                    f"{name}: max_abs_error={max_abs_error} exceeds "
+                    f"correctness_threshold={correctness_threshold}"
+                )
+            measurements[name] = {
+                **_summarize(samples[name]),
+                "preparation_ms": preparations[name],
+                "cuda_graph": name in graph_programs,
+                "max_abs_error": max_abs_error,
+                "rms_error": rms_error,
+                "correctness_threshold": correctness_threshold,
+                "cuda_graph_capture_ms": (
+                    graph_programs[name].stats.capture_seconds * 1e3
+                    if name in graph_programs
+                    else None
+                ),
+            }
+        if len(names) == 2 and dist.get_rank() == 0:
+            eager, jit = last["eager"], last["jit"]
+            if (
+                eager.depth,
+                eager.scale,
+                eager.prime_ids,
+                eager.component_count,
+            ) != (jit.depth, jit.scale, jit.prime_ids, jit.component_count):
+                correctness_errors.append("Eager and JIT output states differ")
+            moduli = torch.tensor(
+                [engine.config.moduli[i] for i in eager.prime_ids],
+                dtype=eager.data.dtype,
+                device=eager.device,
+            ).view(-1, 1)
+            if not torch.equal(eager.data % moduli, jit.data % moduli):
+                correctness_errors.append(
+                    "Eager and JIT output residues differ modulo Q"
+                )
+        if compiled is not None:
+            measurements["jit"]["implementations"] = sorted(
+                {
+                    dispatch.implementation.name
+                    for dispatch in compiled.specializations[
+                        0
+                    ].executable.dispatch_table.operations.values()
+                }
             )
         if dist.get_rank() != 0:
             return None
@@ -449,15 +636,10 @@ def _run_case(
                 "giant rotations"
             ),
             "retained_domain": retained_domain,
-            "cuda_graph": graph_program is not None,
+            "cuda_graph": bool(graph_programs),
             "cuda_graph_scope": (
                 "rank-local BSGS evaluation; ciphertext reduction remains eager"
-                if graph_program is not None
-                else None
-            ),
-            "cuda_graph_capture_ms": (
-                graph_program.stats.capture_seconds * 1e3
-                if graph_program is not None
+                if graph_programs
                 else None
             ),
             "matrix_size": size,
@@ -466,7 +648,8 @@ def _run_case(
             "world_size": world_size,
             "device": device,
             "depth_label": depth,
-            "preset": PRESETS[depth].value,
+            "q_depth_groups": config.q_depth_groups,
+            "p_moduli": config.p_moduli,
             "ntt_backend": engine.ntt_backend_name(execution_device),
             "ring_dimension": config.N,
             "q_product_bits": math.prod(config.q_moduli).bit_length(),
@@ -480,15 +663,16 @@ def _run_case(
             "interop_threads": torch.get_num_interop_threads(),
             "thread_environment": {
                 name: os.environ.get(name)
-                for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+                for name in (
+                    "OMP_NUM_THREADS",
+                    "MKL_NUM_THREADS",
+                    "OPENBLAS_NUM_THREADS",
+                )
             },
             "cpu_affinity": sorted(os.sched_getaffinity(0)),
             "setup_ms": setup_ms,
             "warmup": warmup,
             "runs": runs,
-            "max_abs_error": max_abs_error,
-            "correctness_threshold": correctness_threshold,
-            "rms_error": rms_error,
             "host": platform.node(),
             "torch": torch.__version__,
             "cuda": torch.version.cuda,
@@ -497,11 +681,29 @@ def _run_case(
                 if device == "cuda"
                 else [platform.processor()]
             ),
-            **_summarize(samples),
+            "executions": measurements,
+            "correctness_errors": correctness_errors,
+            "plaintext_storage": (
+                {
+                    "compression_layout": "contiguous",
+                    "unique_count": 2 * size,
+                    "compact_bytes_per_rank": sum(
+                        value.nbytes for value in plaintext_groups.values()
+                    ),
+                    "dense_bytes_per_rank": sum(
+                        value.nbytes
+                        * value.ring_dimension
+                        // value.unique_count
+                        for value in plaintext_groups.values()
+                    ),
+                }
+                if mode == "pt-ct"
+                else None
+            ),
         }
     finally:
-        if graph_program is not None:
-            graph_program.close()
+        for graph in graph_programs.values():
+            graph.close()
         dist.shutdown()
 
 
@@ -539,14 +741,23 @@ def _launch_cuda(args: argparse.Namespace) -> None:
             str(args.input_depth),
             "--retained-domain",
             args.retained_domain,
+            "--execution",
+            args.execution,
+            "--cuda-graph" if args.cuda_graph else "--no-cuda-graph",
             "--output",
             str(worker_output),
         ]
         if args.threads is not None:
             command.extend(("--threads", str(args.threads)))
-        subprocess.run(command, check=True)
-        args.output.write_text(worker_output.read_text())
-        print(worker_output.read_text(), end="")
+        environment = dict(os.environ)
+        # Keep the invoking process's effective thread count in torchrun workers.
+        environment.setdefault("OMP_NUM_THREADS", str(torch.get_num_threads()))
+        process = subprocess.run(command, check=False, env=environment)
+        recorded = worker_output.read_text()
+        if recorded:
+            args.output.write_text(recorded)
+            print(recorded, end="")
+        process.check_returncode()
     finally:
         worker_output.unlink(missing_ok=True)
 
@@ -556,19 +767,34 @@ def main() -> None:
     parser.add_argument("--worker", action="store_true")
     parser.add_argument("--device", choices=("cpu", "cuda"), required=True)
     parser.add_argument("--gpus", type=int, choices=(1, 2), default=1)
-    parser.add_argument("--depth", type=int, choices=PRESETS, required=True)
+    parser.add_argument(
+        "--depth", type=int, choices=BENCHMARK_PARAMETERS, required=True
+    )
     parser.add_argument("--mode", choices=("pt-ct", "ct-ct"), required=True)
     parser.add_argument("--size", type=int, required=True)
     parser.add_argument("--baby-step", type=int, required=True)
-    parser.add_argument("--warmup", type=int, default=3)
-    parser.add_argument("--runs", type=int, default=10)
+    parser.add_argument("--warmup", type=int, default=5)
+    parser.add_argument("--runs", type=int, default=60)
     parser.add_argument("--input-depth", type=int, default=0)
-    parser.add_argument("--threads", type=int, default=None,
-                        help="Override PyTorch intra-op threads; otherwise preserve environment settings.")
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        help="Override PyTorch intra-op threads; otherwise preserve environment settings.",
+    )
     parser.add_argument(
         "--retained-domain",
         choices=("coefficient", "ntt"),
         default="ntt",
+    )
+    parser.add_argument(
+        "--execution", choices=("eager", "jit", "both"), default="both"
+    )
+    parser.add_argument(
+        "--cuda-graph",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Capture JIT rank-local GPU evaluation; reduction remains outside capture.",
     )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -590,11 +816,15 @@ def main() -> None:
         device=args.device,
         input_depth=args.input_depth,
         retained_domain=args.retained_domain,
+        execution=args.execution,
+        cuda_graph=args.cuda_graph,
     )
     if result is not None:
         args.output.write_text(json.dumps(result, indent=2) + "\n")
         if not args.worker:
             print(json.dumps(result, indent=2), flush=True)
+        if result["correctness_errors"]:
+            raise AssertionError(result["correctness_errors"])
 
 
 if __name__ == "__main__":

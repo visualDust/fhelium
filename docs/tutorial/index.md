@@ -1,46 +1,23 @@
 # Tutorials
 
-Start with one correct process-local evaluator, then choose a learning track for
-the capability you actually need. The numbered examples are a catalog of
-numbered workflows; they do not define one mandatory sequential course.
+Start with [installation](installation.md) and [security](../developer/security.md). The [example catalog](tutorials.md) lists every numbered workflow and its source. Examples are grouped by module; select a track rather than running the catalog as a single application.
 
-## First program
+| Module | Examples | Entry point |
+| --- | --- | --- |
+| Eager | 01–08 | [Basic CKKS workflow](basic-ckks-workflow.md) |
+| Values, Serialization, and Artifacts | 09–10 | [Value movement and files](value-memory-and-persistence.md) |
+| Compile | 11–16 | [JIT compilation](compile-jit.md) |
+| Runtime | 17–18 | [Double-buffered execution](reusable-value-buffer.md) |
+| Residency | 19–20 | [Manual Residency](explicit-residency.md) |
+| Distributed | 21–24 | [Data-parallel encrypted batches](spmd-independent-ciphertexts.md) |
+| Experimental | 25–26 | [Experimental bootstrapping](composable-ckks-bootstrap.md) |
 
-1. Read [Support, maturity, and security scope](support-and-security.md).
-2. [Install FHElium](installation.md) against the selected CPU-only or
-   CUDA-enabled PyTorch source-build environment.
-3. Run the first evaluator in [Tutorials](tutorials.md).
-4. Continue with [01 — Basic CKKS workflow](basic-ckks-workflow.md).
+## Choose a level of control
 
-FHElium currently supports Linux x86-64 and macOS Apple Silicon, Python 3.12 or
-3.13, PyTorch `>=2.10,<2.14`, and a C++17 host toolchain. CUDA builds are Linux
-x86-64 only and additionally require a CUDA-enabled PyTorch distribution, a
-matching CUDA source toolkit, and a supported NVIDIA GPU at runtime. macOS uses
-the native CPU backend rather than PyTorch MPS. The
-[installation guide](installation.md) defines the verified endpoints.
+- Start with [Eager](basic-ckks-workflow.md) for immediate numerical operations.
+- Use [a Compile decorator](compile-jit.md) for reusable specialization, [a pipeline](compose-and-execute-compile-pipeline.md) to choose transformations, or [a custom pass](customize-compile-pass-and-pipeline.md) to add a rewrite.
+- Use [Program persistence](compile-material-persistence.md) to separate capture from deployment and supply materials at the execution site.
+- Use [buffers](reusable-value-buffer.md), [CUDA Graphs](cuda-graph-matvec.md), or [Residency](explicit-residency.md) for different execution and memory controls.
+- Choose a [distributed partition](../concepts/distributed/spmd-model.md) based on whether local results are independent values, additive terms, or prime rows.
 
-## Choose a learning track
-
-| Goal | Suggested sequence |
-| --- | --- |
-| Build a correct evaluator | [01 Basic workflow](basic-ckks-workflow.md) → [02 Key lifecycle](key-materials.md) → [04 Chain depth](modulus-chain-depth.md) → [05 Actual scales](explicit-scale-management.md) → [06 Explicit reuse](late-relinearization-and-ntt-reuse.md) |
-| Understand value layout and storage | [03 Memory and persistence](value-memory-and-persistence.md) → [15 Homogeneous batching](homogeneous-batching.md) → [16 Compressed plaintexts](compressed-plaintext.md) |
-| Reduce rotation cost | [07 Rotation hoisting](rotation-hoisting.md) → [Benchmark methodology](/benchmarks/methodology) |
-| Use multiple GPUs | [08 Independent ciphertexts](spmd-independent-ciphertexts.md) → [09 Additive rotation terms](spmd-rotation-parallel-matvec.md) → [10 RNS-limb pipeline](spmd-limb-parallel-pipeline.md) |
-| Repeat work within bounded memory | [11 CUDA Graph](cuda-graph-matvec.md) → [12 Reusable buffers](reusable-value-buffer.md) → [13 Residency](explicit-residency.md) |
-| Work with Compile and IR | [17 Compose and execute built-in Compile passes](compose-and-execute-compile-pipeline.md) → [18 Textual Program IR](ir-textual-program.md) → [19 Custom Compile pass](customize-compile-pass-and-pipeline.md) → [20 Generate editable Python](generate-python.md) → [21 Rank-local collective IR](rank-local-collective-ir.md) |
-| Evaluate an experimental feature | Read the [bootstrapping semantics and range requirements](../concepts/ckks/composable-bootstrapping.md) before [22 Bootstrapping](composable-ckks-bootstrap.md), or the [multiparty supported security scope](../how-to/use-multiparty-ckks.md) before [23 Multiparty CKKS](multiparty-ckks.md) |
-
-Use [Tutorials](tutorials.md) to map every numbered page to
-its source file and main question.
-
-## When you need another document type
-
-- [Concepts](../concepts/index.md) define state, ownership, communication, and
-  architecture.
-- [How-to guides](../how-to/index.md) provide focused planning and diagnostic
-  procedures.
-- [API reference](../api/index.md) gives signatures and docstrings for
-  supported interfaces and non-private implementation modules.
-- [Developer Guide](../developer/index.md) covers the native operator stack and
-  internal cross-layer invariants and interfaces.
+[Concepts](../concepts/index.md) explain the model; [how-to guides](../how-to/index.md) cover focused procedures; the [API reference](../api/index.md) gives current signatures; the [developer guide](../developer/index.md) covers implementation.

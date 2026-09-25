@@ -254,6 +254,19 @@ def _fake_fhelium_ntt_diagnostic_ops_inverse__ntt__montgomery__power__of__two__r
     pass
 
 
+@torch.library.register_fake("fhelium_ntt_ops::compact_ntt_stage_range_")
+def _fake_fhelium_ntt_ops_compact__ntt__stage__range__(
+    residues: torch.Tensor,
+    compact_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+    inverse: bool,
+    start_stage: int,
+    end_stage: int,
+    grouped_stage_count: int,
+) -> None:
+    pass
+
+
 @torch.library.register_fake(
     "fhelium_ntt_ops::forward_ntt_montgomery_compact_grouped_smem_"
 )
@@ -720,6 +733,13 @@ def _fake_fhelium_rns_ops_sub__standard__(
     lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
 ) -> None:
     pass
+
+
+@torch.library.register_fake("fhelium_rns_ops::sum_standard_batch")
+def _fake_fhelium_rns_ops_sum__standard__batch(
+    source: torch.Tensor, dim: int, rns_params: torch.Tensor
+) -> torch.Tensor:
+    return source.new_empty((*source.shape[:dim], *source.shape[dim + 1 :]))
 
 
 @torch.library.register_fake("fhelium_rns_ops::to_montgomery_")

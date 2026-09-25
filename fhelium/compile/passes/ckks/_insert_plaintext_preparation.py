@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from ..._pipeline import (
     PassResult,
     PassStats,
@@ -11,7 +17,6 @@ from dataclasses import dataclass
 
 from xdsl.dialects.builtin import StringAttr, UnrealizedConversionCastOp
 
-from fhelium.ir import Program
 
 from fhelium.ir.dialects import ckks, logical
 from .._operation_transforms import (
@@ -51,12 +56,10 @@ class InsertPlaintextPreparationPass:
 
     name: str = "insert-plaintext-preparation"
 
-    def run(
-        self,
-        program: Program,
-        workspace: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
         """Prepare supported public operands across all function blocks."""
+        program = compilation.program
+        workspace = compilation.workspace
 
         del workspace
         matched = transformed = inserted = skipped = 0

@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from fhelium.config.ckks import CkksConfig
+
 from fhelium.backend.rns.chain import RnsChain
 from fhelium.backend.rns.decomposition import (
     HybridRnsDecomposition,
@@ -41,10 +43,6 @@ class RnsDigitSpec:
 class RnsLayout:
     r"""Mathematical Q/P layout independent of execution placement.
 
-    This object intentionally contains no device assignment or communication
-    policy.  An SPMD workload may partition returned prime ids, but
-    doing so does not change the local CKKS value or native-kernel ABI.
-
     For any tensor ``[..., limb, coefficient_or_ntt_index]``, limb ``j`` maps
     exactly to ``prime_ids(...)[j]``. ``include_p`` chooses between internal
     $Q_d$ and $Q_dP$ row sets; semantic values carry ``modulus_basis``
@@ -62,8 +60,7 @@ class RnsLayout:
         self.hybrid_decomposition = hybrid_decomposition
         self.basis_count = chain.basis_count
         self._digit_specs_by_depth = tuple(
-            self._build_digit_specs(depth)
-            for depth in range(self.basis_count)
+            self._build_digit_specs(depth) for depth in range(self.basis_count)
         )
         # Cache the row projections used by each key-switch sub-operation.
         # RnsDigitSpec remains the per-depth source for these derived views.
@@ -86,6 +83,22 @@ class RnsLayout:
             }
             for include_p in (False, True)
         }
+
+    @classmethod
+    def from_config(cls, config: CkksConfig) -> RnsLayout:
+        """Build Q depth-group rows and hybrid digits from CKKS parameters."""
+
+        chain = RnsChain(
+            num_q_primes=config.num_q_primes,
+            num_p_primes=config.num_p_primes,
+            q_depth_group_sizes=tuple(
+                len(group) for group in config.q_depth_groups
+            ),
+        )
+        return cls(
+            chain,
+            HybridRnsDecomposition(chain, config.q_moduli, config.p_moduli),
+        )
 
     def _build_digit_specs(self, depth: int) -> tuple[RnsDigitSpec, ...]:
         start_row = self.chain.basis_row_starts[depth]

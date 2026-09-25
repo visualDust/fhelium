@@ -20,7 +20,7 @@ from fhelium.distributed._collective_common import (
     _group_info,
     _GroupInfo,
     _KeyT,
-    _p2p_transfer_tensor,
+    _transfer_tensor,
     _wait_p2p_ops,
     _workload_tensors,
     _WorkloadT,
@@ -174,8 +174,7 @@ def broadcast_compressed_plaintext(
     """Broadcast one compressed plaintext with typed allocation.
 
     The compact tensor, ring dimension, encoded repetition layout, and all
-    arithmetic metadata are preserved. The operation is synchronous and does
-    not infer ownership, placement, or residency policy.
+    arithmetic metadata are preserved. The operation is synchronous.
     """
 
     return _broadcast_typed_value(
@@ -335,7 +334,7 @@ def _scatter_values(
                 continue
             destination = info.global_ranks[destination_group_rank]
             for tag, tensor in enumerate(_workload_tensors(destination_value)):
-                transfer = _p2p_transfer_tensor(
+                transfer = _transfer_tensor(
                     tensor,
                     receive_copies,
                     receiving=False,
@@ -352,7 +351,7 @@ def _scatter_values(
                 )
     else:
         for tag, tensor in enumerate(_workload_tensors(result)):
-            transfer = _p2p_transfer_tensor(
+            transfer = _transfer_tensor(
                 tensor,
                 receive_copies,
                 receiving=True,
@@ -377,15 +376,17 @@ def scatter_ciphertexts(
     src: int = 0,
     group: torch.distributed.ProcessGroup | None = None,
 ) -> Ciphertext:
-    """Scatter independent ciphertext workload items from one source.
+    """Scatter caller-prepared ciphertext values from one source.
 
-    This is representation-preserving transport, not an arithmetic operation.
+    The source supplies the values to send, whether independent workload items
+    or views it has already prepared. This interface performs no slicing or
+    reconstruction. This is representation-preserving transport, not an arithmetic operation.
     Sequence position is process-group-rank order even though ``src`` is a
     global rank.  The operation is synchronous, accepts no ``async_op``
     argument, and returns no :class:`torch.distributed.Work`.
 
     Args:
-        values_or_none: On ``src``, one independent ciphertext per group rank
+        values_or_none: On ``src``, one prepared ciphertext per group rank
             in process-group-rank order.  Every non-source rank must pass
             ``None``.
         src: Global rank of the source process, which must belong to ``group``.
@@ -461,7 +462,7 @@ def _gather_values(
                 continue
             source = info.global_ranks[source_group_rank]
             for tag, tensor in enumerate(_workload_tensors(source_value)):
-                transfer = _p2p_transfer_tensor(
+                transfer = _transfer_tensor(
                     tensor,
                     receive_copies,
                     receiving=True,
@@ -478,7 +479,7 @@ def _gather_values(
                 )
     else:
         for tag, tensor in enumerate(_workload_tensors(value)):
-            transfer = _p2p_transfer_tensor(
+            transfer = _transfer_tensor(
                 tensor,
                 receive_copies,
                 receiving=False,

@@ -1,8 +1,10 @@
 # Diagnose a distributed hang
 
-A distributed hang usually means ranks entered incompatible communication
-phases, not that NCCL randomly stopped. Localize the first divergent rank and
-collective before changing timeouts or algorithms.
+A distributed hang indicates that participating ranks are not making progress through the intended communication sequence. Localize the first divergent rank and collective, including preceding local exceptions, before changing timeouts or algorithms.
+
+## Prerequisites
+
+Retain a finite-timeout reproduction, per-rank logs, group membership, and the intended collective sequence. Complete any rank-local Compile preparation before diagnosing collective progress so a local preparation exception is not mistaken for a communication stall.
 
 ## 1. Reproduce with the smallest launch
 
@@ -32,8 +34,7 @@ group membership
 context ID
 ```
 
-Check that global ranks are not confused with group-relative ranks and that
-each process selected the intended device before allocating values.
+Check that global ranks are not confused with group-relative ranks and that each process selected the intended device before allocating values.
 
 ## 3. Number every collective phase
 
@@ -48,13 +49,11 @@ value type and shape
 depth, prime IDs, polynomial domain, modulus basis
 ```
 
-The last phase entered by all ranks and the first phase entered by only some
-ranks usually identify the control-flow divergence.
+The last phase entered by all ranks and the first phase entered by only some ranks usually identify the control-flow divergence.
 
 ## 4. Check collective ordering
 
-All ranks in a process group must execute compatible collectives in the same
-order. Common causes include:
+All ranks in a process group must execute compatible collectives in the same order. Common causes include:
 
 - a rank with no local arithmetic skips a collective;
 - a local validation error raises before peers enter error exchange;
@@ -63,8 +62,7 @@ order. Common causes include:
 - one branch broadcasts a key and another branch proceeds to ciphertext data;
 - a different loop count causes an extra collective on one rank.
 
-Make empty-work ranks contribute a valid neutral value or participate in the
-same transport/control phases.
+Make empty-work ranks contribute a valid neutral value or participate in the same transport/control phases.
 
 ## 5. Check typed descriptors before payloads
 
@@ -78,15 +76,11 @@ Compare the descriptor fields on every rank:
 - polynomial domain, modulus basis, and residue representation;
 - rotation step or key specialization.
 
-If one rank rejects a descriptor locally while peers begin a payload transfer,
-the program can hang. Use the typed APIs' group-consistent validation path
-rather than open-coding one-sided checks.
+If one rank rejects a descriptor locally while peers begin a payload transfer, the program can hang. Use the typed APIs' group-consistent validation path rather than open-coding one-sided checks.
 
 ## 6. Check CUDA stream and asynchronous failures
 
-An earlier CUDA error may surface at a collective or synchronization call.
-Temporarily add synchronization after narrowly defined phases to locate the first
-failing kernel, but remove debugging synchronization after finding the cause.
+An earlier CUDA error may surface at a collective or synchronization call. Temporarily add synchronization after narrowly defined phases to locate the first failing kernel, but remove debugging synchronization after finding the cause.
 
 Check:
 
@@ -104,8 +98,7 @@ NCCL_DEBUG=INFO
 TORCH_DISTRIBUTED_DEBUG=DETAIL
 ```
 
-Use a finite timeout and preserve each rank's complete log. Avoid enabling so
-much tracing that the first semantic divergence becomes invisible in noise.
+Use a finite timeout and preserve each rank's complete log. Avoid enabling so much tracing that the first semantic divergence becomes invisible in noise.
 
 ## 8. Reduce the collective
 
@@ -117,8 +110,7 @@ Replace the hanging phase temporarily with the smallest equivalent:
 - reduce one transparent/additive-compatible ciphertext;
 - scatter/gather one limb range.
 
-This separates process-group health from descriptor allocation, payload
-transport, and CKKS reduction logic.
+This separates process-group health from descriptor allocation, payload transport, and CKKS reduction logic.
 
 ## 9. Restore mechanisms incrementally
 
@@ -132,6 +124,10 @@ After the eager two-rank path succeeds, restore:
 6. target rank count.
 
 Keep phase numbers and timeouts as regression diagnostics.
+
+## Verify the outcome
+
+Repeat the minimal launch and verify that every participating rank enters and leaves each collective in the same order. Restore overlap and larger problem sizes only after the first divergence is resolved. See [distributed internals](../developer/distributed-internals.md) for collective contracts.
 
 ## Related documentation
 

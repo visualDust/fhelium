@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from ..._pipeline import (
     PassResult,
 )
@@ -13,7 +19,6 @@ from typing import Any
 
 from xdsl.dialects.builtin import UnrealizedConversionCastOp
 from xdsl.dialects.func import ReturnOp
-from xdsl.ir import SSAValue
 
 from fhelium.backend.execution import OperationBackend
 from fhelium.backend.implementation import (
@@ -28,13 +33,9 @@ from fhelium.ir.dialects import core
 from ._common import (
     SourceNames,
     append_unique,
-    assignment,
-    constant_literal,
     entry_point_name,
     program_block,
-    return_statement,
     string,
-    unsupported,
 )
 
 
@@ -46,11 +47,9 @@ class EmitBackendPythonPass:
     entry_point: str = "generated_backend"
     name: str = "emit-backend-python"
 
-    def run(
-        self,
-        program: Program,
-        shared_data: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
+        program = compilation.program
+        shared_data = compilation.workspace
         registry = (
             OperationBackend().registry
             if self.registry is None
@@ -77,215 +76,168 @@ def emit_backend_python(
     registry: OperationImplementationRegistry,
     entry_point: str = "generated_backend",
 ) -> BackendPythonSource:
-    """Emit direct implementation calls or fail on unsupported Program content."""
+    """Export the host control flow used by linked execution."""
+    from xdsl.ir import Block
+    from fhelium.backend.implementation import PreparingOperationImplementation
+    from ._host import emit_host_body, tuple_source
 
     entry_point = entry_point_name(entry_point)
     block = program_block(program, target="Backend")
     names = SourceNames()
     input_names = tuple(
-        names.input(argument, index)
-        for index, argument in enumerate(block.args)
+        names.input(value, i) for i, value in enumerate(block.args)
     )
-    resource_values: set[SSAValue] = set()
     material_symbols: list[str] = []
     resource_symbols: list[str] = []
     resource_requirements: list[tuple[str, str]] = []
-    imports: list[str] = [
+    resource_values = set()
+    for operation in block.walk():
+        if isinstance(operation, core.ResourceRefOp):
+            resource_values.add(operation.value)
+        elif (
+            isinstance(operation, UnrealizedConversionCastOp)
+            and operation.inputs[0] in resource_values
+        ):
+            resource_values.add(operation.outputs[0])
+    imports = [
         "from collections.abc import Mapping",
-        "from fhelium.backend.implementation import "
-        "OperationInvocation as __fhelium_codegen_OperationInvocation",
-        "from fhelium.backend.resources import "
-        "BoundResource as __fhelium_codegen_BoundResource",
+        "from fhelium.backend.implementation import OperationInvocation as __fhelium_codegen_OperationInvocation",
+        "from fhelium.backend.resources import BoundResource as __fhelium_codegen_BoundResource",
+        "from fhelium.backend.execution import _index_value as __fhelium_codegen_index, _tensor_region_results as __fhelium_codegen_tensor_results",
+        "from fhelium.ir import Program as __fhelium_codegen_Program",
     ]
     declarations: list[str] = []
-    body: list[str] = []
     call_count = 0
-    operation_count = 0
-    returned = False
+    resolved = {}
 
-    for index, operation in enumerate(block.ops):
-        if operation.regions:
-            raise unsupported("Backend", index, operation)
-        operation_count += 1
-
-        if isinstance(operation, UnrealizedConversionCastOp):
-            if len(operation.inputs) != 1 or len(operation.outputs) != 1:
-                raise PythonCodegenError(
-                    "Backend Python emission supports only one-to-one boundary casts"
-                )
-            result = names.results(operation)
-            source = operation.inputs[0]
-            body.append(assignment(result, names.operand(source)))
-            if source in resource_values:
-                resource_values.add(operation.outputs[0])
-            continue
-
-        if isinstance(operation, core.MaterialRefOp):
-            symbol = string(operation.symbol, label="material symbol")
-            append_unique(material_symbols, (symbol,))
-            body.append(
-                assignment(names.results(operation), f"materials[{symbol!r}]")
-            )
-            continue
-
-        if isinstance(operation, core.ResourceRefOp):
-            symbol = string(operation.symbol, label="resource symbol")
-            kind = string(operation.kind, label="resource kind")
-            append_unique(resource_symbols, (symbol,))
-            _record_requirement(resource_requirements, symbol, kind)
-            results = names.results(operation)
-            body.append(
-                assignment(
-                    results,
-                    "__fhelium_codegen_BoundResource(\n"
-                    f"        {symbol!r},\n"
-                    f"        {kind!r},\n"
-                    f"        resources[{symbol!r}],\n"
-                    "    )",
-                )
-            )
-            resource_values.add(operation.value)
-            continue
-
-        if isinstance(operation, core.ConstantOp):
-            body.append(
-                assignment(
-                    names.results(operation), repr(constant_literal(operation))
-                )
-            )
-            continue
-
-        if isinstance(operation, ReturnOp):
-            body.append(
-                return_statement(
-                    tuple(names.operand(value) for value in operation.arguments)
-                )
-            )
-            returned = True
-            continue
-
-        invocation = operation_invocation(operation)
-        try:
-            implementation = registry.resolve(
+    def implementation_for(operation):
+        if operation not in resolved:
+            resolved[operation] = registry.resolve(
                 operation,
                 requested=requested_implementation(operation),
                 in_place=False,
             )
-        except (KeyError, TypeError, ValueError) as error:
-            raise PythonCodegenError(
-                f"Backend Python emission cannot convert operation {index} "
-                f"{operation.name!r}: {error}"
-            ) from error
-        requirements = implementation.resource_requirements(invocation)
-        append_unique(
-            resource_symbols,
-            (requirement.symbol for requirement in requirements),
-        )
-        for requirement in requirements:
-            _record_requirement(
-                resource_requirements,
-                requirement.symbol,
-                requirement.kind,
-            )
+        return resolved[operation]
 
+    def reference(operation):
+        if isinstance(operation, core.MaterialRefOp):
+            symbol = string(operation.symbol, label="material symbol")
+            append_unique(material_symbols, (symbol,))
+            return f"materials[{symbol!r}]"
+        symbol = string(operation.symbol, label="resource symbol")
+        kind = string(operation.kind, label="resource kind")
+        append_unique(resource_symbols, (symbol,))
+        _record_requirement(resource_requirements, symbol, kind)
+        return f"__fhelium_codegen_BoundResource({symbol!r}, {kind!r}, resources[{symbol!r}])"
+
+    def call(operation, regions):
+        nonlocal call_count
+        implementation = implementation_for(operation)
+        invocation = operation_invocation(operation)
+        requirements = implementation.resource_requirements(invocation)
+        for requirement in requirements:
+            append_unique(resource_symbols, (requirement.symbol,))
+            _record_requirement(
+                resource_requirements, requirement.symbol, requirement.kind
+            )
         _require_importable_class(type(operation), label="operation")
         _require_importable_class(type(implementation), label="implementation")
         operation_alias = f"__fhelium_codegen_Operation{call_count}"
         implementation_alias = f"__fhelium_codegen_Implementation{call_count}"
+        variable = f"__fhelium_codegen_implementation_{call_count}"
+        invocation_name = f"__fhelium_codegen_invocation_{call_count}"
         imports.extend(
             (
-                f"from {type(operation).__module__} import "
-                f"{type(operation).__name__} as {operation_alias}",
-                f"from {type(implementation).__module__} import "
-                f"{type(implementation).__name__} as {implementation_alias}",
+                f"from {type(operation).__module__} import {type(operation).__name__} as {operation_alias}",
+                f"from {type(implementation).__module__} import {type(implementation).__name__} as {implementation_alias}",
             )
         )
-        declarations.extend(
-            (
-                f"__fhelium_codegen_implementation_{call_count} = "
-                f"{implementation_alias}({_constructor_arguments(implementation)})",
-                f"__fhelium_codegen_invocation_{call_count} = "
-                "__fhelium_codegen_OperationInvocation(",
-                f"    operation_type={operation_alias},",
-                f"    operand_count={invocation.operand_count},",
-                f"    result_count={invocation.result_count},",
-                f"    attributes={_python_literal(dict(invocation.attributes))},",
-                f"    operand_prime_ids={_python_literal(invocation.operand_prime_ids)},",
-                f"    operand_bases={_python_literal(invocation.operand_bases)},",
-                f"    operand_components={_python_literal(invocation.operand_components)},",
-                f"    result_prime_ids={_python_literal(invocation.result_prime_ids)},",
-                ")",
-            )
+        declarations.append(
+            f"{variable} = {implementation_alias}({_constructor_arguments(implementation)})"
         )
-
+        if isinstance(implementation, PreparingOperationImplementation):
+            source_block = Block(
+                arg_types=[value.type for value in operation.operands]
+            )
+            copy = operation.clone(
+                value_mapper=dict(zip(operation.operands, source_block.args))
+            )
+            source_block.add_ops((copy, ReturnOp(*copy.results)))
+            description = str(
+                Program.from_function(
+                    source_block, [value.type for value in operation.results]
+                )
+            )
+            declarations.append(
+                f"{variable} = {variable}.prepare_operation(__fhelium_codegen_Program.parse({description!r}).single_block().first_op)"
+            )
+        declarations.append(
+            f"{invocation_name} = __fhelium_codegen_OperationInvocation("
+            f"operation_type={operation_alias}, operand_count={invocation.operand_count}, result_count={invocation.result_count}, "
+            f"attributes={_python_literal(dict(invocation.attributes))}, operand_prime_ids={_python_literal(invocation.operand_prime_ids)}, "
+            f"operand_bases={_python_literal(invocation.operand_bases)}, operand_components={_python_literal(invocation.operand_components)}, "
+            f"result_prime_ids={_python_literal(invocation.result_prime_ids)})"
+        )
         payloads = tuple(
             names.operand(value)
             for value in operation.operands
             if value not in resource_values
         )
-        operand_resources = tuple(
+        bound = [
             names.operand(value)
             for value in operation.operands
             if value in resource_values
+        ]
+        bound.extend(
+            f"__fhelium_codegen_BoundResource({r.symbol!r}, {r.kind!r}, resources[{r.symbol!r}])"
+            for r in requirements
         )
-        requirement_resources: list[str] = []
-        for requirement_index, requirement in enumerate(requirements):
-            resource_name = (
-                f"__fhelium_codegen_resource_{call_count}_{requirement_index}"
-            )
-            body.extend(
-                (
-                    f"    {resource_name} = __fhelium_codegen_BoundResource(",
-                    f"        {requirement.symbol!r},",
-                    f"        {requirement.kind!r},",
-                    f"        resources[{requirement.symbol!r}],",
-                    "    )",
-                )
-            )
-            requirement_resources.append(resource_name)
-        resource_arguments = (*operand_resources, *requirement_resources)
-        expression = (
-            f"__fhelium_codegen_implementation_{call_count}.execute(\n"
-            f"        __fhelium_codegen_invocation_{call_count},\n"
-            f"        {_tuple_source(payloads)},\n"
-            f"        {_resource_tuple_source(resource_arguments)},\n"
-            "        in_place=False,\n"
-            "    )"
-        )
-        result_names = names.results(operation)
-        if not result_names:
-            body.append(f"    {expression}")
-        else:
-            lhs = (
-                f"{result_names[0]},"
-                if len(result_names) == 1
-                else ", ".join(result_names)
-            )
-            body.append(f"    {lhs} = {expression}")
+        method = "execute_regions" if regions else "execute"
+        arguments = f"{invocation_name}, {tuple_source(payloads)}, {tuple_source(bound)}"
+        if regions:
+            arguments += f", {tuple_source(regions)}"
         call_count += 1
+        return f"{variable}.{method}({arguments}, in_place=False)"
 
-    if not returned:
-        raise PythonCodegenError("Backend Python emission requires func.return")
+    def prepared_regions(operation):
+        if not operation.regions or operation.name.startswith("scf."):
+            return False
+        return isinstance(
+            implementation_for(operation), PreparingOperationImplementation
+        )
 
-    source = [*dict.fromkeys(imports), "", *declarations, ""]
-    source.extend(
+    body = emit_host_body(
+        block,
+        names,
+        call,
+        reference,
+        prepared_regions=prepared_regions,
+        tuple_return=False,
+    )
+    parameters = ", ".join(
         (
-            f"def {entry_point}(",
-            *(f"    {name}: object," for name in input_names),
-            "    *,",
-            "    materials: Mapping[str, object],",
-            "    resources: Mapping[str, object],",
-            ") -> object:",
-            *body,
+            *input_names,
+            "*",
+            "materials: Mapping[str, object]",
+            "resources: Mapping[str, object]",
         )
     )
+    # No positional inputs still permits keyword-only binding maps.
+    source = [
+        *dict.fromkeys(imports),
+        "",
+        *declarations,
+        "",
+        f"def {entry_point}({parameters}) -> object:",
+        *body,
+    ]
     return BackendPythonSource(
         "\n".join(source) + "\n",
         entry_point,
         input_names,
         tuple(material_symbols),
         tuple(resource_symbols),
-        operation_count,
+        sum(1 for _ in block.walk()),
         tuple(resource_requirements),
     )
 

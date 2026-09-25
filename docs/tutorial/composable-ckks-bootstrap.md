@@ -1,11 +1,8 @@
 # Refresh a full-slot CKKS ciphertext with composable bootstrapping
 
-**Example source:** [`examples/22_ckks_bootstrap_logn16.py`](https://github.com/VisualDust/fhelium/blob/main/examples/22_ckks_bootstrap_logn16.py)
+**Example source:** [`examples/25_experimental_bootstrap.py`](https://github.com/VisualDust/fhelium/blob/main/examples/25_experimental_bootstrap.py)
 
-This example depletes a full-slot `logN = 16` ciphertext, constructs a callable configured for one Engine,
-bootstrap, generates the three primitive key inputs required by that callable,
-and refreshes the ciphertext. The tutorial explains the mathematical range and
-state assumptions that the factory cannot establish from encrypted data.
+This example depletes a full-slot `logN = 16` ciphertext, constructs a callable configured for one Engine, bootstrap, generates the three primitive key inputs required by that callable, and refreshes the ciphertext. The tutorial explains the mathematical range and state assumptions that the factory cannot establish from encrypted data.
 
 ## 1. Construct the documented bootstrap configuration
 
@@ -28,13 +25,9 @@ engine = Engine(
 bootstrap = cosine_depth_refresh_logn16_v1(engine)
 ```
 
-The global CKKS default remains 40 bits; this documented configuration selects
-50-bit scale primes and one 50-bit terminal Q prime. The factory returns
-a compiled, callable `FullSlotBootstrap`.
+The global CKKS default remains 40 bits; this documented configuration selects 50-bit scale primes and one 50-bit terminal Q prime. The factory returns a compiled, callable `FullSlotBootstrap`.
 
-The `logn16` name documents the configuration. The factory itself checks
-transform slot counts, structural-base/default-scale proximity, and depth, but
-it does not enforce this preset or certify a numerical range.
+The `logn16` name documents the configuration. The factory itself checks transform slot counts, structural-base/default-scale proximity, and depth, but it does not enforce this preset or certify a numerical range.
 
 ## 2. Understand the range precondition
 
@@ -58,15 +51,9 @@ $$
           =\frac{\sin(\pi r)}{\pi}.
 $$
 
-Fusion means `FullSlotBootstrap` folds $1/B$ into CoeffsToSlots; the reducer's
-`evaluate()` receives $x$ and must not divide again. In contrast,
-`bootstrap.modular_reduction.reference(values)` always expects normalized $x$
-regardless of the fusion setting.
+Fusion means `FullSlotBootstrap` folds $1/B$ into CoeffsToSlots; the reducer's `evaluate()` receives $x$ and must not divide again. In contrast, `bootstrap.modular_reduction.reference(values)` always expects normalized $x$ regardless of the fusion setting.
 
-For the full pipeline, both raw real and imaginary branch coordinates must lie
-within $[-B,B]$. Ciphertext data does not reveal that range to the factory. The
-application must establish it from its circuit bounds and validate the observed
-error distribution.
+For the full pipeline, both raw real and imaginary branch coordinates must lie within $[-B,B]$. Ciphertext data does not reveal that range to the factory. The application must establish it from its circuit bounds and validate the observed error distribution.
 
 ## 3. Generate the required primitive keys
 
@@ -86,21 +73,13 @@ evaluation_keys = EvaluationKeySet(
 )
 ```
 
-The compact rotation inventory contains signed powers of two.
-`FullSlotBootstrap` composes them when a direct transform key is absent.
-Use `rotation_strategy="direct"` to trade more key memory for fewer online
-rotation compositions.
+The compact rotation inventory contains signed powers of two. `FullSlotBootstrap` composes them when a direct transform key is absent. Use `rotation_strategy="direct"` to trade more key memory for fewer online rotation compositions.
 
-`create_rotation_keys()` derives only the inventory reported by `key_steps()`.
-Built-in polynomial recurrences require the separately generated
-`RelinearizationKey`, while full-slot branch splitting requires the
-`ConjugationKey`. `EvaluationKeySet` validates the evaluator-only inventory
-without mixing in the public or secret key.
+`create_rotation_keys()` derives only the inventory reported by `key_steps()`. Built-in polynomial recurrences require the separately generated `RelinearizationKey`, while full-slot branch splitting requires the `ConjugationKey`. `EvaluationKeySet` validates the evaluator-only inventory without mixing in the public or secret key.
 
 ## 4. Create an input at the circuit entry depth
 
-A real application reaches the entry depth after useful operations. The example
-below consumes depths with multiplication by encoded ones:
+A real application reaches the entry depth after useful operations. The example below consumes depths with multiplication by encoded ones:
 
 ```python
 values = torch.linspace(-0.1, 0.1, engine.num_slots, dtype=torch.float64)
@@ -124,17 +103,9 @@ while ciphertext.depth < bootstrap.input_depth:
     )
 ```
 
-The entry ciphertext has axes
-`[component, *batch, limb, coefficient]`, two components, coefficient domain,
-standard residues, Q basis, and active `prime_ids`. The built-in topology
-uses all $S=N/2$ slots and requires
-`bootstrap.input_depth = engine.max_depth - 1`. Entry preparation uses the
-actual input scale. The circuit still requires sufficient input precision
-and branch coordinates within the selected reducer's range.
+The entry ciphertext has axes `[component, *batch, limb, coefficient]`, two components, coefficient domain, standard residues, Q basis, and active `prime_ids`. The built-in topology uses all $S=N/2$ slots and requires `bootstrap.input_depth = engine.max_depth - 1`. Entry preparation uses the actual input scale. The circuit still requires sufficient input precision and branch coordinates within the selected reducer's range.
 
-Each depletion multiplication records the actual pending scale product, and
-each public rescale divides that scale by the product of its dropped Q group. No public
-operation silently normalizes to `default_scale`.
+Each depletion multiplication records the actual pending scale product, and each public rescale divides that scale by the product of its dropped Q group. No public operation silently normalizes to `default_scale`.
 
 ## 5. Follow the refresh state transitions
 
@@ -149,29 +120,14 @@ refreshed = bootstrap(
 
 executes:
 
-1. Let $M_{in}$ be the product of the input Q group and $\Delta_0$ the
-   default scale. Multiply the input residues and scale by
-   $k=\max(1,\lceil M_{in}\Delta_0/\Delta_{in}\rceil)$, preserving the message.
-2. Apply nearest group rescale into the terminal Q group at
-   `engine.max_depth`, with actual scale $\Delta_b=k\Delta_{in}/M_{in}$.
-   A separate metadata view at scale $\Delta_0$ gives the fixed circuit
-   coordinate $u=(\Delta_b/\Delta_0)m$.
-3. Center each component modulo the terminal group product $q_b$ and extend
-   it into the Q basis at `modulus_raise_target_depth`. This basis extension
-   preserves the represented centered integers and scale; it is not a rescale.
-4. Apply CoeffsToSlots. A diagonal stage multiplies at its prepared plaintext
-   scale $\Delta_{p,j}$ and removes one Q group with product $M_j$, giving
-   $\Delta_{j+1}=\Delta_j\Delta_{p,j}/M_j$. Plaintext scales are selected
-   from the circuit's arithmetic targets, rather than fixed to $\Delta_0$.
-5. Multiply by $1/S$, split by conjugation, apply periodic reduction to both
-   branches, restore the imaginary branch, and recombine.
-6. Apply SlotsToCoeffs with the same group-rescale rule, then multiply the
-   output's recorded scale by $\Delta_b/\Delta_0$ to restore coordinate $m$.
+1. Let $M_{in}$ be the product of the input Q group and $\Delta_0$ the default scale. Multiply the input residues and scale by $k=\max(1,\lceil M_{in}\Delta_0/\Delta_{in}\rceil)$, preserving the message.
+2. Apply nearest group rescale into the terminal Q group at `engine.max_depth`, with actual scale $\Delta_b=k\Delta_{in}/M_{in}$. A separate metadata view at scale $\Delta_0$ gives the fixed circuit coordinate $u=(\Delta_b/\Delta_0)m$.
+3. Center each component modulo the terminal group product $q_b$ and extend it into the Q basis at `modulus_raise_target_depth`. This basis extension preserves the represented centered integers and scale; it is not a rescale.
+4. Apply CoeffsToSlots. A diagonal stage multiplies at its prepared plaintext scale $\Delta_{p,j}$ and removes one Q group with product $M_j$, giving $\Delta_{j+1}=\Delta_j\Delta_{p,j}/M_j$. Plaintext scales are selected from the circuit's arithmetic targets, rather than fixed to $\Delta_0$.
+5. Multiply by $1/S$, split by conjugation, apply periodic reduction to both branches, restore the imaginary branch, and recombine.
+6. Apply SlotsToCoeffs with the same group-rescale rule, then multiply the output's recorded scale by $\Delta_b/\Delta_0$ to restore coordinate $m$.
 
-The final output is a two-component coefficient-domain standard-RNS Q
-ciphertext at `bootstrap.output_depth`. Its `refreshed.prime_ids` records the
-active Q rows, and `refreshed.scale` records the actual output scale including
-entry-coordinate compensation.
+The final output is a two-component coefficient-domain standard-RNS Q ciphertext at `bootstrap.output_depth`. Its `refreshed.prime_ids` records the active Q rows, and `refreshed.scale` records the actual output scale including entry-coordinate compensation.
 
 ## 6. Verify with the secret key
 
@@ -184,12 +140,7 @@ print("max error:", error.max().item())
 print("mean error:", error.mean().item())
 ```
 
-Only client verification uses the secret key. Online bootstrapping uses the
-ciphertext and the supplied `EvaluationKeySet`, whose fields contain the
-rotation, relinearization, and conjugation capabilities required by the chosen
-composition. Evaluate maximum error, mean error, distribution shape, and
-workload-specific downstream effects. Establish a tolerance from those
-measurements for the selected workload and configuration.
+Only client verification uses the secret key. Online bootstrapping uses the ciphertext and the supplied `EvaluationKeySet`, whose fields contain the rotation, relinearization, and conjugation capabilities required by the chosen composition. Evaluate maximum error, mean error, distribution shape, and workload-specific downstream effects. Establish a tolerance from those measurements for the selected workload and configuration.
 
 ## 7. Choose another built-in composition
 
@@ -203,11 +154,7 @@ alternative = cosine_depth_refresh_logn16_8_28_v1(engine)
 exponential = exponential_depth_refresh_logn16_d16_v1(engine)
 ```
 
-The 8/28 cosine composition uses a degree-28 seed and eight double-angle steps. The
-exponential composition stores ascending power coefficients for
-$\exp(i\pi x)$, squares $\log_2 B$ times, and extracts sine by conjugation.
-Both use raw `input_bound=1024` with fused normalization, but their approximation
-error, depth cost, and CKKS error propagation differ.
+The 8/28 cosine composition uses a degree-28 seed and eight double-angle steps. The exponential composition stores ascending power coefficients for $\exp(i\pi x)$, squares $\log_2 B$ times, and extracts sine by conjugation. Both use raw `input_bound=1024` with fused normalization, but their approximation error, depth cost, and CKKS error propagation differ.
 
 ## 8. Compose directly
 
@@ -238,20 +185,12 @@ bootstrap = bs.FullSlotBootstrap(
 )
 ```
 
-`PolynomialApproximation` coefficients are ascending. `basis="power"` means
-$\sum_n a_nx^n$; `basis="chebyshev"` means $\sum_n a_nT_n(x)$. A physical
-design interval other than $[-1,1]$ requires an affine normalization
-before evaluation.
+`PolynomialApproximation` coefficients are ascending. `basis="power"` means $\sum_n a_nx^n$; `basis="chebyshev"` means $\sum_n a_nT_n(x)$. A physical design interval other than $[-1,1]$ requires an affine normalization before evaluation.
 
-Replace `DiagonalBSGSEvaluator` with `DirectDiagonalEvaluator` to change only
-the execution schedule. Both implement the same cyclic-diagonal map and
-depth/scale transition, although their rotation count and rounding order differ.
+Replace `DiagonalBSGSEvaluator` with `DirectDiagonalEvaluator` to change only the execution schedule. Both implement the same cyclic-diagonal map and depth/scale transition, although their rotation count and rounding order differ.
 
-For a different full algorithm, write an ordinary function or callable class.
-Document who owns raw-to-normalized conversion, the output target, every tensor
-axis and state transition, the required key material, and the output
-actual-scale recurrence.
+For a different full algorithm, write an ordinary function or callable class. Document who owns raw-to-normalized conversion, the output target, every tensor axis and state transition, the required key material, and the output actual-scale recurrence.
 
 ::: details Source
-<<< @/../examples/22_ckks_bootstrap_logn16.py
+<<< @/../examples/25_experimental_bootstrap.py
 :::

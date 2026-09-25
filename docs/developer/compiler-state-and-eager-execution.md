@@ -1,193 +1,60 @@
-# Compiler state and eager execution
+# Values, operation semantics, and Eager dispatch
 
-FHElium provides two ways to evaluate homomorphic programs:
+Eager evaluates individual CKKS operations over public values. An `Engine` owns a CKKS configuration and lazily prepared device services; its methods calculate result metadata and dispatch Tensor payloads without constructing a Program. This page traces the value-state and direct-call mechanism. The [architecture overview](engine-native-stack.md) places it alongside manual and callable Compile execution.
 
-- **Compile** transforms an intermediate representation (IR), an operation
-  graph whose values are connected through static single assignment (SSA).
-  Passes may analyze the graph, assign CKKS state, and choose a schedule before
-  execution.
-- **Eager** executes each operation when the caller invokes an `Engine` method.
-  The caller chooses when depth-changing operations occur, so no graph
-  scheduler is involved.
+## What gives a Tensor its CKKS meaning?
 
-Both paths use registered Backend implementations. They differ in who reasons
-about CKKS state and when that reasoning occurs.
+`fhelium.values` defines `Ciphertext`, `Plaintext`, `CompressedPlaintext`, and key values. Their Tensor storage is interpreted through polynomial domain, residue representation, ordered `prime_ids`, and modulus basis. Ciphertexts and plaintexts additionally carry depth and actual scale. Ciphertext component count describes the polynomial in the secret key; it is independent of the batch axes.
 
-## Compiler state
+For a ciphertext with components $c_i$, decryption evaluates $\sum_i c_i s^i$ modulo the active basis. Scale $\Delta$ relates that encoded polynomial to the approximate message. Tensor shape alone cannot establish the scale or the meaning of a prime row. Equal row counts do not establish equal ordered primes.
 
-CKKS state describes the mathematical representation of a value. Important
-fields include:
+`values/state.py` and the value classes describe public state. `ir/ckks_state.py` implements operation-specific metadata equations shared with symbolic Eager capture. `CkksConfig` supplies mathematical parameters alongside that per-value state.
 
-- **depth**: the index of the first active Q depth group;
-- **depth remaining**: `max_depth - depth`, the number of further public
-  rescale transitions available;
-- **scale**: the per-value factor that relates encoded integers to approximate
-  real or complex values;
-- ordered prime identities, modulus basis, polynomial domain, residue form,
-  and ciphertext component count.
+## Which transitions belong to an operation?
 
-An initial Program may leave these fields unknown. For example, a
-frontend may emit multiplication before deciding where rescale or
-relinearization should occur. A later sequence of passes may:
+For compatible operands at one depth, addition preserves scale and active rows. Multiplication multiplies scales. Multiplying two two-component ciphertexts produces
 
-1. lower source operations to CKKS operations;
-2. estimate depth and resource costs;
-3. choose relinearization and rescale positions;
-4. insert polynomial-representation transitions;
-5. assign or propagate depth and scale information;
-6. form rotation-hoisting groups or other schedules.
+$$
+(c_0,c_1,c_2)=(a_0b_0,\ a_0b_1+a_1b_0,\ a_1b_1),\qquad \Delta_c=\Delta_a\Delta_b.
+$$
 
-A pass can record state in SSA types, operation attributes, analyses, or data
-associated with one Compile request. Unknown fields remain valid partial
-representation. A pass that requires concrete information can preserve the
-operation until a later stage supplies it.
+The polynomial product is implemented in NTT/Montgomery form. Relinearization reduces three components to two using a supplied evaluation key; its output keeps the represented depth and scale. The [arithmetic article](multiplication-keyswitch-rescale.md) gives the key-switch decomposition and rounding equations.
 
-Compiler state serves graph transformation and scheduling. Native execution
-receives the arithmetic resources selected from that state.
+If the next depth group contains primes $G_d$, rescale uses their complete product $D_d=\prod_{q\in G_d}q$. It advances depth from $d$ to $d+1$, removes those rows, and changes scale to $\Delta/D_d$. Domain-specific implementations preserve the requested coefficient/standard or NTT/Montgomery result representation. A depth transition can remove several primes.
 
-## Eager metadata transitions
+Modulus restriction selects a smaller active basis without performing the rescale quotient. Reinterpreting scale changes the represented message interpretation without changing residue bytes. These are distinct operations with distinct state transitions.
 
-Eager execution has no pass pipeline. Each `Engine` method owns the public
-state transition for its operation:
+## How does an Engine call reach arithmetic?
 
 ```text
-check public inputs
-compute result metadata
-execute on Tensor payloads
-construct the public result
+Engine method in eager/_engine.py
+  → public input adaptation and CKKS metadata equations
+  → _EagerOperationDispatcher in eager/_operation_dispatch.py
+  → OperationInvocation and registry-selected implementation
+  → Tensor arithmetic with numerical operands and bound handles
+  → public value construction or in-place replacement
 ```
 
-For example, ciphertext multiplication preserves the current prime rows,
-multiplies the input scales, and produces three ciphertext components. Rescale
-removes the next complete Q group, advances depth once, divides scale by
-the group's modulus product, and preserves either coefficient/standard or
-NTT/Montgomery arithmetic state.
+`OperationInvocation` carries an operation class, operand/result counts, and attributes needed by the implementation. It has no SSA region. `_EagerOperationDispatcher` caches invocations and resolved direct calls using operation metadata. Its `_prepare_call` resolves non-Tensor requirements from device services; numerical parameters, transform tables, and key payloads are passed as Tensor operands.
 
-Conceptually, an Eager implementation expresses rescale as:
+The chosen operation class identifies the computation being executed. A whole CKKS implementation can compose native RNS/NTT arithmetic internally. Lower-level operations can also be dispatched directly. Registry lookup selects an implementation of the requested operation.
 
-```python
-dropped_group = config.q_depth_groups[ciphertext.depth]
-drop_count = len(dropped_group)
-dropped_group_modulus = math.prod(dropped_group)
-result_data = implementation.run(ciphertext.data, resources)
-result = Ciphertext(
-    data=result_data,
-    depth=ciphertext.depth + 1,
-    scale=ciphertext.scale / dropped_group_modulus,
-    prime_ids=ciphertext.prime_ids[drop_count:],
-    polynomial_domain="coefficient",
-    modulus_basis="Q",
-    residue_representation="standard",
-)
-```
+An in-place Engine method computes the new state, performs arithmetic, then updates the public value. Metadata is committed after successful execution. Native mutation and storage aliasing follow the called operator's contract.
 
-The metadata update is part of the Eager method's CKKS semantics. Registered
-Backend implementations return Tensor payloads to the owner of the result
-depth and scale. A linked `ProgramExecutable` may expose a public CKKS function
-boundary: it unwraps declared `Ciphertext` or `Plaintext` inputs and rebuilds
-declared outputs from concrete Program result state after Tensor execution.
-Linking checks that output depth, scale, prime identities, basis, and
-representation are concrete enough to rebuild each public result.
+## Who selects placement and key storage?
 
-Eager placement follows PyTorch value placement. Factory-like boundary calls
-use the Engine's CPU default or a caller-supplied `device`; operations with
-materialized operands use their common Tensor device. A caller-supplied
-`device` on a boundary operation authorizes its public adapter to move the
-inputs. Ordinary homomorphic operations reject mixed-device operands.
+Factories follow PyTorch defaults unless a device is supplied. An Engine has no default-device ownership. Operations on materialized values follow operand placement and select the corresponding lazy device services. Public conversion methods with a device argument may perform their documented transfer; ordinary arithmetic requires compatible operand placement.
 
-For an in-place method, the Engine computes the new metadata and runs the
-operation before replacing the input value. Public metadata changes only after
-successful execution.
+`eager/_key_inventory.py` retains supplied evaluation keys and resolves the requested key kind or rotation step. Cross-device key replication is opt-in. A direct dispatch cache retains prepared implementation and handle objects.
 
-## Backend execution
+## How does capture reuse these semantics?
 
-Backend implementations execute registered operations on Tensor payloads and
-concrete arithmetic resources. A resource is a modulus-parameter, NTT-table,
-evaluation-key, inverse-table, or index Tensor required by an implementation.
+`compile/frontend/_eager_capture.py` substitutes symbolic adapters for supported Engine calls. `compile/frontend/_eager_values.py` constructs typed SSA values from the same metadata transitions while preserving each input's independent state. Numerical kernels are not run for those symbolic CKKS calls. The result is a Compilation that can be inspected or transformed manually, or prepared through a compiled callable.
 
-CPU and CUDA torch operations normally derive launch dimensions and loop
-extents from the input Tensor:
+This shared mathematical code keeps immediate execution and capture aligned. Graph scheduling remains a Compile responsibility: Eager executes the rescale, relinearization, and representation transitions requested by the caller. See [IR and capture](compiler-stack-internals.md) for capture scope and [Compilation and passes](compilation-and-passes.md) for graph transformations.
 
-```text
-logical batch extents
-component extent
-active limb-row count
-ring dimension
-```
+## Extending a public operation
 
-They consume the parameter, key, table, or index Tensors supplied for those
-rows. CKKS depth, scale, and depth guide resource selection before the kernel
-call.
+Define the input/output equations and storage behavior in the public method and dialect operation. Reuse an existing metadata transition when the mathematics matches, or add the corresponding operation-specific rule in `ir/ckks_state.py`. Connect Tensor execution through the owning Backend family. For capture support, implement the symbolic adaptation of the same public arguments and result state; do not run the Eager kernel to infer those results.
 
-For a complete active Q or QP basis, the configured modulus layout and Tensor
-row count can identify the active parameter interval. An operation over an
-arbitrary limb subset instead receives the corresponding prime identities or
-already selected parameter Tensors. In both cases, execution uses the physical
-correspondence between residue rows and arithmetic parameters.
-
-Backend execution assumes that Eager semantics or Compile scheduling has
-already selected a valid operation. Its checks are limited to the execution
-interface and native memory safety, such as argument arity, Tensor rank, and
-row bounds required by a kernel. Runtime resource mutation and placement are
-caller-controlled. Eager semantics or Compile analyses establish rescale
-placement, remaining depth, and scale compatibility before Backend execution.
-
-## Static specialization and dynamic dispatch
-
-Compile may use concrete state to create a specialized executable. For
-example, a pass can statically expand the active hybrid key-switch digits or
-preselect modulus rows. This is an optimization and scheduling choice.
-
-Eager may use one implementation across multiple depths. The implementation
-can select active rows from runtime Tensor dimensions and configured resources,
-then invoke the same shape-dispatched torch operation. Rotation steps can
-similarly share an implementation while supplying different Galois elements,
-keys, or index Tensors.
-
-The current caller-Program Backend executable selects one device for the whole
-Program from its runtime Tensor inputs and build resources. Tensor-consuming
-operations dispatch from operand placement. A creation operation may define a
-device parameter of its own. Existing values change placement through
-registered transfer operations represented in the Program.
-
-```mermaid
-flowchart LR
-    subgraph Compile
-        IR[Partially specified SSA graph]
-        PASS[Analysis and scheduling passes]
-        SCHEDULE[Scheduled operations and resources]
-        IR --> PASS --> SCHEDULE
-    end
-
-    subgraph Eager
-        CALL[Engine method call]
-        META[Operation-specific metadata transition]
-        CALL --> META
-    end
-
-    SCHEDULE --> BACKEND[Registered Backend implementation]
-    META --> BACKEND
-    BACKEND --> TORCH[Shape-dispatched torch operation]
-    TORCH --> DATA[Result Tensor]
-    DATA --> PUBLIC[Public value construction]
-```
-
-Compile and Eager share operation implementations through independent
-state-management workflows. Compile can delay state assignment and schedule a
-graph; Eager applies the state transition selected directly by the caller.
-Backend execution consumes Tensor operations and their arithmetic resources.
-
-## Responsibility summary
-
-| Layer | Responsibility |
-| --- | --- |
-| Compile frontend and passes | Represent partial state, analyze depth and scale, choose schedules, and insert or preserve operations |
-| Eager `Engine` methods | Apply each operation's documented input handling, metadata transition, and public-result construction |
-| Backend build and resource owners | Select registered implementations and provide the parameter, key, table, and index Tensors required for execution |
-| Backend execution | Enforce the execution interface and invoke Tensor implementations |
-| CPU/CUDA torch operations | Dispatch from Tensor dimensions and perform native arithmetic |
-
-Related implementation maps are available in
-[Compiler stack internals](compiler-stack-internals.md),
-[Operation declaration and implementation selection](operation-registration-and-selection.md),
-and [IR operation and implementation index](ir-operation-implementation-index.md).
+Check the public result state and numerical payload together, including functional versus in-place behavior.

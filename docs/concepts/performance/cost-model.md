@@ -1,7 +1,6 @@
 # CKKS workload cost model
 
-Performance work begins with a real evaluator and a decomposition of its
-measured cost.
+Performance work begins with a real evaluator and a decomposition of its measured cost.
 
 ## Cost structure of packed linear workloads
 
@@ -38,8 +37,7 @@ mindmap
       collectives
 ```
 
-A small plaintext pointwise multiply can be surrounded by a much more
-expensive rotation/key-switch path.
+A small plaintext pointwise multiply can be surrounded by a much more expensive rotation/key-switch path.
 
 ## Optimize from the highest useful layer
 
@@ -63,8 +61,7 @@ Higher layers often change total work more dramatically:
 - Backend policy determines transform tables and stage grouping.
 - Kernel work determines occupancy, memory traffic, and local arithmetic.
 
-Move to a lower layer when measurements show that it controls the target
-workload.
+Move to a lower layer when measurements show that it controls the target workload.
 
 ## Main optimization mechanisms
 
@@ -73,7 +70,7 @@ workload.
 | Late relinearization | Repeated key switches across compatible triplets | Larger three-component live state |
 | Operation-ready plaintexts | Repeated encode/lift/NTT preparation | Larger persistent weight footprint |
 | Reused NTT operands | Repeated transforms of fixed operands | Depth/state coupling |
-| NTT-domain product accumulation | Per-term inverse transforms in additive PT×CT regions | One coefficient transition before rescale/decrypt |
+| NTT-domain product accumulation | Per-term inverse transforms in additive PT×CT regions | Quotient-rounding and output-representation constraints |
 | NTT grouping/compact tables | Launches and table/global-memory traffic | Registers, occupancy, index arithmetic |
 | Rotation hoisting | Repeated decomposition/ModUp/NTT prefix | Hoist temporaries and output memory |
 | CUDA Graph | Repeated host/dispatcher submission | Fixed signatures, retained graph memory |
@@ -81,14 +78,11 @@ workload.
 | Multi-GPU partition | Rank-local dominant work | Communication, imbalance, key placement |
 | Minimal keyset | Key memory and movement | Possible extra operations with decomposition |
 
-Each mechanism has a shape-, depth-, platform-, and workload-dependent
-crossover.
+Each mechanism has a shape-, depth-, platform-, and workload-dependent crossover.
 
 ## Hoisting has a memory curve
 
-Multiple rotations can share preparation that depends only on the input
-component, but each step still needs its own automorphism, direct key products,
-ModDown, and output storage.
+Multiple rotations can share preparation that depends only on the input component, but each step still needs its own automorphism, direct key products, ModDown, and output storage.
 
 ```mermaid
 graph LR
@@ -104,27 +98,16 @@ Chunk size is a workload policy. Measure latency and peak memory together.
 
 ## Homogeneous batching has a working-set crossover
 
-A homogeneous batch adds independent-message dimensions while keeping one
-depth, scale, polynomial domain, modulus basis, device, dtype, and component count. The
-public ciphertext layout keeps its structural component axis first, followed
-by `*batch`, limb, and polynomial-index axes. Message batch axes are distinct
-from RNS limbs, ciphertext components, hybrid-decomposition digits, and
-distributed ranks.
+A homogeneous batch adds independent-message dimensions while keeping one depth, scale, polynomial domain, modulus basis, device, dtype, and component count. The public ciphertext layout keeps its structural component axis first, followed by `*batch`, limb, and polynomial-index axes. Message batch axes are distinct from RNS limbs, ciphertext components, hybrid-decomposition digits, and distributed ranks.
 
-Batching can reduce launches and expose parallel work, but it also multiplies
-the tensors active inside NTT, automorphism, ModUp, key accumulation, ModDown,
-and result assembly. For one extended key-switch digit, a useful lower bound
-proxy is:
+Batching can reduce launches and expose parallel work, but it also multiplies the tensors active inside NTT, automorphism, ModUp, key accumulation, ModDown, and result assembly. For one extended key-switch digit with flattened batch size $B$, $L_{QP}$ active prime rows, ring dimension $N$, and $w$ bytes per residue, its payload size is:
 
 $$
-W_{digit}=B\cdot |QP_{active}|\cdot N\cdot 8\ \text{bytes}.
+W_{digit}=B\,L_{QP}\,N\,w.
+\qquad w=4\text{ for int32},\quad w=8\text{ for int64}.
 $$
 
-The full active set is larger because transforms read and write data while
-keys, accumulators, temporaries, and outputs are live. Once that set exceeds
-effective cache capacity, a larger batch can replace cache reuse with DRAM
-traffic and become slower than an explicit loop. Later CKKS depths use fewer Q
-rows, so the crossover may reverse without changing `N` or `B`.
+The full active set is larger because transforms read and write data while keys, accumulators, temporaries, and outputs are live. Once that set exceeds effective cache capacity, a larger batch can replace cache reuse with DRAM traffic and become slower than an explicit loop. Later CKKS depths use fewer Q rows, so the crossover may reverse without changing `N` or `B`.
 
 Two cache regimes are useful when interpreting the crossover:
 
@@ -137,13 +120,7 @@ B1 already streams beyond cache:
     occupancy, bandwidth, and launch count determine the relative result
 ```
 
-For example, an RTX A6000 measurement with 6 MiB L2 placed one depth-zero QP
-digit for `Preset.slots16384_scale40_depth16_int64` at 4.75 MiB: B1 was close to
-cache capacity, while B2 was not. The same GPU placed one depth-zero digit for
-`Preset.slots32768_scale40_depth34_int64` at 19.5 MiB, so even B1 was already a
-streaming workload. The former showed a clear batching loss; the latter
-retained modest gains with a strict radix-16 backend. The digit size is
-one source of explanatory evidence within the complete cache-fit measurement.
+For example, 19 prime rows at $N=32768$ and eight bytes per residue occupy 4.75 MiB per digit and batch member. Against a 6 MiB cache, that payload approaches capacity at $B=1$ and exceeds it at $B=2$. A 39-row digit at $N=65536$ occupies 19.5 MiB even at $B=1$. These cases begin in different cache regimes; the complete active set also includes keys, tables, accumulators, and outputs.
 
 ```mermaid
 graph LR
@@ -161,25 +138,21 @@ graph LR
     C -->|crosses effective capacity| L
 ```
 
-This is why B1 compatibility, operator speedup, workload speedup, and peak
-memory are separate measurements. The application selects batching or looping
-from those measurements while FHElium preserves either value layout. See the
-[homogeneous batching tutorial](../../tutorial/homogeneous-batching.md) and
-[batch-size selection guide](../../how-to/choose-homogeneous-batch-size.md).
+This is why B1 compatibility, operator speedup, workload speedup, and peak memory are separate measurements. The application selects batching or looping from those measurements while FHElium preserves either value layout.
 
-CUDA Graph and homogeneous batching also overlap as launch-amortization
-mechanisms. Batching reduces the number of launches by operating on a larger
-message tensor; graph replay reduces host submission gaps while preserving an
-explicit loop's smaller per-message working set. A batching win under eager
-execution can therefore become a loop win when both paths are captured. The
-valid comparison is batch graph versus loop graph, with graph capture and
-retained memory reported separately from replay latency.
+CUDA Graph and homogeneous batching also overlap as launch-amortization mechanisms. Batching reduces the number of launches by operating on a larger message tensor; graph replay reduces host submission gaps while preserving an explicit loop's smaller per-message working set. A batching win under eager execution can therefore become a loop win when both paths are captured. The valid comparison is batch graph versus loop graph, with graph capture and retained memory reported separately from replay latency.
+
+## Compilation and compact materials change different costs
+
+Compile can reuse repeated transforms, share rotation preparation, and combine compatible arithmetic into generated regions. These changes affect operation count, temporary storage, and device work. Prepared host calls reduce repeated interpretation and dispatch work. CUDA Graph replay further reduces host submission overhead for a fixed sequence. The wall-clock benefit depends on whether device execution, submission, data transfer, or synchronization limits the workload.
+
+A generated region can launch several kernels. In particular, a fused NTT region can use generated endpoint stages and native middle stages. Region count, kernel count, and elapsed device time therefore describe different parts of the cost model. Retaining a whole operation can also keep a streaming implementation that limits the lifetime of intermediate digits.
+
+Compressed plaintext reduces the stored payload for a represented polynomial from $L\,N\,w$ to $L\,U\,w$ bytes, plus implicit row values for sparse layouts, where $U<N$. Arithmetic still computes a full ciphertext result. A smaller plaintext working set can reduce memory traffic and improve cache use, while rotation keys and ciphertext intermediates may remain dominant. [Value representations](../ckks/value-model-and-identity.md) defines compact storage, and [the Compile lifecycle](../open-compiler-stack.md) describes implementation selection.
 
 ## NTT grouping has workload-dependent optima
 
-Combining multiple radix-2 stages can reduce launches and global-memory
-round-trips, but wider grouping can increase register pressure, reduce
-occupancy, or interact poorly with active row count.
+Combining multiple radix-2 stages can reduce launches and global-memory round-trips, but wider grouping can increase register pressure, reduce occupancy, or interact poorly with active row count.
 
 The best backend depends on:
 
@@ -190,9 +163,7 @@ The best backend depends on:
 - table footprint and traffic;
 - surrounding workload and graph capture.
 
-A name such as `group16` identifies one execution strategy. Controlled
-measurements determine its ranking, and direct-radix algorithms retain separate
-implementation identities.
+A name such as `group16` identifies one execution strategy. Controlled measurements determine its ranking, and direct-radix algorithms retain separate implementation identities.
 
 ## Multi-GPU time model
 
@@ -207,13 +178,9 @@ T_p \approx T_{local}/p
       + T_{startup}.
 $$
 
-Data parallelism tends to scale most simply because requests are independent.
-Additive-term parallelism can move communication to the beginning and end phases.
-Limb parallelism pays repeated complete-row reconstruction whenever the next
-operation cannot be row-local.
+Data parallelism tends to scale most simply because requests are independent. Additive-term parallelism can move communication to the beginning and end phases. Limb parallelism pays repeated complete-row reconstruction whenever the next operation cannot be row-local.
 
-Always report topology, per-rank key footprint, and the synchronization rule
-used for timing.
+Topology, per-rank key footprint, and the synchronization rule determine the scope of a distributed timing result.
 
 ## Numerical limits are performance constraints
 
@@ -225,17 +192,17 @@ graph LR
     P[more fractional precision]
     H[less integer headroom]
     W[modular wrap risk]
-    Q[more Q bits / depth]
+    Q[more Q bits]
+    CAP[more modular headroom]
     M[larger values and keys]
     S --> P
     S --> H --> W
-    Q --> P
+    Q --> CAP
+    CAP -->|permits larger scale| S
     Q --> M
 ```
 
-Accept a faster configuration only when it preserves depth
-semantics, wraps realistic inputs, or exceeds the error bound. Every
-performance result should include correctness.
+A valid performance comparison preserves the required value state, stays within the intended numerical range, and meets the justified output-error criterion.
 
 ## Measurement layers answer different questions
 
@@ -255,7 +222,7 @@ graph TB
 | Workload | How do packing, hoisting, graph, and memory combine? | One kernel caused all gains |
 | Distributed | What are compute, communication, imbalance, and memory? | Every topology behaves identically |
 
-## Minimum benchmark metadata
+## Measurement identity
 
 A reproducible report records:
 
@@ -270,7 +237,7 @@ A reproducible report records:
 - peak allocated and reserved memory;
 - decrypt error and expected tolerance.
 
-## Decision process
+## Bottlenecks and corresponding mechanisms
 
 ```mermaid
 flowchart TD
@@ -293,13 +260,8 @@ flowchart TD
     Q5 -->|no| A[revisit packing or kernel design]
 ```
 
-Change one variable at a time, keep the cleartext oracle and CKKS state
-invariants fixed, and promote measured improvements into regression coverage.
+A controlled comparison holds the cleartext calculation and required value state fixed while varying the mechanism under study. The resulting latency, throughput, and memory changes describe that mechanism within the stated measurement conditions.
 
-## Continue
+## Related concepts
 
-- [Rotation hoisting tutorial](../../tutorial/rotation-hoisting.md)
-- [CUDA Graph tutorial](../../tutorial/cuda-graph-matvec.md)
 - [Residency lifetimes](../execution/residency-lifetimes.md)
-- [Benchmark methodology](/benchmarks/methodology)
-- [Optimize a workload systematically](../../how-to/optimize-workload.md)

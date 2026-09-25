@@ -1,125 +1,64 @@
-# Tutorials
+# Example catalog
 
-## First evaluator
+Choose a module and a usage model. Each row links to one executable example and its tutorial. [Start with the basic evaluator](basic-ckks-workflow.md), or go to [JIT compilation](compile-jit.md) for reusable function execution.
 
-This program encrypts two vectors, evaluates addition and multiplication, and
-decrypts the results.
+## Eager
 
-```python
-import torch
-import fhelium as fh
-from fhelium.eager import Engine
-
-engine = Engine(fh.Preset.slots8192_scale40_depth7_int64)
-
-x = torch.linspace(-0.05, 0.05, 32, dtype=torch.float64)
-y = torch.linspace(0.02, -0.02, 32, dtype=torch.float64)
-
-ct_x = engine.encrypt_message(x)
-ct_y = engine.encrypt_message(y)
-
-# Addition preserves depth and scale.
-ct_sum = engine.add(ct_x, ct_y)
-
-# Multiplication exposes representation conversion, relinearization, and a
-# post-product rescale.
-x_ntt = engine.coefficient_domain_to_ntt_domain(ct_x)
-y_ntt = engine.coefficient_domain_to_ntt_domain(ct_y)
-triplet = engine.multiply(x_ntt, y_ntt)
-ct_product = engine.rescale_to_next_depth(engine.relinearize(triplet))
-
-sum_clear = engine.decrypt_message(ct_sum, is_real=True)[: x.numel()]
-product_clear = engine.decrypt_message(ct_product, is_real=True)[: x.numel()]
-
-torch.testing.assert_close(sum_clear, x + y, atol=2e-5, rtol=0)
-torch.testing.assert_close(product_clear, x * y, atol=2e-5, rtol=0)
-```
-
-The separate operations are intentional:
-
-1. in this example, fresh ciphertexts use `engine.config.default_scale` as
-   their initial actual scale $\Delta$;
-2. `coefficient_domain_to_ntt_domain` enters NTT/Montgomery representation;
-3. `multiply` accepts two two-component NTT ciphertexts and returns a
-   three-component NTT ciphertext;
-4. `relinearize` returns the ordinary two-component form, and
-   `rescale_to_next_depth` then consumes one complete Q depth group and records
-   the product scale divided by that group's prime product.
-
-See [Scale and depth lifecycle](../concepts/ckks/scale-and-depth-lifecycle.md)
-for the depth/scale laws,
-[Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)
-for the broader state machine, and
-[`fhelium.eager.Engine`](../api/fhelium/eager.md) for the generated
-method reference. The same program runs with `device="cuda:0"` when the native
-build includes CUDA; see
-[Choose and switch a local execution device](../how-to/switch-cpu-cuda.md).
-Before optimizing or deploying this evaluator, continue with
-[Screen NTT backends](../how-to/screen-ntt-backends.md) to compare the
-implementations compatible with the target device and preset.
-
-## Choose a tutorial
-
-Each tutorial follows one numbered file under
-[`examples/`](https://github.com/VisualDust/fhelium/tree/main/examples). Choose
-a track by goal; the numbers preserve the source mapping and do not impose one
-mandatory reading order.
-
-## CKKS
-
-| Example | Tutorial | Main question |
+| Example | Tutorial | Demonstrates |
 | --- | --- | --- |
-| [01](https://github.com/VisualDust/fhelium/blob/main/examples/01_basic_ckks_flow.py) | [Basic CKKS workflow](basic-ckks-workflow.md) | How do encryption, three-component multiplication state, rotation, and decryption fit together? |
-| [02](https://github.com/VisualDust/fhelium/blob/main/examples/02_key_materials.py) | [Key material lifecycle](key-materials.md) | What state does each key store, and which cryptographic relations remain application-owned? |
-| [04](https://github.com/VisualDust/fhelium/blob/main/examples/04_modulus_chain_depth.py) | [Modulus-chain depth](modulus-chain-depth.md) | How do the depth-transition budget, configured chain depth, security budget, and ciphertext size relate? |
-| [05](https://github.com/VisualDust/fhelium/blob/main/examples/05_explicit_scale_management.py) | [Explicit scale management](explicit-scale-management.md) | How does a program track the actual dropped-group product and keep depth alignment separate from scale policy? |
-| [06](https://github.com/VisualDust/fhelium/blob/main/examples/06_explicit_state_late_relinearization_ntt.py) | [Late relinearization and NTT reuse](late-relinearization-and-ntt-reuse.md) | When can products remain three-component and operands remain in NTT form? |
+| [01](https://github.com/VisualDust/fhelium/blob/main/examples/01_eager_basics.py) | [Basic CKKS workflow](basic-ckks-workflow.md) | Encrypt, evaluate, and decrypt one process-local computation |
+| [02](https://github.com/VisualDust/fhelium/blob/main/examples/02_eager_key_materials.py) | [Key creation and installation](key-materials.md) | Create typed keys from one secret and install selected evaluator capabilities |
+| [03](https://github.com/VisualDust/fhelium/blob/main/examples/03_eager_modulus_chain.py) | [Modulus-chain depth](modulus-chain-depth.md) | Inspect configured Q groups and the available depth budget |
+| [04](https://github.com/VisualDust/fhelium/blob/main/examples/04_eager_scale_management.py) | [Actual scale management](explicit-scale-management.md) | Plan per-value scales and align depth independently |
+| [05](https://github.com/VisualDust/fhelium/blob/main/examples/05_eager_ntt_reuse.py) | [NTT reuse and late relinearization](late-relinearization-and-ntt-reuse.md) | Schedule reusable NTT operands and delay three-component reduction |
+| [06](https://github.com/VisualDust/fhelium/blob/main/examples/06_eager_rotation_hoisting.py) | [Rotation hoisting](rotation-hoisting.md) | Request grouped rotations and compare with independent calls |
+| [07](https://github.com/VisualDust/fhelium/blob/main/examples/07_eager_batching.py) | [Homogeneous batching](homogeneous-batching.md) | Use leading Tensor batch axes instead of an evaluation loop |
+| [08](https://github.com/VisualDust/fhelium/blob/main/examples/08_eager_compressed_plaintext.py) | [Compressed plaintexts](compressed-plaintext.md) | Evaluate losslessly compressed operation-ready plaintexts |
 
-## Performance
+## Values, Serialization, and Artifacts
 
-| Example | Tutorial | Main question |
+| Example | Tutorial | Demonstrates |
 | --- | --- | --- |
-| [07](https://github.com/VisualDust/fhelium/blob/main/examples/07_rotation_hoisting_benchmark.py) | [Rotation hoisting](rotation-hoisting.md) | When does a grouped rotation request avoid repeated decomposition work? |
+| [09](https://github.com/VisualDust/fhelium/blob/main/examples/09_value_files.py) | [Value movement and files](value-memory-and-persistence.md) | Move typed values and restore them from caller-owned files |
+| [10](https://github.com/VisualDust/fhelium/blob/main/examples/10_artifact_store.py) | [Named artifacts and generations](artifact-store.md) | Use logical names, collections, and generation-specific references |
 
-## Distributed execution
+## Compile
 
-| Example | Tutorial | Main question |
+| Example | Tutorial | Demonstrates |
 | --- | --- | --- |
-| [08](https://github.com/VisualDust/fhelium/blob/main/examples/08_spmd_independent_ciphertexts.py) | [Independent ciphertexts](spmd-independent-ciphertexts.md) | When should SPMD code scatter and gather independent encrypted values? |
-| [09](https://github.com/VisualDust/fhelium/blob/main/examples/09_spmd_rotation_parallel_mxv.py) | [Rotation-parallel matrix-vector](spmd-rotation-parallel-matvec.md) | How are additive diagonal terms and direct rotation keys partitioned across processes? |
-| [10](https://github.com/VisualDust/fhelium/blob/main/examples/10_spmd_limb_parallel_pipeline.py) | [Limb-parallel pipeline](spmd-limb-parallel-pipeline.md) | Which operations are RNS-row local, and where must every expected active row be reconstructed? |
+| [11](https://github.com/VisualDust/fhelium/blob/main/examples/11_compile_jit.py) | [JIT compilation](compile-jit.md) | Reuse a decorated function across input contents and static specializations |
+| [12](https://github.com/VisualDust/fhelium/blob/main/examples/12_compile_pipeline.py) | [Caller-composed Compile pipeline](compose-and-execute-compile-pipeline.md) | Select built-in transformation and scheduling passes before direct linking |
+| [13](https://github.com/VisualDust/fhelium/blob/main/examples/13_compile_textual_ir.py) | [Textual Program IR](ir-textual-program.md) | Parse, inspect, transform, and print an open mixed-level Program |
+| [14](https://github.com/VisualDust/fhelium/blob/main/examples/14_compile_custom_pass.py) | [Custom BSGS transformation](customize-compile-pass-and-pipeline.md) | Implement one matrix-to-BSGS rewriting pass |
+| [15](https://github.com/VisualDust/fhelium/blob/main/examples/15_compile_python_codegen.py) | [Generated Python](generate-python.md) | Export editable Eager and Backend Python at selected IR stages |
+| [16](https://github.com/VisualDust/fhelium/blob/main/examples/16_compile_material_persistence.py) | [Program materials and persistence](compile-material-persistence.md) | Name materials, save none/some/all data, and fill bindings after load |
 
-## Execution and lifecycle
+## Runtime
 
-| Example | Tutorial | Main question |
+| Example | Tutorial | Demonstrates |
 | --- | --- | --- |
-| [03](https://github.com/VisualDust/fhelium/blob/main/examples/03_plaintext_ciphertext_memory.py) | [Values, memory, and persistence](value-memory-and-persistence.md) | How do device movement, value files, and artifact policy differ? |
-| [11](https://github.com/VisualDust/fhelium/blob/main/examples/11_cuda_graph_matrix_vector.py) | [CUDA Graph matrix-vector](cuda-graph-matvec.md) | How are static keys and weights separated from changing request ciphertexts? |
-| [12](https://github.com/VisualDust/fhelium/blob/main/examples/12_reusable_value_buffer.py) | [Reusable value buffers](reusable-value-buffer.md) | How can pinned-host tiles stream through two fixed CUDA allocations? |
-| [13](https://github.com/VisualDust/fhelium/blob/main/examples/13_explicit_residency.py) | [Explicit residency plans and CUDA leases](explicit-residency.md) | How do opaque handles, lazy local locations, optional budgets, scoped reservations, and event-backed CUDA leases compose? |
-| [14](https://github.com/VisualDust/fhelium/blob/main/examples/14_automatic_residency.py) | [Automatic residency admission](automatic-residency.md) | How does a working-set request become a deterministic, inspectable, state-versioned admission decision under managed pressure? |
-| [15](https://github.com/VisualDust/fhelium/blob/main/examples/15_homogeneous_batching.py) | [Homogeneous batching](homogeneous-batching.md) | How does a leading message batch compare with an explicit loop? |
-| [16](https://github.com/VisualDust/fhelium/blob/main/examples/16_compressed_plaintext.py) | [Compressed plaintexts](compressed-plaintext.md) | When can an operation-ready plaintext use the versioned compressed encoded-axis layout? |
+| [17](https://github.com/VisualDust/fhelium/blob/main/examples/17_runtime_double_buffer.py) | [Double-buffered execution](reusable-value-buffer.md) | Overlap pinned-host transfers with computation in fixed CUDA buffers |
+| [18](https://github.com/VisualDust/fhelium/blob/main/examples/18_runtime_cuda_graph.py) | [CUDA Graph replay](cuda-graph-matvec.md) | Capture a fixed evaluator and replay with changing input data |
 
-## Compile, IR, and experimental features
+## Residency
 
-Examples 17 and 19 execute compiled Programs, Example 18 focuses on textual IR,
-and Example 20 emits editable Python from two selected Program stages. Example
-21 focuses on rank-local collective IR. Read the
-[bootstrapping composition and range requirements](../concepts/ckks/composable-bootstrapping.md)
-or the [multiparty supported security scope](../how-to/use-multiparty-ckks.md)
-before running Examples 22 and 23.
-
-| Example | Tutorial | Main question |
+| Example | Tutorial | Demonstrates |
 | --- | --- | --- |
-| [17](https://github.com/VisualDust/fhelium/blob/main/examples/17_compose_and_execute.py) | [Compose and execute built-in Compile passes](compose-and-execute-compile-pipeline.md) | How do capture, built-in passes, concrete CKKS state, Backend linking, and encrypted execution form one caller-selected workflow? |
-| [18](https://github.com/VisualDust/fhelium/blob/main/examples/18_ir_textual_program.py) | [Import and transform textual Program IR](ir-textual-program.md) | How can textual mixed-level IR round-trip and participate in a pipeline containing a caller-defined analysis pass? |
-| [19](https://github.com/VisualDust/fhelium/blob/main/examples/19_customize_compile_pass.py) | [Customize a Compile pass and pipeline](customize-compile-pass-and-pipeline.md) | How does a caller define a BSGS rewrite, compose transition and lowering passes, link resources, and execute the resulting Program? |
-| [20](https://github.com/VisualDust/fhelium/blob/main/examples/20_generate_python.py) | [Generate editable Python](generate-python.md) | How can one caller emit Eager-style source from CKKS IR and direct implementation calls from a lower Backend Program? |
-| [21](https://github.com/VisualDust/fhelium/blob/main/examples/21_rank_local_collective_ir.py) | [Transform rank-local collective IR](rank-local-collective-ir.md) | How can a specialized ciphertext-add reduction be preserved or lowered to generic all-reduce with a visible combine region? |
-| [22](https://github.com/VisualDust/fhelium/blob/main/examples/22_ckks_bootstrap_logn16.py) | [Refresh with composable CKKS bootstrapping](composable-ckks-bootstrap.md) | How are approximation, polynomial evaluation, transforms, periodic reduction, keys, and range evidence composed? |
-| [23](https://github.com/VisualDust/fhelium/blob/main/examples/23_multiparty_ckks.py) | [Multiparty CKKS](multiparty-ckks.md) | How do stateless collective-key and unsafe output arithmetic phases fit together under application-owned protocol state? |
+| [19](https://github.com/VisualDust/fhelium/blob/main/examples/19_residency_manual.py) | [Manual Residency](explicit-residency.md) | Plan placements and protect asynchronous readers with leases |
+| [20](https://github.com/VisualDust/fhelium/blob/main/examples/20_residency_automatic.py) | [Automatic Residency admission](automatic-residency.md) | Inspect and execute automatic admission under managed memory pressure |
 
-Use [Concepts](../concepts/index.md) for the underlying invariants,
-[How-to guides](../how-to/index.md) for focused tasks, and the
-[API reference](../api/index.md) for signatures.
+## Distributed
+
+| Example | Tutorial | Demonstrates |
+| --- | --- | --- |
+| [21](https://github.com/VisualDust/fhelium/blob/main/examples/21_distributed_batch_inputs.py) | [Data-parallel encrypted batches](spmd-independent-ciphertexts.md) | Split a global encrypted batch across ranks and restore sample order |
+| [22](https://github.com/VisualDust/fhelium/blob/main/examples/22_distributed_partial_results.py) | [Additive partial results](spmd-rotation-parallel-matvec.md) | Partition additive terms and reduce ciphertext partials |
+| [23](https://github.com/VisualDust/fhelium/blob/main/examples/23_distributed_rns_shards.py) | [RNS-sharded execution](spmd-limb-parallel-pipeline.md) | Partition one ciphertext by prime rows and reconstruct its full basis |
+| [24](https://github.com/VisualDust/fhelium/blob/main/examples/24_distributed_collective_ir.py) | [Rank-local collective IR](rank-local-collective-ir.md) | Express a collective using a specialized op or a generic combine region |
+
+## Experimental
+
+| Example | Tutorial | Demonstrates |
+| --- | --- | --- |
+| [25](https://github.com/VisualDust/fhelium/blob/main/examples/25_experimental_bootstrap.py) | [Experimental bootstrapping](composable-ckks-bootstrap.md) | Refresh a depleted ciphertext using a composable bootstrap preset |
+| [26](https://github.com/VisualDust/fhelium/blob/main/examples/26_experimental_multiparty.py) | [Experimental multiparty CKKS](multiparty-ckks.md) | Compose multiparty arithmetic with application-owned protocol state |

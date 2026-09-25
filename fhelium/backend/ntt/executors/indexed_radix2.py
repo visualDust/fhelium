@@ -1,171 +1,53 @@
-"""Configured indexed radix-2 CPU/CUDA NTT schedule executor."""
+"""Prepare native indexed radix2 calls over Tensor operands."""
 
-from __future__ import annotations
-
-import torch
-
-from fhelium.config.ntt import IndexedRadix2Policy
-from fhelium.backend.ntt.interface import slice_ntt_parameter_rows
-from fhelium.backend.ntt.tables import IndexedRadix2Tables
 from fhelium.native.wrapper import ntt_ops
 
+_OPERATIONS = {
+    'forward_montgomery_': ntt_ops.forward_ntt_montgomery_indexed_,
+    'forward_to_montgomery_': ntt_ops.forward_ntt_to_montgomery_indexed_,
+    'forward_to_montgomery': ntt_ops.forward_ntt_to_montgomery_indexed,
+    'inverse_montgomery_': ntt_ops.inverse_ntt_montgomery_indexed_,
+    'inverse_to_standard_lazy_': ntt_ops.inverse_ntt_to_standard_lazy_indexed_,
+    'inverse_to_standard_': ntt_ops.inverse_ntt_to_standard_indexed_,
+    'inverse_to_centered_': ntt_ops.inverse_ntt_to_centered_indexed_,
+}
 
-class IndexedRadix2NttBackend:
-    """Execute the indexed radix-2 schedule on CPU or CUDA."""
 
-    def __init__(
-        self,
-        *,
-        policy: IndexedRadix2Policy,
-        ntt_tables: IndexedRadix2Tables,
-        rns_params: torch.Tensor,
-    ) -> None:
-        self.policy = policy
-        self.name = policy.name
-        self.rns_params = rns_params
-        self.forward_even_indices = ntt_tables.forward_even_indices
-        self.forward_odd_indices = ntt_tables.forward_odd_indices
-        self.forward_twiddles = ntt_tables.forward_twiddles
-        self.inverse_even_indices = ntt_tables.inverse_even_indices
-        self.inverse_odd_indices = ntt_tables.inverse_odd_indices
-        self.inverse_twiddles = ntt_tables.inverse_twiddles
-        self._native_input_cache: dict[
-            tuple[int, int, int, int], tuple[torch.Tensor, torch.Tensor]
-        ] = {}
+def prepare_transition(transition: str):
+    """Bind the native operation without retaining its Tensor inputs."""
+    operation = _OPERATIONS[transition]
+    if transition == "forward_to_montgomery":
+        return operation
 
-    def __str__(self) -> str:
-        return (
-            f"IndexedRadix2NttBackend(name={self.name!r}, "
-            f"forward_twiddle_shape={tuple(self.forward_twiddles.shape)})"
-        )
+    def execute(operand, even_indices, odd_indices, twiddles, params):
+        operation(operand, even_indices, odd_indices, twiddles, params)
+        return operand
 
-    __repr__ = __str__
+    return execute
 
-    def _active_native_inputs(
-        self,
-        operand: torch.Tensor,
-        twiddles: torch.Tensor,
-        parameter_row_start: int,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        if operand.ndim < 2:
-            return slice_ntt_parameter_rows(
-                operand,
-                twiddles,
-                self.rns_params,
-                parameter_row_start,
-            )
-        cache_key = (
-            id(twiddles),
-            id(self.rns_params),
-            parameter_row_start,
-            operand.size(-2),
-        )
-        cached = self._native_input_cache.get(cache_key)
-        if cached is not None:
-            return cached
-        cached = slice_ntt_parameter_rows(
-            operand,
-            twiddles,
-            self.rns_params,
-            parameter_row_start,
-        )
-        self._native_input_cache[cache_key] = cached
-        return cached
 
-    def forward_montgomery_(
-        self, operand: torch.Tensor, parameter_row_start: int
-    ) -> None:
-        twiddles, params = self._active_native_inputs(
-            operand, self.forward_twiddles, parameter_row_start
-        )
-        ntt_ops.forward_ntt_montgomery_indexed_(
-            operand,
-            self.forward_even_indices,
-            self.forward_odd_indices,
-            twiddles,
+def forward_small_to_montgomery(
+    operand, even_indices, odd_indices, twiddles, params
+):
+    """Evaluate a short indexed NTT with the existing modular primitives.
+
+    Native NTT entry points require at least 256 coefficients. Short periodic
+    plaintexts use the same indexed butterflies without padding the polynomial
+    or changing its roots. Each stage computes (a+b*w, a-b*w) modulo each row.
+    """
+    from fhelium.native.wrapper import rns_ops
+
+    result = operand.clone()
+    rns_ops.to_montgomery_(result, params)
+    for stage in range(even_indices.size(0)):
+        even = even_indices[stage].long()
+        odd = odd_indices[stage].long()
+        a = result.index_select(-1, even)
+        b = rns_ops.montgomery_mul(
+            result.index_select(-1, odd),
+            twiddles[:, stage, :].contiguous(),
             params,
         )
-
-    def forward_to_montgomery_(
-        self, operand: torch.Tensor, parameter_row_start: int
-    ) -> None:
-        twiddles, params = self._active_native_inputs(
-            operand, self.forward_twiddles, parameter_row_start
-        )
-        ntt_ops.forward_ntt_to_montgomery_indexed_(
-            operand,
-            self.forward_even_indices,
-            self.forward_odd_indices,
-            twiddles,
-            params,
-        )
-
-    def forward_to_montgomery(
-        self, operand: torch.Tensor, parameter_row_start: int
-    ) -> torch.Tensor:
-        twiddles, params = self._active_native_inputs(
-            operand, self.forward_twiddles, parameter_row_start
-        )
-        return ntt_ops.forward_ntt_to_montgomery_indexed(
-            operand,
-            self.forward_even_indices,
-            self.forward_odd_indices,
-            twiddles,
-            params,
-        )
-
-    def inverse_montgomery_(
-        self, operand: torch.Tensor, parameter_row_start: int
-    ) -> None:
-        twiddles, params = self._active_native_inputs(
-            operand, self.inverse_twiddles, parameter_row_start
-        )
-        ntt_ops.inverse_ntt_montgomery_indexed_(
-            operand,
-            self.inverse_even_indices,
-            self.inverse_odd_indices,
-            twiddles,
-            params,
-        )
-
-    def inverse_to_standard_lazy_(
-        self, operand: torch.Tensor, parameter_row_start: int
-    ) -> None:
-        twiddles, params = self._active_native_inputs(
-            operand, self.inverse_twiddles, parameter_row_start
-        )
-        ntt_ops.inverse_ntt_to_standard_lazy_indexed_(
-            operand,
-            self.inverse_even_indices,
-            self.inverse_odd_indices,
-            twiddles,
-            params,
-        )
-
-    def inverse_to_standard_(
-        self, operand: torch.Tensor, parameter_row_start: int
-    ) -> None:
-        twiddles, params = self._active_native_inputs(
-            operand, self.inverse_twiddles, parameter_row_start
-        )
-        ntt_ops.inverse_ntt_to_standard_indexed_(
-            operand,
-            self.inverse_even_indices,
-            self.inverse_odd_indices,
-            twiddles,
-            params,
-        )
-
-    def inverse_to_centered_(
-        self, operand: torch.Tensor, parameter_row_start: int
-    ) -> None:
-        twiddles, params = self._active_native_inputs(
-            operand, self.inverse_twiddles, parameter_row_start
-        )
-        ntt_ops.inverse_ntt_to_centered_indexed_(
-            operand,
-            self.inverse_even_indices,
-            self.inverse_odd_indices,
-            twiddles,
-            params,
-        )
+        result.index_copy_(-1, even, rns_ops.add_standard(a, b, params))
+        result.index_copy_(-1, odd, rns_ops.sub_standard(a, b, params))
+    return result

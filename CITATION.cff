@@ -22,8 +22,7 @@ authors:
     given-names: Ran
   - family-names: Wen
     given-names: Wujie
-version: 0.25.0
-date-released: 2026-09-01
+version: 0.30.0
 repository-code: "https://github.com/VisualDust/fhelium"
 url: "https://fhelium.550w.host"
 license: MIT

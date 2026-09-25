@@ -7,13 +7,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from xdsl.dialects.builtin import IntAttr, IntegerAttr
+from xdsl.dialects.builtin import IntAttr, IntegerAttr, StringAttr
 from xdsl.ir import Attribute, Operation, SSAValue
 
 from fhelium.values import EvaluationKeyRequirements
 
 from ._dialect import operation_name, value_role
-from .dialects import ckks, core, logical
+from .dialects import ckks, logical, rns
 from ._program import Program
 
 
@@ -123,11 +123,11 @@ def analyze_evaluation_key_requirements(
     """List the evaluation-key capabilities requested by ``entry``.
 
     The analysis reads logical/CKKS operations and lowered evaluation-key
-    resource roles from the selected single-block function. It returns
+    operand uses from the selected single-block function and its nested regions. It returns
     symbolic requirements only; it does not generate, load, bind, or validate
     key objects. Re-run it after any transformation that may add or remove
     those operations. Unresolved logical rolls contribute their integer
-    ``shift``; resolved rotation operations or resources contribute the
+    ``shift``; resolved rotation operations contribute the
     normalized step represented by their key operand. ``entry`` must name one
     single-block function. Generic key switching remains caller-named and is
     not representable by EvaluationKeyRequirements.
@@ -141,7 +141,7 @@ def analyze_evaluation_key_requirements(
     rotation_steps: set[int] = set()
     requires_relinearization = False
     requires_conjugation = False
-    for operation in program.single_block(entry).ops:
+    for operation in program.single_block(entry).walk():
         if isinstance(operation, ckks.RotateOp):
             step = _rotation_key_step(operation.key)
             if step is None:
@@ -185,17 +185,17 @@ def analyze_evaluation_key_requirements(
             requires_relinearization = True
         elif isinstance(operation, ckks.ConjugateOp):
             requires_conjugation = True
-        elif isinstance(operation, core.ResourceRefOp):
-            kind = operation.kind.data if operation.kind is not None else None
-            if kind == "relinearization-key":
+        elif isinstance(operation, rns.KeySwitchDigitProductOp):
+            role = operation.attributes.get("key_role")
+            if role == StringAttr("relinearization"):
                 requires_relinearization = True
-            elif kind == "conjugation-key":
+            elif role == StringAttr("conjugation"):
                 requires_conjugation = True
-            elif kind == "rotation-key":
-                step = _rotation_key_step(operation.value)
+            elif role == StringAttr("rotation"):
+                step = _rotation_key_step(operation.key)
                 if step is None:
                     raise ValueError(
-                        "rotation-key resource requires a represented step"
+                        "Lowered rotation key operand needs its represented step"
                     )
                 if step:
                     rotation_steps.add(step)

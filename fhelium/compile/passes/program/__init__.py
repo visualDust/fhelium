@@ -1,6 +1,7 @@
 """Transform and inspect Programs without assuming one operation dialect."""
 
 from ._eliminate_dead_values import EliminateDeadValuesPass
+from ._reuse_intermediates import ReuseIntermediatesPass
 from ._visualize_svg import (
     SvgGraphDirection,
     SvgGraphError,
@@ -16,6 +17,7 @@ from ._visualize_svg import (
 
 __all__ = [
     "EliminateDeadValuesPass",
+    "ReuseIntermediatesPass",
     "SvgGraphDirection",
     "SvgGraphError",
     "SvgGraphField",

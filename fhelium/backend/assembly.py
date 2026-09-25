@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from importlib.util import find_spec
+
 from fhelium.backend.implementation import OperationImplementationRegistry
+from .torch import TorchCallImplementation
+from .ckks.codec._periodic import NativePrepareCompressedPlaintextImplementation
 from fhelium.backend.memory import TorchMemoryTransferImplementation
 from fhelium.backend.ckks import (
     NativeDecodeImplementation,
@@ -13,22 +17,27 @@ from fhelium.backend.ckks import (
     NativeScalarArithmeticImplementation,
 )
 
-from .ckks.operations import (
+from .ckks.arithmetic import (
     NativeCiphertextMultiplyImplementation,
     NativeCompressedPlaintextImplementation,
+)
+from .ckks.key_switch import (
+    NativeKeySwitchImplementation,
+    NativeRelinearizeImplementation,
+)
+from .ckks.rotation.operations import (
+    NativeRotateImplementation,
     NativeHoistedRotateManyImplementation,
     NativeGroupedRotationWeightedSumImplementation,
-    NativeKeySwitchDigitProductImplementation,
-    NativeKeySwitchImplementation,
-    NativeKeySwitchModDownImplementation,
-    NativeRelinearizeImplementation,
-    NativeRotateImplementation,
 )
-from .ckks.rescale import NativeRescaleImplementation
+from .rns.modup import NativeHybridModUpImplementation
+from .rns.moddown import NativeModDownImplementation
+from .rns.key_product import NativeKeySwitchDigitProductImplementation
+from .rns.automorphism import NativeCoefficientAutomorphismImplementation
+from .rns.rescale import NativeRescaleImplementation
 from .ntt.operations import NativeNttImplementation
 from .rns.operations import (
-    NativeCoefficientAutomorphismImplementation,
-    NativeHybridModUpImplementation,
+    NativeBatchSumImplementation,
     NativeMontgomeryAccumulateImplementation,
     NativeMontgomeryMultiplyImplementation,
     NativeMontgomeryWeightedSumImplementation,
@@ -43,7 +52,7 @@ def create_builtin_operation_registry(
     *,
     ntt_backend_name: str | None = None,
 ) -> OperationImplementationRegistry:
-    """Construct built-in implementations for one device resource bundle."""
+    """Assemble built-in implementations without binding numerical resources."""
 
     ntt_implementation = (
         NativeNttImplementation(
@@ -52,14 +61,31 @@ def create_builtin_operation_registry(
         )
         if ntt_backend_name is not None
         else NativeNttImplementation(
-            "supplied-ntt-plan",
+            "native-ntt",
             required_backend_name=None,
         )
     )
+    generated = ()
+    if find_spec("triton") is not None:
+        from .triton import (
+            TritonFusionImplementation,
+            TritonTensorFusionImplementation,
+        )
+
+        generated = (
+            TritonTensorFusionImplementation(),
+            TritonFusionImplementation(),
+            TritonFusionImplementation(
+                name="triton-ntt-fused", include_ntt=True
+            ),
+        )
     return OperationImplementationRegistry(
         (
+            *generated,
+            TorchCallImplementation(),
             TorchMemoryTransferImplementation(),
             NativeRnsLinearImplementation(),
+            NativeBatchSumImplementation(),
             NativeRnsTransitionImplementation(),
             NativePlaintextArithmeticImplementation(),
             NativeMontgomeryMultiplyImplementation(),
@@ -68,7 +94,7 @@ def create_builtin_operation_registry(
             NativeHybridModUpImplementation(),
             NativeKeySwitchDigitProductImplementation(),
             NativeMontgomeryAccumulateImplementation(),
-            NativeKeySwitchModDownImplementation(),
+            NativeModDownImplementation(),
             NativeCoefficientAutomorphismImplementation(),
             ntt_implementation,
             NativeRescaleImplementation(),
@@ -80,6 +106,7 @@ def create_builtin_operation_registry(
             NativeHoistedRotateManyImplementation(),
             NativeGroupedRotationWeightedSumImplementation(),
             NativeEncodeImplementation(),
+            NativePrepareCompressedPlaintextImplementation(),
             NativeDecodeImplementation(),
             NativeIntegerCoefficientsToRnsImplementation(),
             NativeScalarArithmeticImplementation(),

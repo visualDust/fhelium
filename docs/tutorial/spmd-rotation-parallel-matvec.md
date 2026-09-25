@@ -1,22 +1,20 @@
 # Rotation-parallel matrix-vector multiplication
 
-**Example source:** [`examples/09_spmd_rotation_parallel_mxv.py`](https://github.com/VisualDust/fhelium/blob/main/examples/09_spmd_rotation_parallel_mxv.py)
+**Example source:** [`examples/22_distributed_partial_results.py`](https://github.com/VisualDust/fhelium/blob/main/examples/22_distributed_partial_results.py)
 
-This example partitions the cyclic-diagonal terms and direct rotation keys of
-one packed matrix-vector product across ranks, then reduces additive
-ciphertext partials. The tutorial explains term ownership, key movement, and
-the final reduction step.
+This example partitions the cyclic-diagonal terms and direct rotation keys of one packed matrix-vector product across ranks, then reduces additive ciphertext partials. The tutorial explains term ownership, key movement, and the final reduction step.
+
+`--preset` selects the CKKS configuration. `dist.init` selects the rank-local CUDA device when available and CPU otherwise; the same source supports a world-size-one launch or multiple ranks.
 
 ## Run on two GPUs
 
 ```bash
 torchrun --standalone --nproc-per-node=2 \
-  examples/09_spmd_rotation_parallel_mxv.py \
+  examples/22_distributed_partial_results.py \
   --size 8
 ```
 
-The matrix size must divide the CKKS slot count, and the world size must not
-exceed the matrix size.
+The matrix size must divide the CKKS slot count, and the world size must not exceed the matrix size.
 
 ## 1. Express matrix-vector multiplication with cyclic diagonals
 
@@ -29,8 +27,7 @@ $$
 \mathbf{d}_s \odot \operatorname{Rot}(\mathbf{x}, s),
 $$
 
-where $\mathbf{d}_s$ is the cyclic diagonal aligned with rotation step
-$s$, and $\odot$ denotes slot-wise multiplication.
+where $\mathbf{d}_s$ is the cyclic diagonal aligned with rotation step $s$, and $\odot$ denotes slot-wise multiplication.
 
 The diagonal aligned with step `s` is built by:
 
@@ -40,8 +37,7 @@ column = torch.remainder(row - rotation_step, size)
 diagonal = matrix[row, column]
 ```
 
-Repeating the input vector periodically across all slots lets each slot block
-evaluate the same small matrix-vector problem.
+Repeating the input vector periodically across all slots lets each slot block evaluate the same small matrix-vector problem.
 
 ## 2. Replicate one encrypted input
 
@@ -49,9 +45,7 @@ evaluate the same small matrix-vector problem.
 source = dist.broadcast_ciphertext(root_source, src=0)
 ```
 
-Every rank needs the complete source because each rank rotates it by a
-different subset of steps. This is one logical ciphertext replicated for
-parallel evaluation, not independent data-parallel samples.
+Every rank needs the complete source because each rank rotates it by a different subset of steps. This is one logical ciphertext replicated for parallel evaluation, not independent data-parallel samples.
 
 ## 3. Partition terms by rotation step
 
@@ -68,9 +62,7 @@ rank 0: steps 0, 2, 4, 6
 rank 1: steps 1, 3, 5, 7
 ```
 
-The cyclic assignment balances the number of diagonal terms. A production
-algorithm may choose another owner function based on measured cost or
-key locality.
+The cyclic assignment balances the number of diagonal terms. A production algorithm may choose another owner function based on measured cost or key locality.
 
 ## 4. Move only the direct keys each owner retains
 
@@ -80,8 +72,7 @@ Rank zero creates each key:
 source_key = engine.create_rotation_key(rotation_step, secret_key)
 ```
 
-All ranks participate in the typed broadcast when the owner is remote, but
-only that owner retains the transferred object:
+All ranks participate in the typed broadcast when the owner is remote, but only that owner retains the transferred object:
 
 ```python
 transferred_key = dist.broadcast_key(source_key, src=0)
@@ -91,8 +82,7 @@ else:
     del transferred_key
 ```
 
-The secret key never leaves rank zero. FHElium does not infer step ownership
-or key placement.
+The secret key never leaves rank zero. FHElium does not infer step ownership or key placement.
 
 ## 5. Evaluate local diagonal terms
 
@@ -114,8 +104,7 @@ term = engine.rescale_to_next_depth(
 )
 ```
 
-All local terms reach the same depth and scale, so they can be summed with
-`engine.sum_ciphertexts`.
+All local terms reach the same depth and scale, so they can be summed with `engine.sum_ciphertexts`.
 
 ## 6. Reduce additive partials
 
@@ -124,9 +113,10 @@ local_partial = engine.sum_ciphertexts(local_terms)
 dist.reduce_ciphertext(local_partial, dst=0, engine=engine)
 ```
 
-Unlike the independent-ciphertext example, rank identity is no longer part of
-the result. Each local ciphertext represents a partial sum of the same
-mathematical output, so a typed ciphertext addition reduction is correct.
+A rescale result may retain a strided view of a larger allocation. The typed reduction handles communication packing and updates the existing destination storage; the example does not need to replace `local_partial.data` with a contiguous copy.
+
+
+Unlike the independent-ciphertext example, rank identity is no longer part of the result. Each local ciphertext represents a partial sum of the same mathematical output, so a typed ciphertext addition reduction is correct.
 
 ```mermaid
 flowchart LR
@@ -136,14 +126,11 @@ flowchart LR
     reduction --> output["one ciphertext on rank 0"]
 ```
 
-Raw integer reduction of `ciphertext.data` is not a substitute for the typed
-collective because receiver construction and CKKS compatibility remain part of
-the operation.
+Raw integer reduction of `ciphertext.data` is not a substitute for the typed collective because receiver construction and CKKS compatibility remain part of the operation.
 
 ## Capacity implication
 
-This partition can reduce per-rank rotation-key residency, but the input is
-replicated and every rank produces local terms. Measure:
+This partition can reduce per-rank rotation-key residency, but the input is replicated and every rank produces local terms. Measure:
 
 - aggregate and maximum-rank key bytes;
 - input replication;
@@ -152,7 +139,7 @@ replicated and every rank produces local terms. Measure:
 - load balance across step owners.
 
 ::: details Source
-<<< @/../examples/09_spmd_rotation_parallel_mxv.py
+<<< @/../examples/22_distributed_partial_results.py
 :::
 
 ## Related concepts and guides

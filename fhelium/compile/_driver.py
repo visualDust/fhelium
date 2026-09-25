@@ -1,65 +1,115 @@
-"""Source-oriented compilation over neutral mixed-level Programs."""
+"""Create callable execution interfaces over Compile Programs."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, overload
 
 from fhelium.ir import Program
 
+from ._callable import CompiledCallable
 from ._compilation import Compilation
 from ._pipeline import Pipeline
+from ._specialization import CallSignature
 from ._workspace import CompileWorkspace
-from .frontend._capture import capture
 from .frontend._specs import InputSpec
+
+if TYPE_CHECKING:
+    from fhelium.backend import OperationBackend
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+@overload
+def compile(
+    source: Callable[_P, _R],
+    *,
+    backend: OperationBackend | None = None,
+    pipeline: Pipeline | Callable[[CallSignature], Pipeline] | None = None,
+    on_miss: Literal["compile", "error"] = "compile",
+    workspace: CompileWorkspace | None = None,
+    inputs: Mapping[str, InputSpec] | None = None,
+    material_names: Mapping[str, object] | None = None,
+) -> CompiledCallable[_P, _R]: ...
+
+
+@overload
+def compile(
+    source: Program | Compilation,
+    *,
+    backend: OperationBackend | None = None,
+    pipeline: Pipeline | Callable[[CallSignature], Pipeline] | None = None,
+    on_miss: Literal["compile", "error"] = "compile",
+    workspace: CompileWorkspace | None = None,
+    inputs: Mapping[str, InputSpec] | None = None,
+) -> CompiledCallable[..., Any]: ...
+
+
+@overload
+def compile(
+    source: None = None,
+    *,
+    backend: OperationBackend | None = None,
+    pipeline: Pipeline | Callable[[CallSignature], Pipeline] | None = None,
+    on_miss: Literal["compile", "error"] = "compile",
+    workspace: CompileWorkspace | None = None,
+    inputs: Mapping[str, InputSpec] | None = None,
+    material_names: Mapping[str, object] | None = None,
+) -> Callable[[Callable[_P, _R]], CompiledCallable[_P, _R]]: ...
 
 
 def compile(
-    source: Program | Compilation | Callable[..., Any],
+    source: Program | Compilation | Callable[_P, _R] | None = None,
     *,
-    pipeline: Pipeline | None = None,
-    inputs: Mapping[str, InputSpec] | None = None,
+    backend: OperationBackend | None = None,
+    pipeline: Pipeline | Callable[[CallSignature], Pipeline] | None = None,
+    on_miss: Literal["compile", "error"] = "compile",
     workspace: CompileWorkspace | None = None,
-) -> Compilation:
-    """Capture or import ``source`` and optionally run ``pipeline``.
+    inputs: Mapping[str, InputSpec] | None = None,
+    material_names: Mapping[str, object] | None = None,
+) -> (
+    CompiledCallable[_P, _R]
+    | Callable[[Callable[_P, _R]], CompiledCallable[_P, _R]]
+):
+    """Create a lazily prepared callable or decorate a pure Python function.
 
-    ``source`` may be a Python callable, a prior ``Compilation``, or any neutral
-    ``Program``. ``inputs`` is required only for a callable. Program-external
-    materials, frontend state, caller inputs, and pass-produced data travel in
-    the Compilation's schema-free ``CompileWorkspace``.
+    Python functions capture ordinary Tensor expressions and Eager calls in
+    one Program unless ``inputs`` selects the role-declared FX frontend.
+    Ordinary Tensor computations retain their public numerical role; a
+    Ciphertext input does not encrypt other inputs or the entire function. Programs and Compilations skip Python capture.
+    There is no frontend fallback: unsupported capture or execution raises.
+    The original Python reference and standard function metadata are retained.
 
-    The result may remain mixed-level or incomplete; this function does not
-    select a runtime backend or assert executability.
+    An omitted Backend uses the standard operation registry. Capture retains
+    actual Tensor materials; it does not bind an Engine owner or generate keys.
+    ``material_names`` assigns stable symbols to fixed Tensor/value objects.
+
+    When ``pipeline`` is omitted, preparation uses ``default_lower_and_fuse_pipeline``.
+    A supplied Pipeline, or function from ``CallSignature`` to Pipeline, replaces
+    that recipe rather than extending it. ``on_miss='error'`` requires ``prepare`` before
+    calls with new input conditions or new Backend bindings. Lazy Backend kernel
+    compilation may still occur on the first actual execution.
+
+    Use ``capture``, ``capture_eager``, ``Compilation``, and ``Pipeline.run`` when
+    a transformed Program rather than a callable executable is the desired
+    product. Those lower-level operations do not require a Backend.
     """
 
-    if isinstance(source, Program):
-        compilation = Compilation(
-            source,
-            CompileWorkspace() if workspace is None else workspace,
-        )
-    elif isinstance(source, Compilation):
-        if workspace is not None and workspace is not source.workspace:
-            raise ValueError(
-                "A Compilation already owns its CompileWorkspace; do not "
-                "replace it while continuing the same compilation"
-            )
-        compilation = source
-    elif callable(source):
-        if inputs is None:
-            raise TypeError(
-                "compile inputs are required when source is a callable"
-            )
-        compilation = capture(source, inputs=inputs, workspace=workspace)
-    else:
-        raise TypeError(
-            "compile source must be a Program, Compilation, or callable"
+    def wrap(
+        function: Program | Compilation | Callable[_P, _R],
+    ) -> CompiledCallable[_P, _R]:
+        return CompiledCallable(
+            function,
+            backend=backend,
+            pipeline=pipeline,
+            on_miss=on_miss,
+            workspace=workspace,
+            inputs=inputs,
+            material_names=material_names,
         )
 
-    if pipeline is None:
-        return compilation
-    if not isinstance(pipeline, Pipeline):
-        raise TypeError("compile pipeline must be a Pipeline")
-    return pipeline.run(compilation)
+    return wrap if source is None else wrap(source)
 
 
 __all__ = ["compile"]

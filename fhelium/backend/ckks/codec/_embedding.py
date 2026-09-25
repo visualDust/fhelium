@@ -12,7 +12,7 @@ from functools import cache
 
 import torch
 
-from fhelium.rng import Csprng
+from fhelium.rng.csprng import stochastic_round_
 
 _FFT_NORM = "forward"
 
@@ -178,14 +178,14 @@ def _skewer(ring_dimension: int, device: str) -> torch.Tensor:
 def inverse_embed_slots(
     message: torch.Tensor,
     *,
-    device: torch.device,
-    generator: int,
+    pre: torch.Tensor,
+    twister: torch.Tensor,
 ) -> torch.Tensor:
-    """Map ``[*batch, slot]`` messages to unscaled real coefficients."""
+    """Map ordered slots to real coefficients using supplied embedding tables."""
 
     ring_dimension = message.size(-1) * 2
-    pre, _ = _permutations(ring_dimension, str(device), generator)
-    local = message.to(device)
+    local = message
+    device = message.device
     permuted = torch.zeros(
         (*local.shape[:-1], ring_dimension),
         dtype=local.dtype,
@@ -194,24 +194,20 @@ def inverse_embed_slots(
     permuted[..., pre] = local
     conjugate_symmetric = permuted + permuted.conj().flip(-1)
     transformed = torch.fft.fft(conjugate_symmetric, norm=_FFT_NORM)
-    return (transformed * _twister(ring_dimension, str(device))).real
+    return (transformed * twister).real
 
 
 def embed_coefficients(
     coefficients: torch.Tensor,
     *,
-    generator: int,
+    post: torch.Tensor,
+    skewer: torch.Tensor,
 ) -> torch.Tensor:
     """Map real coefficients to the selected complex CKKS slot order."""
 
     ring_dimension = coefficients.size(-1)
-    _, post = _permutations(
-        ring_dimension,
-        str(coefficients.device),
-        generator,
-    )
     recovered = torch.fft.ifft(
-        coefficients * _skewer(ring_dimension, str(coefficients.device)),
+        coefficients * skewer,
         norm=_FFT_NORM,
     )
     result = torch.zeros_like(recovered)
@@ -222,27 +218,24 @@ def embed_coefficients(
 def encode_slots(
     message: torch.Tensor,
     *,
-    rng: Csprng,
+    pre: torch.Tensor,
+    twister: torch.Tensor,
+    rounding_state: torch.Tensor,
     scale: float,
-    device: torch.device,
-    generator: int,
 ) -> torch.Tensor:
-    """Return stochastic-rounded integer coefficients for ordered slots."""
-
-    coefficients = inverse_embed_slots(
-        message,
-        device=device,
-        generator=generator,
-    )
-    return rng.randround(coefficients * float(scale), dtype=torch.int64)
+    """Stochastically quantize the inverse slot embedding with a live stream."""
+    coefficients = inverse_embed_slots(message, pre=pre, twister=twister)
+    return stochastic_round_(coefficients * float(scale), rounding_state)
 
 
 def decode_slots(
     coefficients: torch.Tensor,
     *,
+    post: torch.Tensor,
+    skewer: torch.Tensor,
     scale: float,
-    generator: int,
 ) -> torch.Tensor:
-    """Return complex slots from integer or bounded approximate coefficients."""
-
-    return embed_coefficients(coefficients, generator=generator) / float(scale)
+    """Recover ordered complex slots from scaled coefficients."""
+    return embed_coefficients(coefficients, post=post, skewer=skewer) / float(
+        scale
+    )

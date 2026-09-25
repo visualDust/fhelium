@@ -23,8 +23,15 @@ function formatLatency(value: number): string {
   })
 }
 
-function speedup(measurement: WorkloadMeasurement): string {
-  return `${(measurement.referenceMs / measurement.fheliumMs).toFixed(2)}×`
+function series(measurement: WorkloadMeasurement) {
+  return [
+    { key: 'reference', label: 'Reference', value: measurement.referenceMs },
+    { key: 'jit', label: 'JIT', value: measurement.fheliumJitMs },
+  ] as const
+}
+
+function speedup(measurement: WorkloadMeasurement, value: number): string {
+  return `${(measurement.referenceMs / value).toFixed(2)}×`
 }
 
 function cellMaximum(
@@ -34,13 +41,13 @@ function cellMaximum(
   return Math.max(
     ...workloads.flatMap(({ key }) => {
       const measurement = platform.results[depth][key]
-      return [measurement.referenceMs, measurement.fheliumMs]
+      return series(measurement).map(entry => entry.value)
     }),
   )
 }
 
 function barWidth(value: number, maximum: number): string {
-  return `${Math.max(3, (value / maximum) * 100)}%`
+  return `${(value / maximum) * 100}%`
 }
 
 function metricLabel(
@@ -48,12 +55,24 @@ function metricLabel(
   workload: string,
   measurement: WorkloadMeasurement,
 ): string {
-  return `${workload}: ${platform.reference} ${formatLatency(measurement.referenceMs)} milliseconds; ${platform.measured} ${formatLatency(measurement.fheliumMs)} milliseconds`
+  return `${workload}, ${platform.reference}: ${series(measurement).map(entry =>
+    `${entry.label} ${formatLatency(entry.value)} milliseconds`,
+  ).join('; ')}`
 }
 </script>
 
 <template>
   <section class="performance-chart" aria-label="Measured BSGS matrix-vector performance">
+    <div class="chart-toolbar">
+      <div class="chart-legend" aria-label="Implementations">
+        <span><i class="legend-dot reference-dot" />Reference</span>
+        <span><i class="legend-dot jit-dot" />FHElium JIT</span>
+      </div>
+      <div class="chart-units">
+        <span>Latency · ms</span>
+        <span>Speedup · relative to reference</span>
+      </div>
+    </div>
     <div
       class="chart-scroll"
       role="region"
@@ -61,13 +80,7 @@ function metricLabel(
       tabindex="0"
     >
       <div class="chart-grid">
-        <div class="legend-cell">
-          <div>
-            <span><i class="legend-dot reference-dot" />reference</span>
-            <span><i class="legend-dot fhelium-dot" />FHElium</span>
-          </div>
-          <small>lower is better</small>
-        </div>
+        <div class="axis-corner">Platform / depth</div>
 
         <div
           v-for="configuration in depthConfigurations"
@@ -109,45 +122,23 @@ function metricLabel(
             >
               <div class="metric-heading">
                 <strong>{{ workload.label }}</strong>
-                <span class="latencies">
-                  <span
-                    class="reference-value"
-                  >
-                    {{ formatLatency(platform.results[configuration.depth][workload.key].referenceMs) }}
-                  </span>
-                  <span aria-hidden="true">/</span>
-                  <span class="fhelium-value">
-                    {{ formatLatency(platform.results[configuration.depth][workload.key].fheliumMs) }}
-                  </span>
-                  <small>ms</small>
-                  <em>
-                    {{ speedup(platform.results[configuration.depth][workload.key]) }}
-                  </em>
-                </span>
               </div>
-              <div class="bar-pair" aria-hidden="true">
-                <span
-                  class="bar-track reference-track"
-                >
-                  <i
-                    :style="{
-                      width: barWidth(
-                        platform.results[configuration.depth][workload.key].referenceMs,
-                        cellMaximum(platform, configuration.depth),
-                      ),
-                    }"
-                  />
+              <div
+                v-for="entry in series(platform.results[configuration.depth][workload.key])"
+                :key="entry.key"
+                class="series-row"
+                :class="`${entry.key}-series`"
+              >
+                <span class="series-label visually-hidden">{{ entry.label }}</span>
+                <span class="bar-track" aria-hidden="true">
+                  <i :style="{
+                    width: barWidth(entry.value, cellMaximum(platform, configuration.depth)),
+                  }" />
                 </span>
-                <span class="bar-track fhelium-track">
-                  <i
-                    :style="{
-                      width: barWidth(
-                        platform.results[configuration.depth][workload.key].fheliumMs,
-                        cellMaximum(platform, configuration.depth),
-                      ),
-                    }"
-                  />
-                </span>
+                <span class="series-value">{{ formatLatency(entry.value) }}</span>
+                <small class="series-speedup">
+                  {{ entry.key === 'reference' ? '' : speedup(platform.results[configuration.depth][workload.key], entry.value) }}
+                </small>
               </div>
             </div>
           </div>
@@ -160,6 +151,8 @@ function metricLabel(
 
 <style scoped>
 .performance-chart {
+  --chart-reference: #8a4f2e;
+  --chart-jit: #087e6d;
   margin: 20px 0 30px;
   padding: 14px;
   border: 1px solid color-mix(in srgb, var(--fhe-c-border) 72%, var(--fhe-c-divider));
@@ -170,115 +163,111 @@ function metricLabel(
   box-shadow: 0 2px 4px color-mix(in srgb, var(--fhe-c-text-1) 4%, transparent), 0 22px 54px color-mix(in srgb, var(--fhe-c-text-1) 9%, transparent);
 }
 
-.chart-scroll { overflow-x: auto; padding: 2px; border-radius: 12px; }
-.chart-scroll:focus-visible { outline: 2px solid var(--vp-c-brand-1); outline-offset: 2px; }
+.chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding: 2px 4px 12px;
+  line-height: 1.4;
+}
+.chart-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--vp-c-text-2); font-size: 11px; }
+.chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.chart-units { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--vp-c-text-3); font-size: 10px; }
+.legend-dot { width: 8px; height: 8px; border-radius: 999px; }
+.reference-dot { background: var(--chart-reference); }
+.jit-dot { background: var(--chart-jit); }
+:global(.dark .performance-chart) { --chart-reference: #e4a273; --chart-jit: #69d6bb; }
 
+.chart-scroll { overflow-x: auto; padding: 2px; border-radius: 10px; }
+.chart-scroll:focus-visible { outline: 2px solid var(--vp-c-brand-1); outline-offset: 2px; }
 .chart-grid {
   display: grid;
-  grid-template-columns: 190px repeat(3, minmax(218px, 1fr));
-  gap: 10px;
-  min-width: 900px;
+  grid-template-columns: 158px repeat(3, minmax(226px, 1fr));
+  gap: 8px;
+  min-width: 860px;
+  line-height: 1.4;
 }
-
-.legend-cell,
+.axis-corner { align-self: end; padding: 10px 12px; color: var(--vp-c-text-3); font-size: 10px; }
 .depth-heading,
 .platform-cell,
 .depth-cell {
   border: 1px solid color-mix(in srgb, var(--fhe-c-border) 72%, var(--fhe-c-divider));
-  border-radius: 10px;
+  border-radius: 9px;
   background: var(--fhe-c-surface);
-  box-shadow: 0 5px 14px color-mix(in srgb, var(--fhe-c-text-1) 6%, transparent);
 }
-
-.legend-cell {
+.depth-heading {
   display: flex;
   flex-direction: column;
-  align-items: center;
   justify-content: center;
   gap: 3px;
-  padding: 10px;
-  color: var(--vp-c-text-2);
-  font-size: 10px;
-}
-
-.legend-cell div { display: flex; gap: 14px; }
-.legend-cell span { display: inline-flex; align-items: center; gap: 5px; }
-.legend-cell small { color: var(--vp-c-text-3); font-size: 9px; }
-.legend-dot { width: 8px; height: 8px; border-radius: 999px; }
-.reference-dot { background: #a8663f; }
-.fhelium-dot { background: var(--vp-c-brand-1); }
-:global(.dark) .reference-dot { background: #e4a273; }
-
-.depth-heading {
-  padding: 9px 12px;
+  padding: 9px 10px;
   background: var(--fhe-c-surface-tint);
   text-align: center;
 }
-.depth-heading strong,
-.depth-heading small { display: block; }
 .depth-heading strong { font-size: 13px; }
 .depth-heading strong span { color: var(--vp-c-text-3); font-size: 10px; font-weight: 500; }
-.depth-heading small { margin-top: 1px; color: var(--vp-c-text-3); font-size: 9px; }
-
+.depth-heading small { color: var(--vp-c-text-3); font-size: 9px; }
 .platform-cell {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  min-height: 104px;
-  padding: 12px 14px;
-  border-color: var(--fhe-c-brand);
+  gap: 2px;
+  padding: 12px;
   background: color-mix(in srgb, var(--fhe-c-brand) 5%, var(--fhe-c-surface));
 }
-
-.platform-cell strong { font-size: 15px; }
-.platform-cell span { color: var(--vp-c-text-2); font-size: 10px; line-height: 1.4; }
-.platform-cell small { color: var(--vp-c-text-3); font-size: 9px; line-height: 1.4; }
-
+.platform-cell strong { margin-bottom: 3px; font-size: 15px; }
+.platform-cell span { color: var(--vp-c-text-2); font-size: 10px; }
+.platform-cell small { color: var(--vp-c-text-3); font-size: 9px; }
 .depth-cell {
   display: grid;
-  align-content: center;
-  gap: 9px;
-  min-height: 104px;
-  padding: 10px 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 12px 10px;
   background: color-mix(in srgb, var(--fhe-c-surface) 94%, var(--fhe-c-surface-tint));
 }
-
-.metric + .metric { padding-top: 8px; border-top: 1px dashed var(--vp-c-divider); }
-.metric-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.metric { min-width: 0; padding-right: 10px; }
+.metric + .metric { padding-right: 0; padding-left: 10px; border-left: 1px solid var(--vp-c-divider); }
+.metric-heading { margin-bottom: 8px; }
 .metric-heading > strong { font-size: 10px; }
-.latencies { display: inline-flex; align-items: baseline; gap: 4px; font-variant-numeric: tabular-nums; font-size: 10px; }
-.reference-value { color: #8a4f2e; font-weight: 650; }
-:global(.dark) .reference-value { color: #e4a273; }
-.fhelium-value { color: var(--vp-c-brand-1); font-weight: 700; }
-.latencies small { color: var(--vp-c-text-3); font-size: 8px; }
-.latencies em {
-  margin-left: 3px;
-  padding: 1px 5px;
-  border: 1px solid color-mix(in srgb, var(--fhe-c-brand) 22%, var(--fhe-c-divider));
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--fhe-c-brand) 6%, var(--fhe-c-surface));
-  color: var(--vp-c-brand-1);
-  font-size: 8px;
-  font-style: normal;
-  font-weight: 700;
+.series-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: 'value speedup' 'bar bar';
+  align-items: baseline;
+  column-gap: 4px;
+  row-gap: 4px;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
 }
-
-.bar-pair { display: grid; gap: 3px; margin-top: 4px; }
+.series-row + .series-row { margin-top: 9px; }
+.series-value { grid-area: value; font-weight: 650; white-space: nowrap; }
+.timing-note { display: block; margin-top: 7px; color: var(--vp-c-text-3); font-size: 9px; line-height: 1.4; }
+.series-speedup { grid-area: speedup; text-align: right; font-size: 9px; white-space: nowrap; }
+.reference-series { color: var(--chart-reference); }
+.jit-series { color: var(--chart-jit); }
 .bar-track {
-  position: relative;
+  grid-area: bar;
   display: block;
-  height: 4px;
+  height: 5px;
   overflow: hidden;
   border-radius: 999px;
   background: color-mix(in srgb, var(--vp-c-text-3) 12%, transparent);
 }
-.bar-track i { display: block; height: 100%; border-radius: inherit; }
-.reference-track i { background: #a8663f; }
-:global(.dark) .reference-track i { background: #e4a273; }
-.fhelium-track i { background: linear-gradient(90deg, var(--vp-c-brand-1), #7f94ff); }
-
+.bar-track i { display: block; height: 100%; border-radius: inherit; background: currentColor; }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 @media (max-width: 700px) {
-  .performance-chart { padding: 15px 10px; border-radius: 13px; }
-  .chart-grid { grid-template-columns: 176px repeat(3, 214px); }
+  .performance-chart { padding: 12px 8px; }
+  .chart-toolbar { gap: 8px; }
 }
 </style>

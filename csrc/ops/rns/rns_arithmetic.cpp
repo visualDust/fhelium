@@ -37,6 +37,10 @@
 // centered interval; `shift_residues_positive_` adds q_i to centered values.
 // `add_standard` and `sub_standard` compute modulo q_i and return [0, q_i);
 // their trailing-underscore forms mutate and preserve lhs storage.
+// `sum_standard_batch` reduces one leading batch axis of a standard-residue
+// bundle: `dim` selects that axis, the result keeps the remaining axes, and
+// each addition is reduced to [0, q_i), so the result equals any association
+// order of standard additions.
 // `montgomery_mul_row_scalars_standard` computes a_i b_i R^{-1} mod q_i in
 // [0, q_i). These standard-range operations allow only the validated singleton
 // RHS batch broadcast; limb and final-index axes never broadcast.
@@ -74,6 +78,7 @@ TORCH_LIBRARY_FRAGMENT(fhelium_rns_ops, m) {
   m.def("sub_lazy(Tensor lhs, Tensor rhs, Tensor rns_params) -> Tensor");
   m.def("add_standard(Tensor lhs, Tensor rhs, Tensor rns_params) -> Tensor");
   m.def("add_standard_(Tensor(a!) lhs, Tensor rhs, Tensor rns_params) -> ()");
+  m.def("sum_standard_batch(Tensor source, int dim, Tensor rns_params) -> Tensor");
   m.def("sub_standard(Tensor lhs, Tensor rhs, Tensor rns_params) -> Tensor");
   m.def("sub_standard_(Tensor(a!) lhs, Tensor rhs, Tensor rns_params) -> ()");
   m.def(

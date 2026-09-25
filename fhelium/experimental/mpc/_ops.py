@@ -30,10 +30,10 @@ from typing import Literal, cast
 
 import torch
 
-from fhelium.backend.ckks.crypto._galois import (
+from fhelium.backend.rns.automorphism import (
     apply_coefficient_galois_automorphism,
-    rotation_galois_element,
 )
+from fhelium.backend.ckks.rotation._galois import rotation_galois_element
 from fhelium.values import (
     Ciphertext,
     ConjugationKey,
@@ -470,7 +470,9 @@ def _active_q_secret_rows(
 ) -> torch.Tensor:
     rns_context = engine._rns_context_for(secret_share.device)
     basis = rns_context.basis_parameters(depth)
-    return secret_share.data[basis.parameter_row_start : basis.parameter_row_stop]
+    return secret_share.data[
+        basis.parameter_row_start : basis.parameter_row_stop
+    ]
 
 
 def _ciphertext_secret_product(
@@ -1000,8 +1002,12 @@ def unsafe_public_key_switch_share(
     rns_context = engine._rns_context_for(ciphertext.device)
     ntt_context = engine._ntt_context_for(ciphertext.device)
     basis = rns_context.basis_parameters(ciphertext.depth)
-    destination0 = destination_public_key.k0[basis.parameter_row_start : basis.parameter_row_stop]
-    destination1 = destination_public_key.k1[basis.parameter_row_start : basis.parameter_row_stop]
+    destination0 = destination_public_key.k0[
+        basis.parameter_row_start : basis.parameter_row_stop
+    ]
+    destination1 = destination_public_key.k1[
+        basis.parameter_row_start : basis.parameter_row_stop
+    ]
     encrypted0 = rns_context.montgomery_mul(
         ephemeral_rns,
         destination0,

@@ -250,6 +250,111 @@ void rns_sub_standard_inplace_cpu(torch::Tensor lhs,
 
 }  // namespace
 
+torch::Tensor rns_sum_standard_batch_cpu(const torch::Tensor source,
+                                         const int64_t dim,
+                                         const torch::Tensor rns_params) {
+  constexpr const char* operation = "rns_sum_standard_batch";
+  TORCH_CHECK(source.device().is_cpu(), operation, " requires a CPU source");
+  TORCH_CHECK(rns_params.device() == source.device(),
+              operation,
+              " requires RNS parameters on the source CPU device");
+  TORCH_CHECK(source.scalar_type() == rns_params.scalar_type(),
+              operation,
+              " requires RNS parameters with the source dtype");
+  TORCH_CHECK(dim >= 0 && dim <= source.dim() - 3,
+              operation,
+              " dim must select a leading batch axis");
+  TORCH_CHECK(source.size(dim) > 0,
+              operation,
+              " cannot reduce an empty batch axis");
+  const auto input = view_rns_batch_3d(source, "source");
+  check_rns_parameter_rows(input, rns_params, operation);
+  auto sizes = source.sizes().vec();
+  sizes.erase(sizes.begin() + dim);
+  auto out = torch::empty(sizes, source.options());
+  const auto output = view_rns_batch_3d(out, "out");
+  const int64_t count = source.size(dim);
+  int64_t inner = 1;
+  for (int64_t axis = dim + 1; axis < source.dim() - 2; ++axis) {
+    inner *= source.size(axis);
+  }
+  const int64_t limb_count = source.size(-2);
+  const int64_t coefficient_count = source.size(-1);
+  const int64_t plane_count = output.size(0);
+  AT_DISPATCH_INTEGRAL_TYPES(source.scalar_type(), operation, [&] {
+    const scalar_t* values = input.data_ptr<scalar_t>();
+    scalar_t* result = output.data_ptr<scalar_t>();
+    const scalar_t* parameters = rns_params.data_ptr<scalar_t>();
+    const int64_t parameter_row_stride = rns_params.stride(0);
+    const int64_t parameter_limb_stride = rns_params.stride(1);
+    const int64_t value_stride0 = input.stride(0);
+    const int64_t value_stride1 = input.stride(1);
+    const int64_t value_stride2 = input.stride(2);
+    const int64_t result_stride0 = output.stride(0);
+    const int64_t result_stride1 = output.stride(1);
+    const int64_t result_stride2 = output.stride(2);
+    const int64_t row_count = plane_count * limb_count;
+    // Parallel units are (row, coefficient block) pairs. Splitting the
+    // coefficient axis keeps every task's reads contiguous and guarantees at
+    // least two tasks per thread when the row count alone is small.
+    const int64_t threads = std::max<int64_t>(at::get_num_threads(), 1);
+    constexpr int64_t preferred_block = 512;
+    int64_t coefficient_block = preferred_block;
+    if (row_count * ((coefficient_count + coefficient_block - 1) /
+                     coefficient_block) <
+        threads * 2) {
+      const int64_t blocks =
+          (threads * 2 + row_count - 1) / row_count;
+      coefficient_block = std::max<int64_t>(
+          64, (coefficient_count + blocks - 1) / blocks);
+      coefficient_block = ((coefficient_block + 63) / 64) * 64;
+    }
+    const int64_t block_count =
+        (coefficient_count + coefficient_block - 1) / coefficient_block;
+    at::parallel_for(
+        0,
+        row_count * block_count,
+        1,
+        [&](int64_t begin, int64_t end) {
+          for (int64_t task = begin; task < end; ++task) {
+            const int64_t row_index = task / block_count;
+            const int64_t block_index = task % block_count;
+            const int64_t limb = row_index % limb_count;
+            const int64_t plane = row_index / limb_count;
+            const int64_t outer = plane / inner;
+            const int64_t inner_index = plane - outer * inner;
+            const int64_t twice_modulus = static_cast<int64_t>(
+                parameters[RNS_PARAM_TWICE_MODULUS * parameter_row_stride +
+                           limb * parameter_limb_stride]);
+            const scalar_t* source_row =
+                values + (outer * count * inner + inner_index) * value_stride0 +
+                limb * value_stride1;
+            scalar_t* result_row = result + plane * result_stride0 +
+                                   limb * result_stride1;
+            const int64_t step = inner * value_stride0;
+            const int64_t coefficient_begin =
+                block_index * coefficient_block;
+            const int64_t coefficient_end =
+                std::min(coefficient_count,
+                         coefficient_begin + coefficient_block);
+            for (int64_t coefficient = coefficient_begin;
+                 coefficient < coefficient_end; ++coefficient) {
+              const int64_t offset = coefficient * value_stride2;
+              int64_t value = static_cast<int64_t>(source_row[offset]);
+              for (int64_t index = 1; index < count; ++index) {
+                value += static_cast<int64_t>(source_row[offset + index * step]);
+                if (value >= twice_modulus) value -= twice_modulus;
+              }
+              const int64_t modulus = twice_modulus >> 1;
+              result_row[coefficient * result_stride2] = static_cast<scalar_t>(
+                  value < modulus ? value : value - modulus);
+            }
+          }
+        });
+  });
+  return out;
+}
+
 torch::Tensor rns_add_standard_cpu(const torch::Tensor lhs,
                                    const torch::Tensor rhs,
                                    const torch::Tensor rns_params) {
@@ -263,4 +368,5 @@ TORCH_LIBRARY_IMPL(fhelium_rns_ops, CPU, m) {
   m.impl("sub_standard_", &rns_sub_standard_inplace_cpu);
   m.impl("montgomery_mul_row_scalars_standard",
          &rns_montgomery_mul_row_scalars_standard_cpu);
+  m.impl("sum_standard_batch", &rns_sum_standard_batch_cpu);
 }

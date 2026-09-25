@@ -1,8 +1,10 @@
 # Diagnose a value-state mismatch
 
-When an operation rejects a value—or a lower-level experiment produces wrong
-results—compare value state in a fixed order. Do not begin by changing kernels
-or disabling validation.
+When an operation rejects a value—or a lower-level experiment produces wrong results—compare value state in a fixed order. Do not begin by changing kernels or disabling validation.
+
+## Prerequisites
+
+Retain the inputs, configuration provenance, key relation, and first failing operation. For a Compile path, also retain the Program and pass reports that assigned the relevant value facts.
 
 ## 1. Reduce to one deterministic operation
 
@@ -15,7 +17,7 @@ Build the smallest reproducer with:
 - state printed before and after;
 - no graph, distributed execution, cache, or multi-stream overlap.
 
-First establish whether single-GPU eager execution is correct.
+First establish whether the same operation and supplied materials are correct in a direct single-device execution.
 
 ## 2. Compare configuration provenance and device
 
@@ -28,13 +30,9 @@ the installed native extension supports that device type
 ring dimension matches
 ```
 
-Runtime values do not carry a configuration identifier. Parameter provenance
-is application state, so a mistaken cross-configuration combination may
-produce an incorrect result instead of a FHElium mismatch exception.
+Runtime values do not carry a configuration identifier. Parameter provenance is application state, so a mistaken cross-configuration combination may produce an incorrect result instead of a FHElium mismatch exception.
 
-A loaded value may be on CPU by default. `torch.get_default_device()` controls
-factory placement, while existing values retain their own placement. Move a
-value with `.to(...)`, or pass `device` to a boundary operation after loading.
+A loaded value may be on CPU by default. `torch.get_default_device()` controls factory placement, while existing values retain their own placement. Move a value with `.to(...)`, or pass `device` to a boundary operation after loading.
 
 ## 3. Compare structure
 
@@ -49,9 +47,7 @@ ring dimension
 prime_ids length and order
 ```
 
-Two tensors can have equal shape but different parameter provenance or row identity. A
-partial-limb view does not contain the complete active-row layout merely
-because its other metadata is valid.
+Two tensors can have equal shape but different parameter provenance or row identity. A partial-limb view does not contain the complete active-row layout merely because its other metadata is valid.
 
 ## 4. Compare arithmetic state
 
@@ -86,11 +82,9 @@ For key-requiring operations, verify:
 - key type;
 - rotation key's normalized signed step;
 - whether the key is installed on the local engine/device.
-- whether the application supplied a key with the required ciphertext,
-  source-secret, and destination-secret relation.
+- whether the application supplied a key with the required ciphertext, source-secret, and destination-secret relation.
 
-Do not substitute a same-shaped key from another parameter set, step, or
-externally supplied key provenance.
+Do not substitute a same-shaped key from another parameter set, step, or externally supplied key provenance.
 
 ## 6. Inspect the operation requirements
 
@@ -123,9 +117,7 @@ flowchart LR
     START --> T1 --> CHECK1 --> T2 --> CHECK2
 ```
 
-For operations whose intermediate representation is not directly meaningful to
-decrypt, first reach a legal decryptable checkpoint or compare against a
-trusted single-GPU reference path.
+For operations whose intermediate representation is not directly meaningful to decrypt, first reach a legal decryptable checkpoint or compare against a trusted single-GPU reference path.
 
 ## 8. Reintroduce execution mechanisms last
 
@@ -138,8 +130,7 @@ Add in this order:
 5. distributed transport/partition;
 6. residency/prefetch policy.
 
-At each step, preserve the same oracle, seed, depth checkpoints, and error
-threshold.
+At each step, preserve the same oracle, seed, depth checkpoints, and error threshold.
 
 ## 9. If the problem reaches native code
 
@@ -153,8 +144,11 @@ Capture:
 - synchronized CUDA error location;
 - smallest `logN` and NTT backend that reproduce the issue.
 
-Do not treat an asynchronous error reported at a later call as proof that the
-later call caused it.
+Do not treat an asynchronous error reported at a later call as proof that the later call caused it.
+
+## Verify the outcome
+
+The reduced operation should produce the expected decoded message with the intended state transition. Use [Compile preparation diagnosis](diagnose-compile-preparation.md) when the issue is a missing fact or binding before execution rather than a materialized operand mismatch.
 
 ## Related documentation
 

@@ -21,6 +21,7 @@ from xdsl.irdl import (
     region_def,
     result_def,
     traits_def,
+    var_operand_def,
 )
 from xdsl.traits import IsTerminator, Pure
 from xdsl.utils.exceptions import VerifyException
@@ -34,6 +35,12 @@ from .._operation_catalog import (
 )
 from ._common import OpenStateType
 from .ckks import CiphertextType
+from .._dependencies import (
+    OperationDependencies,
+    ValueDependency,
+    identity_axes,
+    operand_relations,
+)
 
 
 @irdl_attr_definition
@@ -85,6 +92,16 @@ class BroadcastOp(IRDLOperation):
     group = operand_def(GroupType)
     result = result_def()
     root = attr_def(IntegerAttr)
+
+    def dependencies(self) -> OperationDependencies:
+        """Read corresponding value positions from the root rank."""
+        return OperationDependencies(
+            (
+                ValueDependency(
+                    0, 0, {**identity_axes(self.value), "rank": "reindexed"}
+                ),
+            )
+        )
 
     def __init__(
         self,
@@ -138,6 +155,10 @@ class AllReduceOp(IRDLOperation):
     group = operand_def(GroupType)
     result = result_def()
     combine = region_def("single_block")
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(self, {0: {'rank': 'mixing'}})
 
     def __init__(
         self,
@@ -198,19 +219,36 @@ class AllReduceAddCiphertextOp(IRDLOperation):
 
     value = operand_def(CiphertextType)
     group = operand_def(GroupType)
+    parameters = var_operand_def()
     result = result_def(CiphertextType)
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'element',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                    'rank': 'mixing',
+                }
+            },
+        )
 
     def __init__(
         self,
         value: SSAValue | Operation,
         group: SSAValue | Operation,
         *,
+        parameters: tuple[SSAValue | Operation, ...] = (),
         result_type: Attribute | None = None,
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         value_type = SSAValue.get(value).type
         super().__init__(
-            operands=[value, group],
+            operands=[value, group, parameters],
             result_types=[result_type or value_type],
             attributes=attributes,
         )

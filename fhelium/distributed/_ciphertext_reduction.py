@@ -8,11 +8,14 @@ import torch
 
 from fhelium.values import Ciphertext
 from fhelium.distributed._collective_common import (
+    _broadcast_transfer_tensor,
     _check_global_rank,
     _check_identical_layout,
     _collect_argument_errors,
     _group_info,
     _GroupInfo,
+    _transfer_tensor,
+    _wait_p2p_ops,
 )
 
 if TYPE_CHECKING:
@@ -79,19 +82,22 @@ def _reduce_ciphertext_tree(
             receiver_group_rank = (
                 receiver_logical + root_group_rank
             ) % info.world_size
-            requests = torch.distributed.batch_isend_irecv(
+            receive_copies: list[tuple[torch.Tensor, torch.Tensor]] = []
+            transfer = _transfer_tensor(
+                value.data, receive_copies, receiving=False, info=info
+            )
+            _wait_p2p_ops(
                 [
                     torch.distributed.P2POp(
                         torch.distributed.isend,
-                        value.data,
+                        transfer,
                         info.global_ranks[receiver_group_rank],
                         group=info.group,
                         tag=phase,
                     )
-                ]
+                ],
+                receive_copies,
             )
-            for request in requests:
-                request.wait()
             return
 
         sender_logical = next(
@@ -101,20 +107,25 @@ def _reduce_ciphertext_tree(
         if sender_logical is None:
             continue
         sender_group_rank = (sender_logical + root_group_rank) % info.world_size
-        incoming = value.with_data(torch.empty_like(value.data))
-        requests = torch.distributed.batch_isend_irecv(
+        incoming = value.with_data(
+            torch.empty_like(value.data, memory_format=torch.contiguous_format)
+        )
+        receive_copies = []
+        transfer = _transfer_tensor(
+            incoming.data, receive_copies, receiving=True, info=info
+        )
+        _wait_p2p_ops(
             [
                 torch.distributed.P2POp(
                     torch.distributed.irecv,
-                    incoming.data,
+                    transfer,
                     info.global_ranks[sender_group_rank],
                     group=info.group,
                     tag=phase,
                 )
-            ]
+            ],
+            receive_copies,
         )
-        for request in requests:
-            request.wait()
         engine.add_(value, incoming)
 
 
@@ -140,7 +151,8 @@ def reduce_ciphertext(
     Args:
         value: Rank-local additive ciphertext partial.  The object on ``dst``
             is updated in place; intermediate receivers may also be mutated as
-            the tree accumulates subtrees.
+            the tree accumulates subtrees. Non-overlapping strided views are
+            supported without replacing their Tensor storage.
         dst: Global rank that receives the complete sum, which must belong to
             ``group``.  This is not a process-group-relative rank.
         engine: Rank-local CKKS engine used for in-place modular ciphertext
@@ -195,7 +207,8 @@ def all_reduce_ciphertext(
     Args:
         value: Rank-local additive ciphertext partial.  Every rank's object is
             overwritten in place with the component-wise CKKS sum modulo the
-            active Q primes.
+            active Q primes. Non-overlapping strided views retain their Tensor
+            storage and are updated through any existing aliases.
         engine: Rank-local CKKS engine used during tree reduction.  Every
             participating rank must provide an engine compatible with its
             ``value``.
@@ -229,4 +242,4 @@ def all_reduce_ciphertext(
         engine=engine,
         info=info,
     )
-    torch.distributed.broadcast(value.data, src=root, group=group)
+    _broadcast_transfer_tensor(value.data, src=root, info=info)

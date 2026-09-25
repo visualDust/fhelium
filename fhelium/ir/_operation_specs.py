@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from xdsl.dialects.builtin import UnrealizedConversionCastOp
 
+from ._dependencies import identity_dependencies
+
 from ._operation_catalog import (
     OperationEffect,
     OperationSpec,
@@ -15,6 +17,7 @@ from .dialects import (
     ckks,
     core,
     distributed,
+    fusion,
     logical,
     memory,
     ntt,
@@ -32,6 +35,7 @@ _DIALECT_OPERATION_SPECS: tuple[OperationSpec, ...] = (
     *ntt.OPERATION_SPECS,
     *memory.OPERATION_SPECS,
     *distributed.OPERATION_SPECS,
+    *fusion.OPERATION_SPECS,
     *torch_dialect.OPERATION_SPECS,
 )
 
@@ -44,6 +48,7 @@ _BRIDGE_OPERATION_SPECS = (
         (None,),
         (None,),
         operation_type=UnrealizedConversionCastOp,
+        dependencies=identity_dependencies,
     ),
 )
 

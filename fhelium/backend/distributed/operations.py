@@ -28,23 +28,22 @@ TensorCombine = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 def prepare_ciphertext_add_combine(
     backend: OperationBackend,
-    rns_resource: BoundResource,
     *,
     modulus_basis: str = "Q",
     implementation: str | None = None,
-) -> TensorCombine:
+) -> Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]:
     """Bind ciphertext addition through an existing operation backend.
 
     The returned callable owns no Engine or public CKKS value.  It reuses the
     execution owner's selected RNS implementation and concrete arithmetic
-    resource for every local combine performed by a distributed reduction.
+    parameters supplied by each distributed reduction.
     """
 
     invocation = OperationInvocation(
         rns.AddStandardOp,
-        2,
+        3,
         1,
-        operand_bases=(modulus_basis, modulus_basis),
+        operand_bases=(modulus_basis, modulus_basis, None),
     )
     selected = backend.registry.resolve_type(
         invocation.operation_type,
@@ -54,13 +53,14 @@ def prepare_ciphertext_add_combine(
     required = backend.named_resources.resolve_all(
         selected.resource_requirements(invocation)
     )
-    resources = (rns_resource, *required)
 
-    def combine(lhs: torch.Tensor, rhs: torch.Tensor) -> torch.Tensor:
+    def combine(
+        lhs: torch.Tensor, rhs: torch.Tensor, parameters: torch.Tensor
+    ) -> torch.Tensor:
         return selected.execute(
             invocation,
-            (lhs, rhs),
-            resources,
+            (lhs, rhs, parameters),
+            required,
             in_place=False,
         )[0]
 
@@ -212,7 +212,9 @@ class TorchGenericAllReduceImplementation(_OperandResourceImplementation):
 class TorchCiphertextAddAllReduceImplementation(_OperandResourceImplementation):
     """Reduce ciphertext payloads with an injected Backend Tensor addition."""
 
-    combine: TensorCombine = field(repr=False, compare=False)
+    combine: Callable[
+        [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+    ] = field(repr=False, compare=False)
     name: str = "torch-ciphertext-add-all-reduce"
     supports_in_place: bool = False
     operation_types: tuple[type[Operation], ...] = (
@@ -232,12 +234,22 @@ class TorchCiphertextAddAllReduceImplementation(_OperandResourceImplementation):
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
         del invocation, in_place
-        return (_collective_fold(inputs[0], _group(resources), self.combine),)
+        value, parameters = inputs
+        return (
+            _collective_fold(
+                value,
+                _group(resources),
+                lambda lhs, rhs: self.combine(lhs, rhs, parameters),
+            ),
+        )
 
 
 def distributed_operation_contributions(
     *,
-    ciphertext_add: TensorCombine | None = None,
+    ciphertext_add: Callable[
+        [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+    ]
+    | None = None,
 ) -> tuple[
     TorchProcessGroupQueryImplementation
     | TorchBroadcastImplementation

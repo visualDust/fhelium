@@ -1,13 +1,13 @@
 # Import and transform textual Program IR
 
-**Example source:** [`examples/18_ir_textual_program.py`](https://github.com/VisualDust/fhelium/blob/main/examples/18_ir_textual_program.py)
+**Example source:** [`examples/13_compile_textual_ir.py`](https://github.com/VisualDust/fhelium/blob/main/examples/13_compile_textual_ir.py)
 
-Example 18 starts from textual mixed-level IR. It parses and prints the Program, verifies a stable textual round trip, inserts a caller-defined analysis pass into the Compile pipeline, and inspects the transformed CKKS operations.
+Example 13 starts from textual mixed-level IR. It parses and prints the Program, verifies a stable textual round trip, inserts a caller-defined analysis pass into the Compile pipeline, and inspects the transformed CKKS operations.
 
 ## Run the example
 
 ```bash
-python examples/18_ir_textual_program.py
+python examples/13_compile_textual_ir.py
 ```
 
 No cryptographic runtime or device is required because the example stops at the transformed Program.
@@ -47,13 +47,15 @@ from fhelium import compile as fh_compile
 class RecordDialectInventoryPass:
     name: str = "record-dialect-inventory"
 
-    def run(self, program, shared_data):
+    def run(self, compilation):
+        program = compilation.program
+        shared_data = compilation.workspace
         ...
         shared_data["textual-ir/dialect-counts"] = counts
         return fh_compile.PassResult.unchanged(...)
 ```
 
-The pass reads the current Program, counts operation namespaces, publishes its result through the request's schema-free `CompileWorkspace`, and returns an unchanged `PassResult`. It does not add attributes to the Program merely to transport analysis data.
+The pass reads the current Program, counts operation namespaces, publishes its result through the request's schema-free `CompileWorkspace`, and returns an unchanged `PassResult`.
 
 The example places this pass before dead-value elimination:
 
@@ -94,7 +96,7 @@ The parser accepts permissive mixed-level Programs. It does not turn structural 
 
 ::: details Source
 
-<<< @/../examples/18_ir_textual_program.py
+<<< @/../examples/13_compile_textual_ir.py
 
 :::
 

@@ -500,6 +500,27 @@ def sub_standard_(
     torch.ops.fhelium_rns_ops.sub_standard_(lhs, rhs, rns_params)
 
 
+def sum_standard_batch(
+    source: torch.Tensor, dim: int, rns_params: torch.Tensor
+) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_rns_ops::sum_standard_batch``.
+
+    Torch schema::
+
+        fhelium_rns_ops::sum_standard_batch(Tensor source, int dim, Tensor rns_params) -> Tensor
+
+    Args:
+        source: torch.Tensor.
+        dim: int.
+        rns_params: torch.Tensor.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.sum_standard_batch(source, dim, rns_params)
+
+
 def to_montgomery_(
     standard_residues: torch.Tensor, rns_params: torch.Tensor
 ) -> None:

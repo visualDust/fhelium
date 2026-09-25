@@ -2,6 +2,18 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
+from typing import cast
+
+import json
+from fhelium.config import CkksConfig
+from ..._materials import material_symbol, parameter_description
+
 from ..._pipeline import (
     PassResult,
     PassStats,
@@ -19,7 +31,6 @@ from xdsl.dialects.builtin import (
 from xdsl.ir import Attribute, Operation, SSAValue
 from xdsl.rewriter import Rewriter
 
-from fhelium.ir import Program
 from fhelium.ir.dialects import ckks, core
 from .._operation_transforms import display_name, program_operations
 
@@ -68,13 +79,11 @@ class LowerMessagePlaintextPreparationPass:
 
     name: str = "lower-message-plaintext-preparation"
 
-    def run(
-        self,
-        program: Program,
-        shared_data: dict[object, object],
-    ) -> PassResult:
-        del shared_data
-        matched = transformed = inserted = 0
+    def run(self, compilation: "Compilation") -> PassResult:
+        program = compilation.program
+        shared_data = compilation.workspace
+        matched = transformed = inserted = skipped = 0
+        diagnostics: list[str] = []
         for operation in program_operations(program):
             if not isinstance(operation, _MESSAGE_PREPARATION_TYPES):
                 continue
@@ -90,6 +99,22 @@ class LowerMessagePlaintextPreparationPass:
                     "Message preparation result must be CKKS plaintext"
                 )
             operation_name = display_name(operation)
+            required = {
+                "depth": IntegerAttr,
+                "scale": FloatAttr,
+                "prime_ids": ArrayAttr,
+                "basis": StringAttr,
+            }
+            if any(
+                not isinstance(result_type.state.data.get(key), typ)
+                or result_type.state.data.get(key) == StringAttr("unknown")
+                for key, typ in required.items()
+            ):
+                skipped += 1
+                diagnostics.append(
+                    f"{operation_name}: plaintext preparation awaits depth, scale and prime-row facts"
+                )
+                continue
             depth = _state_attribute(
                 result_type,
                 "depth",
@@ -138,8 +163,50 @@ class LowerMessagePlaintextPreparationPass:
                     "role": StringAttr("message"),
                 }
             )
+            codec_refs = tuple(
+                core.MaterialRefOp(
+                    core.MessageType(),
+                    symbol=material_symbol(operation, symbol),
+                )
+                for symbol in (
+                    "codec/encode/permutation",
+                    "codec/encode/twister",
+                    "codec/rounding_state",
+                )
+            )
+            row_parameters = core.MaterialRefOp(
+                core.MessageType(),
+                symbol=material_symbol(
+                    operation, f"twice_modulus/{basis.data}/{depth.value.data}"
+                ),
+            )
+            config_attr = operation.attributes.get("ckks_config")
+            config = (
+                CkksConfig.parse(json.loads(config_attr.data))
+                if isinstance(config_attr, StringAttr)
+                else shared_data.get(CkksConfig)
+            )
+            for index, reference in enumerate(codec_refs):
+                fields = {"index": index}
+                description = (
+                    parameter_description(config, "encode_table", **fields)
+                    if isinstance(config, CkksConfig)
+                    else {"kind": "encode_table", **fields}
+                )
+                program.set_material_description(
+                    cast(StringAttr, reference.symbol).data, description
+                )
+            fields = {"prime_ids": [int(item.value.data) for item in prime_ids]}
+            description = (
+                parameter_description(config, "twice_modulus", **fields)
+                if isinstance(config, CkksConfig)
+                else {"kind": "twice_modulus", **fields}
+            )
+            program.set_material_description(
+                cast(StringAttr, row_parameters.symbol).data, description
+            )
             encode = ckks.EncodeOp.create(
-                operands=(message,),
+                operands=(message, *(ref.value for ref in codec_refs)),
                 result_types=(coefficient_type,),
                 attributes={"depth": depth, "scale": scale},
             )
@@ -157,13 +224,15 @@ class LowerMessagePlaintextPreparationPass:
             }
             rns_type = ckks.PlaintextType().with_state(rns_state)
             to_rns = ckks.IntegerCoefficientsToRnsOp.create(
-                operands=(encode.result,),
+                operands=(encode.result, row_parameters.value),
                 result_types=(rns_type,),
                 attributes={"modulus_basis": basis, "depth": depth},
             )
             to_rns.result.name_hint = f"{operation_name}_rns"
             replacements: list[Operation] = [
                 *message_operations,
+                *codec_refs,
+                row_parameters,
                 encode,
                 to_rns,
             ]
@@ -178,7 +247,15 @@ class LowerMessagePlaintextPreparationPass:
                     montgomery_type,
                 )
                 to_montgomery.result.name_hint = f"{operation_name}_montgomery"
-                to_ntt = ckks.ToNttOp(to_montgomery.result, result_type)
+                to_ntt = ckks.ToNttOp(
+                    to_montgomery.result,
+                    result_type,
+                    attributes={
+                        name: value
+                        for name, value in operation.attributes.items()
+                        if name in {"ntt_backend", "ckks_config"}
+                    },
+                )
                 to_ntt.result.name_hint = operation.result.name_hint
                 replacements.extend((to_montgomery, to_ntt))
                 prepared = to_ntt.result
@@ -221,9 +298,11 @@ class LowerMessagePlaintextPreparationPass:
             PassStats(
                 matched=matched,
                 transformed=transformed,
+                skipped=skipped,
                 inserted=inserted,
                 removed=transformed,
             ),
+            tuple(diagnostics),
         )
 
 

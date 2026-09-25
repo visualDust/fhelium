@@ -30,7 +30,8 @@ void launch_inverse_ntt_to_centered_indexed_cuda(
   const auto N = a.size(2);
 
   int dim_block = kCudaBlockSize;
-  dim3 dim_grid_ntt(C, N_half / kCudaBlockSize, B);
+  const int ntt_block = std::min<int64_t>(kCudaBlockSize, N_half);
+  dim3 dim_grid_ntt(C, (N_half + kCudaBlockSize - 1) / kCudaBlockSize, B);
   dim3 to_montgomery_grid(C, N / kCudaBlockSize, B);
 
   // make the packed accessors.
@@ -42,7 +43,7 @@ void launch_inverse_ntt_to_centered_indexed_cuda(
 
   for (int i = 0; i < logN; ++i) {
     inverse_ntt_indexed_stage_kernel<scalar_t>
-        <<<dim_grid_ntt, dim_block, 0, stream>>>(
+        <<<dim_grid_ntt, ntt_block, 0, stream>>>(
             a_acc, even_acc, odd_acc, inverse_twiddles_acc, params_acc, i);
   }
 

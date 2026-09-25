@@ -484,3 +484,42 @@ def test_eager_metadata_operations_preserve_payload_and_update_state() -> None:
     )
     assert reinterpreted.scale == ciphertext.scale * 2
     assert torch.equal(reinterpreted.data, ciphertext.data)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+def test_eager_limb_arithmetic_uses_declared_prime_rows(device: str) -> None:
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    engine = Engine(Preset.slots8192_scale40_depth7_int64)
+    moduli = torch.tensor(
+        engine.config.q_moduli, dtype=torch.int64, device=device
+    )
+    data = moduli.view(1, -1, 1) - torch.randint(
+        1,
+        65536,
+        (2, len(moduli), engine.config.N),
+        dtype=torch.int64,
+        device=device,
+    )
+    source = Ciphertext(
+        data=data, depth=0, scale=2.0**40, prime_ids=tuple(range(len(moduli)))
+    )
+
+    def evaluate(value: Ciphertext) -> Ciphertext:
+        combined = engine.add(value, value)
+        engine.subtract_(combined, engine.negate(value))
+        scaled = engine.multiply_integer_scalar(combined, 3)
+        transformed = engine.coefficient_domain_to_ntt_domain(scaled)
+        return engine.ntt_domain_to_coefficient_domain(
+            engine.multiply(transformed, transformed)
+        )
+
+    expected = evaluate(source)
+    for start, stop in ((0, 4), (2, 6), (4, 8)):
+        shard = source.slice_limbs(start, stop)
+        shard = shard.with_data(shard.data.contiguous())
+        actual = evaluate(shard)
+        assert actual.prime_ids == shard.prime_ids
+        torch.testing.assert_close(
+            actual.data, expected.data[..., start:stop, :], rtol=0, atol=0
+        )

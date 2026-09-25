@@ -2,7 +2,6 @@
 
 from ._assign_implementations import AssignImplementationsPass
 from ._assign_ntt_implementation import AssignNttImplementationPass
-from ._bind_ckks_keys import BindCkksKeysPass
 from ._initialize_resources import InitializeResourceBindingsPass
 from ._link_program import LinkProgramPass
 from ._materialize_resources import (
@@ -10,16 +9,22 @@ from ._materialize_resources import (
 )
 from ._pipeline import backend_linking_pipeline
 from ._resolve_operations import ResolveBackendOperationsPass
+from ._resolve_tensor_placeholders import ResolveTensorPlaceholdersPass
+from ._select_ntt import SelectNttImplementationsPass
 from ._validate_representations import ValidateExecutionRepresentationsPass
 
+from ._prepare_operands import PrepareOperationOperandsPass
+
 __all__ = [
+    "PrepareOperationOperandsPass",
     "AssignImplementationsPass",
     "AssignNttImplementationPass",
-    "BindCkksKeysPass",
+    "SelectNttImplementationsPass",
     "InitializeResourceBindingsPass",
     "LinkProgramPass",
     "MaterializeResourcesPass",
     "ResolveBackendOperationsPass",
+    "ResolveTensorPlaceholdersPass",
     "ValidateExecutionRepresentationsPass",
     "backend_linking_pipeline",
 ]

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from copy import copy
+from dataclasses import dataclass, replace
+
+from typing import Literal
 
 import torch
 
@@ -21,8 +24,6 @@ from fhelium.values._validation import (
     validate_prime_ids,
 )
 
-COMPRESSED_PLAINTEXT_FORMAT_VERSION = 1
-
 _SUPPORTED_COMPRESSION_LAYOUTS: tuple[CompressedPlaintextLayout, ...] = (
     "cyclic",
     "contiguous",
@@ -32,17 +33,17 @@ _SUPPORTED_COMPRESSION_LAYOUTS: tuple[CompressedPlaintextLayout, ...] = (
 
 @dataclass(eq=False)
 class CompressedPlaintext(TensorResident):
-    r"""An operation-ready RNS plaintext with compressed storage.
+    r"""An RNS plaintext with compact polynomial or NTT storage.
 
     ``data`` is a dense integral tensor with layout
     ``[*batch, limb, unique_index]`` rather than the dense
     ``[*batch, limb, coefficient_or_ntt_index]`` layout used by
     :class:`Plaintext`. Limb row $i$ is modulo the prime identified by
     ``prime_ids[i]`` in $Q_\ell$ or $Q_\ell P$; ``polynomial_domain``
-    determines whether the expanded last
-    axis indexes coefficients or NTT evaluations. Operation-ready compressed
-    values always use Montgomery residues. ``compression_layout`` defines the
-    lossless expansion of each compact row:
+    determines whether the expanded last axis indexes coefficients or NTT
+    evaluations. Coefficient data may use standard or Montgomery residues;
+    NTT data uses Montgomery residues, as in :class:`Plaintext`.
+    ``compression_layout`` defines the lossless expansion of each compact row:
 
     - ``"cyclic"`` expands ``[a, b]`` as ``[a, b, a, b, ...]``;
     - ``"contiguous"`` expands ``[a, b]`` as
@@ -55,8 +56,10 @@ class CompressedPlaintext(TensorResident):
     These modes describe the encoded polynomial/NTT tensor axis, not the
     user-visible CKKS slot order. CKKS encoding permutes slots, and coefficient
     rounding can destroy repetition that exists only in semantic slot space.
-    Construct this type from a dense operation-ready plaintext with
-    :meth:`from_plaintext`; that conversion verifies bit-for-bit representability.
+    :meth:`from_plaintext` verifies bit-for-bit representability of existing
+    encoded data. ``Engine.prepare_compressed_plaintext`` prepares compact data
+    directly from one periodic message; its rounding need not reproduce a prior
+    full-ring encoding bit for bit.
 
     ``implicit_data`` is absent except for ``"strided_sparse"``, where it has
     layout ``[*batch, limb]`` and the same integral dtype and device as
@@ -77,7 +80,6 @@ class CompressedPlaintext(TensorResident):
     residue_representation: ResidueRepresentation
     prime_ids: tuple[int, ...]
     implicit_data: torch.Tensor | None = None
-    compression_format_version: int = COMPRESSED_PLAINTEXT_FORMAT_VERSION
 
     def __post_init__(self) -> None:
         self.scale = coerce_scale(
@@ -98,16 +100,6 @@ class CompressedPlaintext(TensorResident):
                 "Unsupported CompressedPlaintext compression_layout: "
                 f"{self.compression_layout!r}"
             )
-        if (
-            type(self.compression_format_version) is not int
-            or self.compression_format_version
-            != COMPRESSED_PLAINTEXT_FORMAT_VERSION
-        ):
-            raise ValueError(
-                "Unsupported CompressedPlaintext compression format version: "
-                f"{self.compression_format_version}; expected "
-                f"{COMPRESSED_PLAINTEXT_FORMAT_VERSION}"
-            )
         if self.polynomial_domain not in ("coefficient", "ntt"):
             raise ValueError(
                 "CompressedPlaintext polynomial_domain must be 'coefficient' "
@@ -119,10 +111,16 @@ class CompressedPlaintext(TensorResident):
                 "CompressedPlaintext modulus_basis must be 'Q' or 'QP': "
                 f"{self.modulus_basis!r}"
             )
-        if self.residue_representation != "montgomery":
+        if self.residue_representation not in ("standard", "montgomery"):
             raise ValueError(
-                "Operation-ready CompressedPlaintext data must use "
-                "Montgomery form"
+                "CompressedPlaintext requires standard or Montgomery residues"
+            )
+        if (
+            self.polynomial_domain == "ntt"
+            and self.residue_representation != "montgomery"
+        ):
+            raise ValueError(
+                "NTT-domain CompressedPlaintext must use Montgomery residues"
             )
         if self.data.ndim < 2:
             raise ValueError(
@@ -130,18 +128,12 @@ class CompressedPlaintext(TensorResident):
                 "[*batch, limb, unique], got shape "
                 f"{tuple(self.data.shape)}"
             )
-        if self.data.size(-2) == 0 or self.data.size(-1) == 0:
-            raise ValueError(
-                "CompressedPlaintext limb and encoded axes cannot be empty"
-            )
+        if self.data.numel() == 0:
+            raise ValueError("CompressedPlaintext data cannot be empty")
         if self.data.size(-2) != len(self.prime_ids):
             raise ValueError(
                 "CompressedPlaintext limb count does not match prime_ids: "
                 f"limbs={self.data.size(-2)}, prime_ids={self.prime_ids}"
-            )
-        if any(extent == 0 for extent in self.data.shape[:-2]):
-            raise ValueError(
-                "CompressedPlaintext batch dimensions must be nonzero"
             )
         if type(self.ring_dimension) is not int:
             raise TypeError(
@@ -155,7 +147,7 @@ class CompressedPlaintext(TensorResident):
                 f"of two: {self.ring_dimension}"
             )
         unique_count = self.unique_count
-        if unique_count <= 0 or unique_count & (unique_count - 1):
+        if unique_count & (unique_count - 1):
             raise ValueError(
                 "CompressedPlaintext unique count must be a positive power of "
                 f"two: {unique_count}"
@@ -165,17 +157,7 @@ class CompressedPlaintext(TensorResident):
                 "CompressedPlaintext must reduce the encoded last axis: "
                 f"unique={unique_count}, ring_dimension={self.ring_dimension}"
             )
-        if self.ring_dimension % unique_count:
-            raise ValueError(
-                "CompressedPlaintext unique count must divide ring_dimension: "
-                f"{unique_count} does not divide {self.ring_dimension}"
-            )
         if self.compression_layout == "strided_sparse":
-            if self.polynomial_domain != "coefficient":
-                raise ValueError(
-                    "strided_sparse CompressedPlaintext requires "
-                    "polynomial_domain='coefficient'"
-                )
             if self.implicit_data is None:
                 raise ValueError(
                     "strided_sparse CompressedPlaintext requires implicit_data"
@@ -206,6 +188,38 @@ class CompressedPlaintext(TensorResident):
             )
 
     @property
+    def representation(self) -> Literal["rns"]:
+        """The compact payload represents RNS polynomial rows."""
+        return "rns"
+
+    @property
+    def is_rns(self) -> bool:
+        return True
+
+    @property
+    def is_slots(self) -> bool:
+        return False
+
+    @property
+    def is_integer_coefficients(self) -> bool:
+        return False
+
+    @property
+    def is_approximate_coefficients(self) -> bool:
+        return False
+
+    @classmethod
+    def _from_fields(cls, **fields) -> CompressedPlaintext:
+        """Wrap prepared metadata and Tensor storage without revalidating it."""
+        result: CompressedPlaintext = object.__new__(cls)
+        for name, value in {
+            "implicit_data": None,
+            **fields,
+        }.items():
+            setattr(result, name, value)
+        return result
+
+    @property
     def unique_count(self) -> int:
         """Number of physically stored values per RNS row."""
 
@@ -216,6 +230,12 @@ class CompressedPlaintext(TensorResident):
         """Number of dense positions represented by each stored extent."""
 
         return self.ring_dimension // self.unique_count
+
+    @property
+    def limb_count(self) -> int:
+        """Number of represented RNS rows."""
+
+        return self.data.size(-2)
 
     @property
     def batch_shape(self) -> torch.Size:
@@ -324,7 +344,6 @@ class CompressedPlaintext(TensorResident):
             implicit_data=(
                 None if implicit_data is None else implicit_data.clone()
             ),
-            compression_format_version=COMPRESSED_PLAINTEXT_FORMAT_VERSION,
         )
 
     def decompress_data(self) -> torch.Tensor:
@@ -382,12 +401,7 @@ class CompressedPlaintext(TensorResident):
     def with_data(self, data: torch.Tensor) -> CompressedPlaintext:
         """Return unchanged metadata around replacement tensor storage."""
 
-        tensors = (
-            (data,)
-            if self.implicit_data is None
-            else (data, self.implicit_data)
-        )
-        return self._with_resident_tensors(tensors)
+        return replace(self, data=data)
 
     def with_storage(
         self,
@@ -396,8 +410,29 @@ class CompressedPlaintext(TensorResident):
     ) -> CompressedPlaintext:
         """Return the same metadata around complete replacement storage."""
 
-        tensors = (data,) if implicit_data is None else (data, implicit_data)
-        return self._with_resident_tensors(tensors)
+        return replace(self, data=data, implicit_data=implicit_data)
+
+    def slice_limbs(self, start: int, stop: int) -> CompressedPlaintext:
+        """Return a storage-sharing RNS row interval and its prime IDs.
+
+        ``[start, stop)`` indexes stored limb positions, not global prime IDs.
+        Compact data and any implicit row values are sliced together. Batch
+        axes, depth, scale, compression layout, and representation state are
+        preserved; slicing does not rescale or change the compression format.
+        """
+
+        if not 0 <= start < stop <= self.limb_count:
+            raise ValueError(
+                "CompressedPlaintext limb slice must satisfy "
+                f"0 <= start < stop <= {self.limb_count}; "
+                f"got start={start}, stop={stop}"
+            )
+        tensors = (self.data[..., start:stop, :],)
+        if self.implicit_data is not None:
+            tensors += (self.implicit_data[..., start:stop],)
+        result = self._with_resident_tensors(tensors)
+        result.prime_ids = self.prime_ids[start:stop]
+        return result
 
     @classmethod
     def stack_batch(
@@ -420,7 +455,6 @@ class CompressedPlaintext(TensorResident):
             "modulus_basis",
             "residue_representation",
             "prime_ids",
-            "compression_format_version",
         )
         tensors = [first.data]
         implicit_tensors = (
@@ -462,6 +496,37 @@ class CompressedPlaintext(TensorResident):
         if implicit_tensors:
             stacked.append(torch.stack(implicit_tensors, dim=0))
         return first._with_resident_tensors(tuple(stacked))
+
+    def slice_batch(
+        self, start: int, stop: int, *, dim: int = 0
+    ) -> CompressedPlaintext:
+        """Return a storage-sharing interval along one logical batch axis.
+
+        ``[start, stop)`` must be a nonempty interval within the selected axis.
+        ``dim`` indexes ``batch_shape`` and accepts negative dimensions. The
+        axis is retained even for a one-item interval. The same interval selects both compact data and any implicit row values.
+        Arithmetic state and compression metadata are unchanged.
+        """
+
+        if not self.is_batched:
+            raise ValueError("Cannot slice a batch axis of an unbatched value")
+        logical_dim = dim if dim >= 0 else dim + len(self.batch_shape)
+        if not 0 <= logical_dim < len(self.batch_shape):
+            raise IndexError(
+                f"Batch dimension {dim} is outside shape {tuple(self.batch_shape)}"
+            )
+        if not 0 <= start < stop <= self.batch_shape[logical_dim]:
+            raise ValueError(
+                "CompressedPlaintext batch slice must satisfy "
+                f"0 <= start < stop <= {self.batch_shape[logical_dim]}; "
+                f"got start={start}, stop={stop}"
+            )
+        return self._with_resident_tensors(
+            tuple(
+                tensor.narrow(logical_dim, start, stop - start)
+                for tensor in self._resident_tensors
+            )
+        )
 
     def select_batch(self, index: int, *, dim: int = 0) -> CompressedPlaintext:
         """Return a storage-sharing view selected from one batch axis."""
@@ -514,26 +579,11 @@ class CompressedPlaintext(TensorResident):
     def _with_resident_tensors(
         self, tensors: tuple[torch.Tensor, ...]
     ) -> CompressedPlaintext:
-        expected_count = 1 if self.implicit_data is None else 2
-        if len(tensors) != expected_count:
-            raise ValueError(
-                "CompressedPlaintext resident tensor count differs from its "
-                f"compression layout: expected={expected_count}, "
-                f"actual={len(tensors)}"
-            )
-        return CompressedPlaintext(
-            data=tensors[0],
-            ring_dimension=self.ring_dimension,
-            compression_layout=self.compression_layout,
-            depth=self.depth,
-            scale=self.scale,
-            polynomial_domain=self.polynomial_domain,
-            modulus_basis=self.modulus_basis,
-            residue_representation=self.residue_representation,
-            prime_ids=self.prime_ids,
-            implicit_data=None if len(tensors) == 1 else tensors[1],
-            compression_format_version=self.compression_format_version,
-        )
+        result = copy(self)
+        result.data = tensors[0]
+        if self.implicit_data is not None:
+            result.implicit_data = tensors[1]
+        return result
 
     def __str__(self) -> str:
         return (
@@ -543,7 +593,6 @@ class CompressedPlaintext(TensorResident):
             f"residue_representation={self.residue_representation}, prime_ids={self.prime_ids}, "
             f"ring_dimension={self.ring_dimension}, "
             f"compression_layout={self.compression_layout!r}, "
-            f"compression_format_version={self.compression_format_version}, "
             f"repeat_count={self.repeat_count}, "
             f"batch_shape={tuple(self.batch_shape)}, "
             f"data_shape={tuple(self.data.shape)})"

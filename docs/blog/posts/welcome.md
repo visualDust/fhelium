@@ -3,7 +3,7 @@ title: Welcome to the FHElium blog
 date: 2026-08-03
 category: Announcement
 author: FHElium contributors
-description: A new home for FHElium engineering notes, project announcements, and release updates.
+description: Project updates, release notes, and technical articles about FHElium.
 tags:
   - Project
 ---
@@ -12,19 +12,13 @@ tags:
 
 **Announcement · August 3, 2026 · FHElium contributors**
 
-The FHElium documentation is organized around stable reader tasks: learning
-the programming model, completing a workflow, resolving an API, or
-understanding implementation details. Not every useful project update fits
-one of those document families.
+FHElium is a full-stack CKKS framework for Python and PyTorch. It provides tensor-backed encrypted values and immediate Eager evaluation, builds inspectable Compile Programs from the same operation implementations and arithmetic resources, runs on native CPU and NVIDIA CUDA implementations, and supports rank-local distributed execution.
 
-This blog provides a separate home for:
+This blog is where the project shares news and technical writing about that work:
 
-- engineering notes that explain an investigation or implementation choice;
-- project and documentation announcements;
-- release summaries and migration notes;
-- benchmark or research reports whose results are tied to a particular date;
-- community updates that do not define supported library behavior.
+- release announcements and upgrade notes;
+- project and documentation updates;
+- technical articles on the programming model, the compiler, native kernels, and performance work;
+- benchmark or measurement reports, which describe the configuration and date of each run.
 
-Posts may link into the project documentation, but the documentation remains
-the source of truth for current API semantics, mathematical invariants,
-installation requirements, and support policies.
+FHElium is in beta and under active development; we look forward to the day of its first stable release.

@@ -33,7 +33,7 @@ const caption = computed(() => {
     return {
       title: 'Trace the shared stack.',
       detail: 'Eager and Program meet Backend resources and native CPU/CUDA dispatch.',
-      example: 'Example 17',
+      example: 'Example 12',
       href: '/tutorial/compose-and-execute-compile-pipeline',
     }
   }
@@ -41,7 +41,7 @@ const caption = computed(() => {
     return {
       title: 'Transform before execution.',
       detail: 'Preserve or lower CKKS operations, then link implementations and resources.',
-      example: 'Example 19',
+      example: 'Example 14',
       href: '/tutorial/customize-compile-pass-and-pipeline',
     }
   }
@@ -49,7 +49,7 @@ const caption = computed(() => {
     return {
       title: 'Capture once and replay.',
       detail: 'Each Input refreshes the same stable Buffer before CUDA Graph replay.',
-      example: 'Example 11',
+      example: 'Example 18',
       href: '/tutorial/cuda-graph-matvec',
     }
   }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from xdsl.dialects.builtin import (
+    ArrayAttr,
     DictionaryAttr,
     IntegerAttr,
     StringAttr,
@@ -10,15 +11,8 @@ from xdsl.dialects.builtin import (
 )
 from xdsl.ir import Attribute, Operation, SSAValue
 
-from fhelium.config import CkksConfig
-from fhelium.backend.rns.chain import RnsChain
-from fhelium.backend.rns.decomposition import HybridRnsDecomposition
 
 from ....ir.dialects import ckks, rns
-
-
-def _resource_type_state(*, kind: str) -> DictionaryAttr:
-    return DictionaryAttr({"kind": StringAttr(kind)})
 
 
 def _rns_type(value_type: object) -> rns.RnsBundleType:
@@ -54,52 +48,54 @@ def _cast_to_ckks(
     return cast, result
 
 
-def _state_integer(value_type: object, name: str, *, operation: str) -> int:
-    if not isinstance(value_type, ckks.CiphertextType):
-        raise TypeError(f"{operation} requires a CKKS ciphertext type")
-    attribute = value_type.state.data.get(name)
-    if not isinstance(attribute, IntegerAttr):
-        raise ValueError(
-            f"{operation} requires a concrete ciphertext {name!r} state"
-        )
-    return int(attribute.value.data)
-
-
-def _key_switch_digit_indices(
+def _bundle_type(
     value_type: object,
-    config: CkksConfig,
-    *,
-    operation: str,
-) -> tuple[int, ...]:
-    depth = _state_integer(value_type, "depth", operation=operation)
-    if not 0 <= depth <= config.max_depth:
-        raise ValueError(
-            f"{operation} requires a public CKKS depth, got {depth}"
+    components: int | None,
+    updates: dict[str, Attribute | None],
+) -> rns.RnsBundleType:
+    source = _rns_type(value_type)
+    fields: dict[str, Attribute | None] = {
+        "value_kind": StringAttr("polynomial"),
+        "component_count": None
+        if components is None
+        else IntegerAttr(components, 64),
+        "strides": None,
+    }
+    shape = source.state.data.get("shape")
+    if isinstance(shape, ArrayAttr):
+        dims = tuple(shape)
+        batch = (
+            dims[1:-2]
+            if isinstance(value_type, ckks.CiphertextType)
+            else dims[:-2]
         )
-    chain = RnsChain(
-        config.num_q_primes,
-        config.num_p_primes,
-        tuple(len(group) for group in config.q_depth_groups),
-    )
-    decomposition = HybridRnsDecomposition(
-        chain, config.q_moduli, config.p_moduli
-    )
-    return tuple(
-        digit.key_digit_index for digit in decomposition.digits_at_depth(depth)
-    )
+        ids = updates.get("prime_ids", source.state.data.get("prime_ids"))
+        rows = (
+            IntegerAttr(len(ids), 64)
+            if isinstance(ids, ArrayAttr)
+            else dims[-2]
+        )
+        fields["shape"] = ArrayAttr(
+            (
+                *(
+                    (IntegerAttr(components, 64),)
+                    if components is not None
+                    else ()
+                ),
+                *batch,
+                rows,
+                dims[-1],
+            )
+        )
+    fields.update(updates)
+    return source.with_state(fields)
 
 
 def _polynomial_type(
     value_type: object,
     **updates: Attribute | None,
 ) -> rns.RnsBundleType:
-    fields: dict[str, Attribute | None] = {
-        "value_kind": StringAttr("polynomial"),
-        "component_count": None,
-        "strides": None,
-    }
-    fields.update(updates)
-    return _rns_type(value_type).with_state(fields)
+    return _bundle_type(value_type, None, updates)
 
 
 def _component_bundle_type(
@@ -107,10 +103,4 @@ def _component_bundle_type(
     component_count: int,
     **updates: Attribute | None,
 ) -> rns.RnsBundleType:
-    fields: dict[str, Attribute | None] = {
-        "value_kind": StringAttr("polynomial"),
-        "component_count": IntegerAttr(component_count, 64),
-        "strides": None,
-    }
-    fields.update(updates)
-    return _rns_type(value_type).with_state(fields)
+    return _bundle_type(value_type, component_count, updates)

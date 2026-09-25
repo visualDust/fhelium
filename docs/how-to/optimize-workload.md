@@ -1,11 +1,14 @@
 # Optimize a workload systematically
 
-Optimize a complete correct evaluator by locating its dominant cost, changing
-one mechanism, and retaining the same oracle and state invariants.
+Optimize a complete correct evaluator by locating its dominant cost, changing one mechanism, and retaining the same oracle and state invariants.
+
+## Prerequisites
+
+Have a correctness-qualified evaluator, representative inputs, and a stated timing scope. Eager, direct linked execution, and callable specialization are valid baselines; select the path actually being deployed and measure its setup costs separately.
 
 ## 1. Preserve the baseline
 
-Keep a reproducible single-rank eager evaluator with:
+Keep a reproducible single-rank evaluator with:
 
 - CKKS state schedule;
 - direct keyset;
@@ -14,8 +17,7 @@ Keep a reproducible single-rank eager evaluator with:
 - memory profile;
 - target amplitude and error tolerance.
 
-Commit or otherwise preserve its benchmark configuration before beginning an
-ablation.
+Preserve its benchmark configuration before beginning an ablation.
 
 ## 2. Profile by phase
 
@@ -34,8 +36,7 @@ rank-local launch overhead
 distributed gather/reduction
 ```
 
-Use operator and kernel profiling to explain the workload result, not to replace
-it.
+Use operator and kernel profiling to explain the workload result, not to replace it.
 
 ## 3. Match the mechanism to the bottleneck
 
@@ -64,8 +65,7 @@ bytes moved or retained
 communication moved from per-term to start/end
 ```
 
-Also state expected new costs such as larger triplets, hoist temporaries,
-graph-private memory, H2D traffic, or key replication.
+Also state expected new costs such as larger triplets, hoist temporaries, graph-private memory, H2D traffic, or key replication.
 
 ## 5. Run a one-variable ablation
 
@@ -105,8 +105,7 @@ After each change, verify:
 - in-place/borrowed storage lifetime;
 - distributed gather/reduce/reconstruct semantics.
 
-Optimizations must not bypass range guards or silently change the rescale or
-relinearization placement without updating the declared operation schedule.
+Optimizations must not bypass range guards or silently change the rescale or relinearization placement without updating the declared operation schedule.
 
 ## 8. Validate broader coverage
 
@@ -128,14 +127,15 @@ Promote the improvement into:
 - a benchmark profile or recorded baseline;
 - documentation describing applicability and trade-offs.
 
-Avoid tests that assert fragile absolute latency on shared hardware. Prefer
-structural counters, correctness, and separately monitored performance data.
+Avoid tests that assert fragile absolute latency on shared hardware. Prefer structural counters, correctness, and separately monitored performance data.
 
 ## 10. Report attribution honestly
 
-If a result combines packing, hoisting, backend changes, graph replay, and
-multiple GPUs, call it an **application-level configuration result**. Report
-component ablations before attributing the speedup to one kernel.
+If a result combines packing, hoisting, backend changes, graph replay, and multiple GPUs, call it an **application-level configuration result**. Report component ablations before attributing the speedup to one kernel.
+
+## Verify the outcome
+
+Retain a change only when the original decoded-result criterion still holds and the measured target metric improves for representative inputs. Report setup, warmed latency, throughput, and memory as separate quantities. Use [implementation selection](select-operation-implementation.md) for local Backend controls rather than inferring a global policy from one measurement.
 
 ## Related documentation
 

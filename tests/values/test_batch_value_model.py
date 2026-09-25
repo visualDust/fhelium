@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from fhelium import Ciphertext, Plaintext, Preset
+from fhelium import Ciphertext, CompressedPlaintext, Plaintext, Preset
 from fhelium.eager import Engine
 from fhelium.backend.ckks.codec import _embedding as slot_embedding
 
@@ -76,6 +76,25 @@ def test_stack_batch_adds_outer_axis_to_already_batched_values():
     torch.testing.assert_close(selected.data, stacked.data[:, :, -1])
 
 
+def test_ciphertext_batch_slice_preserves_state_and_aliases():
+    batch = _ciphertext(batch_shape=(4, 5))
+    selected = batch.slice_batch(1, 4, dim=-1)
+    assert selected.batch_shape == (4, 3)
+    assert selected.prime_ids == batch.prime_ids
+    assert selected.depth == batch.depth
+    assert selected.scale == batch.scale
+    assert selected.polynomial_domain == batch.polynomial_domain
+    assert selected.residue_representation == batch.residue_representation
+    selected.data.fill_(17)
+    assert torch.all(batch.data[:, :, 1:4] == 17)
+    assert torch.all(batch.data[:, :, (0, 4)] == 0)
+    assert batch.slice_batch(2, 3).batch_shape == (1, 5)
+    with pytest.raises(ValueError, match="start < stop"):
+        batch.slice_batch(2, 2)
+    with pytest.raises(IndexError, match="Batch dimension"):
+        batch.slice_batch(0, 1, dim=2)
+
+
 def test_ciphertext_limb_slice_preserves_all_batch_dimensions():
     batch = _ciphertext(batch_shape=(2, 4))
 
@@ -88,7 +107,7 @@ def test_ciphertext_limb_slice_preserves_all_batch_dimensions():
     assert batch.data[0, 0, 0, 1, 0].item() == 17
 
 
-def test_plaintext_batch_shape_depends_on_layout():
+def test_plaintext_batch_shape_and_slices_follow_active_representation():
     slots = Plaintext(
         message=torch.zeros(6, 4, dtype=torch.complex128),
         depth=0,
@@ -117,6 +136,143 @@ def test_plaintext_batch_shape_depends_on_layout():
     assert slots.batch_shape == (6,)
     assert coefficients.batch_shape == (6,)
     assert rns.batch_shape == (6,)
+    assert rns.limb_count == 3
+    for value in (slots, coefficients):
+        assert value.limb_count == 0
+        with pytest.raises(ValueError, match="requires RNS"):
+            value.slice_limbs(0, 1)
+
+    approximate = Plaintext(
+        message=None,
+        depth=0,
+        scale=float(2**40),
+        data=torch.zeros(6, 8, dtype=torch.float64),
+        representation="approximate_coefficients",
+        polynomial_domain="coefficient",
+    )
+    for value in (slots, coefficients, approximate, rns):
+        sliced = value.slice_batch(1, 3, dim=-1)
+        assert sliced.batch_shape == (2,)
+        assert sliced.representation == value.representation
+        assert sliced.prime_ids == value.prime_ids
+        assert sliced.scale == value.scale
+        selected = sliced.message if sliced.message is not None else sliced.data
+        original = value.message if value.message is not None else value.data
+        selected.fill_(17)
+        assert torch.all(original[1:3] == 17)
+        assert torch.all(original[0] == 0)
+
+
+def test_compressed_batch_slice_keeps_payload_and_implicit_views_together():
+    source = CompressedPlaintext(
+        data=torch.zeros(2, 4, 3, 2, dtype=torch.int64),
+        implicit_data=torch.ones(2, 4, 3, dtype=torch.int64),
+        ring_dimension=8,
+        compression_layout="strided_sparse",
+        depth=2,
+        scale=float(2**40),
+        prime_ids=(2, 3, 4),
+        polynomial_domain="coefficient",
+        modulus_basis="Q",
+        residue_representation="montgomery",
+    )
+    sliced = source.slice_batch(1, 3, dim=-1)
+    assert sliced.batch_shape == (2, 2)
+    assert sliced.compression_layout == source.compression_layout
+    assert sliced.prime_ids == source.prime_ids
+    sliced.data.fill_(7)
+    assert sliced.implicit_data is not None
+    sliced.implicit_data.fill_(19)
+    assert torch.all(source.data[:, 1:3] == 7)
+    assert torch.all(source.data[:, (0, 3)] == 0)
+    assert torch.all(source.implicit_data[:, 1:3] == 19)
+    assert torch.all(source.implicit_data[:, (0, 3)] == 1)
+    torch.testing.assert_close(
+        sliced.to_plaintext().data, source.to_plaintext().data[:, 1:3]
+    )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["ciphertext", "plaintext", "cyclic", "contiguous", "strided_sparse"],
+)
+def test_rns_value_batch_and_limb_views_compose(kind):
+    state = dict(
+        depth=2,
+        scale=float(2**40),
+        prime_ids=(2, 3, 4),
+        polynomial_domain="coefficient",
+        modulus_basis="Q",
+        residue_representation="montgomery",
+    )
+    if kind == "ciphertext":
+        source = Ciphertext(
+            data=torch.zeros(2, 4, 5, 3, 8, dtype=torch.int64),
+            **{**state, "residue_representation": "standard"},
+        )
+    elif kind == "plaintext":
+        source = Plaintext(
+            message=None,
+            data=torch.zeros(4, 5, 3, 8, dtype=torch.int64),
+            representation="rns",
+            **state,
+        )
+    else:
+        source = CompressedPlaintext(
+            data=torch.zeros(4, 5, 3, 2, dtype=torch.int64),
+            implicit_data=torch.ones(4, 5, 3, dtype=torch.int64)
+            if kind == "strided_sparse"
+            else None,
+            ring_dimension=8,
+            compression_layout=kind,
+            **state,
+        )
+    selected = source.slice_batch(1, 3, dim=-1).slice_limbs(1, 3)
+    reverse = source.slice_limbs(1, 3).slice_batch(1, 3, dim=-1)
+    assert selected.batch_shape == (4, 2)
+    assert selected.limb_count == 2
+    assert selected.prime_ids == (3, 4)
+    assert selected.depth == source.depth
+    assert selected.scale == source.scale
+    assert selected.modulus_basis == source.modulus_basis
+    assert selected.polynomial_domain == source.polynomial_domain
+    assert selected.residue_representation == source.residue_representation
+    torch.testing.assert_close(selected.data, reverse.data)
+    assert (
+        selected.data.untyped_storage().data_ptr()
+        == source.data.untyped_storage().data_ptr()
+    )
+    selected.data.fill_(7)
+    expected = torch.zeros_like(source.data)
+    if kind == "ciphertext":
+        expected[:, :, 1:3, 1:3, :] = 7
+    else:
+        expected[:, 1:3, 1:3, :] = 7
+    torch.testing.assert_close(source.data, expected)
+    if isinstance(source, CompressedPlaintext):
+        if source.implicit_data is not None:
+            selected.implicit_data.fill_(19)
+            expected_implicit = torch.ones_like(source.implicit_data)
+            expected_implicit[:, 1:3, 1:3] = 19
+            torch.testing.assert_close(source.implicit_data, expected_implicit)
+        torch.testing.assert_close(
+            selected.to_plaintext().data,
+            source.to_plaintext()
+            .slice_batch(1, 3, dim=-1)
+            .slice_limbs(1, 3)
+            .data,
+        )
+    # Selection removes a batch axis; stacking restores it with independent data.
+    pieces = selected.unbind_batch()
+    stacked = type(selected).stack_batch(pieces)
+    torch.testing.assert_close(stacked.data, selected.data)
+    assert (
+        stacked.data.untyped_storage().data_ptr()
+        != selected.data.untyped_storage().data_ptr()
+    )
+    torch.testing.assert_close(selected.select_batch(0).data, pieces[0].data)
+    with pytest.raises(ValueError, match="start < stop"):
+        source.slice_limbs(1, 1)
 
 
 def test_plaintext_stack_batch_is_explicit_copy_and_unbind_returns_views():
@@ -159,7 +315,7 @@ def test_zero_sized_batch_dimensions_are_rejected():
             scale=float(2**40),
             prime_ids=(0, 1, 2),
         )
-    with pytest.raises(ValueError, match="batch dimensions must be nonzero"):
+    with pytest.raises(ValueError, match="cannot be empty"):
         Plaintext(
             message=torch.empty(0, 8),
             depth=0,
@@ -175,14 +331,16 @@ def test_slot_embedding_preserves_leading_batch_dimensions():
     assert torch.equal(slots[..., :4], messages)
     assert torch.count_nonzero(slots[..., 4:]) == 0
 
+    pre, post = slot_embedding._permutations(16, "cpu", 3)
     encoded = slot_embedding.inverse_embed_slots(
         slots,
-        device="cpu",
-        generator=3,
+        pre=pre,
+        twister=slot_embedding._twister(16, "cpu"),
     )
     decoded = slot_embedding.embed_coefficients(
         encoded,
-        generator=3,
+        post=post,
+        skewer=slot_embedding._skewer(16, "cpu"),
     )
     assert encoded.shape == (3, 2, 16)
     assert decoded.shape == (3, 2, 16)

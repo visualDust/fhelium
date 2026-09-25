@@ -13,6 +13,45 @@ def _require_native() -> None:
     require_native()
 
 
+def compact_ntt_stage_range_(
+    residues: torch.Tensor,
+    compact_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+    inverse: bool,
+    start_stage: int,
+    end_stage: int,
+    grouped_stage_count: int,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::compact_ntt_stage_range_``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::compact_ntt_stage_range_(Tensor(a!) residues, Tensor compact_twiddles, Tensor rns_params, bool inverse, int start_stage, int end_stage, int grouped_stage_count) -> ()
+
+    Args:
+        residues: torch.Tensor (modified in-place).
+        compact_twiddles: torch.Tensor.
+        rns_params: torch.Tensor.
+        inverse: bool.
+        start_stage: int.
+        end_stage: int.
+        grouped_stage_count: int.
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_ntt_ops.compact_ntt_stage_range_(
+        residues,
+        compact_twiddles,
+        rns_params,
+        inverse,
+        start_stage,
+        end_stage,
+        grouped_stage_count,
+    )
+
+
 def forward_ntt_montgomery_compact_grouped_smem_(
     montgomery_residues: torch.Tensor,
     forward_twiddles: torch.Tensor,

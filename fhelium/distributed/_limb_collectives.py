@@ -19,54 +19,73 @@ from fhelium.distributed._value_collectives import (
 
 
 def scatter_ciphertext_limbs(
-    shards_or_none: Sequence[Ciphertext] | None,
+    value_or_none: Ciphertext | None,
     *,
+    limb_ranges: Sequence[tuple[int, int]] | None = None,
     src: int = 0,
     group: torch.distributed.ProcessGroup | None = None,
 ) -> Ciphertext:
-    """Scatter RNS limb shards of one logical ciphertext from one source.
+    """Slice and scatter caller-selected RNS intervals of one ciphertext.
 
-    The source sequence must partition one ciphertext into nonempty,
-    contiguous prime intervals in process-group-rank order.  This function
-    distributes those existing shards; it neither performs ciphertext
-    arithmetic nor reconstructs the full ciphertext.  It is synchronous,
-    accepts no ``async_op`` argument, and returns no
-    :class:`torch.distributed.Work`.
+    The source provides one nonempty half-open interval per group rank. The
+    intervals refer to positions on the source's limb axis, form a consecutive
+    range in group-rank order, and may have unequal lengths. ``slice_limbs``
+    selects both Tensor rows and their declared ``prime_ids``. The caller
+    chooses the partition; the collective performs no arithmetic or balancing.
+    It is synchronous and accepts no ``async_op`` argument.
 
     Args:
-        shards_or_none: On ``src``, exactly one caller-prepared ciphertext limb
-            shard per group rank, ordered by process-group rank and increasing
-            contiguous prime interval. Every non-source rank must pass
-            ``None``.
+        value_or_none: Source ciphertext on ``src``; ``None`` on every other
+            rank. The source may itself represent an interval of the full basis.
+        limb_ranges: On ``src``, one ``(start, stop)`` pair per process-group
+            rank, indexing the source's stored rows rather than global prime
+            IDs. Other ranks supply ``None``. The intervals may select a
+            consecutive portion of the source without covering every row.
         src: Global rank of the source process, which must belong to ``group``.
-        group: Participating process group.  ``None`` selects the default
-            process group.
+        group: Participating process group. ``None`` selects the default group.
 
     Returns:
-        The shard assigned to the caller's process-group rank.  The source
-        receives its existing sequence element; other ranks receive newly
-        allocated shards.  For world size one, the sole validated shard is
-        returned unchanged without communication or allocation.
+        The local ciphertext shard with its selected prime IDs and unchanged
+        arithmetic state. On ``src``, it shares the source Tensor storage;
+        other ranks receive newly allocated storage. World size one returns
+        the requested source view without communication or copying.
 
     Raises:
-        ValueError: If ``src`` is outside ``group``; the source/non-source
-            calling rules or sequence-length requirements are violated; or
-            shards do not describe compatible, contiguous prime intervals of
-            one ciphertext.
+        ValueError: If the source rank or source/non-source arguments are
+            invalid; the range count differs from group size; or intervals
+            are empty, out of bounds, or not consecutive in group-rank order.
         RuntimeError: If distributed communication is uninitialized or the
             caller is not a member of ``group``.
     """
 
     info = _group_info(group)
     local_error = None
-    if info.global_rank == src and shards_or_none is not None:
-        try:
-            _validate_limb_shards(shards_or_none, check_device=False)
-        except (TypeError, ValueError) as exc:
-            local_error = str(exc)
+    shards: list[Ciphertext] | None = None
+    if info.global_rank == src:
+        if not isinstance(value_or_none, Ciphertext) or limb_ranges is None:
+            local_error = "source must supply a Ciphertext and limb_ranges"
+        else:
+            try:
+                shards = [
+                    value_or_none.slice_limbs(start, stop)
+                    for start, stop in limb_ranges
+                ]
+                if any(
+                    left[1] != right[0]
+                    for left, right in zip(limb_ranges, limb_ranges[1:])
+                ):
+                    raise ValueError(
+                        "limb_ranges must be consecutive in group-rank order"
+                    )
+            except (TypeError, ValueError) as exc:
+                local_error = str(exc)
+    elif value_or_none is not None or limb_ranges is not None:
+        local_error = (
+            "non-source ranks must supply None for value and limb_ranges"
+        )
     _collect_argument_errors("scatter_ciphertext_limbs", local_error, info)
     return _scatter_values(
-        shards_or_none,
+        shards,
         src=src,
         expected_type=Ciphertext,
         operation="scatter_ciphertext_limbs",

@@ -1,7 +1,10 @@
 # Choose a Residency control level
 
-Use this procedure to select the narrowest placement mechanism that exposes the
-control required by the workload.
+Use this procedure to select the narrowest placement mechanism that exposes the control required by the workload.
+
+## Prerequisites
+
+Inventory the values, placement endpoints, and asynchronous consumers of a working evaluator. These controls apply to values supplied to Eager operations, a linked Program, or a compiled callable; choose ownership and placement before arranging the numerical execution.
 
 ## 1. Choose from the ownership requirement
 
@@ -15,17 +18,11 @@ control required by the workload.
 
 Apply the following decision tree:
 
-1. If no managed identity, budget, placement cache, or lease is required, use
-   `TensorResident.to(...)`.
-2. If every placement transition is already known at the call site, adopt the
-   value into a manager and use direct primitives.
-3. If several known transitions and reservations form one repeatable stage, use
-   a manual plan.
-4. If the working-set endpoints are known but reclaim choices depend on current
-   state, use a request and controller. Choose the inspected `decide`/`scope`
-   path when the application must log or approve the decision.
-5. Use `controller.use(...)` only when the selected policy and complete request
-   make the combined context sufficiently reviewable.
+1. If no managed identity, budget, placement cache, or lease is required, use `TensorResident.to(...)`.
+2. If every placement transition is already known at the call site, adopt the value into a manager and use direct primitives.
+3. If several known transitions and reservations form one repeatable stage, use a manual plan.
+4. If the working-set endpoints are known but reclaim choices depend on current state, use a request and controller. Choose the inspected `decide`/`scope` path when the application must log or approve the decision.
+5. Use `controller.use(...)` only when the selected policy and complete request make the combined context sufficiently reviewable.
 
 ## 2. Keep each layer's input concrete
 
@@ -35,8 +32,7 @@ Apply the following decision tree:
 moved = value.to("cuda:0")
 ```
 
-The application retains ordinary ownership of `value` and `moved`. This layer
-has no manager handle, budget, reservation, cache policy, or borrowing rules.
+The application retains ordinary ownership of `value` and `moved`. This layer has no manager handle, budget, reservation, cache policy, or borrowing rules.
 
 ### Direct managed operations
 
@@ -52,16 +48,11 @@ with manager.acquire(
     run(resident[handle])
 ```
 
-After `adopt`, retain the handle rather than a concrete alias. The application
-chooses every destination and removal. `acquire` is already-ready-only and does
-not invoke placement or policy.
+After `adopt`, retain the handle rather than a concrete alias. The application chooses every destination and removal. `acquire` is already-ready-only and does not invoke placement or policy.
 
 ### Manual stage
 
-Use a `ResidencyPlan` when reclaim order, entry, exit, and reservation headroom
-are known program structure. Inspect `manager.explain(plan)` before entering
-`manager.scope(plan, transfer_streams=...)`. The plan says how to change
-placement; the manager remains the only transition executor.
+Use a `ResidencyPlan` when reclaim order, entry, exit, and reservation headroom are known program structure. Inspect `manager.explain(plan)` before entering `manager.scope(plan, transfer_streams=...)`. The plan says how to change placement; the manager remains the only transition executor.
 
 ### Automatic admission
 
@@ -84,15 +75,9 @@ with controller.scope(
         run(resident)
 ```
 
-A request specifies required `(handle, location)` endpoints and reservation
-headroom. A policy ranks legal reclaim candidates and supplies only configured
-fallback tiers. A decision records policy evidence, a concrete plan, and the
-manager state version against which it was derived. The controller owns none of
-the materializations.
+A request specifies required `(handle, location)` endpoints and reservation headroom. A policy ranks legal reclaim candidates and supplies only configured fallback tiers. A decision records policy evidence, a concrete plan, and the manager state version against which it was derived. The controller owns none of the materializations.
 
-`controller.use(...)` combines the same decision, scope, and strict leases. Its
-result is keyed by `ResidencyRequirement`; use `use.value(handle, at=...)` for
-an endpoint lookup.
+`controller.use(...)` combines the same decision, scope, and strict leases. Its result is keyed by `ResidencyRequirement`; use `use.value(handle, at=...)` for an endpoint lookup.
 
 ## 3. Assign stream responsibilities
 
@@ -103,40 +88,30 @@ an endpoint lookup.
 | Plan or decision scope | `transfer_streams={location: stream}` selects per-destination copy streams. | Supplied to the strict lease inside the scope. |
 | `controller.use` | `transfer_streams` mapping. | `consumer_streams` mapping for every requested CUDA location. |
 
-A transfer stream governs placement completion. A consumer stream governs how
-long an already-ready materialization remains protected after Python lease
-release. Do not substitute one identity for the other.
+A transfer stream governs placement completion. A consumer stream governs how long an already-ready materialization remains protected after Python lease release. Do not substitute one identity for the other.
 
 ## 4. Choose cache and identity lifetime
 
-Direct operations and manual plan exit actions determine which
-materializations remain cached. Successful controller admission retains its
-requested endpoints; later pressure may reclaim eligible materializations
-according to policy. The controller does not run background eviction and never
-emits `DiscardValue`.
+Direct operations and manual plan exit actions determine which materializations remain cached. Successful controller admission retains its requested endpoints; later pressure may reclaim eligible materializations according to policy. The controller does not run background eviction and never emits `DiscardValue`.
 
-Use `drop(handle, location)` to remove one legal materialization while retaining
-the logical value. Use `discard(handle)` only when the application intends to
-end that managed identity. Close the manager after leases, holds, reservations,
-and pending CUDA consumers have completed.
+Use `drop(handle, location)` to remove one legal materialization while retaining the logical value. Use `discard(handle)` only when the application intends to end that managed identity. Close the manager after leases, holds, reservations, and pending CUDA consumers have completed.
 
 ## 5. Keep execution buffers separate
 
-A mutable fixed-address execution buffer and a manager-owned immutable logical
-value have different ownership and lifetime rules. CUDA Graph and
-execution-buffer bridging is deferred; no Residency control level assigns a
-managed handle to such a buffer or transfers graph ownership. Select Residency
-for logical-value placement, and treat fixed-address execution resources under
-their own documented requirements.
+A mutable fixed-address execution buffer and a manager-owned immutable logical value have different ownership and lifetime rules. CUDA Graph and execution-buffer bridging is deferred; no Residency control level assigns a managed handle to such a buffer or transfers graph ownership. Select Residency for logical-value placement, and treat fixed-address execution resources under their own documented requirements.
 
 ## References
 
 - [Residency lifetimes](../concepts/execution/residency-lifetimes.md)
 - [Explicit Residency tutorial](../tutorial/explicit-residency.md)
 - [Automatic Residency tutorial](../tutorial/automatic-residency.md)
-- [Manual Example 13 source](https://github.com/VisualDust/fhelium/blob/main/examples/13_explicit_residency.py)
-- [Automatic Example 14 source](https://github.com/VisualDust/fhelium/blob/main/examples/14_automatic_residency.py)
+- [Manual Example 19 source](https://github.com/VisualDust/fhelium/blob/main/examples/19_residency_manual.py)
+- [Automatic Example 20 source](https://github.com/VisualDust/fhelium/blob/main/examples/20_residency_automatic.py)
 - [Stream resources with bounded memory](./stream-bounded-memory.md)
 - [`TensorResident` API](../api/fhelium/values/tensor_resident.md#tensorresident)
 - [`ResidencyManager` API](../api/fhelium/residency/manager.md#residencymanager)
 - [`ResidencyController` API](../api/fhelium/residency/controller.md#residencycontroller)
+
+## Verify the outcome
+
+The selected mechanism should admit every required endpoint while keeping copy completion, active reads, and release order visible. Exercise one full stage and inspect manager accounting when a manager is used. Continue with [bounded-memory streaming](stream-bounded-memory.md) to implement repeated windows.

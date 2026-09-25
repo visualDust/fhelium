@@ -24,15 +24,11 @@ def validate_prime_ids(
     prime_ids: Iterable[object],
     *,
     value_name: str,
-    allow_empty: bool = False,
 ) -> tuple[int, ...]:
     """Require non-bool, non-negative, strictly ordered prime IDs."""
 
-    try:
-        values = tuple(prime_ids)
-    except TypeError as error:
-        raise TypeError(f"{value_name} prime_ids must be iterable") from error
-    if not allow_empty and not values:
+    values = tuple(prime_ids)
+    if not values:
         raise ValueError(f"{value_name} prime_ids cannot be empty")
     if any(type(prime_id) is not int for prime_id in values):
         raise TypeError(

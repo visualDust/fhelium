@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 import hashlib
 import tempfile
 from collections.abc import Callable, Collection, Mapping
@@ -584,8 +590,7 @@ class _SvgGraphRenderer:
     The renderer handles entry traversal, stable SSA naming, dependency edges,
     Graphviz construction, overwrite policy, and SVG production. A composed
     ``SvgGraphPresentation`` owns operation rows, tooltips, color classification,
-    and theme values. Rendering returns the Program unchanged and does not
-    establish execution readiness or numerical correctness.
+    and theme values. Rendering returns the Program unchanged.
 
     Args:
         output_path: ``.svg`` file to write.
@@ -841,12 +846,10 @@ class SvgGraphVisualizationPass:
         object.__setattr__(self, "rank_direction", rank_direction)
         object.__setattr__(self, "name", name)
 
-    def run(
-        self,
-        program: Program,
-        shared_data: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
         """Render the current Program and publish its output path."""
+        program = compilation.program
+        shared_data = compilation.workspace
 
         temporary = self.output_path is None
         path = self.output_path

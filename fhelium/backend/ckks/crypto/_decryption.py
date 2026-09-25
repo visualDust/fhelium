@@ -10,108 +10,74 @@ from xdsl.ir import Operation
 
 from fhelium.backend.implementation import OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
-from fhelium.backend.ntt.context import NttContext
-from fhelium.backend.ntt.resources import NTT_RESOURCE_KIND
-from fhelium.backend.rns.context import RnsContext
-from fhelium.backend.rns.resources import RNS_RESOURCE_KIND
-from fhelium.values import ModulusBasis, PolynomialDomain, SecretKey
 from fhelium.ir.dialects import ckks
 from fhelium.native.wrapper import rns_ops
-
-from ._resources import (
-    DECRYPT_RECONSTRUCTION_RESOURCE_KIND,
-    SECRET_KEY_RESOURCE_KIND,
-    DecryptReconstructionResource,
-)
 
 
 def _decrypt_tensor_to_coefficient_standard_rns(
     ciphertext_data: torch.Tensor,
     secret_key_data: torch.Tensor,
     *,
-    depth: int,
-    includes_p: bool,
-    secret_key_basis: ModulusBasis,
-    input_domain: PolynomialDomain,
-    rns_context: RnsContext,
-    ntt_context: NttContext,
+    parameters: torch.Tensor,
+    forward: tuple[torch.Tensor, ...],
+    inverse: tuple[torch.Tensor, ...],
+    key_row_start: int,
+    input_domain: str,
+    ntt_backend: str,
 ) -> torch.Tensor:
-    r"""Evaluate $\sum_j c_js^j$ and return coefficient standard RNS.
+    """Evaluate the CT2 or CT3 phase using supplied arithmetic tables."""
+    from fhelium.backend.ntt.operations import execute_transition
 
-    NTT inputs form the complete phase before one inverse transform.
-    Coefficient inputs transform each nonconstant component for multiplication
-    by its NTT/Montgomery secret-key power and return that product before the
-    coefficient-domain sum.
-    """
-
-    basis = rns_context.basis_parameters(depth, include_p=includes_p)
-    secret_data = secret_key_data[basis.parameter_row_start : basis.parameter_row_stop]
+    secret_data = secret_key_data[
+        key_row_start : key_row_start + parameters.size(1)
+    ]
     if ciphertext_data.size(0) not in (2, 3):
         raise ValueError("Decryption requires a CT2 or CT3 payload")
     if input_domain not in ("coefficient", "ntt"):
-        raise ValueError(
-            "Decryption input_domain must be 'coefficient' or 'ntt'"
-        )
-
+        raise ValueError("Decryption requires a coefficient or NTT input")
     phase = ciphertext_data[0].clone()
     secret_power = secret_data
     for component in range(1, ciphertext_data.size(0)):
         value = ciphertext_data[component]
         if input_domain == "coefficient":
-            value = value.clone()
-            ntt_context.forward_to_montgomery_(
-                value,
-                include_p=includes_p,
+            value = execute_transition(
+                "forward_to_montgomery_",
+                (value, *forward),
+                ntt_backend,
+                in_place=False,
             )
-        product = rns_context.montgomery_mul(
-            value,
-            secret_power,
-            include_p=includes_p,
-        )
+        product = rns_ops.montgomery_mul(value, secret_power, parameters)
         if input_domain == "coefficient":
-            ntt_context.inverse_to_standard_(
-                product,
-                include_p=includes_p,
+            execute_transition(
+                "inverse_to_standard_",
+                (product, *inverse),
+                ntt_backend,
+                in_place=True,
             )
-            phase = rns_context.add_standard(
-                phase,
-                product,
-                include_p=includes_p,
-            )
+            phase = rns_ops.add_standard(phase, product, parameters)
         else:
-            phase = rns_context.add_lazy(
-                phase,
-                product,
-                include_p=includes_p,
-            )
+            phase = rns_ops.add_lazy(phase, product, parameters)
         if component + 1 < ciphertext_data.size(0):
-            secret_power = rns_context.montgomery_mul(
-                secret_power,
-                secret_data,
-                include_p=includes_p,
+            secret_power = rns_ops.montgomery_mul(
+                secret_power, secret_data, parameters
             )
     if input_domain == "ntt":
-        ntt_context.inverse_to_standard_(phase, include_p=includes_p)
+        execute_transition(
+            "inverse_to_standard_",
+            (phase, *inverse),
+            ntt_backend,
+            in_place=True,
+        )
     return phase
 
 
 def _mixed_radix_is_above_half(
-    digits: torch.Tensor,
-    moduli: tuple[int, ...],
+    digits: torch.Tensor, half_digits: torch.Tensor
 ) -> torch.Tensor:
-    """Compare mixed-radix digits with half the represented modulus."""
-
-    half = 1
-    for modulus in moduli:
-        half *= modulus
-    half //= 2
-    half_digits = []
-    for modulus in moduli:
-        half, digit = divmod(half, modulus)
-        half_digits.append(digit)
+    """Compare mixed-radix digits with the supplied half-product digits."""
     equal = torch.ones_like(digits[..., 0, :], dtype=torch.bool)
     above = torch.zeros_like(equal)
-    for row in range(len(moduli) - 1, -1, -1):
+    for row in range(half_digits.numel() - 1, -1, -1):
         above |= equal & (digits[..., row, :] > half_digits[row])
         equal &= digits[..., row, :] == half_digits[row]
     return above
@@ -119,41 +85,22 @@ def _mixed_radix_is_above_half(
 
 def reconstruct_q_coefficients_tensor(
     plaintext_rns: torch.Tensor,
-    *,
-    depth: int,
-    includes_p: bool,
-    rns_context: RnsContext,
-    reconstruction: DecryptReconstructionResource,
+    source_params: torch.Tensor,
+    normalizers: torch.Tensor,
+    propagation: torch.Tensor,
+    half_digits: torch.Tensor,
 ) -> torch.Tensor:
-    """Reconstruct the centered class modulo the complete active Q product."""
-
-    q_prime_ids = rns_context.rns_layout.prime_ids(depth)
-    source_prime_ids = reconstruction.source_prime_ids_by_depth[depth]
-    del includes_p
-    source = plaintext_rns.narrow(
-        -2,
-        len(q_prime_ids) - len(source_prime_ids),
-        len(source_prime_ids),
-    ).clone()
-    start = source_prime_ids[0]
-    stop = source_prime_ids[-1] + 1
-    source_params = rns_context.rns_parameter_tensor[:, start:stop]
+    """Reconstruct the centered class modulo the complete supplied Q product."""
+    count = source_params.size(1)
+    source = plaintext_rns[..., :count, :].clone()
     rns_ops.reduce_to_standard_(source, source_params)
-    source_moduli = tuple(
-        int(rns_context.montgomery_parameters.moduli[index])
-        for index in source_prime_ids
-    )
-    if len(source_prime_ids) == 1:
+    source_moduli = source_params[0] // 2
+    if count == 1:
         modulus = source_moduli[0]
         centered = source.squeeze(-2)
         return torch.where(
-            centered > modulus // 2,
-            centered - modulus,
-            centered,
+            centered > modulus // 2, centered - modulus, centered
         ).to(torch.float64)
-
-    normalizers = reconstruction.normalizers_by_depth[depth]
-    propagation = reconstruction.propagation_by_depth[depth]
     lo, hi, neg_lo, neg_hi = source_params[1:5]
 
     def decompose(residues: torch.Tensor) -> torch.Tensor:
@@ -170,12 +117,8 @@ def reconstruct_q_coefficients_tensor(
         return digits
 
     positive_digits = decompose(source)
-    negative = _mixed_radix_is_above_half(positive_digits, source_moduli)
-    moduli_tensor = torch.tensor(
-        source_moduli,
-        dtype=source.dtype,
-        device=source.device,
-    ).view(*([1] * (source.ndim - 2)), -1, 1)
+    negative = _mixed_radix_is_above_half(positive_digits, half_digits)
+    moduli_tensor = source_moduli.view(*([1] * (source.ndim - 2)), -1, 1)
     negated_source = torch.where(source == 0, source, moduli_tensor - source)
     negative_digits = decompose(negated_source)
 
@@ -191,63 +134,49 @@ def reconstruct_q_coefficients_tensor(
 
 
 def decrypt_tensor(
-    ciphertext_data: torch.Tensor,
-    secret_key_data: torch.Tensor,
-    *,
-    depth: int,
-    ciphertext_basis: ModulusBasis,
-    secret_key_basis: ModulusBasis,
-    input_domain: PolynomialDomain,
-    rns_context: RnsContext,
-    ntt_context: NttContext,
-    reconstruction: DecryptReconstructionResource,
+    ciphertext: torch.Tensor,
+    secret_key: torch.Tensor,
+    tensors: dict[str, torch.Tensor],
+    attributes: dict[str, object],
 ) -> torch.Tensor:
-    """Decrypt ciphertext and secret-key Tensor payloads to coefficients."""
-
-    includes_p = ciphertext_basis == "QP"
-    plaintext_rns = _decrypt_tensor_to_coefficient_standard_rns(
-        ciphertext_data,
-        secret_key_data,
-        depth=depth,
-        includes_p=includes_p,
-        secret_key_basis=secret_key_basis,
-        input_domain=input_domain,
-        rns_context=rns_context,
-        ntt_context=ntt_context,
+    """Decrypt Tensor payloads and reconstruct their centered Q coefficients."""
+    forward = tuple(
+        value for name, value in tensors.items() if name.startswith("forward_")
+    )
+    inverse = tuple(
+        value for name, value in tensors.items() if name.startswith("inverse_")
+    )
+    phase = _decrypt_tensor_to_coefficient_standard_rns(
+        ciphertext,
+        secret_key,
+        parameters=tensors["parameters"],
+        forward=forward,
+        inverse=inverse,
+        key_row_start=int(cast(int, attributes["key_row_start"])),
+        input_domain=str(attributes["input_domain"]),
+        ntt_backend=str(attributes["ntt_backend"]),
     )
     return reconstruct_q_coefficients_tensor(
-        plaintext_rns,
-        depth=depth,
-        includes_p=includes_p,
-        rns_context=rns_context,
-        reconstruction=reconstruction,
+        phase,
+        tensors["reconstruction_parameters"],
+        tensors["normalizers"],
+        tensors["propagation"],
+        tensors["half_digits"],
     )
 
 
 @dataclass(frozen=True)
 class NativeDecryptImplementation:
-    """Execute decryption with call-bound RNS and secret-key resources."""
+    """Execute decryption with Tensor key, transform, and reconstruction operands."""
 
     name: str = "native-ckks-decrypt"
     supports_in_place: bool = False
     operation_types: tuple[type[Operation], ...] = (ckks.DecryptOp,)
 
     def resource_requirements(
-        self,
-        invocation: OperationInvocation,
+        self, invocation: OperationInvocation
     ) -> tuple[ResourceRequirement, ...]:
-        return (
-            ResourceRequirement("active-rns-parameters", RNS_RESOURCE_KIND),
-            ResourceRequirement("active-ntt-plan", NTT_RESOURCE_KIND),
-            ResourceRequirement(
-                "ckks-decrypt-reconstruction",
-                DECRYPT_RECONSTRUCTION_RESOURCE_KIND,
-            ),
-            ResourceRequirement(
-                cast(str, invocation.attributes["key_symbol"]),
-                SECRET_KEY_RESOURCE_KIND,
-            ),
-        )
+        return ()
 
     def execute(
         self,
@@ -257,33 +186,17 @@ class NativeDecryptImplementation:
         *,
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
-        del in_place
-        rns_context = cast(RnsContext, resources[0].value)
-        ntt_context = cast(NttContext, resources[1].value)
-        if ntt_context.rns_context is not rns_context:
-            raise ValueError("Decryption resources bind different contexts")
-        reconstruction = cast(
-            DecryptReconstructionResource,
-            resources[2].value,
+        del resources, in_place
+        tensors = dict(
+            zip(
+                cast(tuple[str, ...], invocation.attributes["parameter_names"]),
+                inputs[2:],
+                strict=True,
+            )
         )
-        key = cast(SecretKey, resources[3].value)
         return (
             decrypt_tensor(
-                inputs[0],
-                key.data,
-                depth=int(cast(int, invocation.attributes["depth"])),
-                ciphertext_basis=cast(
-                    ModulusBasis,
-                    invocation.attributes["modulus_basis"],
-                ),
-                secret_key_basis=key.modulus_basis,
-                input_domain=cast(
-                    PolynomialDomain,
-                    invocation.attributes["input_domain"],
-                ),
-                rns_context=rns_context,
-                ntt_context=ntt_context,
-                reconstruction=reconstruction,
+                inputs[0], inputs[1], tensors, dict(invocation.attributes)
             ),
         )
 

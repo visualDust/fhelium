@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, MutableMapping
+from copy import copy
 from dataclasses import dataclass, field
+
+from typing import Self
 
 import torch
 
@@ -96,13 +99,7 @@ class SecretKey(TensorResident):
     def clone(self) -> SecretKey:
         """Return the same key value in independent tensor storage."""
 
-        return SecretKey(
-            self.data.clone(),
-            self.prime_ids,
-            self.polynomial_domain,
-            self.modulus_basis,
-            self.residue_representation,
-        )
+        return self._with_resident_tensors((self.data.clone(),))
 
     @property
     def _resident_tensors(self) -> tuple[torch.Tensor, ...]:
@@ -111,13 +108,9 @@ class SecretKey(TensorResident):
     def _with_resident_tensors(
         self, tensors: tuple[torch.Tensor, ...]
     ) -> SecretKey:
-        return SecretKey(
-            tensors[0],
-            self.prime_ids,
-            self.polynomial_domain,
-            self.modulus_basis,
-            self.residue_representation,
-        )
+        result = copy(self)
+        result.data = tensors[0]
+        return result
 
 
 @dataclass
@@ -181,13 +174,7 @@ class PublicKey(TensorResident):
         return self.data[component_id]
 
     def clone(self) -> PublicKey:
-        return PublicKey(
-            self.data.clone(),
-            self.prime_ids,
-            self.polynomial_domain,
-            self.modulus_basis,
-            self.residue_representation,
-        )
+        return self._with_resident_tensors((self.data.clone(),))
 
     @property
     def _resident_tensors(self) -> tuple[torch.Tensor, ...]:
@@ -196,13 +183,9 @@ class PublicKey(TensorResident):
     def _with_resident_tensors(
         self, tensors: tuple[torch.Tensor, ...]
     ) -> PublicKey:
-        return PublicKey(
-            tensors[0],
-            self.prime_ids,
-            self.polynomial_domain,
-            self.modulus_basis,
-            self.residue_representation,
-        )
+        result = copy(self)
+        result.data = tensors[0]
+        return result
 
 
 @dataclass
@@ -274,27 +257,17 @@ class KeySwitchKey(TensorResident):
 
         return self.data[key_digit_index, component_id]
 
-    def clone(self):
-        return self.__class__(
-            self.data.clone(),
-            self.prime_ids,
-            self.polynomial_domain,
-            self.modulus_basis,
-            self.residue_representation,
-        )
+    def clone(self) -> Self:
+        return self._with_resident_tensors((self.data.clone(),))
 
     @property
     def _resident_tensors(self) -> tuple[torch.Tensor, ...]:
         return (self.data,)
 
-    def _with_resident_tensors(self, tensors: tuple[torch.Tensor, ...]):
-        return self.__class__(
-            tensors[0],
-            self.prime_ids,
-            self.polynomial_domain,
-            self.modulus_basis,
-            self.residue_representation,
-        )
+    def _with_resident_tensors(self, tensors: tuple[torch.Tensor, ...]) -> Self:
+        result = copy(self)
+        result.data = tensors[0]
+        return result
 
 
 @dataclass(kw_only=True)
@@ -330,28 +303,6 @@ class RotationKey(KeySwitchKey):
             )
         num_slots = ring_dimension // 2
         return (step + num_slots // 2) % num_slots - num_slots // 2
-
-    def clone(self) -> RotationKey:
-        return RotationKey(
-            data=self.data.clone(),
-            prime_ids=self.prime_ids,
-            polynomial_domain=self.polynomial_domain,
-            modulus_basis=self.modulus_basis,
-            residue_representation=self.residue_representation,
-            rotation_step=self.rotation_step,
-        )
-
-    def _with_resident_tensors(
-        self, tensors: tuple[torch.Tensor, ...]
-    ) -> RotationKey:
-        return RotationKey(
-            data=tensors[0],
-            prime_ids=self.prime_ids,
-            polynomial_domain=self.polynomial_domain,
-            modulus_basis=self.modulus_basis,
-            residue_representation=self.residue_representation,
-            rotation_step=self.rotation_step,
-        )
 
 
 class RelinearizationKey(KeySwitchKey):
@@ -546,7 +497,7 @@ class EvaluationKeySet:
         planning, so consumers call this method again before use. The
         check re-establishes capability-role types, rotation-step mapping, and
         one shared prime/domain/basis/residue/ring/digit/dtype/device
-        structure. It does not select or validate an evaluator engine.
+        structure.
         """
 
         self._validate_member_types()

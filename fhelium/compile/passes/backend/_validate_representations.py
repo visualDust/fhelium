@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from collections.abc import Collection
 from dataclasses import dataclass
 
 from xdsl.dialects.builtin import StringAttr
 from xdsl.ir import Operation, SSAValue
 
-from fhelium.ir import Program
-from fhelium.ir.dialects import ckks, ntt, rns
+from fhelium.ir.dialects import ckks, fusion, ntt, rns
 
 from ..._pipeline import PassResult
 from ._operations import executable_operations
@@ -109,7 +114,7 @@ def _validate_ckks(operation: Operation) -> bool:
     elif isinstance(operation, (ckks.MultiplyOp, ckks.MultiplyPlaintextOp)):
         _require_values(
             operation,
-            (*operation.operands, operation.results[0]),
+            (*operation.operands[:2], operation.results[0]),
             {_NTT_MONTGOMERY},
         )
     elif isinstance(operation, ckks.EncryptOp):
@@ -244,7 +249,7 @@ def _validate_ntt(operation: Operation) -> bool:
             _NTT_MONTGOMERY,
             _COEFFICIENT_STANDARD,
         ),
-        ntt.InverseMontgomeryOp: (
+        ntt.NttMontgomeryToCoefficientMontgomeryOp: (
             _NTT_MONTGOMERY,
             _COEFFICIENT_MONTGOMERY,
         ),
@@ -365,19 +370,25 @@ class ValidateExecutionRepresentationsPass:
 
     name: str = "validate-execution-representations"
 
-    def run(
-        self,
-        program: Program,
-        workspace: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
+        program = compilation.program
+        workspace = compilation.workspace
         del workspace
         matched = 0
         for operation in executable_operations(program):
-            matched += int(
-                _validate_ckks(operation)
-                or _validate_ntt(operation)
-                or _validate_rns(operation)
+            # A generated region replaces dispatches, not the representation
+            # requirements of the arithmetic retained inside it.
+            members = (
+                operation.walk()
+                if isinstance(operation, fusion.FusedOp)
+                else (operation,)
             )
+            for member in members:
+                matched += int(
+                    _validate_ckks(member)
+                    or _validate_ntt(member)
+                    or _validate_rns(member)
+                )
         return PassResult.unchanged(program, matched=matched)
 
 

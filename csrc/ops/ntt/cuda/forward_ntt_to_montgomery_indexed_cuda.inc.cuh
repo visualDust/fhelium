@@ -31,7 +31,8 @@ void launch_forward_ntt_to_montgomery_indexed_inplace_cuda(
   const auto N = a.size(2);
 
   int dim_block = kCudaBlockSize;
-  dim3 dim_grid_ntt(C, N_half / kCudaBlockSize, B);
+  const int ntt_block = std::min<int64_t>(kCudaBlockSize, N_half);
+  dim3 dim_grid_ntt(C, (N_half + kCudaBlockSize - 1) / kCudaBlockSize, B);
   dim3 to_montgomery_grid(C, N / kCudaBlockSize, B);
 
   auto a_acc = FHELIUM_CUDA_ACCESSOR32(a, scalar_t, 3);
@@ -47,7 +48,7 @@ void launch_forward_ntt_to_montgomery_indexed_inplace_cuda(
   // ntt.
   for (int i = 0; i < logN; ++i) {
     forward_ntt_indexed_stage_kernel<scalar_t>
-        <<<dim_grid_ntt, dim_block, 0, stream>>>(
+        <<<dim_grid_ntt, ntt_block, 0, stream>>>(
             a_acc, even_acc, odd_acc, forward_twiddles_acc, params_acc, i);
   }
 }
@@ -73,7 +74,8 @@ void launch_forward_ntt_to_montgomery_indexed_out_cuda(
   const auto N = a.size(2);
 
   int dim_block = kCudaBlockSize;
-  dim3 dim_grid_ntt(C, N_half / kCudaBlockSize, B);
+  const int ntt_block = std::min<int64_t>(kCudaBlockSize, N_half);
+  dim3 dim_grid_ntt(C, (N_half + kCudaBlockSize - 1) / kCudaBlockSize, B);
   dim3 to_montgomery_grid(C, N / kCudaBlockSize, B);
 
   const auto a_acc = FHELIUM_CUDA_ACCESSOR32(a, scalar_t, 3);
@@ -92,7 +94,7 @@ void launch_forward_ntt_to_montgomery_indexed_out_cuda(
 
   for (int i = 0; i < logN; ++i) {
     forward_ntt_indexed_stage_kernel<scalar_t>
-        <<<dim_grid_ntt, dim_block, 0, stream>>>(
+        <<<dim_grid_ntt, ntt_block, 0, stream>>>(
             out_acc, even_acc, odd_acc, forward_twiddles_acc, params_acc, i);
   }
 }

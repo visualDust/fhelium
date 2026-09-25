@@ -1,7 +1,10 @@
 # Provision the minimum required keyset
 
-Generate, load, move, and retain keys from the evaluator's operation
-schedule. Avoid a default policy of creating every possible key on every rank.
+Generate, load, move, and retain keys from the evaluator's operation schedule. Avoid a default policy of creating every possible key on every rank.
+
+## Prerequisites
+
+Have the operation schedule and parameter identity for each evaluator or worker. For a transformed Program, derive requirements after the passes that introduce rotations and relinearization; captured Eager key operands already identify supplied Tensor data.
 
 ## 1. Inventory key-requiring operations
 
@@ -16,17 +19,25 @@ From direct evaluator code, list:
 | Conjugation | `ConjugationKey` |
 | Source-to-destination secret-key dependency change | `KeySwitchKey` |
 
-Plaintext affine operations may not require secret or evaluation keys on a
-worker after ciphertext provisioning.
+Plaintext affine operations may not require secret or evaluation keys on a worker after ciphertext provisioning.
 
-## 2. Canonicalize the rotation steps
+For a transformed Program, inspect the introduced requirements before generating evaluation keys:
 
-Derive steps from the actual packing algorithm. Normalize them with the same
-ring/slot convention used by the engine, remove duplicates, and confirm each
-step against the cleartext oracle.
+```python
+from fhelium import ir
 
-Do not generate keys from matrix dimensions alone if padding, baby-step/giant-
-step decomposition, or negative rotations change the schedule.
+requirements = ir.analyze_evaluation_key_requirements(compiled.program)
+print(sorted(requirements.rotation_steps))
+print(requirements.requires_relinearization)
+```
+
+Here `compiled` is the Compilation after the chosen rotation and multiplication scheduling passes. Generate or load the resulting inventory, then supply it through [material preparation](persist-compiled-program.md#3-supply-missing-data-or-replace-an-assignment). The analysis reports the key roles and rotation steps required by the represented schedule.
+
+## 2. Normalize the rotation steps
+
+Derive steps from the actual packing algorithm. Normalize them with the same ring/slot convention used by the engine, remove duplicates, and confirm each step against the cleartext oracle.
+
+Do not generate keys from matrix dimensions alone if padding, baby-step/giant-step decomposition, or negative rotations change the schedule.
 
 ## 3. Decide direct keys versus decomposition
 
@@ -45,8 +56,7 @@ flowchart LR
     DECOMP --> SMALL --> MORE
 ```
 
-Measure both latency and peak/transient memory. Key decomposition adds
-rotations and key switches, while direct keys may dominate CUDA memory.
+Measure both latency and peak/transient memory. Key decomposition adds rotations and key switches, while direct keys may dominate CUDA memory.
 
 ## 4. Assign keys to ranks
 
@@ -64,11 +74,9 @@ CUDA residency window
 Examples:
 
 - independent data-parallel workers may share the same public evaluator keyset;
-- offset-parallel ranks need only rotation keys for owned steps plus any common
-  keys;
+- offset-parallel ranks need only rotation keys for owned steps plus any common keys;
 - root may retain the secret key while evaluator workers never receive it;
-- limb-parallel complete-row stages may force key/value reconstruction on an
-  owner rank.
+- limb-parallel complete-row stages may force key/value reconstruction on an owner rank.
 
 ## 5. Separate setup from steady state
 
@@ -83,18 +91,13 @@ engine.set_public_key(public_key)
 engine.set_relinearization_key(relin_key)
 ```
 
-Add only the rotation keys required by the schedule. Use the current API
-reference for construction and installation signatures.
+Add only the rotation keys required by the schedule. Use the current API reference for construction and installation signatures.
 
-For a production evaluator, disable implicit secret-key generation and fail
-clearly if a required key is missing.
+For an evaluator that must only consume provisioned keys, construct `Engine(config, allow_automatic_key_generation=False)`. Load and install its selected keys during setup; missing material then requires an application provisioning decision. Compile capture and linking do not generate missing keys regardless of this Eager convenience setting.
 
 ## 6. Prove specialist key relations
 
-A generic key-switch key has a direction that its tensor object does not store
-symbolically. Generate it from the named source and destination secrets,
-record that relation in application metadata, and verify the output only with
-the destination secret:
+A generic key-switch key has a direction that its tensor object does not store symbolically. Generate it from the named source and destination secrets, record that relation in application metadata, and verify the output only with the destination secret:
 
 ```python
 source_secret = engine.create_secret_key()
@@ -110,9 +113,7 @@ switched = engine.switch_key(source, source_to_destination)
 decoded = engine.decrypt_message(switched, destination_secret)
 ```
 
-Reversing the two secrets creates a different key. Tensor layout establishes
-neither parameter compatibility nor direction or lineage; the application
-must retain those relations.
+Reversing the two secrets creates a different key. Tensor layout establishes neither parameter compatibility nor direction or lineage; the application must retain those relations.
 
 Conjugation uses a key specialized for the conjugation automorphism:
 
@@ -121,22 +122,18 @@ conjugation_key = engine.create_conjugation_key(source_secret)
 conjugated = engine.conjugate(source, conjugation_key)
 ```
 
-Confirm the decoded result against `message.conj()` under the application's
-packing convention. Neither specialist key is installed implicitly.
+Confirm the decoded result against `message.conj()` under the application's packing convention. Neither specialist key is installed implicitly.
 
 ## 7. Choose a residency plan
 
-Frequently reused common keys may remain on CUDA. Large per-user or phase-
-specific keys may instead use:
+Frequently reused common keys may remain on CUDA. Large per-user or phase-specific keys may instead use:
 
 - request-lifetime pageable host holds;
 - fixed-capacity pinned-host and CUDA windows;
 - short active leases;
 - prefetch before the operation that needs them.
 
-Account for both retained and transient material. A broadcast that eventually
-keeps a key on one owner can still materialize temporary copies on peers,
-depending on the collective used.
+Account for both retained and transient material. A broadcast that eventually keeps a key on one owner can still materialize temporary copies on peers, depending on the collective used.
 
 ## 8. Validate custody and persistence
 
@@ -149,8 +146,7 @@ Before writing secret material, confirm:
 - logs and benchmark metadata do not expose payloads;
 - stale artifact references fail safely and the application checks parameter provenance before use.
 
-A sensitivity label classifies stored material. Encryption and access control
-must be supplied by the storage system.
+A sensitivity label classifies stored material. Encryption and access control must be supplied by the storage system.
 
 ## 9. Report key cost
 
@@ -162,6 +158,10 @@ A performance or memory report should state:
 - host and CUDA residency;
 - whether setup/key movement is timed;
 - transient peaks during distribution or prefetch.
+
+## Verify the outcome
+
+The evaluator should execute with only the public and evaluation material required by its schedule, while decryption remains with the intended secret holder. [Bind and deploy a Program](persist-compiled-program.md) explains symbol assignments and missing-material preparation for both manual and callable Compile paths.
 
 ## Related documentation
 

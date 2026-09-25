@@ -1,747 +1,450 @@
-"""Lower CKKS key-switch operations and their logical RNS/NTT composition."""
+"""Expand CKKS key switching into operations over supplied Tensor operands."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from typing import cast
+import json
 
-from xdsl.dialects.builtin import (
-    IntegerAttr,
-    StringAttr,
-    UnrealizedConversionCastOp,
-)
+from xdsl.dialects.builtin import ArrayAttr, IntegerAttr, StringAttr
 from xdsl.ir import Attribute, Operation, SSAValue
 
 from fhelium.config import CkksConfig
+from fhelium.ir.dialects import ckks, core, ntt, rns
+from fhelium.backend.rns._preparation import (
+    hybrid_decomposition_facts,
+    rns_names,
+    table_description,
+)
 
-from ....ir.dialects import ckks, core, ntt, rns
-from ._core import (
-    CkksLoweringDefinition,
-    LoweredCkksOperation,
+from ._core import CkksLoweringDefinition, LoweredCkksOperation
+from ..._materials import (
+    declare_material,
+    rns_parameter_identity,
+    parameter_description,
 )
 from ._types import (
     _cast_to_ckks,
     _cast_to_rns,
     _component_bundle_type,
-    _key_switch_digit_indices,
     _polynomial_type,
-    _resource_type_state,
     _rns_type,
-    _state_integer,
 )
 
 
-@dataclass(frozen=True)
-class _KeySwitchResources:
-    operations: tuple[Operation, ...]
-    parameters: SSAValue
-    ntt_plan: SSAValue
-    key_switch_plan: SSAValue
-    evaluation_key: SSAValue
-
-
-def _key_switch_resources(
-    config: CkksConfig,
-    *,
-    key_kind: str,
-    key_symbol: str | None = None,
-    evaluation_key: SSAValue | None = None,
-) -> _KeySwitchResources:
-    parameter_type = rns.RnsParametersType.new(
-        (_resource_type_state(kind="rns-parameters"),)
-    )
-    parameters = core.ResourceRefOp(
-        parameter_type,
-        symbol="active-rns-parameters",
-        kind="rns-parameters",
-    )
-    ntt_plan_type = ntt.NttPlanType.new(
-        (_resource_type_state(kind="ntt-plan"),)
-    )
-    ntt_plan = core.ResourceRefOp(
-        ntt_plan_type,
-        symbol="active-ntt-plan",
-        kind="ntt-plan",
-    )
-    key_switch_plan_type = rns.KeySwitchPlanType.new(
-        (_resource_type_state(kind="key-switch-plan"),)
-    )
-    key_switch_plan = core.ResourceRefOp(
-        key_switch_plan_type,
-        symbol="active-key-switch-plan",
-        kind="key-switch-plan",
-    )
-    operations: tuple[Operation, ...]
-    if evaluation_key is None:
-        if key_symbol is None:
-            raise ValueError("Key-switch lowering requires a key resource")
-        evaluation_key_type = rns.EvaluationKeyResourceType.new(
-            (_resource_type_state(kind=key_kind),)
-        )
-        key_reference = core.ResourceRefOp(
-            evaluation_key_type,
-            symbol=key_symbol,
-            kind=key_kind,
-        )
-        evaluation_key = key_reference.value
-        operations = (parameters, ntt_plan, key_switch_plan, key_reference)
-    else:
-        operations = (parameters, ntt_plan, key_switch_plan)
-    return _KeySwitchResources(
-        operations,
-        parameters.value,
-        ntt_plan.value,
-        key_switch_plan.value,
-        evaluation_key,
-    )
-
-
-def _extract_component(
-    value: SSAValue,
-    source_type: object,
-    component: int,
-    **updates: Attribute | None,
-) -> tuple[rns.ExtractComponentOp, SSAValue]:
-    operation = rns.ExtractComponentOp(
-        value,
-        _polynomial_type(source_type, **updates),
-        component=component,
-    )
-    return operation, operation.result
-
-
-def _key_switch_corrections(
-    source: SSAValue,
-    source_type: object,
-    resources: _KeySwitchResources,
-    key_digit_indices: tuple[int, ...],
-    *,
-    output_ntt: bool = False,
-) -> tuple[tuple[Operation, ...], SSAValue]:
-    operations: list[Operation] = []
-    accumulator: SSAValue | None = None
-    qp_coefficient_type = _polynomial_type(
-        source_type,
-        basis=StringAttr("QP"),
-        prime_ids=None,
-        polynomial_domain=StringAttr("coefficient"),
-        residue_representation=StringAttr("montgomery"),
-    )
-    qp_ntt_type = qp_coefficient_type.with_state(
-        polynomial_domain=StringAttr("ntt")
-    )
-    product_type = _component_bundle_type(
-        source_type,
-        2,
-        basis=StringAttr("QP"),
-        prime_ids=None,
-        polynomial_domain=StringAttr("ntt"),
-        residue_representation=StringAttr("montgomery"),
-    )
-    for digit_index, key_digit_index in enumerate(key_digit_indices):
-        modup = rns.HybridModUpDigitOp(
-            source,
-            resources.parameters,
-            resources.key_switch_plan,
-            qp_coefficient_type,
-            digit_index=digit_index,
-        )
-        forward = ntt.CoefficientMontgomeryToNttMontgomeryOp(
-            modup.result,
-            resources.ntt_plan,
-            qp_ntt_type,
-        )
-        product = rns.KeySwitchDigitProductOp(
-            forward.result,
-            resources.evaluation_key,
-            resources.parameters,
-            resources.key_switch_plan,
-            product_type,
-            key_digit_index=key_digit_index,
-        )
-        operations.extend((modup, forward, product))
-        if accumulator is None:
-            accumulator = product.result
-            continue
-        addition = rns.AddMontgomeryLazyOp(
-            accumulator,
-            product.result,
-            resources.parameters,
-            product_type,
-        )
-        operations.append(addition)
-        accumulator = addition.result
-    if accumulator is None:
-        raise ValueError("Key switching requires at least one active RNS digit")
-
-    q_prime_ids = None
-    if isinstance(source_type, ckks.CiphertextType):
-        q_prime_ids = source_type.state.data.get("prime_ids")
-    if output_ntt:
-        correction_type = _component_bundle_type(
-            source_type,
-            2,
-            basis=StringAttr("Q"),
-            prime_ids=q_prime_ids,
-            polynomial_domain=StringAttr("ntt"),
-            residue_representation=StringAttr("montgomery"),
-        )
-        moddown_ntt = rns.ModDownNttQpToQOp(
-            accumulator,
-            resources.parameters,
-            resources.ntt_plan,
-            resources.key_switch_plan,
-            correction_type,
-        )
-        operations.append(moddown_ntt)
-        return tuple(operations), moddown_ntt.result
-
-    inverse_type = product_type.with_state(
-        polynomial_domain=StringAttr("coefficient"),
-        residue_representation=StringAttr("standard"),
-    )
-    inverse = ntt.NttMontgomeryToCoefficientStandardOp(
-        accumulator,
-        resources.ntt_plan,
-        inverse_type,
-    )
-    correction_type = _component_bundle_type(
-        source_type,
-        2,
-        basis=StringAttr("Q"),
-        prime_ids=q_prime_ids,
-        polynomial_domain=StringAttr("coefficient"),
-        residue_representation=StringAttr("standard"),
-    )
-    moddown = rns.ModDownQpToQOp(
-        inverse.result,
-        resources.parameters,
-        resources.key_switch_plan,
-        correction_type,
-    )
-    operations.extend((inverse, moddown))
-    return tuple(operations), moddown.result
-
-
-def _assemble_switched_ciphertext(
-    component0: SSAValue,
-    source_component1: SSAValue,
-    source_type: object,
-    result_type: object,
-    resources: _KeySwitchResources,
-    key_digit_indices: tuple[int, ...],
-) -> tuple[tuple[Operation, ...], SSAValue]:
-    output_state = getattr(getattr(result_type, "state", None), "data", {})
-    output_domain = output_state.get("polynomial_domain")
-    output_ntt = (
-        isinstance(output_domain, StringAttr) and output_domain.data == "ntt"
-    )
-    switch_ops, corrections = _key_switch_corrections(
-        source_component1,
-        source_type,
-        resources,
-        key_digit_indices,
-        output_ntt=output_ntt,
-    )
-    if output_ntt:
-        ntt_updates: dict[str, Attribute] = {
-            "polynomial_domain": StringAttr("ntt"),
-            "residue_representation": StringAttr("montgomery"),
-        }
-        correction0_op, correction0 = _extract_component(
-            corrections, source_type, 0, **ntt_updates
-        )
-        correction1_op, correction1 = _extract_component(
-            corrections, source_type, 1, **ntt_updates
-        )
-        polynomial_type = _polynomial_type(source_type, **ntt_updates)
-        component0_ntt = ntt.CoefficientStandardToNttMontgomeryOp(
-            component0,
-            resources.ntt_plan,
-            polynomial_type,
-        )
-        add0 = rns.AddMontgomeryLazyOp(
-            component0_ntt.result,
-            correction0,
-            resources.parameters,
-            polynomial_type,
-        )
-        packed = rns.PackTwoComponentsOp(
-            add0.result,
-            correction1,
-            _rns_type(result_type),
-        )
-        return (
-            (
-                *switch_ops,
-                correction0_op,
-                correction1_op,
-                component0_ntt,
-                add0,
-                packed,
-            ),
-            packed.result,
-        )
-    correction0_op, correction0 = _extract_component(
-        corrections, source_type, 0
-    )
-    correction1_op, correction1 = _extract_component(
-        corrections, source_type, 1
-    )
-    polynomial_type = _polynomial_type(
-        source_type,
-        polynomial_domain=StringAttr("coefficient"),
-        residue_representation=StringAttr("standard"),
-    )
-    add0 = rns.AddStandardOp(
-        component0,
-        correction0,
-        resources.parameters,
-        polynomial_type,
-    )
-    packed = rns.PackTwoComponentsOp(
-        add0.result,
-        correction1,
-        _rns_type(result_type),
-    )
-    return (
-        (*switch_ops, correction0_op, correction1_op, add0, packed),
-        packed.result,
-    )
-
-
-def _lower_relinearize(
-    operation: Operation,
-    config: CkksConfig,
+def _lower_key_operation(
+    operation: Operation, config: CkksConfig | None, compilation
 ) -> LoweredCkksOperation:
-    if not isinstance(operation, ckks.RelinearizeOp):
-        raise TypeError("relinearize lowering received another operation")
-    key_digit_indices = _key_switch_digit_indices(
-        operation.value.type,
-        config,
-        operation="CKKS relinearization",
-    )
-    input_cast, value = _cast_to_rns(operation.value)
-    resources = _key_switch_resources(
-        config,
-        key_symbol="relinearization-key",
-        key_kind="relinearization-key",
-    )
-    if operation.output_domain.data == "ntt":
-        ntt_updates: dict[str, Attribute] = {
-            "polynomial_domain": StringAttr("ntt"),
-            "residue_representation": StringAttr("montgomery"),
-        }
-        d0_op, d0 = _extract_component(
-            value, operation.value.type, 0, **ntt_updates
-        )
-        d1_op, d1 = _extract_component(
-            value, operation.value.type, 1, **ntt_updates
-        )
-        d2_ntt_op, d2_ntt = _extract_component(
-            value, operation.value.type, 2, **ntt_updates
-        )
-        d2_type = _polynomial_type(
-            operation.value.type,
-            polynomial_domain=StringAttr("coefficient"),
-            residue_representation=StringAttr("standard"),
-        )
-        d2_inverse = ntt.NttMontgomeryToCoefficientStandardOp(
-            d2_ntt,
-            resources.ntt_plan,
-            d2_type,
-        )
-        switch_ops, corrections = _key_switch_corrections(
-            d2_inverse.result,
-            operation.value.type,
-            resources,
-            key_digit_indices,
-            output_ntt=True,
-        )
-        correction0_op, correction0 = _extract_component(
-            corrections, operation.value.type, 0, **ntt_updates
-        )
-        correction1_op, correction1 = _extract_component(
-            corrections, operation.value.type, 1, **ntt_updates
-        )
-        polynomial_type = _polynomial_type(
-            operation.value.type,
-            polynomial_domain=StringAttr("ntt"),
-            residue_representation=StringAttr("montgomery"),
-        )
-        result0 = rns.AddMontgomeryLazyOp(
-            d0, correction0, resources.parameters, polynomial_type
-        )
-        result1 = rns.AddMontgomeryLazyOp(
-            d1, correction1, resources.parameters, polynomial_type
-        )
-        packed = rns.PackTwoComponentsOp(
-            result0.result,
-            result1.result,
-            _rns_type(operation.result.type),
-        )
-        result_cast, result = _cast_to_ckks(
-            packed.result, operation.result.type
-        )
-        return LoweredCkksOperation(
-            (
-                input_cast,
-                *resources.operations,
-                d0_op,
-                d1_op,
-                d2_ntt_op,
-                d2_inverse,
-                *switch_ops,
-                correction0_op,
-                correction1_op,
-                result0,
-                result1,
-                packed,
-                result_cast,
-            ),
-            result,
-        )
-    coefficient_type = _rns_type(operation.value.type).with_state(
-        {
-            "polynomial_domain": StringAttr("coefficient"),
-            "residue_representation": StringAttr("standard"),
-        }
-    )
-    inverse = ntt.NttMontgomeryToCoefficientStandardOp(
-        value,
-        resources.ntt_plan,
-        coefficient_type,
-    )
-    coefficient_updates: dict[str, Attribute] = {
-        "polynomial_domain": StringAttr("coefficient"),
-        "residue_representation": StringAttr("standard"),
-    }
-    d0_op, d0 = _extract_component(
-        inverse.result, operation.value.type, 0, **coefficient_updates
-    )
-    d1_op, d1 = _extract_component(
-        inverse.result, operation.value.type, 1, **coefficient_updates
-    )
-    d2_op, d2 = _extract_component(
-        inverse.result, operation.value.type, 2, **coefficient_updates
-    )
-    switch_ops, corrections = _key_switch_corrections(
-        d2,
-        operation.value.type,
-        resources,
-        key_digit_indices,
-    )
-    correction0_op, correction0 = _extract_component(
-        corrections, operation.value.type, 0, **coefficient_updates
-    )
-    correction1_op, correction1 = _extract_component(
-        corrections, operation.value.type, 1, **coefficient_updates
-    )
-    polynomial_type = _polynomial_type(
-        operation.value.type,
-        polynomial_domain=StringAttr("coefficient"),
-        residue_representation=StringAttr("standard"),
-    )
-    result0 = rns.AddStandardOp(
-        d0,
-        correction0,
-        resources.parameters,
-        polynomial_type,
-    )
-    result1 = rns.AddStandardOp(
-        d1,
-        correction1,
-        resources.parameters,
-        polynomial_type,
-    )
-    packed = rns.PackTwoComponentsOp(
-        result0.result,
-        result1.result,
-        _rns_type(operation.result.type),
-    )
-    result_cast, result = _cast_to_ckks(packed.result, operation.result.type)
-    return LoweredCkksOperation(
-        (
-            input_cast,
-            *resources.operations,
-            inverse,
-            d0_op,
-            d1_op,
-            d2_op,
-            *switch_ops,
-            correction0_op,
-            correction1_op,
-            result0,
-            result1,
-            packed,
-            result_cast,
-        ),
-        result,
-    )
-
-
-def _lower_direct_key_switch(
-    operation: ckks.SwitchKeyOp | ckks.RotateOp | ckks.ConjugateOp,
-    config: CkksConfig,
-    *,
-    value: SSAValue,
-    key_kind: str,
-    key_symbol: str | None = None,
-    evaluation_key: SSAValue | None = None,
-) -> tuple[tuple[Operation, ...], SSAValue]:
-    key_digit_indices = _key_switch_digit_indices(
-        operation.value.type,
-        config,
-        operation=operation.name,
-    )
-    resources = _key_switch_resources(
-        config,
-        key_symbol=key_symbol,
-        key_kind=key_kind,
-        evaluation_key=evaluation_key,
-    )
-    component0_op, component0 = _extract_component(
-        value, operation.value.type, 0
-    )
-    component1_op, component1 = _extract_component(
-        value, operation.value.type, 1
-    )
-    assembly, switched = _assemble_switched_ciphertext(
-        component0,
-        component1,
-        operation.value.type,
-        operation.result.type,
-        resources,
-        key_digit_indices,
-    )
-    return (
-        (*resources.operations, component0_op, component1_op, *assembly),
-        switched,
-    )
-
-
-def _lower_switch_key(
-    operation: Operation,
-    config: CkksConfig,
-) -> LoweredCkksOperation:
-    if not isinstance(operation, ckks.SwitchKeyOp):
-        raise TypeError("switch-key lowering received another operation")
-    input_cast, value = _cast_to_rns(operation.value)
-    operations, switched = _lower_direct_key_switch(
+    if not isinstance(
         operation,
-        config,
-        value=value,
-        key_symbol=operation.key_symbol.data,
-        key_kind="key-switch-key",
-    )
-    result_cast, result = _cast_to_ckks(switched, operation.result.type)
-    return LoweredCkksOperation(
-        (input_cast, *operations, result_cast),
-        result,
-    )
-
-
-def _concrete_ring_dimension(value_type: object, *, operation: str) -> int:
-    ring_dimension = _state_integer(
-        value_type,
-        "ring_dimension",
-        operation=operation,
-    )
-    if ring_dimension <= 0:
-        raise ValueError(f"{operation} requires a positive ring dimension")
-    return ring_dimension
-
-
-def _lower_rotate(
-    operation: Operation,
-    config: CkksConfig,
-) -> LoweredCkksOperation:
-    if not isinstance(operation, ckks.RotateOp):
-        raise TypeError("rotate lowering received another operation")
-    if operation.input_domain.data != "coefficient":
+        (ckks.RelinearizeOp, ckks.SwitchKeyOp, ckks.RotateOp, ckks.ConjugateOp),
+    ):
+        raise TypeError("Key-switch lowering received another operation")
+    if config is None:
         raise ValueError(
-            "CKKS logical rotation lowering requires coefficient input; "
-            "retain the NTT-input RotateOp for direct Backend execution or "
-            "insert FromNttOp before lowering"
+            "Key-switch lowering requires CKKS decomposition parameters"
         )
-    if operation.output_domain.data == "ntt":
-        coefficient_type = operation.result.type.with_state(
-            {
-                "polynomial_domain": StringAttr("coefficient"),
-                "residue_representation": StringAttr("standard"),
-            }
-        )
-        coefficient_operation = ckks.RotateOp(
-            operation.value,
-            operation.key,
-            coefficient_type,
-            attributes={
-                **operation.attributes,
-                "output_domain": StringAttr("coefficient"),
+    key = operation.key
+    fields = dict(operation.attributes)
+    references: list[Operation] = []
+    descriptions: dict[str, dict[str, object]] = {}
+    if not operation.parameters:
+        state = cast(ckks.CiphertextType, operation.value.type).state.data
+        represented_depth = state.get("depth")
+        if not isinstance(represented_depth, IntegerAttr):
+            raise ValueError("Key-switch lowering requires represented depth")
+        depth = int(represented_depth.value.data)
+        facts = hybrid_decomposition_facts(config, depth)
+        digits = cast(tuple[tuple[int, int, int], ...], facts["digits"])
+        names = rns_names(digits)
+        physical = {
+            name: state[name] for name in ("dtype", "device") if name in state
+        }
+        tensors: dict[str, SSAValue] = {}
+        for name in names:
+            description = table_description(config, depth, name, facts)
+            kind = cast(str, description["kind"])
+            typ = (
+                rns.RnsParametersType().with_state(physical)
+                if kind == "rns_parameters"
+                else core.MessageType().with_state(physical)
+            )
+            declared = parameter_description(
+                config,
+                kind,
+                **{k: v for k, v in description.items() if k != "kind"},
+            )
+            identity = (
+                rns_parameter_identity(
+                    config, description.get("prime_ids"), physical
+                )
+                if kind == "rns_parameters"
+                else None
+            )
+            created, value = declare_material(
+                compilation,
+                operation,
+                f"keyswitch/{depth}/{name}",
+                typ,
+                declared,
+                identity=identity,
+            )
+            references.extend(created)
+            for reference in created:
+                descriptions[cast(StringAttr, reference.symbol).data] = declared
+            tensors[name] = value
+        fields.update(
+            parameter_names=ArrayAttr(StringAttr(name) for name in names),
+            digits=ArrayAttr(
+                ArrayAttr(IntegerAttr(item, 64) for item in span)
+                for span in digits
+            ),
+            **{
+                name: IntegerAttr(cast(int, facts[name]), 64)
+                for name in ("q_count", "p_count", "key_row_start")
             },
         )
-        lowered = _lower_rotate(coefficient_operation, config)
-        input_cast, coefficient = _cast_to_rns(lowered.result)
-        plan = core.ResourceRefOp(
-            ntt.NttPlanType(), symbol="active-ntt-plan", kind="ntt-plan"
+    else:
+        names = fields.get("parameter_names")
+        spans = fields.get("digits")
+        if not isinstance(names, ArrayAttr) or not isinstance(spans, ArrayAttr):
+            raise ValueError(
+                f"{operation.name} supplied Tensor operands need their names and digit ranges"
+            )
+        tensors = dict(
+            zip(
+                (cast(StringAttr, name).data for name in names),
+                operation.parameters,
+                strict=True,
+            )
         )
-        forward = ntt.CoefficientStandardToNttMontgomeryOp(
-            coefficient, plan, _rns_type(operation.result.type)
+        digits = tuple(
+            tuple(
+                int(cast(IntegerAttr, item).value.data)
+                for item in cast(ArrayAttr, span)
+            )
+            for span in spans
         )
-        result_cast, result = _cast_to_ckks(
-            forward.result, operation.result.type
-        )
-        coefficient_operation.drop_all_references()
-        return LoweredCkksOperation(
-            (*lowered.operations, input_cast, plan, forward, result_cast),
-            result,
-        )
-    ring_dimension = _concrete_ring_dimension(
-        operation.value.type,
-        operation="CKKS rotation",
-    )
-    slot_count = ring_dimension // 2
-    key_type = operation.key.type
-    if not isinstance(key_type, ckks.EvaluationKeyType):
-        raise TypeError("CKKS rotation requires an evaluation-key operand")
-    key_state = key_type.state.data
-    represented_step = key_state.get("rotation_step")
-    if not isinstance(represented_step, IntegerAttr):
-        raise ValueError(
-            "CKKS rotation lowering requires a represented key rotation step"
-        )
-    shift = int(represented_step.value.data)
-    normalized_shift = (shift + slot_count // 2) % slot_count - slot_count // 2
-    if normalized_shift == 0:
-        raise ValueError(
-            "Zero CKKS rotation requires a represented clone operation"
-        )
-    represented_galois_element = key_state.get("galois_element")
-    if not isinstance(represented_galois_element, IntegerAttr):
-        raise ValueError(
-            "CKKS rotation lowering requires a represented key Galois element"
-        )
-    galois_element = int(represented_galois_element.value.data)
+    facts = {
+        name: value
+        for name, value in fields.items()
+        if name
+        in {
+            "parameter_names",
+            "digits",
+            "p_count",
+            "q_count",
+            "key_row_start",
+            "ntt_backend",
+        }
+    }
+    row_start = cast(IntegerAttr, fields["key_row_start"]).value.data
     input_cast, value = _cast_to_rns(operation.value)
-    key_owner = operation.key.owner
-    if (
-        not isinstance(key_owner, core.ResourceRefOp)
-        or key_owner.symbol is None
-        or key_owner.kind is None
-    ):
-        raise ValueError(
-            "CKKS rotation lowering requires a symbolic key resource operand"
+    operations: list[Operation] = [*references, input_cast]
+    source_type = cast(ckks.CiphertextType, operation.value.type)
+    q_ids = source_type.state.data.get("prime_ids")
+    qp_ids = ArrayAttr(
+        IntegerAttr(i, 64)
+        for i in (
+            *[
+                int(cast(IntegerAttr, item).value.data)
+                for item in cast(ArrayAttr, q_ids)
+            ],
+            *range(config.num_q_primes, config.total_num_primes),
         )
-    key_symbol = key_owner.symbol.data
-    key_kind = key_owner.kind.data
-    if key_kind != "rotation-key":
-        raise ValueError(
-            "CKKS rotation key resource must have kind 'rotation-key'"
+    )
+
+    def emit(op: Operation) -> SSAValue:
+        operations.append(op)
+        return op.results[0]
+
+    def polynomial(
+        *,
+        output_ntt: bool = False,
+        qp: bool = False,
+        components: int | None = None,
+    ) -> Attribute:
+        updates: dict[str, Attribute] = {
+            "polynomial_domain": StringAttr(
+                "ntt" if output_ntt else "coefficient"
+            ),
+            "residue_representation": StringAttr(
+                "montgomery" if output_ntt else "standard"
+            ),
+            "basis": StringAttr("QP" if qp else "Q"),
+            "prime_ids": qp_ids if qp else cast(Attribute, q_ids),
+        }
+        return (
+            _polynomial_type(source_type, **updates)
+            if components is None
+            else _component_bundle_type(source_type, components, **updates)
         )
-    evaluation_key_type = rns.EvaluationKeyResourceType.new(
-        (_resource_type_state(kind=key_kind),)
-    )
-    key_cast, evaluation_key = UnrealizedConversionCastOp.cast_one(
-        operation.key,
-        evaluation_key_type,
-    )
-    parameter_type = rns.RnsParametersType.new(
-        (_resource_type_state(kind="rns-parameters"),)
-    )
-    parameters = core.ResourceRefOp(
-        parameter_type,
-        symbol="active-rns-parameters",
-        kind="rns-parameters",
-    )
-    automorphism = rns.CoefficientAutomorphismOp(
-        value,
-        parameters,
-        _rns_type(operation.value.type).with_state({"strides": None}),
-        galois_element=galois_element,
-    )
-    operations, switched = _lower_direct_key_switch(
-        operation,
-        config,
-        value=automorphism.result,
-        key_kind=key_kind,
-        key_symbol=key_symbol,
-        evaluation_key=evaluation_key,
-    )
-    result_cast, result = _cast_to_ckks(switched, operation.result.type)
-    return LoweredCkksOperation(
-        (
-            input_cast,
-            key_cast,
-            parameters,
-            automorphism,
-            *operations,
-            result_cast,
-        ),
-        result,
-    )
+
+    ntt_attributes = {
+        name: value
+        for name, value in fields.items()
+        if name
+        in {
+            "ntt_backend",
+            "ntt_algorithm",
+            "ntt_group_width",
+            "ntt_radix",
+            "ntt_table_layout",
+        }
+        and value != StringAttr("unknown")
+    }
+    ntt_attributes["ckks_config"] = StringAttr(json.dumps(config.dumps()))
+
+    def transform(
+        value: SSAValue, *, inverse: bool, basis: str, typ: Attribute
+    ) -> SSAValue:
+        prefix = f"{basis}_{'inverse' if inverse else 'forward'}_"
+        supplied = tuple(
+            tensors[f"{prefix}{i}"]
+            for i in range(sum(name.startswith(prefix) for name in tensors))
+        )
+        source_state = cast(rns.RnsBundleType, value.type).state.data
+        cls = (
+            ntt.NttMontgomeryToCoefficientStandardOp
+            if inverse
+            else (
+                ntt.CoefficientMontgomeryToNttMontgomeryOp
+                if source_state.get("residue_representation")
+                == StringAttr("montgomery")
+                else ntt.CoefficientStandardToNttMontgomeryOp
+            )
+        )
+        return emit(
+            cls(
+                value,
+                supplied[0] if supplied else tensors[f"{basis}_parameters"],
+                typ,
+                tables=supplied[1:],
+                attributes=ntt_attributes,
+            )
+        )
+
+    def local_tables(names):
+        return tuple(tensors[name] for name in names), {
+            **facts,
+            "parameter_names": ArrayAttr(StringAttr(name) for name in names),
+        }
+
+    def extract(
+        value: SSAValue, component: int, *, output_ntt: bool = False
+    ) -> SSAValue:
+        return emit(
+            rns.ExtractComponentOp(
+                value, polynomial(output_ntt=output_ntt), component=component
+            )
+        )
+
+    def corrections(source: SSAValue, *, output_ntt: bool) -> SSAValue:
+        accumulator: SSAValue | None = None
+        for index, span in enumerate(digits):
+            coefficient_type = cast(
+                rns.RnsBundleType, polynomial(qp=True)
+            ).with_state({"residue_representation": StringAttr("montgomery")})
+            names = tuple(
+                name
+                for name in tensors
+                if name == "qp_parameters" or name.startswith(f"digit{index}_")
+            )
+            operands, local_facts = local_tables(names)
+            lifted = emit(
+                rns.HybridModUpDigitOp(
+                    source,
+                    operands,
+                    coefficient_type,
+                    digit_index=index,
+                    attributes=local_facts,
+                )
+            )
+            transformed = transform(
+                lifted,
+                inverse=False,
+                basis="qp",
+                typ=polynomial(qp=True, output_ntt=True),
+            )
+            product_operation = rns.KeySwitchDigitProductOp(
+                transformed,
+                key,
+                tensors["qp_parameters"],
+                polynomial(qp=True, output_ntt=True, components=2),
+                key_digit_index=span[2],
+                key_row_start=int(row_start),
+            )
+            product_operation.attributes["key_role"] = StringAttr(
+                {
+                    ckks.RelinearizeOp: "relinearization",
+                    ckks.ConjugateOp: "conjugation",
+                    ckks.RotateOp: "rotation",
+                    ckks.SwitchKeyOp: "switch",
+                }[type(operation)]
+            )
+            product = emit(product_operation)
+            accumulator = (
+                product
+                if accumulator is None
+                else emit(
+                    rns.AddMontgomeryLazyOp(
+                        accumulator,
+                        product,
+                        tensors["qp_parameters"],
+                        polynomial(qp=True, output_ntt=True, components=2),
+                    )
+                )
+            )
+        if accumulator is None:
+            raise ValueError("Key switching requires at least one digit")
+        names = tuple(
+            name
+            for name in tensors
+            if name
+            in {
+                "q_parameters",
+                "qp_parameters",
+                "moddown_inverses",
+                "p_inverse",
+            }
+            or name.startswith(("p_inverse_", "q_forward_"))
+        )
+        operands, local_facts = local_tables(names)
+        if output_ntt:
+            return emit(
+                rns.ModDownNttQpToQOp(
+                    accumulator,
+                    operands,
+                    polynomial(output_ntt=True, components=2),
+                    attributes=local_facts,
+                )
+            )
+        accumulator = transform(
+            accumulator,
+            inverse=True,
+            basis="qp",
+            typ=polynomial(qp=True, components=2),
+        )
+        operands, local_facts = local_tables(
+            ("qp_parameters", "moddown_inverses")
+        )
+        return emit(
+            rns.ModDownQpToQOp(
+                accumulator,
+                operands,
+                polynomial(components=2),
+                attributes=local_facts,
+            )
+        )
+
+    requested_ntt = operation.output_domain.data == "ntt"
+    if isinstance(operation, ckks.RelinearizeOp):
+        if requested_ntt:
+            d0, d1, d2 = (extract(value, i, output_ntt=True) for i in range(3))
+            d2 = transform(d2, inverse=True, basis="q", typ=polynomial())
+        else:
+            coefficient = transform(
+                value, inverse=True, basis="q", typ=polynomial(components=3)
+            )
+            d0, d1, d2 = (extract(coefficient, i) for i in range(3))
+        correction = corrections(d2, output_ntt=requested_ntt)
+        c0, c1 = (
+            extract(correction, i, output_ntt=requested_ntt) for i in range(2)
+        )
+        add = rns.AddMontgomeryLazyOp if requested_ntt else rns.AddStandardOp
+        result0 = emit(
+            add(
+                d0,
+                c0,
+                tensors["q_parameters"],
+                polynomial(output_ntt=requested_ntt),
+            )
+        )
+        result1 = emit(
+            add(
+                d1,
+                c1,
+                tensors["q_parameters"],
+                polynomial(output_ntt=requested_ntt),
+            )
+        )
+    else:
+        if isinstance(operation, ckks.RotateOp):
+            if operation.input_domain.data != "coefficient":
+                raise ValueError(
+                    "Logical rotation lowering requires coefficient input; preserve the whole operation for NTT input"
+                )
+            step = cast(
+                IntegerAttr,
+                cast(ckks.EvaluationKeyType, key.type).state.data[
+                    "rotation_step"
+                ],
+            ).value.data
+            exponent = -int(step) if config.galois_generator == 5 else int(step)
+            value = emit(
+                rns.CoefficientAutomorphismOp(
+                    value,
+                    tensors["q_parameters"],
+                    polynomial(components=2),
+                    galois_element=pow(
+                        config.galois_generator,
+                        exponent % config.N,
+                        2 * config.N,
+                    ),
+                )
+            )
+        elif isinstance(operation, ckks.ConjugateOp):
+            value = emit(
+                rns.CoefficientAutomorphismOp(
+                    value,
+                    tensors["q_parameters"],
+                    polynomial(components=2),
+                    galois_element=2 * config.N - 1,
+                )
+            )
+        d0, d1 = (extract(value, i) for i in range(2))
+        # The represented rotation route completes coefficient-domain switching
+        # before converting its result, retaining its original rounding schedule.
+        retained_ntt = requested_ntt and not isinstance(
+            operation, ckks.RotateOp
+        )
+        correction = corrections(d1, output_ntt=retained_ntt)
+        c0, result1 = (
+            extract(correction, i, output_ntt=retained_ntt) for i in range(2)
+        )
+        if retained_ntt:
+            d0 = transform(
+                d0, inverse=False, basis="q", typ=polynomial(output_ntt=True)
+            )
+        add = rns.AddMontgomeryLazyOp if retained_ntt else rns.AddStandardOp
+        result0 = emit(
+            add(
+                d0,
+                c0,
+                tensors["q_parameters"],
+                polynomial(output_ntt=retained_ntt),
+            )
+        )
+    packed_type = _rns_type(operation.result.type)
+    if isinstance(operation, ckks.RotateOp) and requested_ntt:
+        packed = emit(
+            rns.PackTwoComponentsOp(result0, result1, polynomial(components=2))
+        )
+        packed = transform(packed, inverse=False, basis="q", typ=packed_type)
+    else:
+        packed = emit(rns.PackTwoComponentsOp(result0, result1, packed_type))
+    result_cast, result = _cast_to_ckks(packed, operation.result.type)
+    operations.append(result_cast)
+    return LoweredCkksOperation(tuple(operations), result, descriptions)
 
 
-def _lower_conjugate(
-    operation: Operation,
-    config: CkksConfig,
-) -> LoweredCkksOperation:
-    if not isinstance(operation, ckks.ConjugateOp):
-        raise TypeError("conjugate lowering received another operation")
-    ring_dimension = _concrete_ring_dimension(
-        operation.value.type,
-        operation="CKKS conjugation",
-    )
-    input_cast, value = _cast_to_rns(operation.value)
-    parameter_type = rns.RnsParametersType.new(
-        (_resource_type_state(kind="rns-parameters"),)
-    )
-    parameters = core.ResourceRefOp(
-        parameter_type,
-        symbol="active-rns-parameters",
-        kind="rns-parameters",
-    )
-    automorphism = rns.CoefficientAutomorphismOp(
-        value,
-        parameters,
-        _rns_type(operation.value.type).with_state({"strides": None}),
-        galois_element=2 * ring_dimension - 1,
-    )
-    operations, switched = _lower_direct_key_switch(
-        operation,
-        config,
-        value=automorphism.result,
-        key_symbol="active-conjugation-key",
-        key_kind="conjugation-key",
-    )
-    result_cast, result = _cast_to_ckks(switched, operation.result.type)
-    return LoweredCkksOperation(
-        (input_cast, parameters, automorphism, *operations, result_cast),
-        result,
-    )
-
-
-KEY_SWITCH_LOWERINGS = (
+KEY_SWITCH_LOWERINGS = tuple(
     CkksLoweringDefinition(
-        "rns-ntt-relinearize",
-        ckks.RelinearizeOp,
-        _lower_relinearize,
-        is_default=True,
-    ),
-    CkksLoweringDefinition(
-        "rns-ntt-switch-key",
-        ckks.SwitchKeyOp,
-        _lower_switch_key,
-        is_default=True,
-    ),
-    CkksLoweringDefinition(
-        "rns-ntt-rotate",
-        ckks.RotateOp,
-        _lower_rotate,
-        is_default=True,
-    ),
-    CkksLoweringDefinition(
-        "rns-ntt-conjugate",
-        ckks.ConjugateOp,
-        _lower_conjugate,
-        is_default=True,
-    ),
+        name, operation, _lower_key_operation, is_default=True
+    )
+    for name, operation in (
+        ("rns-ntt-relinearize", ckks.RelinearizeOp),
+        ("rns-ntt-switch-key", ckks.SwitchKeyOp),
+        ("rns-ntt-rotate", ckks.RotateOp),
+        ("rns-ntt-conjugate", ckks.ConjugateOp),
+    )
 )

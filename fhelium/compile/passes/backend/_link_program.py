@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from ..._pipeline import (
     PassResult,
 )
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import MappingProxyType
+
 
 from fhelium.backend.execution import ProgramDispatchTable, ProgramExecutable
 from fhelium.backend.resources import ResourceBindings
-from fhelium.ir import Program
 
-from ..._constants import ConstantBundle
 from ._operations import (
     program_material_values,
     program_resource_requirements,
@@ -25,14 +29,11 @@ from ._operations import (
 class LinkProgramPass:
     """Match all external references and produce the Program executable."""
 
-    material_overrides: Mapping[str, object] = field(default_factory=dict)
     name: str = "link-backend-program"
 
-    def run(
-        self,
-        program: Program,
-        shared_data: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
+        program = compilation.program
+        shared_data = compilation.workspace
         dispatch_table = shared_data.get(ProgramDispatchTable)
         if not isinstance(dispatch_table, ProgramDispatchTable):
             raise RuntimeError(
@@ -45,15 +46,9 @@ class LinkProgramPass:
                 "LinkProgramPass requires InitializeResourceBindingsPass"
             )
         bindings = provided
-        captured = shared_data.get(ConstantBundle)
-        if captured is None:
-            materials: dict[str, object] = {}
-        elif isinstance(captured, ConstantBundle):
-            materials = dict(captured.view())
-        else:
-            raise TypeError("Backend ConstantBundle entry has another type")
-        materials.update(self.material_overrides)
-        material_values = program_material_values(program, materials)
+        material_values = program_material_values(
+            program, compilation.material_bindings
+        )
         resource_references, requirements = program_resource_requirements(
             program,
             dispatch_table,

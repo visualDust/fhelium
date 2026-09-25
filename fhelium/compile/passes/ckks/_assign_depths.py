@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from ..._pipeline import (
     PassResult,
     PassStats,
@@ -19,7 +25,7 @@ from xdsl.ir import Attribute, SSAValue
 from xdsl.rewriter import Rewriter
 
 from fhelium.config import CkksConfig
-from fhelium.ir import Program, value_role
+from fhelium.ir import value_role
 from fhelium.ir.dialects import ckks
 from fhelium.ir.dialects._common import OpenStateType
 from ._transition_state import is_same_dialect_ckks_cast
@@ -131,25 +137,44 @@ class AssignCkksDepthsPass:
     Repeated application does not duplicate either transition.
     """
 
-    entry_depth: int
+    entry_depth: int | None = None
     name: str = field(default="assign-ckks-depths", init=False)
 
     def __post_init__(self) -> None:
+        if self.entry_depth is None:
+            return
         if type(self.entry_depth) is not int:
             raise TypeError("entry_depth must be an integer")
 
-    def run(
-        self,
-        program: Program,
-        shared_data: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
+        program = compilation.program
+        shared_data = compilation.workspace
+        partial = self.entry_depth is None
+        if partial:
+            pending = [
+                value
+                for operation in program.walk()
+                for value in operation.results
+                if value_role(value) == "encrypted"
+                and _represented_depth(value) is None
+            ]
+            if not pending:
+                return PassResult.unchanged(program)
         config = shared_data.get(CkksConfig)
+        if partial and not isinstance(config, CkksConfig):
+            return PassResult.unchanged(
+                program,
+                diagnostics=(
+                    "CKKS depth propagation awaits mathematical parameters",
+                ),
+            )
         if not isinstance(config, CkksConfig):
             raise ValueError(
                 "CKKS depth assignment requires CkksConfig in the Compile "
                 "workspace"
             )
-        _prime_ids(config, self.entry_depth)
+        if self.entry_depth is not None:
+            _prime_ids(config, self.entry_depth)
         if len(program.functions) != 1:
             raise ValueError("CKKS depth assignment requires one function")
         function = program.function("main")
@@ -195,7 +220,16 @@ class AssignCkksDepthsPass:
 
         for argument in tuple(block.args):
             if value_role(argument) == "encrypted":
-                record(argument, self.entry_depth)
+                entry = (
+                    self.entry_depth
+                    if self.entry_depth is not None
+                    else _represented_depth(argument)
+                )
+                if entry is None:
+                    if partial:
+                        continue
+                    raise ValueError("Encrypted input lacks depth")
+                record(argument, entry)
             else:
                 represented = _represented_depth(argument)
                 if represented is not None:
@@ -250,6 +284,15 @@ class AssignCkksDepthsPass:
                 continue
             if not operation.results:
                 continue
+            if partial and all(
+                _represented_depth(value) is not None
+                for value in operation.results
+            ):
+                for value in operation.results:
+                    known = _represented_depth(value)
+                    if known is not None:
+                        depths[value] = known
+                continue
 
             depth: int | None = None
             if isinstance(operation, _PREPARATION_TYPES):
@@ -257,7 +300,7 @@ class AssignCkksDepthsPass:
             elif isinstance(operation, (ckks.AddOp, ckks.SubtractOp)):
                 operand_depths = [
                     require(operand, operation=operation.name)
-                    for operand in operation.operands
+                    for operand in operation.operands[:2]
                 ]
                 target_depth = max(operand_depths)
                 for index, source_depth in enumerate(operand_depths):

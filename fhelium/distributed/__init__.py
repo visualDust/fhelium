@@ -3,7 +3,10 @@
 For ordinary ``torch.Tensor`` values, this namespace exposes selected
 ``torch.distributed`` functions with their native signatures, mutation rules,
 ProcessGroup behavior, and Work handles. FHElium value operations use typed
-names such as ``broadcast_ciphertext`` and ``all_reduce_ciphertext``.
+names such as ``broadcast_ciphertext`` and ``all_reduce_ciphertext``. These
+functions pack strided payloads into contiguous communication buffers when
+needed. In-place results are written into the existing Tensor storage;
+writable destinations must not contain overlapping elements.
 """
 
 import torch.distributed as _torch_distributed

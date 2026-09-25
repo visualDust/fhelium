@@ -1,11 +1,8 @@
 # Basic CKKS workflow
 
-**Example source:** [`examples/01_basic_ckks_flow.py`](https://github.com/VisualDust/fhelium/blob/main/examples/01_basic_ckks_flow.py)
+**Example source:** [`examples/01_eager_basics.py`](https://github.com/VisualDust/fhelium/blob/main/examples/01_eager_basics.py)
 
-This example encrypts dense tensor messages, evaluates independent addition,
-multiplication, and rotation branches, then decrypts and checks each result.
-The tutorial explains the CKKS state transitions in that baseline
-workflow.
+This example encrypts dense tensor messages, evaluates independent addition, multiplication, and rotation branches, then decrypts and checks each result. The tutorial explains the CKKS state transitions in that baseline workflow.
 
 ## 1. Create a local engine
 
@@ -16,14 +13,7 @@ from fhelium.eager import Engine
 engine = Engine(fh.Preset.slots8192_scale40_depth7_int64)
 ```
 
-An eager `Engine` is process-local and creates device-specific arithmetic
-resources when they are first needed. Source and material factories use
-PyTorch's default device unless the call supplies `device=`. Distributed
-execution is expressed separately through `fhelium.distributed` collectives.
-Passing `device="cuda:0"` to a boundary or factory call places that result on
-CUDA; ordinary homomorphic operations dispatch from their operands. Key
-material must already be on the operation device unless the Engine was created
-with `allow_automatic_key_replication=True`.
+An eager `Engine` is process-local and creates device-specific arithmetic resources when they are first needed. Source and material factories use PyTorch's default device unless the call supplies `device=`. Distributed execution is expressed separately through `fhelium.distributed` collectives. Passing `device="cuda:0"` to a boundary or factory call places that result on CUDA; ordinary homomorphic operations dispatch from their operands. Key material must already be on the operation device unless the Engine was created with `allow_automatic_key_replication=True`.
 
 ## 2. Encrypt messages
 
@@ -37,9 +27,7 @@ ct_x = engine.encrypt_message(x)
 ct_y = engine.encrypt_message(y)
 ```
 
-The returned [`Ciphertext`](../api/fhelium/values/ciphertext.md#ciphertext) carries its depth, scale,
-prime IDs, polynomial domain, modulus basis, and residue representation alongside one
-dense tensor.
+The returned [`Ciphertext`](../api/fhelium/values/ciphertext.md#ciphertext) carries its depth, scale, prime IDs, polynomial domain, modulus basis, and residue representation alongside one dense tensor.
 
 ## 3. Evaluate an operation that preserves state
 
@@ -47,8 +35,7 @@ dense tensor.
 ct_sum = engine.add(ct_x, ct_y)
 ```
 
-`add` is out of place and requires compatible ciphertext layouts. It does not
-change the depth or scale.
+`add` is out of place and requires compatible ciphertext layouts. It does not change the depth or scale.
 
 ## 4. Prepare and multiply ciphertexts
 
@@ -59,12 +46,7 @@ product_triplet = engine.multiply(mul_x, mul_y)
 ct_product = engine.rescale_to_next_depth(engine.relinearize(product_triplet))
 ```
 
-FHElium deliberately does not hide rescale or relinearization. This makes the
-depth, representation, and key-switch transitions visible to algorithms that
-reuse NTT-domain operands or delay relinearization. With default-scale inputs,
-the product carries scale $\Delta^2$; the post-relinearization rescale consumes
-one depth and records the actual scale $\Delta^2/M_0$, where $M_0$ is the
-product of the primes in the leading Q depth group.
+FHElium deliberately does not hide rescale or relinearization. This makes the depth, representation, and key-switch transitions visible to algorithms that reuse NTT-domain operands or delay relinearization. With default-scale inputs, the product carries scale $\Delta^2$; the post-relinearization rescale consumes one depth and records the actual scale $\Delta^2/M_0$, where $M_0$ is the product of the primes in the leading Q depth group.
 
 ## 5. Rotate with a key
 
@@ -73,8 +55,7 @@ rotation_key = engine.rotation_key(1)
 ct_rotated = engine.rotate_with_key(ct_x, rotation_key)
 ```
 
-A rotation key carries one normalized signed step. Applications choose
-which keys exist and where they reside.
+A rotation key carries one normalized signed step. Applications choose which keys exist and where they reside.
 
 ## 6. Decrypt and check approximation error
 
@@ -83,12 +64,11 @@ sum_clear = engine.decrypt_message(ct_sum)[: engine.num_slots]
 torch.testing.assert_close(sum_clear, x + y, atol=2e-5, rtol=0)
 ```
 
-CKKS is approximate. Validate results with a chosen numerical tolerance appropriate
-for the scale, depth, input range, and workload.
+CKKS is approximate. Validate results with a chosen numerical tolerance appropriate for the scale, depth, input range, and workload.
 
 ::: details Source
 
-<<< @/../examples/01_basic_ckks_flow.py
+<<< @/../examples/01_eager_basics.py
 
 :::
 

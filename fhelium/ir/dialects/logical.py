@@ -25,6 +25,7 @@ from .._operation_catalog import (
     registered_operation_spec,
 )
 from ._common import OpenStateType, ValueRole
+from .._dependencies import OperationDependencies, operand_relations
 
 
 @irdl_attr_definition
@@ -98,6 +99,12 @@ class AddEncryptedEncryptedOp(_BinaryLogicalOp):
     rhs = operand_def(EncryptedType)
     result = result_def(EncryptedType)
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'slot': 'reindexed'}, 1: {'slot': 'reindexed'}}
+        )
+
 
 @irdl_op_definition
 class AddEncryptedPublicOp(_BinaryLogicalOp):
@@ -111,6 +118,12 @@ class AddEncryptedPublicOp(_BinaryLogicalOp):
     lhs = operand_def(EncryptedType)
     rhs = operand_def(PublicType)
     result = result_def(EncryptedType)
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'slot': 'reindexed'}, 1: {'slot': 'reindexed'}}
+        )
 
 
 @irdl_op_definition
@@ -126,6 +139,12 @@ class AddPublicEncryptedOp(_BinaryLogicalOp):
     rhs = operand_def(EncryptedType)
     result = result_def(EncryptedType)
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'slot': 'reindexed'}, 1: {'slot': 'reindexed'}}
+        )
+
 
 @irdl_op_definition
 class SubtractEncryptedEncryptedOp(_BinaryLogicalOp):
@@ -140,6 +159,12 @@ class SubtractEncryptedEncryptedOp(_BinaryLogicalOp):
     rhs = operand_def(EncryptedType)
     result = result_def(EncryptedType)
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'slot': 'reindexed'}, 1: {'slot': 'reindexed'}}
+        )
+
 
 @irdl_op_definition
 class SubtractEncryptedPublicOp(_BinaryLogicalOp):
@@ -152,6 +177,12 @@ class SubtractEncryptedPublicOp(_BinaryLogicalOp):
     lhs = operand_def(EncryptedType)
     rhs = operand_def(PublicType)
     result = result_def(EncryptedType)
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'slot': 'reindexed'}, 1: {'slot': 'reindexed'}}
+        )
 
 
 @irdl_op_definition
@@ -167,6 +198,12 @@ class SubtractPublicEncryptedOp(_BinaryLogicalOp):
     rhs = operand_def(EncryptedType)
     result = result_def(EncryptedType)
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'slot': 'reindexed'}, 1: {'slot': 'reindexed'}}
+        )
+
 
 @irdl_op_definition
 class MultiplyEncryptedEncryptedOp(_BinaryLogicalOp):
@@ -180,6 +217,12 @@ class MultiplyEncryptedEncryptedOp(_BinaryLogicalOp):
     lhs = operand_def(EncryptedType)
     rhs = operand_def(EncryptedType)
     result = result_def(EncryptedType)
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'slot': 'reindexed'}, 1: {'slot': 'reindexed'}}
+        )
 
 
 @irdl_op_definition
@@ -195,6 +238,12 @@ class MultiplyEncryptedPublicOp(_BinaryLogicalOp):
     rhs = operand_def(PublicType)
     result = result_def(EncryptedType)
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'slot': 'reindexed'}, 1: {'slot': 'reindexed'}}
+        )
+
 
 @irdl_op_definition
 class MultiplyPublicEncryptedOp(_BinaryLogicalOp):
@@ -209,6 +258,12 @@ class MultiplyPublicEncryptedOp(_BinaryLogicalOp):
     rhs = operand_def(EncryptedType)
     result = result_def(EncryptedType)
 
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'slot': 'reindexed'}, 1: {'slot': 'reindexed'}}
+        )
+
 
 @irdl_op_definition
 class NegateEncryptedOp(_UnaryLogicalOp):
@@ -220,6 +275,12 @@ class NegateEncryptedOp(_UnaryLogicalOp):
     name = "fhelium_logical.negate.encrypted"
     value = operand_def(EncryptedType)
     result = result_def(EncryptedType)
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'slot': 'element', 'batch': 'element'}}
+        )
 
 
 @irdl_op_definition
@@ -235,6 +296,12 @@ class RollEncryptedOp(_UnaryLogicalOp):
     name = "fhelium_logical.roll.encrypted"
     value = operand_def(EncryptedType)
     result = result_def(EncryptedType)
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        return operand_relations(
+            self, {0: {'slot': 'reindexed', 'batch': 'element'}}
+        )
 
 
 _LOGICAL_OPERATION_TYPES = (

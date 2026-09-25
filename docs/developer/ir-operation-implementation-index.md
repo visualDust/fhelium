@@ -1,218 +1,198 @@
-# IR operator implementation index
+# IR operations and implementations
 
-This index maps the operations used by FHElium's intermediate representation (IR) to the files that directly transform or execute them. An **IR abstraction level** describes how much cryptographic and execution detail an operation represents; it is independent of a CKKS modulus-chain depth.
+This index maps operation families to their Compile transformations and Backend execution owners. Paths below are relative to `fhelium/`. An IR abstraction level describes the amount of computational detail represented by an operation; CKKS modulus-chain depth is a separate value property.
 
-The main inventory contains all 87 operations in `REGISTERED_DIALECTS` and groups them by mathematical or execution responsibility. Each group proceeds from higher-level intent toward lower-level arithmetic where applicable. A separate final section lists the 18 upstream xDSL operations that FHElium's current Backend executes directly.
-
-[Operation declaration and implementation selection](./operation-registration-and-selection.md) describes how Compile records transformations and how execution owners assemble Backend implementations.
-
-## Reading the tables
-
-**Operator** is the operation's textual IR name. **Schema** gives its operands, behavior-relevant attributes, regions, and results. **File** names the direct transformation or execution owner using only its basename. A high-level lowering does not repeat every transitive lower-level kernel; those kernels appear on the rows for the resulting RNS or NTT operations.
-
-The compact schemas use these symbols:
-
-- `T` and `U` are arbitrary value types and may differ. Repeated `T` positions have the same type unless stated otherwise. `T...` is a possibly heterogeneous type sequence; corresponding `T...` positions match element by element.
-- `X` is either `CT` or `PT`, with the same concrete value kind at the corresponding operand and result positions.
-- `P_message`, `P_plaintext`, and `P_static` are public source values whose represented roles are message, plaintext, and static.
-- `S` is `!fhelium_semantic.secret` or `!fhelium_semantic.public`; `LE` and `LP` are `!fhelium_logical.encrypted` and `!fhelium_logical.public`.
-- `M`, `CT`, `PT`, and `CPT` are `!fhelium.message`, `!fhelium_ckks.ciphertext`, `!fhelium_ckks.plaintext`, and `!fhelium_ckks.compressed_plaintext`.
-- `R`, `RP`, `RS`, `KP`, and `EK` are `!fhelium_rns.bundle`, `!fhelium_rns.parameters`, `!fhelium_rns.rescale_plan`, `!fhelium_rns.key_switch_plan`, and `!fhelium_rns.evaluation_key_resource`.
-- `NP`, `D`, and `G` are `!fhelium_ntt.plan`, `!fhelium_memory.device`, and `!fhelium_dist.group`.
-- `I` is an index or integer scalar type, `J` is another index or integer scalar type, and `F` is a floating scalar type.
-- `?` marks an optional operand or attribute. A region schema inside braces gives its block arguments and yielded values.
+The operation definitions specify operands, attributes, equations, and state transitions: [CKKS](/api/fhelium/ir/dialects/ckks), [RNS](/api/fhelium/ir/dialects/rns), [NTT](/api/fhelium/ir/dialects/ntt), and [core data references](/api/fhelium/ir/dialects/core). Numerical parameters, tables, and keys enter execution as Tensor operands. Non-Tensor execution handles use resource references.
 
 ## Program structure, binding, and interoperability
 
-These operations introduce literals and graph-external bindings or preserve a PyTorch call for a selected consumer.
-
-| Operator | Schema | File |
+| Operation | Responsibility | Direct owner |
 |---|---|---|
-| `fhelium.constant` | `() {fhelium.literal: JSON} -> T` | `_interpreter_runtime.py` |
-| `fhelium.material.ref` | `() {symbol: str, kind?: str} -> T` | `_interpreter_runtime.py` |
-| `fhelium.resource.ref` | `() {symbol: str, kind?: str} -> T` | `execution.py`<br>`_interpreter_runtime.py` |
-| `torch.call` | `(T...) {fhelium.call.kind: str, fhelium.call.target: str, fhelium.call.arguments: JSON, fhelium.role?: str} -> T` | `_interpreter_runtime.py` |
+| `fhelium.constant` | Materialize a represented literal in generated host code | `compile/passes/codegen/_host.py` |
+| `fhelium.material.ref` | Read the Tensor bound to a Program symbol | `compile/passes/backend/_operations.py`, `_prepare_host.py` |
+| `fhelium.resource.ref` | Bind a supplied execution handle | `compile/passes/backend/_operations.py`, `_link_program.py` |
+| `torch.call` | Execute supported public Tensor calls | `backend/torch.py` |
+| `torch.tensor_call` | Execute supported public Tensor calls | `backend/torch.py` |
+| `fhelium_fusion.yield` | Return the region's selected result values | `compile/passes/codegen/_host.py`, `backend/triton/_expressions.py` |
+| `fhelium_fusion.execute` | Execute a selected generated region | `backend/triton/_pointwise.py`, `_tensor.py` |
+
+Compile selects fusion regions in `compile/passes/fusion.py`. The Triton backend owns expression lowering, generated kernels, compilation, and launch. A region may contain several kernels, including native NTT middle stages.
 
 ## Frontend intent and operand roles
 
-Semantic operations state source-level arithmetic. Logical operations make encrypted and public operand roles visible before a CKKS representation is selected.
-
-| Operator | Schema | File |
+| Operation | Responsibility | Direct owner |
 |---|---|---|
-| `fhelium_semantic.add` | `(S, S) -> S` | `_lower_semantic_to_logical.py`<br>`_triton.py` |
-| `fhelium_semantic.subtract` | `(S, S) -> S` | `_lower_semantic_to_logical.py` |
-| `fhelium_semantic.multiply` | `(S, S) -> S` | `_lower_semantic_to_logical.py`<br>`_triton.py` |
-| `fhelium_semantic.negate` | `(S) -> S` | `_lower_semantic_to_logical.py`<br>`_triton.py` |
-| `fhelium_semantic.roll` | `(S) {shift: i64, dimension?: i64} -> S` | `_lower_semantic_to_logical.py` |
-| `fhelium_logical.add.encrypted_encrypted` | `(LE, LE) -> LE` | `_lower_logical_to_ckks.py` |
-| `fhelium_logical.add.encrypted_public` | `(LE, LP) -> LE` | `_lower_logical_to_ckks.py` |
-| `fhelium_logical.add.public_encrypted` | `(LP, LE) -> LE` | `_lower_logical_to_ckks.py` |
-| `fhelium_logical.subtract.encrypted_encrypted` | `(LE, LE) -> LE` | `_lower_logical_to_ckks.py` |
-| `fhelium_logical.subtract.encrypted_public` | `(LE, LP) -> LE` | `_lower_logical_to_ckks.py` |
-| `fhelium_logical.subtract.public_encrypted` | `(LP, LE) -> LE` | `_lower_logical_to_ckks.py` |
-| `fhelium_logical.multiply.encrypted_encrypted` | `(LE, LE) -> LE` | `_lower_logical_to_ckks.py` |
-| `fhelium_logical.multiply.encrypted_public` | `(LE, LP) -> LE` | `_lower_logical_to_ckks.py` |
-| `fhelium_logical.multiply.public_encrypted` | `(LP, LE) -> LE` | `_lower_logical_to_ckks.py` |
-| `fhelium_logical.negate.encrypted` | `(LE) -> LE` | `_lower_logical_to_ckks.py` |
-| `fhelium_logical.roll.encrypted` | `(LE) {shift: i64} -> LE` | `_resolve_rotation_keys.py` |
+| `fhelium_semantic.add` | Classify addition operands by encrypted and public roles | `compile/passes/frontend/_lower_semantic_to_logical.py` |
+| `fhelium_semantic.subtract` | Classify subtraction operands by encrypted and public roles | `compile/passes/frontend/_lower_semantic_to_logical.py` |
+| `fhelium_semantic.multiply` | Classify multiplication operands by encrypted and public roles | `compile/passes/frontend/_lower_semantic_to_logical.py` |
+| `fhelium_semantic.negate` | Classify unary negation by its input role | `compile/passes/frontend/_lower_semantic_to_logical.py` |
+| `fhelium_semantic.roll` | Classify slot rotation by its input role | `compile/passes/frontend/_lower_semantic_to_logical.py` |
+| `fhelium_logical.add.encrypted_encrypted` | Construct CKKS add for encrypted/encrypted operands | `compile/passes/ckks/_lower_logical_to_ckks.py` |
+| `fhelium_logical.add.encrypted_public` | Construct CKKS add for encrypted/public operands | `compile/passes/ckks/_lower_logical_to_ckks.py` |
+| `fhelium_logical.add.public_encrypted` | Construct CKKS add for public/encrypted operands | `compile/passes/ckks/_lower_logical_to_ckks.py` |
+| `fhelium_logical.subtract.encrypted_encrypted` | Construct CKKS subtract for encrypted/encrypted operands | `compile/passes/ckks/_lower_logical_to_ckks.py` |
+| `fhelium_logical.subtract.encrypted_public` | Construct CKKS subtract for encrypted/public operands | `compile/passes/ckks/_lower_logical_to_ckks.py` |
+| `fhelium_logical.subtract.public_encrypted` | Construct CKKS subtract for public/encrypted operands | `compile/passes/ckks/_lower_logical_to_ckks.py` |
+| `fhelium_logical.multiply.encrypted_encrypted` | Construct CKKS multiply for encrypted/encrypted operands | `compile/passes/ckks/_lower_logical_to_ckks.py` |
+| `fhelium_logical.multiply.encrypted_public` | Construct CKKS multiply for encrypted/public operands | `compile/passes/ckks/_lower_logical_to_ckks.py` |
+| `fhelium_logical.multiply.public_encrypted` | Construct CKKS multiply for public/encrypted operands | `compile/passes/ckks/_lower_logical_to_ckks.py` |
+| `fhelium_logical.negate.encrypted` | Construct CKKS negate for encrypted operands | `compile/passes/ckks/_lower_logical_to_ckks.py` |
+| `fhelium_logical.roll.encrypted` | Resolve rotation keys and the coefficient rotation route | `compile/passes/ckks/_resolve_rotation_keys.py` |
+
+The shared construction helpers preserve value identity through transparent type references. Arithmetic lowering retains unknown facts until they can be derived or assigned; a type cast does not perform an NTT or change residue data.
 
 ## Boundary conversion and cryptography
 
-Boundary operations adapt messages, plaintexts, ciphertexts, and key resources to Tensor numerical work. They are normally invoked outside an encrypted computation, but remain representable for caller-selected protocols and passes.
-
-| Operator | Schema | File |
+| Operation | Responsibility | Direct owner |
 |---|---|---|
-| `fhelium_ckks.encode` | `(M) {depth: i64, scale: f64} -> PT` | `_implementation.py`<br>`_codec.py` |
-| `fhelium_ckks.decode` | `(PT) {is_real: i64} -> M` | `_implementation.py`<br>`_codec.py` |
-| `fhelium_ckks.integer_coefficients_to_rns` | `(PT) {modulus_basis: str, depth: i64} -> PT` | `_implementation.py` |
-| `fhelium_ckks.encrypt` | `(PT) {key_symbol: str} -> CT` | `_encryption.py` |
-| `fhelium_ckks.decrypt` | `(CT) {key_symbol: str} -> PT` | `_decryption.py` |
+| `fhelium_ckks.encode` | Embed message slots and quantize scaled coefficients | `backend/ckks/codec/_implementation.py`, `_codec.py`, `_embedding.py` |
+| `fhelium_ckks.decode` | Reconstruct message slots from scaled coefficients | `backend/ckks/codec/_implementation.py`, `_codec.py`, `_embedding.py` |
+| `fhelium_ckks.integer_coefficients_to_rns` | Reduce integer coefficients into supplied prime rows | `backend/ckks/codec/_implementation.py`, `backend/rns/context.py` |
+| `fhelium_ckks.prepare_compressed_plaintext` | Prepare periodic compact plaintexts | `backend/ckks/codec/_periodic.py` |
+| `fhelium_ckks.encrypt` | Sample and assemble ciphertext components | `backend/ckks/crypto/_encryption.py` |
+| `fhelium_ckks.decrypt` | Evaluate the ciphertext phase and reconstruct coefficients | `backend/ckks/crypto/_decryption.py` |
+
+Key generation is a data-provision API in `backend/ckks/crypto/_key_generation.py`. Decryption's numerical reconstruction tables live in `crypto/_tables.py`; `crypto/_resources.py` defines the encryption sampler's execution-resource names.
 
 ## Ciphertext arithmetic and component composition
 
-This group connects CKKS ciphertext arithmetic to RNS component operations. CKKS multiplication has both a lowering and a registered whole-operation implementation.
-
-| Operator | Schema | File |
+| Operation | Responsibility | Direct owner |
 |---|---|---|
-| `fhelium_ckks.add` | `(CT, CT) -> CT` | `_arithmetic.py` |
-| `fhelium_ckks.subtract` | `(CT, CT) -> CT` | `_arithmetic.py` |
-| `fhelium_ckks.negate` | `(CT) -> CT` | `_arithmetic.py` |
-| `fhelium_ckks.multiply` | `(CT, CT) -> CT` | `_arithmetic.py`<br>`operations.py`<br>`multiply_cpu.cpp`<br>`multiply_cuda.cu` |
-| `fhelium_ckks.add_scalar` | `(CT) {scalar: f64, scalar_scale: f64} -> CT` | `scalar.py` |
-| `fhelium_ckks.multiply_scalar` | `(CT) {scalar: f64, scalar_scale: f64} -> CT` | `scalar.py` |
-| `fhelium_ckks.multiply_integer_scalar` | `(CT) {scalar: I} -> CT` | `scalar.py` |
-| `fhelium_rns.add_standard` | `(R, R, RP) -> R` | `operations.py`<br>`rns_standard_arithmetic_cpu.cpp`<br>`rns_standard_arithmetic_cuda.cu` |
-| `fhelium_rns.subtract_standard` | `(R, R, RP) -> R` | `operations.py`<br>`rns_standard_arithmetic_cpu.cpp`<br>`rns_standard_arithmetic_cuda.cu` |
-| `fhelium_rns.negate_standard` | `(R, RP) -> R` | `operations.py` |
-| `fhelium_rns.montgomery_multiply` | `(R, R, RP) -> R` | `operations.py`<br>`rns_arithmetic_cpu.cpp`<br>`rns_arithmetic_cuda.cu` |
-| `fhelium_rns.extract_component` | `(R) {component: i64} -> R` | `operations.py` |
-| `fhelium_rns.pack_two_components` | `(R, R) -> R` | `operations.py` |
-| `fhelium_rns.pack_three_components` | `(R, R, R) -> R` | `operations.py` |
+| `fhelium_ckks.add` | Lower ciphertext addition to row-wise RNS addition | `compile/passes/lowering/_arithmetic.py` |
+| `fhelium_ckks.subtract` | Lower ciphertext subtraction to row-wise RNS subtraction | `compile/passes/lowering/_arithmetic.py` |
+| `fhelium_ckks.negate` | Lower ciphertext negation to row-wise RNS negation | `compile/passes/lowering/_arithmetic.py` |
+| `fhelium_ckks.multiply` | Whole CT2 convolution or RNS component composition | `backend/ckks/arithmetic.py`, `compile/passes/lowering/_arithmetic.py` |
+| `fhelium_ckks.add_scalar` | Encode and add a scalar at the ciphertext scale | `backend/ckks/scalar.py` |
+| `fhelium_ckks.multiply_scalar` | Encode and multiply by a scalar with its represented scale | `backend/ckks/scalar.py` |
+| `fhelium_ckks.multiply_integer_scalar` | Multiply by an unscaled integer while preserving actual scale | `backend/ckks/scalar.py` |
+| `fhelium_rns.add_standard` | Add corresponding residues modulo each supplied prime | `backend/rns/operations.py` |
+| `fhelium_rns.subtract_standard` | Subtract corresponding residues modulo each supplied prime | `backend/rns/operations.py` |
+| `fhelium_rns.negate_standard` | Negate residues modulo each supplied prime | `backend/rns/operations.py` |
+| `fhelium_rns.montgomery_multiply` | Multiply corresponding Montgomery residues | `backend/rns/operations.py` |
+| `fhelium_rns.add_montgomery_lazy` | Accumulate Montgomery residues in the declared lazy range | `backend/rns/operations.py` |
+| `fhelium_rns.extract_component` | Select one polynomial component from a Tensor bundle | `backend/rns/operations.py` |
+| `fhelium_rns.pack_two_components` | Assemble a two-component Tensor bundle | `backend/rns/operations.py` |
+| `fhelium_rns.pack_three_components` | Assemble a three-component Tensor bundle | `backend/rns/operations.py` |
 
 ## Public and plaintext preparation and mixed arithmetic
 
-Preparation operations convert a public source into an operation-ready plaintext for one ciphertext. The operation name identifies whether the source is a message, existing plaintext, or specialized static value.
-
-| Operator | Schema | File |
+| Operation | Responsibility | Direct owner |
 |---|---|---|
-| `fhelium_ckks.prepare.add.message` | `(P_message, CT) {operation: "add", source_role: "message", scale_mode: "ciphertext_scale"} -> PT` | `_lower_message_preparation.py`<br>`_engine.py` |
-| `fhelium_ckks.prepare.add.plaintext` | `(P_plaintext, CT) {operation: "add", source_role: "plaintext", scale_mode: "ciphertext_scale"} -> PT` | `_engine.py`<br>`_interpreter_runtime.py` |
-| `fhelium_ckks.prepare.add.static` | `(P_static, CT) {operation: "add", source_role: "static", scale_mode: "ciphertext_scale"} -> PT` | `_engine.py`<br>`_interpreter_runtime.py` |
-| `fhelium_ckks.prepare.multiply.message` | `(P_message, CT) {operation: "multiply", source_role: "message", scale_mode: "default_scale"} -> PT` | `_lower_message_preparation.py`<br>`_engine.py` |
-| `fhelium_ckks.prepare.multiply.plaintext` | `(P_plaintext, CT) {operation: "multiply", source_role: "plaintext", scale_mode: "runtime_plaintext_scale"} -> PT` | `_engine.py`<br>`_interpreter_runtime.py` |
-| `fhelium_ckks.prepare.multiply.static` | `(P_static, CT) {operation: "multiply", source_role: "static", scale_mode: "default_scale"} -> PT` | `_engine.py`<br>`_interpreter_runtime.py` |
-| `fhelium_ckks.add_plaintext` | `(CT, PT) -> CT` | `_arithmetic.py` |
-| `fhelium_ckks.multiply_plaintext` | `(CT, PT) -> CT` | `_arithmetic.py` |
-| `fhelium_ckks.add_compressed_plaintext` | `(CT, CPT) {inplace?: i64} -> CT` | `operations.py`<br>`plaintext_cpu.cpp`<br>`plaintext_cuda.cu` |
-| `fhelium_ckks.multiply_compressed_plaintext` | `(CT, CPT) {inplace?: i64} -> CT` | `operations.py`<br>`rns_arithmetic_cpu.cpp`<br>`rns_arithmetic_cuda.cu` |
-| `fhelium_rns.add_plaintext` | `(R, R, RP) -> R` | `operations.py`<br>`plaintext_cpu.cpp`<br>`plaintext_cuda.cu` |
-| `fhelium_rns.multiply_plaintext` | `(R, R, RP) -> R` | `operations.py`<br>`rns_arithmetic_cpu.cpp`<br>`rns_arithmetic_cuda.cu` |
-| `fhelium_rns.montgomery_weighted_sum` | `(RP, R...) {term_count: i64} -> R` | `operations.py` |
-| `fhelium_rns.montgomery_weighted_sums` | `(RP, R...) {term_count: i64, group_count: i64} -> R` | `operations.py` |
+| `fhelium_ckks.prepare.add.message` | Prepare message data for CKKS add arithmetic | `compile/passes/ckks/_lower_message_preparation.py` |
+| `fhelium_ckks.prepare.add.plaintext` | Prepare plaintext data for CKKS add arithmetic | `compile/passes/ckks/_lower_message_preparation.py` |
+| `fhelium_ckks.prepare.add.static` | Prepare static data for CKKS add arithmetic | `compile/passes/ckks/_lower_message_preparation.py` |
+| `fhelium_ckks.prepare.multiply.message` | Prepare message data for CKKS multiply arithmetic | `compile/passes/ckks/_lower_message_preparation.py` |
+| `fhelium_ckks.prepare.multiply.plaintext` | Prepare plaintext data for CKKS multiply arithmetic | `compile/passes/ckks/_lower_message_preparation.py` |
+| `fhelium_ckks.prepare.multiply.static` | Prepare static data for CKKS multiply arithmetic | `compile/passes/ckks/_lower_message_preparation.py` |
+| `fhelium_ckks.add_plaintext` | Lower addition of a supplied plaintext to component zero | `compile/passes/lowering/_arithmetic.py` |
+| `fhelium_ckks.multiply_plaintext` | Lower multiplication of ciphertext components by a supplied plaintext | `compile/passes/lowering/_arithmetic.py` |
+| `fhelium_ckks.add_compressed_plaintext` | Add compact plaintext values to component zero through encoded-axis indexing | `backend/ckks/arithmetic.py`, `backend/triton/_expressions.py` |
+| `fhelium_ckks.multiply_compressed_plaintext` | Multiply ciphertext components by compact plaintext values through encoded-axis indexing | `backend/ckks/arithmetic.py`, `backend/triton/_expressions.py` |
+| `fhelium_rns.add_plaintext` | Add the supplied plaintext polynomial to component zero | `backend/rns/operations.py` |
+| `fhelium_rns.multiply_plaintext` | Multiply each ciphertext component by the supplied plaintext polynomial | `backend/rns/operations.py` |
+| `fhelium_rns.montgomery_weighted_sum` | Accumulate one weighted sum of polynomial Tensor products | `backend/rns/operations.py` |
+| `fhelium_rns.montgomery_weighted_sums` | Apply several plaintext weight rows to shared polynomial Tensor inputs | `backend/rns/operations.py` |
 
 ## Polynomial and residue representation transforms
 
-These operations change polynomial domain or residue representation while preserving the represented CKKS value. `X` below is a ciphertext or plaintext and the result has the same value kind.
-
-| Operator | Schema | File |
+| Operation | Responsibility | Direct owner |
 |---|---|---|
-| `fhelium_ckks.to_ntt` | `(X) -> X` | `_representation.py` |
-| `fhelium_ckks.from_ntt` | `(X) -> X` | `_representation.py` |
-| `fhelium_ckks.to_montgomery_residues` | `(X) -> X` | `_representation.py` |
-| `fhelium_ckks.to_standard_residues` | `(X) -> X` | `_representation.py` |
-| `fhelium_rns.standard_to_montgomery` | `(R, RP) -> R` | `operations.py`<br>`rns_arithmetic_cpu.cpp`<br>`rns_arithmetic_cuda.cu` |
-| `fhelium_rns.montgomery_to_standard` | `(R, RP) -> R` | `operations.py`<br>`rns_arithmetic_cpu.cpp`<br>`rns_arithmetic_cuda.cu` |
-| `fhelium_ntt.coefficient_standard_to_ntt_montgomery` | `(R, NP) -> R` | `operations.py`<br>`indexed_radix2.py`<br>`compact_radix2.py`<br>`power_of_two_radix.py`<br>`indexed_ntt_cpu.cpp`<br>`forward_ntt_cuda.cu` |
-| `fhelium_ntt.coefficient_montgomery_to_ntt_montgomery` | `(R, NP) -> R` | `operations.py`<br>`indexed_radix2.py`<br>`compact_radix2.py`<br>`power_of_two_radix.py`<br>`indexed_ntt_cpu.cpp`<br>`forward_ntt_cuda.cu` |
-| `fhelium_ntt.ntt_montgomery_to_coefficient_standard` | `(R, NP) -> R` | `operations.py`<br>`indexed_radix2.py`<br>`compact_radix2.py`<br>`power_of_two_radix.py`<br>`indexed_ntt_cpu.cpp`<br>`inverse_ntt_cuda.cu` |
-| `fhelium_ntt.inverse_montgomery` | `(R, NP) -> R` | `operations.py`<br>`indexed_radix2.py`<br>`compact_radix2.py`<br>`power_of_two_radix.py`<br>`indexed_ntt_cpu.cpp`<br>`inverse_ntt_cuda.cu` |
+| `fhelium_ckks.to_ntt` | Lower a forward polynomial-domain transition to NTT operations | `compile/passes/lowering/_representation.py` |
+| `fhelium_ckks.from_ntt` | Lower an inverse polynomial-domain transition to NTT operations | `compile/passes/lowering/_representation.py` |
+| `fhelium_ckks.to_montgomery_residues` | Lower standard-to-Montgomery residue conversion | `compile/passes/lowering/_representation.py` |
+| `fhelium_ckks.to_standard_residues` | Lower Montgomery-to-standard residue conversion | `compile/passes/lowering/_representation.py` |
+| `fhelium_rns.standard_to_montgomery` | Convert standard residues to Montgomery form | `backend/rns/operations.py` |
+| `fhelium_rns.montgomery_to_standard` | Convert Montgomery residues to standard form | `backend/rns/operations.py` |
+| `fhelium_ntt.coefficient_standard_to_ntt_montgomery` | Forward NTT with standard input | `backend/ntt/operations.py`, `backend/ntt/executors/` |
+| `fhelium_ntt.coefficient_montgomery_to_ntt_montgomery` | Forward NTT with Montgomery input | `backend/ntt/operations.py`, `backend/ntt/executors/` |
+| `fhelium_ntt.ntt_montgomery_to_coefficient_standard` | Normalized inverse NTT with standard output | `backend/ntt/operations.py`, `backend/ntt/executors/` |
+| `fhelium_ntt.ntt_montgomery_to_coefficient_montgomery` | Normalized inverse NTT retaining Montgomery output | `backend/ntt/operations.py`, `backend/ntt/executors/` |
+
+`backend/ntt/plans/` constructs twiddle and index tables; `backend/ntt/tables.py` materializes their device-specific views. Native transitions execute through `backend/ntt/operations.py`. Generated NTT regions use `backend/triton/_ntt.py` and `_ntt_codegen.py`.
 
 ## Modulus-chain and scale transitions
 
-These operations change the active modulus basis, depth metadata, or scale metadata. CKKS rescale accepts one ciphertext operand and carries `rounding: "nearest"` or `"floor"`.
-
-| Operator | Schema | File |
+| Operation | Responsibility | Direct owner |
 |---|---|---|
-| `fhelium_ckks.rescale` | `(CT, PT?) {condition: str, rounding: str} -> CT` | `_representation.py` |
-| `fhelium_ckks.mod_switch` | `(CT) {target_depth: i64} -> CT` | `_representation.py` |
-| `fhelium_ckks.reinterpret_scale` | `(CT) {scale: f64} -> CT` | `_representation.py` |
-| `fhelium_rns.rescale_drop_leading_primes` | `(R, RS) {drop_count: int, rounding?: str} -> R` | `rescale.py`<br>`rescale_cpu.cpp`<br>`rescale_cuda.cu` |
-| `fhelium_rns.restrict_depth` | `(R, RP) {target_depth: i64} -> R` | `operations.py` |
-| `fhelium_rns.reinterpret_scale` | `(R) {scale: f64} -> R` | `operations.py` |
+| `fhelium_ckks.rescale` | Lower a rounded quotient over the next complete Q depth group | `compile/passes/lowering/_representation.py` |
+| `fhelium_ckks.mod_switch` | Lower restriction to the selected active Q rows | `compile/passes/lowering/_representation.py` |
+| `fhelium_ckks.reinterpret_scale` | Lower a represented-scale change that preserves residue data | `compile/passes/lowering/_representation.py` |
+| `fhelium_rns.rescale_drop_leading_primes` | Divide by a dropped Q group with the selected rounding | `backend/rns/rescale.py` |
+| `fhelium_rns.restrict_depth` | Select the active rows at the requested depth | `backend/rns/operations.py` |
+| `fhelium_rns.reinterpret_scale` | Update represented scale while preserving residue data | `backend/rns/operations.py` |
+
+Modulus switching to fewer Q rows and ModDown by the auxiliary P product have different equations. They remain separate operations. Numerical inverse tables for rescaling and ModDown are constructed in `backend/rns/tables.py`.
 
 ## Key switching, automorphisms, and rotation
 
-This group contains evaluation-key-dependent CKKS operations and their RNS key-switch primitives. Whole-operation relinearization and rotation coexist with lower-level compositions.
-
-| Operator | Schema | File |
+| Operation | Responsibility | Direct owner |
 |---|---|---|
-| `fhelium_ckks.rotate` | `(CT, EK) -> CT` | `_resolve_rotation_keys.py`<br>`_keyswitch.py`<br>`operations.py` |
-| `fhelium_ckks.hoisted_rotate_many` | `(CT, EK...) -> CT...` | `_hoist_rotations.py`<br>`operations.py`<br>`_hoisted.py` |
-| `fhelium_ckks.grouped_rotation_weighted_sum` | `(CT, EK..., PT...) {baby_steps: i64[], term_count: i64, group_count: i64} -> CT` | `_hoist_rotations.py`<br>`operations.py`<br>`_hoisted.py` |
-| `fhelium_ckks.relinearize` | `(CT) -> CT` | `_keyswitch.py`<br>`operations.py` |
-| `fhelium_ckks.switch_key` | `(CT) {key_symbol: str} -> CT` | `_keyswitch.py` |
-| `fhelium_ckks.conjugate` | `(CT) -> CT` | `_keyswitch.py` |
-| `fhelium_rns.hybrid_modup_digit` | `(R, RP, KP) {digit_index: i64} -> R` | `operations.py`<br>`rns_arithmetic_cpu.cpp`<br>`mixed_radix_cuda.cu`<br>`rns_arithmetic_cuda.cu` |
-| `fhelium_rns.key_switch_digit_product` | `(R, EK, RP, KP) {key_digit_index: i64} -> R` | `operations.py`<br>`keyswitch_cpu.cpp`<br>`keyswitch_cuda.cu` |
-| `fhelium_rns.add_montgomery_lazy` | `(R, R, RP) -> R` | `operations.py`<br>`rns_arithmetic_cpu.cpp`<br>`rns_arithmetic_cuda.cu` |
-| `fhelium_rns.moddown_qp_to_q` | `(R, RP, KP) -> R` | `operations.py`<br>`keyswitch_cpu.cpp`<br>`keyswitch_cuda.cu` |
-| `fhelium_rns.moddown_ntt_qp_to_q` | `(R, RP, KP) -> R` | `operations.py`<br>`keyswitch_cpu.cpp`<br>`keyswitch_cuda.cu` |
-| `fhelium_rns.coefficient_automorphism` | `(R, RP) {galois_element: i64} -> R` | `operations.py`<br>`automorphism_cpu.cpp`<br>`automorphism_cuda.cu` |
+| `fhelium_ckks.switch_key` | Assemble ciphertext components under the supplied destination key relation | `backend/ckks/key_switch.py` |
+| `fhelium_ckks.conjugate` | Compose conjugation with the supplied key-switch relation | `backend/ckks/key_switch.py` |
+| `fhelium_ckks.relinearize` | Reduce a three-component ciphertext through a supplied relinearization key | `backend/ckks/key_switch.py` |
+| `fhelium_ckks.rotate` | Compose a slot-selected automorphism and key switch | `backend/ckks/rotation/operations.py` |
+| `fhelium_ckks.hoisted_rotate_many` | Reuse input-derived digit preparation across keys | `backend/ckks/rotation/operations.py`, `_hoisted.py` |
+| `fhelium_ckks.grouped_rotation_weighted_sum` | Compose a selected rotation group with plaintext products | `backend/ckks/rotation/operations.py` |
+| `fhelium_rns.hybrid_modup_digit` | Decompose and extend one digit into QP | `backend/rns/modup.py` |
+| `fhelium_rns.key_switch_digit_product` | Multiply one prepared digit by its supplied key rows | `backend/rns/key_product.py` |
+| `fhelium_rns.moddown_qp_to_q` | Remove the auxiliary P basis in coefficient representation | `backend/rns/moddown.py` |
+| `fhelium_rns.moddown_ntt_qp_to_q` | Remove the auxiliary P basis while retaining Q NTT evaluations | `backend/rns/moddown.py` |
+| `fhelium_rns.coefficient_automorphism` | Apply a supplied polynomial Galois element | `backend/rns/automorphism.py` |
+
+The CKKS slot-step convention is defined in `backend/ckks/rotation/_galois.py`. Coefficient and NTT permutation builders accept the polynomial Galois element in `backend/rns/automorphism.py` and `backend/ntt/automorphism.py` respectively. Neither requires a key Tensor or a slot-rotation convention.
+
+`compile/passes/lowering/_keyswitch.py` exposes key switching as RNS/NTT dataflow. The whole-operation and lowered routes use the same numerical owners. `backend/rns/_preparation.py` describes hybrid arithmetic tables and ModDown requirements; `backend/ckks/_key_switch_preparation.py` declares whole CKKS implementation requirements. `backend/ckks/tables.py` assembles the table views used by those whole implementations. Material lookup does not generate keys.
 
 ## Placement and memory movement
 
-Existing values change placement through a transfer operation. The destination is a launch-bound device resource; `memory_space` may select default, pageable-host, or pinned-host storage.
-
-| Operator | Schema | File |
+| Operation | Responsibility | Direct owner |
 |---|---|---|
-| `fhelium_memory.transfer` | `(T, D) {memory_space?: str} -> T` | `operations.py` |
+| `fhelium_memory.transfer` | Move a Tensor to the supplied destination handle | `backend/memory/operations.py` |
+
+`backend/memory/resources.py` owns the device resource kind. Tensor placement and storage policy are caller choices.
 
 ## Rank-local SPMD and collectives
 
-A distributed Program represents one rank. Group resources supply rank and process-group identity at launch. Local verification does not prove collective uniformity, cross-rank order, associativity, or deadlock freedom. Generic all-reduce exposes its combine region; specialized ciphertext addition may remain a whole operation or lower to that generic form.
-
-| Operator | Schema | File |
+| Operation | Responsibility | Direct owner |
 |---|---|---|
-| `fhelium_dist.rank` | `(G) -> index` | `operations.py` |
-| `fhelium_dist.group_size` | `(G) -> index` | `operations.py` |
-| `fhelium_dist.broadcast` | `(T, G) {root: i64} -> T` | `operations.py` |
-| `fhelium_dist.all_reduce` | `(T, G) {combine(T, T) -> T} -> T` | `operations.py` |
-| `fhelium_dist.all_reduce_add_ciphertext` | `(CT, G) -> CT` | `_lower_specialized_collectives.py`<br>`operations.py` |
-| `fhelium_dist.yield` | `(T) -> ()` | `execution.py` |
+| `fhelium_dist.rank` | Read the process-group-relative rank | `backend/distributed/operations.py` |
+| `fhelium_dist.group_size` | Read the participating process-group size | `backend/distributed/operations.py` |
+| `fhelium_dist.broadcast` | Broadcast a rank-local Tensor from the selected group root | `backend/distributed/operations.py` |
+| `fhelium_dist.all_reduce` | Reduce rank-local Tensors through a supplied combine region | `backend/distributed/operations.py` |
+| `fhelium_dist.all_reduce_add_ciphertext` | Execute ciphertext-add reduction or expose a generic combine region | `backend/distributed/operations.py`, `compile/passes/distributed/_lower_specialized_collectives.py` |
+| `fhelium_dist.yield` | Return a combine region's Tensor result | `compile/passes/codegen/_host.py` |
+
+`backend/distributed/resources.py` owns process-group handles. The distributed schedule must preserve cross-rank operation order and the combine region's algebraic requirements.
 
 ## Upstream structured execution substrate
 
-The FHElium context loads xDSL Builtin, Func, Arith, and SCF dialects. The table
-below lists the upstream operations that the current `ProgramExecutable`
-handles directly.
-
-| Operator | Schema | File |
+| Operation | Responsibility | Direct owner |
 |---|---|---|
-| `builtin.unrealized_conversion_cast` | `(T) -> U` | `execution.py` |
-| `func.return` | `(T...) -> ()` | `execution.py` |
-| `arith.constant` | `() {value: I or F} -> I or F` | `execution.py` |
-| `arith.addi` | `(I, I) -> I` | `execution.py` |
-| `arith.subi` | `(I, I) -> I` | `execution.py` |
-| `arith.muli` | `(I, I) -> I` | `execution.py` |
-| `arith.divui` | `(I, I) -> I` | `execution.py` |
-| `arith.divsi` | `(I, I) -> I` | `execution.py` |
-| `arith.remui` | `(I, I) -> I` | `execution.py` |
-| `arith.remsi` | `(I, I) -> I` | `execution.py` |
-| `arith.minui` | `(I, I) -> I` | `execution.py` |
-| `arith.maxui` | `(I, I) -> I` | `execution.py` |
-| `arith.index_cast` | `(I) -> J` | `execution.py` |
-| `arith.select` | `(i1, T, T) -> T` | `execution.py` |
-| `arith.cmpi` | `(I, I) {predicate} -> i1` | `execution.py` |
-| `scf.for` | `(index, index, index, T...) {body(index, T...) -> T...} -> T...` | `execution.py` |
-| `scf.if` | `(i1) {then() -> T..., else() -> T...} -> T...` | `execution.py` |
-| `scf.yield` | `(T...) -> ()` | `execution.py` |
+| `builtin.unrealized_conversion_cast` | Forward a one-input, one-result type reference | `compile/passes/codegen/_host.py` |
+| `func.return` | Return function results | `compile/passes/codegen/_host.py` |
+| `arith.constant` | Materialize a scalar integer or floating-point constant | `compile/passes/codegen/_host.py` |
+| `arith.addi` | Add scalar indices | `compile/passes/codegen/_host.py` |
+| `arith.subi` | Subtract scalar indices | `compile/passes/codegen/_host.py` |
+| `arith.muli` | Multiply scalar indices | `compile/passes/codegen/_host.py` |
+| `arith.divui` | Evaluate unsigned scalar quotient control flow | `compile/passes/codegen/_host.py` |
+| `arith.divsi` | Evaluate signed scalar quotient control flow | `compile/passes/codegen/_host.py` |
+| `arith.remui` | Evaluate unsigned scalar remainder control flow | `compile/passes/codegen/_host.py` |
+| `arith.remsi` | Evaluate signed scalar remainder control flow | `compile/passes/codegen/_host.py` |
+| `arith.minui` | Select the minimum scalar index | `compile/passes/codegen/_host.py` |
+| `arith.maxui` | Select the maximum scalar index | `compile/passes/codegen/_host.py` |
+| `arith.index_cast` | Adapt a scalar index | `compile/passes/codegen/_host.py` |
+| `arith.select` | Select one scalar value from a condition | `compile/passes/codegen/_host.py` |
+| `arith.cmpi` | Compare scalar indices using the represented predicate | `compile/passes/codegen/_host.py` |
+| `scf.if` | Execute the selected conditional region | `compile/passes/codegen/_host.py` |
+| `scf.for` | Execute a loop with carried values | `compile/passes/codegen/_host.py` |
+| `scf.yield` | Return region values to structured control flow | `compile/passes/codegen/_host.py` |
 
-Unknown application and vendor operations may coexist with this vocabulary in permissive Programs. Their schemas and implementations belong to the extension that defines them and therefore do not appear in this static index.
+`compile/passes/backend/_prepare_host.py` binds the emitted host function. `ProgramExecutable` invokes it with the linked Tensor materials and execution resources.
 
 ## Continue
 
-- [Operation declaration and implementation selection](./operation-registration-and-selection.md)
-- [Compiler stack internals](./compiler-stack-internals.md)
-- [Compiler state and Eager execution](./compiler-state-and-eager-execution.md)
+- [Operation registration and implementation selection](./operation-registration-and-selection.md)
+- [IR, capture, effects, and open state](./compiler-stack-internals.md)
+- [Values, operation semantics, and Eager dispatch](./compiler-state-and-eager-execution.md)
 - [Distributed internals](./distributed-internals.md)
 - [RNS and NTT internals](./rns-and-ntt.md)

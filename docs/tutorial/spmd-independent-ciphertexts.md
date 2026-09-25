@@ -1,95 +1,87 @@
-# SPMD over independent ciphertexts
+# Data-parallel encrypted batches
 
-**Example source:** [`examples/08_spmd_independent_ciphertexts.py`](https://github.com/VisualDust/fhelium/blob/main/examples/08_spmd_independent_ciphertexts.py)
+**Example source:** [`examples/21_distributed_batch_inputs.py`](https://github.com/VisualDust/fhelium/blob/main/examples/21_distributed_batch_inputs.py)
 
-This example scatters independent encrypted inputs, evaluates the same public
-affine transform on every rank, and gathers distinct outputs. The tutorial
-explains the data-parallel SPMD pattern and why its results are gathered rather
-than reduced.
+This example starts with one encrypted batch of independent samples. The data owner assigns each rank a consecutive sample interval. Ranks evaluate the same public affine model on their sub-batches, then return their distinct outputs for decryption and concatenation in original sample order.
 
-## Run on one process
+This is a centralized-input data-parallel workload. Other applications can provision rank-local inputs directly and do not need an input scatter.
 
-```bash
-python examples/08_spmd_independent_ciphertexts.py
-```
-
-## Run on two local GPUs
+## Run
 
 ```bash
+python examples/21_distributed_batch_inputs.py --batch-size 7
+
 torchrun --standalone --nproc-per-node=2 \
-  examples/08_spmd_independent_ciphertexts.py
+  examples/21_distributed_batch_inputs.py --batch-size 7
 ```
 
-The same source supports world size one and multiple ranks.
+`--batch-size` is the global number of samples, not a per-rank size. The example requires at least one sample per participating rank. Seven samples on two ranks produce sub-batches of three and four samples. `--preset` selects the CKKS configuration. `dist.init()` uses rank-local CUDA devices when available and CPU otherwise; Tensor factories follow the selected PyTorch default device.
 
-## 1. Initialize process-local SPMD state
+## 1. Encrypt one batch on the data-owner rank
 
-```python
-import fhelium as fh
-import fhelium.distributed as dist
-from fhelium.eager import Engine
-
-dist.init()
-engine = Engine(
-    fh.Preset.slots32768_scale40_depth34_int64,
-    device=dist.local_device(),
-    allow_automatic_key_generation=False,
-)
-```
-
-`dist.init()` reads the standard `torchrun` rank environment and initializes a
-real process group. Each process creates one local engine for one local CUDA
-device. There is no multi-device engine object or hidden placement runtime.
-
-## 2. Keep secret material on the data-owner rank
+Rank zero constructs a clear Tensor with shape `[batch_size, sample_width]`, creates one encryption key pair, and encrypts the entire batch:
 
 ```python
-if dist.get_rank() == 0:
+if rank == 0:
     secret_key = engine.create_secret_key()
     public_key = engine.create_public_key(secret_key)
-    encrypted_inputs = [
-        engine.encrypt_message(message, public_key)
-        for message in messages
+    encrypted_batch = engine.encrypt_message(messages, public_key)
+```
+
+The resulting `Ciphertext` has `batch_shape=(batch_size,)`. Worker ranks need no keys for this plaintext-ciphertext model. Encryption and decryption remain on rank zero.
+
+## 2. Choose sample intervals and create local views
+
+The application uses a near-even consecutive partition:
+
+```python
+batch_ranges = [
+    (owner * batch_size // world_size,
+     (owner + 1) * batch_size // world_size)
+    for owner in range(world_size)
+]
+
+if rank == 0:
+    chunks = [
+        encrypted_batch.slice_batch(start, stop)
+        for start, stop in batch_ranges
     ]
 else:
-    secret_key = None
-    encrypted_inputs = None
+    chunks = None
 ```
 
-Only rank zero encrypts and decrypts. Worker ranks execute a public
-plaintext-ciphertext affine transform and therefore need no key material.
-`allow_automatic_key_generation=False` guards against accidental local secret
-generation.
+`slice_batch(start, stop, dim=0)` indexes a **logical batch axis**, excluding the component and RNS axes. It retains the selected axis, including a one-item interval, and accepts negative `dim` values. Intervals are nonempty half-open ranges with nonnegative bounds. The result shares Tensor storage and preserves depth, scale, prime IDs, and representation state.
 
-## 3. Scatter independent logical values
+The same local slice interface is available on `Plaintext` and `CompressedPlaintext` when an application needs corresponding plaintext sub-batches. This example instead uses one shared, unbatched model weight.
+
+The interval list is application policy. Neither `slice_batch` nor the collective chooses a partition or infers sample identity.
+
+## 3. Scatter sub-batches
 
 ```python
-local_input = dist.scatter_ciphertexts(encrypted_inputs, src=0)
-```
-
-Rank `r` receives the encrypted sample intended for rank `r`:
-
-```mermaid
-flowchart LR
-    ciphertext0["rank 0 ciphertext"] --> rank0["rank 0"]
-    ciphertext1["rank 1 ciphertext"] --> rank1["rank 1"]
-    ciphertext2["rank 2 ciphertext"] --> rank2["rank 2"]
-```
-
-The typed collective transmits enough metadata to reconstruct the
-receiver `Ciphertext`. It does not infer application sample identity.
-
-## 4. Broadcast one shared public parameter
-
-```python
+local_input = dist.scatter_ciphertexts(chunks, src=0)
 weight = dist.broadcast_plaintext(root_weight, src=0)
 ```
 
-The model weight is one logical [`Plaintext`](../api/fhelium/values/plaintext.md#plaintext) replicated
-to every rank. This is different from scattering independent request
-ciphertexts.
+Each entry in `chunks` is a batched ciphertext; it need not contain the same number of samples as the other entries. The existing typed scatter transmits their shapes and state. It also handles communication packing when the source batch views are non-contiguous. No specialized batch-scatter API is required.
 
-## 5. Evaluate the same program locally
+```mermaid
+flowchart LR
+    batch["encrypted batch: 7 samples"] --> part0["samples [0,3)"]
+    batch --> part1["samples [3,7)"]
+    part0 --> rank0["rank 0: batch of 3"]
+    part1 --> rank1["rank 1: batch of 4"]
+```
+
+## 4. Evaluate the same model on every rank
+
+For each sample $x_b$, the model is
+
+$$
+y_b = 1.25x_b - 0.003.
+$$
+
+The coefficients do not depend on rank or partition. Engine operations process the entire local batch; there is no Python loop over local samples:
 
 ```python
 local_output = engine.rescale_to_next_depth(
@@ -99,56 +91,38 @@ local_output = engine.rescale_to_next_depth(
         )
     )
 )
-
-bias = engine.prepare_plaintext_for_addition(
-    engine.encode(
-        bias_message,
-        depth=local_output.depth,
-        scale=local_output.scale,
-    )
-)
 local_output = engine.add_plaintext(local_output, bias)
 ```
 
-Each rank owns its local activation and creates a rank-specific public bias.
-The multiplication does not rescale implicitly, so the depth transition is
-visible in the source.
+The shared weight is broadcast. Each rank encodes the same bias using the result's depth and actual scale. Multiplication and rescale remain separate operations.
 
-## 6. Gather independent ciphertext results
+## 5. Gather and restore sample order
 
 ```python
 outputs = dist.gather_ciphertexts(local_output, dst=0)
 ```
 
-The outputs correspond to different samples and must remain separate:
+The source receives sub-batches in process-group-rank order. Since the chosen intervals are consecutive in that order, rank zero can decrypt each sub-batch and concatenate the clear results along their batch axis:
 
-```text
-[output rank 0, output rank 1, ...]
+```python
+decoded = torch.cat(
+    [
+        engine.decrypt_message(output, secret_key=secret_key, is_real=True)
+        .cpu()[..., :sample_width]
+        for output in outputs
+    ],
+    dim=0,
+)
 ```
 
-An arithmetic reduction would add unrelated encrypted samples and change the
-workload meaning. Rank zero decrypts each gathered output with the one retained
-secret key.
+The reconstructed clear Tensor has shape `[batch_size, sample_width]` and is checked against the same affine model applied to the original input batch. An arithmetic reduction would add different samples together and change the workload meaning.
 
-## When to use this pattern
+## Related usage models
 
-Use scatter/evaluate/gather when:
-
-- ranks process independent requests or batch elements;
-- every rank executes the same program;
-- model plaintexts can be replicated;
-- outputs must preserve request or sample identity.
-
-For additive contributions to one output, use the
-[rotation-parallel matrix-vector pattern](spmd-rotation-parallel-matvec.md)
-instead.
+- [Homogeneous batching](homogeneous-batching.md) compares single-device batched execution with per-sample execution. This example distributes sub-batches across ranks instead.
+- [Rotation-parallel matrix-vector multiplication](spmd-rotation-parallel-matvec.md) distributes contributions to one result and therefore uses arithmetic reduction.
+- [Communication semantics](../concepts/distributed/communication-semantics.md) distinguishes independent samples, additive partials, and RNS shards.
 
 ::: details Source
-<<< @/../examples/08_spmd_independent_ciphertexts.py
+<<< @/../examples/21_distributed_batch_inputs.py
 :::
-
-## Related concepts and guides
-
-- [Rank-local SPMD model](../concepts/distributed/spmd-model.md)
-- [Communication semantics](../concepts/distributed/communication-semantics.md)
-- [Choose a multi-GPU partition](../how-to/choose-multi-gpu-partition.md)

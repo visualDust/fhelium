@@ -52,8 +52,7 @@ def build_compact_twiddles(
     r"""Build bit-reversed forward and inverse rows per prime.
 
     These ``[prime, coefficient]`` rows are the mathematical source shared by
-    compact kernels and by indexed-plan expansion. They do not
-    encode a grouped execution policy.
+    compact kernels and indexed-plan expansion.
 
     For row ``i`` with primitive $2N$-th root $\psi_i$, column ``k`` stores
     $\psi_i^{\operatorname{br}(k)}\bmod q_i$ for forward execution and its

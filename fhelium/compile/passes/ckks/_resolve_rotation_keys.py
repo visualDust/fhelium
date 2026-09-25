@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
+from ..._materials import material_symbol
 from ..._pipeline import (
     PassResult,
     PassStats,
@@ -12,7 +19,6 @@ from dataclasses import dataclass, field
 from xdsl.dialects.builtin import IntegerAttr, StringAttr
 
 from fhelium.config import CkksConfig
-from fhelium.ir import Program
 from fhelium.ir.dialects import ckks, core, logical
 
 from .._operation_transforms import (
@@ -22,6 +28,7 @@ from .._operation_transforms import (
     program_operations,
 )
 from ._lower_logical_to_ckks import _replace_with_result_cast
+from ._transition_state import infer_logical_representation
 
 
 def _normalize_step(step: int, slot_count: int) -> int:
@@ -52,11 +59,9 @@ class ResolveRotationKeyOperandsPass:
             )
         return config
 
-    def run(
-        self,
-        program: Program,
-        workspace: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
+        program = compilation.program
+        workspace = compilation.workspace
         rotations = tuple(
             operation
             for operation in program_operations(program)
@@ -65,9 +70,17 @@ class ResolveRotationKeyOperandsPass:
         if not rotations:
             return PassResult.unchanged(program)
 
-        config = self._config(workspace)
+        config = workspace.get(CkksConfig)
+        if not isinstance(config, CkksConfig):
+            return PassResult.unchanged(
+                program,
+                matched=len(rotations),
+                skipped=len(rotations),
+                diagnostics=("Rotation lowering awaits CKKS parameters",),
+            )
         slot_count = config.num_slots
         transformed = inserted = 0
+        diagnostics = []
         for operation in rotations:
             if len(operation.operands) != 1:
                 raise ValueError(
@@ -85,24 +98,41 @@ class ResolveRotationKeyOperandsPass:
                 slot_count,
             )
             source = operation.operands[0]
+            if normalized_step == 0:
+                _replace_with_result_cast(operation, (), source)
+                transformed += 1
+                continue
+            try:
+                domain, residues = infer_logical_representation(source, {})
+            except ValueError as error:
+                diagnostics.append(f"{display_name(operation)}: {error}")
+                continue
             typed = cast_before(
                 operation,
                 source,
                 ciphertext_type(
-                    source,
-                    domain="coefficient",
-                    residues="standard",
-                    components=2,
+                    source, domain=domain, residues=residues, components=2
                 ),
                 name_hint=f"{display_name(operation)}_ciphertext",
             )
             inserted += typed is not source
-            if normalized_step == 0:
-                _replace_with_result_cast(operation, (), typed)
-                transformed += 1
-                inserted += 1
-                continue
-            symbol = f"rotation-key:{normalized_step}"
+            transitions = ()
+            if domain == "ntt":
+                converted = ckks.FromNttOp(
+                    typed,
+                    ciphertext_type(
+                        typed, domain="coefficient", residues="standard"
+                    ),
+                )
+                transitions = (converted,)
+                typed = converted.result
+            symbol = material_symbol(
+                operation, f"rotation-key:{normalized_step}"
+            )
+            program.set_material_description(
+                symbol,
+                {"kind": "RotationKey", "rotation_step": normalized_step},
+            )
 
             key_type = ckks.EvaluationKeyType().with_state(
                 {
@@ -124,21 +154,20 @@ class ResolveRotationKeyOperandsPass:
                     ),
                 }
             )
-            key = core.ResourceRefOp(
+            key = core.MaterialRefOp(
                 key_type,
                 symbol=symbol,
-                kind="rotation-key",
             )
             key.value.name_hint = f"rotation_key_{normalized_step}"
             rotation = ckks.RotateOp(typed, key.value, typed.type)
             rotation.result.name_hint = operation.result.name_hint
             _replace_with_result_cast(
                 operation,
-                (key, rotation),
+                (*transitions, key, rotation),
                 rotation.result,
             )
             transformed += 1
-            inserted += 3
+            inserted += 3 + len(transitions)
 
         return PassResult(
             program,

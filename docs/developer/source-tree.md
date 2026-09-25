@@ -1,9 +1,6 @@
 # Source tree
 
-This map identifies the current implementation owners for common development
-tasks. It emphasizes the Eager and Compile use models and the Backend execution
-layer they share. Generated files and private helpers may move within a release
-series.
+This map identifies the current implementation owners for common development tasks. It emphasizes the Eager and Compile use models and the Backend execution layer they share. Generated files and private helpers may move within a release series.
 
 ## Repository map
 
@@ -23,15 +20,15 @@ fhelium/
     ntt/            plans, tables, resources, and configured NTT executors
     memory/         registered placement-transfer operations and resources
     distributed/    registered process-group operations and resources
+    triton/         selected RNS kernels and fusion-region code generation
   native/          extension loading, ABI diagnostics, CUDA inspection, typed wrappers
   runtime/         topology/memory observation, buffers, signatures, and CUDA Graphs
   distributed/     process setup, typed transport, and public value collectives
   rng/             cryptographic random-stream interface and implementations
-  serialization/   versioned public-value serialization
+  serialization/   versioned public-value and Compilation persistence
   artifacts/       logical artifact references, generations, and repository policy
   residency/       live-value ownership, accounting, admission, plans, and lifetimes
-  experimental/    opt-in bootstrap, multiparty CKKS, and JIT
-    jit/            runtime bindings, provider assignment, region planning, executables
+  experimental/    opt-in bootstrap and multiparty CKKS
   legacy/          handwritten reference implementations used for differential work
   benchmarks/      benchmark definitions, evidence schemas, and built-in runners
   utils/           narrowly shared algorithms such as rotation decomposition
@@ -61,7 +58,11 @@ graph TB
     end
 
     subgraph Compile
+        MANUAL[Manual Compilation and Pipeline]
+        CALLABLE[Callable capture and specialization]
         CAP[Capture, parse, or construct Program]
+        MANUAL --> CAP
+        CALLABLE --> CAP
         PASS[Caller-composed Compile passes]
         LINK[Backend linking passes]
         EXE[ProgramExecutable]
@@ -74,16 +75,15 @@ graph TB
     DEVICE[CPU C++ or CUDA kernel]
 
     APP --> ENG
-    APP --> CAP
+    APP --> MANUAL
+    APP --> CALLABLE
     ECALL --> IMPL
     EXE --> IMPL
     IMPL --> PY --> NATIVE --> DEVICE
+    IMPL --> GENERATED[Backend-generated kernels]
 ```
 
-Eager executes a requested operation without an SSA graph. Compile owns Program
-construction and transformation, then links a complete Program before running
-it. Both paths invoke the `OperationImplementation` interface with Tensor
-payloads and concrete resources.
+Eager executes a requested operation without an SSA graph. Compile owns Program construction and transformation, then links a complete Program before running it. Manual Program/Pipeline execution and callable specialization use the same Compile machinery. Eager and Compile invoke the `OperationImplementation` interface with Tensor payloads and concrete resources.
 
 ## Public values and configuration
 
@@ -97,9 +97,7 @@ payloads and concrete resources.
 | Tensor movement and value-local byte accounting | `fhelium/values/tensor_resident.py` |
 | CKKS configuration and packaged primes | `fhelium/config/` |
 
-Public value classes carry value state and Tensor storage. Execution services,
-process groups, artifact names, and application cache policy remain with their
-own packages.
+Public value classes carry value state and Tensor storage. Execution services, process groups, artifact names, and application cache policy remain with their own packages.
 
 ## Eager execution
 
@@ -112,9 +110,7 @@ own packages.
 | Eager input checks | `fhelium/eager/_validation.py` |
 | Device resource construction | `fhelium/backend/ckks/materialization.py` |
 
-An `Engine` owns one CKKS configuration and creates per-device services lazily.
-Evaluator operations dispatch from operand placement. Cross-device key copying
-occurs only when the caller enables automatic key replication.
+An `Engine` owns one CKKS configuration and creates per-device services lazily. Evaluator operations dispatch from operand placement. Cross-device key copying occurs only when the caller enables automatic key replication.
 
 ## IR and Compile
 
@@ -126,6 +122,8 @@ occurs only when the caller enables automatic key replication.
 | Program analyses | `fhelium/ir/_analysis.py` |
 | Compilation and caller-owned workspace | `fhelium/compile/_compilation.py`, `fhelium/compile/_workspace.py` |
 | Pass and Pipeline protocol | `fhelium/compile/_pipeline.py` |
+| Tensor material provision | `fhelium/compile/_materials.py`, `fhelium/compile/passes/backend/_prepare_operands.py` |
+| Prepared host execution | `fhelium/compile/passes/backend/_prepare_host.py`, `fhelium/compile/passes/codegen/_host.py` |
 | Source capture and input roles | `fhelium/compile/frontend/` |
 | Semantic-to-logical transformation | `fhelium/compile/passes/frontend/` |
 | CKKS state and scheduling passes | `fhelium/compile/passes/ckks/` |
@@ -133,9 +131,7 @@ occurs only when the caller enables automatic key replication.
 | Implementation assignment and Backend linking passes | `fhelium/compile/passes/backend/` |
 | Eager and Backend Python emission | `fhelium/compile/codegen/`, `fhelium/compile/passes/codegen/` |
 
-A Program may retain unknown CKKS state until a selected pass requires and
-assigns it. Compile passes may preserve a CKKS operation for a whole-operation
-implementation or lower it to registered RNS and NTT operations.
+A Program may retain unknown CKKS state until a selected pass requires and assigns it. Compile passes may preserve a CKKS operation for a whole-operation implementation or lower it to registered RNS and NTT operations.
 
 ## Backend execution
 
@@ -146,21 +142,18 @@ implementation or lower it to registered RNS and NTT operations.
 | OperationBackend, dispatch tables, and ProgramExecutable | `fhelium/backend/execution.py` |
 | Backend workspace | `fhelium/backend/workspace.py` |
 | Resource requirements and linked bindings | `fhelium/backend/resources.py` |
-| CKKS operation classes and whole-operation implementations | `fhelium/backend/ckks/operations.py` |
+| Whole CKKS arithmetic and key switching | `fhelium/backend/ckks/arithmetic.py`, `fhelium/backend/ckks/key_switch.py` |
 | Codec | `fhelium/backend/ckks/codec/` |
-| Encryption, decryption, Galois mapping, and key creation | `fhelium/backend/ckks/crypto/` |
-| CKKS resource materialization | `fhelium/backend/ckks/materialization.py`, `fhelium/backend/ckks/resources.py` |
-| Rescale and key-switch arithmetic | `fhelium/backend/ckks/rescale.py`, `fhelium/backend/ckks/operations.py` |
+| Encryption, decryption, and key creation | `fhelium/backend/ckks/crypto/` |
+| CKKS resource materialization | `fhelium/backend/ckks/materialization.py`, `fhelium/backend/ckks/crypto/_resources.py` |
+| Rescale and key-switch arithmetic | `fhelium/backend/rns/rescale.py`, `fhelium/backend/rns/modup.py`, `fhelium/backend/rns/moddown.py`, `fhelium/backend/rns/key_product.py` |
 | Scheduled hoisted rotation execution | `fhelium/backend/ckks/rotation/` |
 | RNS chain, layout, parameters, and decomposition | `fhelium/backend/rns/` |
 | NTT context, resources, plans, tables, and executors | `fhelium/backend/ntt/` |
 | Placement-transfer operations | `fhelium/backend/memory/` |
 | Process-group operations | `fhelium/backend/distributed/` |
 
-`OperationBackend` owns an implementation registry and an immutable
-`BackendWorkspace`. Eager resolves and caches individual direct calls through
-that owner. Compile callers use Backend-stage passes to resolve a Program's
-operations, bind resources and materials, and create a `ProgramExecutable`.
+`OperationBackend` owns an implementation registry and an immutable `BackendWorkspace`. Eager resolves and caches individual direct calls through that owner. Compile callers use Backend-stage passes to resolve a Program's operations, bind resources and materials, and create a `ProgramExecutable`.
 
 ## Native ABI and kernels
 
@@ -176,14 +169,13 @@ operations, bind resources and materials, and create a `ProgramExecutable`.
 | Shared Tensor and RNS helpers | `csrc/ops/common/` |
 | CUDA topology inspection | `fhelium/native/cuda/`, `csrc/runtime/cuda_info.{h,cpp}` |
 
-Run `python scripts/generate_native_wrappers.py` after changing a native schema
-or the generator, then regenerate the wrapper output.
+Run `python scripts/generate_native_wrappers.py` after changing a native schema or the generator, then regenerate the wrapper output.
 
-## Experimental JIT, runtime, distribution, and storage
+## Callable preparation, runtime, distribution, and storage
 
 | Goal | Location |
 | --- | --- |
-| Experimental JIT | `fhelium/experimental/jit/` |
+| Callable preparation and specialization | `fhelium/compile/` |
 | CPU/CUDA topology and memory observation | `fhelium/runtime/topology.py`, `fhelium/runtime/memory.py` |
 | Reusable buffers and CUDA Graphs | `fhelium/runtime/buffer.py`, `fhelium/runtime/cuda_graph.py` |
 | Rank and process-group initialization | `fhelium/distributed/_state.py` |
@@ -193,7 +185,7 @@ or the generator, then regenerate the wrapper output.
 | Residency ownership and accounting | `fhelium/residency/manager.py`, `fhelium/residency/model.py` |
 | Residency requests, policy, plans, and controller | `fhelium/residency/request.py`, `policy.py`, `plan.py`, `controller.py` |
 | Leases and tensor-free snapshots | `fhelium/residency/lease.py`, `fhelium/residency/snapshot.py` |
-| Versioned value serialization | `fhelium/serialization/` |
+| Versioned value and Compilation serialization | `fhelium/serialization/value.py`, `fhelium/serialization/compilation.py` |
 | Composable bootstrapping and presets | `fhelium/experimental/bootstrap/` |
 | Multiparty CKKS | `fhelium/experimental/mpc/` |
 
@@ -228,10 +220,10 @@ fhelium.values → fhelium.eager.Engine → Eager operation dispatcher
 For Program transformation and execution:
 
 ```text
-fhelium.ir.Program → fhelium.compile Pipeline → Backend linking passes
+Program → Compilation → Pipeline.run(compilation) → Backend linking passes
 → ProgramExecutable → Backend implementation → native wrapper → csrc kernel
 ```
 
-Read the focused tests beside each owner before changing an execution path.
-They capture value-state, mutation, resource, singleton-row, last-depth, and
-Q/QP behavior that may not be visible from a benchmark.
+For callable specialization, `compile.compile` captures or accepts the same Program, prepares it through a Pipeline, and caches its linked executable. See [prepared host execution](prepared-host-execution.md).
+
+Read the focused tests beside each owner before changing an execution path. They capture value-state, mutation, resource, singleton-row, last-depth, and Q/QP behavior that may not be visible from a benchmark.

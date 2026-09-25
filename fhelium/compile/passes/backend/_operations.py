@@ -12,17 +12,19 @@ from xdsl.ir import Operation
 from fhelium.backend.execution import ProgramDispatchTable
 from fhelium.backend.resources import ResourceRequirement
 from fhelium.ir import Program
-from fhelium.ir.dialects import core, distributed
+from fhelium.ir.dialects import core, distributed, fusion
 
 _STRUCTURAL_OPERATION_TYPES = (
     UnrealizedConversionCastOp,
     core.MaterialRefOp,
+    core.ConstantOp,
     core.ResourceRefOp,
     ReturnOp,
     scf.ForOp,
     scf.IfOp,
     scf.YieldOp,
     distributed.YieldOp,
+    fusion.YieldOp,
     arith.ConstantOp,
     arith.AddiOp,
     arith.SubiOp,
@@ -42,10 +44,19 @@ _STRUCTURAL_OPERATION_TYPES = (
 def executable_operations(program: Program) -> tuple[Operation, ...]:
     """Return operations that require registered Backend implementations."""
 
+    def owned_by_fusion(operation: Operation) -> bool:
+        parent = operation.parent_op()
+        while parent is not None:
+            if isinstance(parent, fusion.FusedOp):
+                return True
+            parent = parent.parent_op()
+        return False
+
     return tuple(
         operation
         for operation in program.single_block("main").walk()
         if not isinstance(operation, _STRUCTURAL_OPERATION_TYPES)
+        and not owned_by_fusion(operation)
     )
 
 

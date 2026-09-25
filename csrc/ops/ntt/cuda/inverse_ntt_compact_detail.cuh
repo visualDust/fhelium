@@ -12,6 +12,7 @@ __global__ void inverse_ntt_compact_stage_kernel(
   const int batch = blockIdx.z;
   const int j = blockIdx.y * kCudaBlockSize + threadIdx.x;
   const int N = static_cast<int>(a_acc.size(2));
+  if (j >= N / 2) return;
   const int q = 1 << stage;
   const int group = j >> stage;
   const int rr = j & (q - 1);
@@ -231,19 +232,18 @@ void launch_inverse_ntt_compact_grouped_stage_range_cuda(
     const int grouped_stage_count,
     const int transform_rows,
     const int start_stage,
+    const int end_stage,
     cudaStream_t stream) {
   const auto params_acc = FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2);
-  int logN = 0;
-  for (int n = static_cast<int>(a.size(2)); n > 1; n >>= 1) ++logN;
   const auto N_half = a.size(2) / 2;
-  dim3 dim_grid_stage(transform_rows, N_half / kCudaBlockSize, a.size(0));
+  dim3 dim_grid_stage(transform_rows, (N_half + kCudaBlockSize - 1) / kCudaBlockSize, a.size(0));
 
   auto a_acc = FHELIUM_CUDA_ACCESSOR32(a, scalar_t, 3);
   const auto inverse_twiddles_compact_acc =
       FHELIUM_CUDA_ACCESSOR32(inverse_twiddles, scalar_t, 2);
 
-  for (int stage = start_stage; stage < logN;) {
-    const int remaining = logN - stage;
+  for (int stage = start_stage; stage < end_stage;) {
+    const int remaining = end_stage - stage;
     const int grouped_stages = std::min(grouped_stage_count, remaining);
     launch_inverse_ntt_compact_grouped_stages_cuda<scalar_t>(
         a_acc,
@@ -297,5 +297,6 @@ void launch_inverse_ntt_compact_grouped_smem_cuda(
       grouped_stage_count,
       transform_rows,
       effective_smem_stage_count,
+      logN,
       stream);
 }

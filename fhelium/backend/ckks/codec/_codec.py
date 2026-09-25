@@ -1,56 +1,40 @@
-"""CKKS message, coefficient, and RNS plaintext conversion algorithms.
-
-Registered operation implementations supply the execution placement, random
-stream, and RNS resources for each call.
-"""
+"""CKKS coefficient quantization and slot reconstruction over supplied tables."""
 
 from __future__ import annotations
 
 import torch
-
-from fhelium.config import CkksConfig
-from fhelium.rng import Csprng
-
 from . import _embedding
 
 
 def encode_tensor(
     message: torch.Tensor,
+    pre: torch.Tensor,
+    twister: torch.Tensor,
+    rounding_state: torch.Tensor,
     *,
-    config: CkksConfig,
-    rng: Csprng,
     scale: float,
 ) -> torch.Tensor:
-    """Encode a message Tensor on its current device into coefficients."""
-
-    slots = _embedding.make_slot_tensor(
-        message,
-        config.num_slots,
-        message.device,
-    )
+    slots = _embedding.make_slot_tensor(message, pre.numel(), message.device)
     return _embedding.encode_slots(
         slots,
-        rng=rng,
+        pre=pre,
+        twister=twister,
+        rounding_state=rounding_state,
         scale=scale,
-        device=message.device,
-        generator=config.galois_generator,
     )
 
 
 def decode_tensor(
     coefficients: torch.Tensor,
+    post: torch.Tensor,
+    skewer: torch.Tensor,
     *,
-    config: CkksConfig,
     scale: float,
     is_real: bool,
 ) -> torch.Tensor:
-    """Decode coefficients into slots on the coefficient Tensor device."""
-
     decoded = _embedding.decode_slots(
-        coefficients,
-        scale=scale,
-        generator=config.galois_generator,
-    )[..., : config.num_slots]
+        coefficients, post=post, skewer=skewer, scale=scale
+    )[..., : coefficients.size(-1) // 2]
     return decoded.real if is_real else decoded
 
 

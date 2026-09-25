@@ -77,132 +77,225 @@ const learningSidebar = [
     items: [
       { text: 'Overview', link: '/tutorial/' },
       { text: 'Installation', link: '/tutorial/installation' },
-      {
-        text: 'Support and security scope',
-        link: '/tutorial/support-and-security',
-      },
       { text: 'Tutorials', link: '/tutorial/tutorials' },
     ],
   },
   {
-    text: 'CKKS',
+    text: 'Eager',
+    collapsed: false,
     items: [
       {
         text: '01 - Basic CKKS workflow',
         link: '/tutorial/basic-ckks-workflow',
       },
       {
-        text: '02 - Key material lifecycle',
+        text: '02 - Key creation and installation',
         link: '/tutorial/key-materials',
       },
       {
-        text: '04 - Modulus-chain depth',
+        text: '03 - Modulus-chain depth',
         link: '/tutorial/modulus-chain-depth',
       },
       {
-        text: '05 - Explicit scale management',
+        text: '04 - Actual scale management',
         link: '/tutorial/explicit-scale-management',
       },
       {
-        text: '06 - Late relinearization and NTT reuse',
+        text: '05 - NTT reuse and late relinearization',
         link: '/tutorial/late-relinearization-and-ntt-reuse',
       },
       {
-        text: '07 - Rotation hoisting',
+        text: '06 - Rotation hoisting',
         link: '/tutorial/rotation-hoisting',
       },
-    ],
-  },
-  {
-    text: 'Distributed execution',
-    collapsed: false,
-    items: [
       {
-        text: '08 - Independent ciphertexts',
-        link: '/tutorial/spmd-independent-ciphertexts',
-      },
-      {
-        text: '09 - Rotation-parallel matrix-vector',
-        link: '/tutorial/spmd-rotation-parallel-matvec',
-      },
-      {
-        text: '10 - Limb-parallel pipeline',
-        link: '/tutorial/spmd-limb-parallel-pipeline',
-      },
-    ],
-  },
-  {
-    text: 'Execution and lifecycle',
-    collapsed: false,
-    items: [
-      {
-        text: '03 - Values, memory, and persistence',
-        link: '/tutorial/value-memory-and-persistence',
-      },
-      {
-        text: '11 - CUDA Graph matrix-vector',
-        link: '/tutorial/cuda-graph-matvec',
-      },
-      {
-        text: '12 - Reusable value buffers',
-        link: '/tutorial/reusable-value-buffer',
-      },
-      {
-        text: '13 - Explicit residency plans and CUDA leases',
-        link: '/tutorial/explicit-residency',
-      },
-      {
-        text: '14 - Automatic residency admission',
-        link: '/tutorial/automatic-residency',
-      },
-      {
-        text: '15 - Homogeneous batching',
+        text: '07 - Homogeneous batching',
         link: '/tutorial/homogeneous-batching',
       },
       {
-        text: '16 - Compressed plaintexts',
+        text: '08 - Compressed plaintexts',
         link: '/tutorial/compressed-plaintext',
       },
     ],
   },
   {
-    text: 'Compile and IR examples',
+    text: 'Values, Serialization, and Artifacts',
     collapsed: false,
     items: [
       {
-        text: '17 - Compose and execute Compile passes',
+        text: '09 - Value movement and files',
+        link: '/tutorial/value-memory-and-persistence',
+      },
+      {
+        text: '10 - Named artifacts and generations',
+        link: '/tutorial/artifact-store',
+      },
+    ],
+  },
+  {
+    text: 'Compile',
+    collapsed: false,
+    items: [
+      {
+        text: '11 - JIT compilation',
+        link: '/tutorial/compile-jit',
+      },
+      {
+        text: '12 - Caller-composed Compile pipeline',
         link: '/tutorial/compose-and-execute-compile-pipeline',
       },
       {
-        text: '18 - Textual mixed-level IR',
+        text: '13 - Textual Program IR',
         link: '/tutorial/ir-textual-program',
       },
       {
-        text: '19 - Customize a Compile pass',
+        text: '14 - Custom BSGS transformation',
         link: '/tutorial/customize-compile-pass-and-pipeline',
       },
       {
-        text: '20 - Generate editable Python',
+        text: '15 - Generated Python',
         link: '/tutorial/generate-python',
       },
       {
-        text: '21 - Rank-local collective IR',
+        text: '16 - Program materials and persistence',
+        link: '/tutorial/compile-material-persistence',
+      },
+    ],
+  },
+  {
+    text: 'Runtime',
+    collapsed: false,
+    items: [
+      {
+        text: '17 - Double-buffered execution',
+        link: '/tutorial/reusable-value-buffer',
+      },
+      {
+        text: '18 - CUDA Graph replay',
+        link: '/tutorial/cuda-graph-matvec',
+      },
+    ],
+  },
+  {
+    text: 'Residency',
+    collapsed: false,
+    items: [
+      {
+        text: '19 - Manual Residency',
+        link: '/tutorial/explicit-residency',
+      },
+      {
+        text: '20 - Automatic Residency admission',
+        link: '/tutorial/automatic-residency',
+      },
+    ],
+  },
+  {
+    text: 'Distributed',
+    collapsed: false,
+    items: [
+      {
+        text: '21 - Data-parallel encrypted batches',
+        link: '/tutorial/spmd-independent-ciphertexts',
+      },
+      {
+        text: '22 - Additive partial results',
+        link: '/tutorial/spmd-rotation-parallel-matvec',
+      },
+      {
+        text: '23 - RNS-sharded execution',
+        link: '/tutorial/spmd-limb-parallel-pipeline',
+      },
+      {
+        text: '24 - Rank-local collective IR',
         link: '/tutorial/rank-local-collective-ir',
       },
     ],
   },
   {
-    text: 'Experimental features',
+    text: 'Experimental',
     collapsed: false,
     items: [
       {
-        text: '22 - Refresh with composable bootstrapping',
+        text: '25 - Experimental bootstrapping',
         link: '/tutorial/composable-ckks-bootstrap',
       },
       {
-        text: '23 - Multiparty CKKS',
+        text: '26 - Experimental multiparty CKKS',
         link: '/tutorial/multiparty-ckks',
       },
+    ],
+  },
+]
+
+const howToSidebar = [
+  {
+    text: 'How-to guides',
+    items: [
+      { text: 'Overview', link: '/how-to/' },
+    ],
+  },
+  {
+    text: 'Describe and execute calculations',
+    items: [
+      { text: 'Evaluate CKKS data eagerly', link: '/how-to/evaluate-ckks-data' },
+      { text: 'Build a Program and pipeline', link: '/how-to/build-program-pipeline' },
+      { text: 'Compile a callable', link: '/how-to/compile-callable' },
+      { text: 'Write a Compile pass', link: '/how-to/write-compilation-pass' },
+      { text: 'Inspect Program transformations', link: '/how-to/visualize-mixed-level-ir' },
+    ],
+  },
+  {
+    text: 'Parameters and implementations',
+    items: [
+      { text: 'Choose parameters and depth', link: '/how-to/choose-preset-and-depth' },
+      { text: 'Provision evaluation keys', link: '/how-to/provision-keyset' },
+      { text: 'Select an operation implementation', link: '/how-to/select-operation-implementation' },
+      { text: 'Choose an NTT implementation', link: '/how-to/choose-ntt-backend' },
+    ],
+  },
+  {
+    text: 'Materials and deployment',
+    items: [
+      { text: 'Bind and persist a compiled Program', link: '/how-to/persist-compiled-program' },
+      { text: 'Manage named artifacts', link: '/how-to/manage-artifacts' },
+      { text: 'Place computation on CPU or CUDA', link: '/how-to/switch-cpu-cuda' },
+    ],
+  },
+  {
+    text: 'Repeated execution and memory',
+    items: [
+      { text: 'Capture repeated execution', link: '/how-to/capture-repeated-evaluator' },
+      { text: 'Choose Residency controls', link: '/how-to/choose-residency-control-level' },
+      { text: 'Stream within a memory budget', link: '/how-to/stream-bounded-memory' },
+      { text: 'Diagnose a Residency failure', link: '/how-to/diagnose-residency-failure' },
+    ],
+  },
+  {
+    text: 'Distributed execution',
+    items: [
+      { text: 'Partition work across GPUs', link: '/how-to/choose-multi-gpu-partition' },
+      { text: 'Diagnose a distributed hang', link: '/how-to/diagnose-distributed-hang' },
+    ],
+  },
+  {
+    text: 'Diagnosis and performance',
+    items: [
+      { text: 'Diagnose value-state errors', link: '/how-to/diagnose-value-state-mismatch' },
+      { text: 'Diagnose Compile preparation', link: '/how-to/diagnose-compile-preparation' },
+      { text: 'Inspect runtime and topology', link: '/how-to/inspect-runtime-and-cuda' },
+      { text: 'Profile and optimize a workload', link: '/how-to/optimize-workload' },
+      { text: 'Choose a batch size', link: '/how-to/choose-homogeneous-batch-size' },
+      { text: 'Measure NTT candidates', link: '/how-to/screen-ntt-backends' },
+      { text: 'Run and submit a benchmark', link: '/benchmarks/run-and-submit' },
+    ],
+  },
+  {
+    text: 'Experimental',
+    items: [
+      { text: 'Compose a bootstrap circuit', link: '/how-to/compose-bootstrap-circuit' },
+      { text: 'Implement a bootstrap component', link: '/how-to/implement-bootstrap-component' },
+      { text: 'Use multiparty CKKS', link: '/how-to/use-multiparty-ckks' },
     ],
   },
 ]
@@ -210,106 +303,74 @@ const learningSidebar = [
 const developerSidebar = [
   {
     text: 'Developer Guide',
-    items: [{ text: 'Overview', link: '/developer/' }],
+    items: [
+      { text: 'Overview', link: '/developer/' },
+    ],
   },
   {
-    text: 'Architecture and native execution',
+    text: 'Architecture overview',
     items: [
+      { text: 'Execution stack', link: '/developer/engine-native-stack' },
       { text: 'Source tree', link: '/developer/source-tree' },
-      {
-        text: 'Python-to-native stack',
-        link: '/developer/engine-native-stack',
-      },
+      { text: 'Security', link: '/developer/security' },
     ],
   },
   {
-    text: 'Arithmetic internals',
+    text: 'Values and operations',
     items: [
-      {
-        text: 'RNS and NTT',
-        link: '/developer/rns-and-ntt',
-      },
-      {
-        text: 'Multiplication, key switching, and rescale',
-        link: '/developer/multiplication-keyswitch-rescale',
-      },
-      {
-        text: 'CompressedPlaintext internals',
-        link: '/developer/compressed-plaintext-internals',
-      },
-      {
-        text: 'CKKS bootstrapping',
-        link: '/developer/composable-ckks-bootstrap',
-      },
+      { text: 'Value state and Eager execution', link: '/developer/compiler-state-and-eager-execution' },
+      { text: 'Operation definitions and registration', link: '/developer/operation-registration-and-selection' },
+      { text: 'IR operations and implementations', link: '/developer/ir-operation-implementation-index' },
     ],
   },
   {
-    text: 'Distributed and execution',
+    text: 'Programs and Compile',
     items: [
-      {
-        text: 'Distributed internals',
-        link: '/developer/distributed-internals',
-      },
-      {
-        text: 'Buffers and CUDA Graphs',
-        link: '/developer/execution-buffers-and-cuda-graphs',
-      },
+      { text: 'IR and capture', link: '/developer/compiler-stack-internals' },
+      { text: 'Compilation and passes', link: '/developer/compilation-and-passes' },
+      { text: 'Materials and preparation', link: '/developer/materials-and-preparation' },
     ],
   },
   {
-    text: 'Compiler stack',
+    text: 'Backend execution',
     items: [
-      {
-        text: 'Compiler stack internals',
-        link: '/developer/compiler-stack-internals',
-      },
-      {
-        text: 'Compiler state and eager execution',
-        link: '/developer/compiler-state-and-eager-execution',
-      },
-      {
-        text: 'Operation declaration and implementation selection',
-        link: '/developer/operation-registration-and-selection',
-      },
-      {
-        text: 'IR operation and implementation index',
-        link: '/developer/ir-operation-implementation-index',
-      },
+      { text: 'Linking and prepared host execution', link: '/developer/prepared-host-execution' },
+      { text: 'Generated kernels and fusion', link: '/developer/compiled-execution-and-kernels' },
     ],
   },
   {
-    text: 'Storage and residency',
+    text: 'Arithmetic implementations',
     items: [
-      {
-        text: 'ArtifactStore internals',
-        link: '/developer/artifact-store-v1',
-      },
-      {
-        text: 'Residency state and ownership',
-        link: '/developer/residency-state-and-ownership',
-      },
-      {
-        text: 'Residency plans and execution',
-        link: '/developer/residency-plans-and-execution',
-      },
+      { text: 'Encoding, randomness, and keys', link: '/developer/encoding-randomness-and-keys' },
+      { text: 'RNS and NTT', link: '/developer/rns-and-ntt' },
+      { text: 'Multiplication, key switching, and rescale', link: '/developer/multiplication-keyswitch-rescale' },
+      { text: 'Compressed plaintext', link: '/developer/compressed-plaintext-internals' },
+    ],
+  },
+  {
+    text: 'Runtime, storage, and communication',
+    items: [
+      { text: 'Compilation persistence', link: '/developer/compilation-persistence' },
+      { text: 'ArtifactStore', link: '/developer/artifact-store-v1' },
+      { text: 'Buffers and CUDA Graphs', link: '/developer/execution-buffers-and-cuda-graphs' },
+      { text: 'Residency state and ownership', link: '/developer/residency-state-and-ownership' },
+      { text: 'Residency plans and execution', link: '/developer/residency-plans-and-execution' },
+      { text: 'Distributed execution', link: '/developer/distributed-internals' },
     ],
   },
   {
     text: 'Contributing',
     items: [
       { text: 'Contributor guide', link: '/developer/contributing' },
-      {
-        text: 'Native operator workflow',
-        link: '/developer/native-operator-workflow',
-      },
-      {
-        text: 'Documentation guide',
-        link: '/developer/documentation',
-      },
-      {
-        text: 'Binary packaging and release',
-        link: '/developer/binary-packaging-and-release',
-      },
+      { text: 'Native operator workflow', link: '/developer/native-operator-workflow' },
+      { text: 'Binary packaging', link: '/developer/binary-packaging-and-release' },
+      { text: 'Documentation tooling', link: '/developer/documentation' },
+    ],
+  },
+  {
+    text: 'Experimental',
+    items: [
+      { text: 'CKKS bootstrapping', link: '/developer/composable-ckks-bootstrap' },
     ],
   },
 ]
@@ -587,122 +648,7 @@ export default defineConfig({
           ],
         },
       ],
-      '/how-to/': [
-        {
-          text: 'How-to guides',
-          items: [{ text: 'Overview', link: '/how-to/' }],
-        },
-        {
-          text: 'CKKS',
-          items: [
-            {
-              text: 'Choose a preset and chain depth',
-              link: '/how-to/choose-preset-and-depth',
-            },
-            {
-              text: 'Provision the minimum keyset',
-              link: '/how-to/provision-keyset',
-            },
-            {
-              text: 'Diagnose a value-state mismatch',
-              link: '/how-to/diagnose-value-state-mismatch',
-            },
-          ],
-        },
-        {
-          text: 'Distributed execution',
-          items: [
-            {
-              text: 'Choose a multi-GPU partition',
-              link: '/how-to/choose-multi-gpu-partition',
-            },
-            {
-              text: 'Diagnose a distributed hang',
-              link: '/how-to/diagnose-distributed-hang',
-            },
-          ],
-        },
-        {
-          text: 'Compiler and IR',
-          items: [
-            {
-              text: 'Visualize mixed-level IR',
-              link: '/how-to/visualize-mixed-level-ir',
-            },
-          ],
-        },
-        {
-          text: 'Experimental features',
-          items: [
-            {
-              text: 'Compose a bootstrap callable',
-              link: '/how-to/compose-bootstrap-circuit',
-            },
-            {
-              text: 'Implement a bootstrap component',
-              link: '/how-to/implement-bootstrap-component',
-            },
-            {
-              text: 'Use multiparty CKKS',
-              link: '/how-to/use-multiparty-ckks',
-            },
-          ],
-        },
-        {
-          text: 'Execution and lifecycle',
-          items: [
-            {
-              text: 'Manage artifacts',
-              link: '/how-to/manage-artifacts',
-            },
-            {
-              text: 'Capture a repeated evaluator',
-              link: '/how-to/capture-repeated-evaluator',
-            },
-            {
-              text: 'Choose a Residency control level',
-              link: '/how-to/choose-residency-control-level',
-            },
-            {
-              text: 'Stream bounded CUDA memory',
-              link: '/how-to/stream-bounded-memory',
-            },
-            {
-              text: 'Diagnose a Residency failure',
-              link: '/how-to/diagnose-residency-failure',
-            },
-          ],
-        },
-        {
-          text: 'Performance',
-          items: [
-            {
-              text: 'Inspect runtime and CUDA topology',
-              link: '/how-to/inspect-runtime-and-cuda',
-            },
-            {
-              text: 'Screen NTT backends',
-              link: '/how-to/screen-ntt-backends',
-            },
-            {
-              text: 'Analyze and choose an NTT backend',
-              link: '/how-to/choose-ntt-backend',
-            },
-            {
-              text: 'Run and submit a benchmark',
-              link: '/benchmarks/run-and-submit',
-            },
-            {
-              text: 'Choose a homogeneous batch size',
-              link: '/how-to/choose-homogeneous-batch-size',
-            },
-            {
-              text: 'Optimize a workload systematically',
-              link: '/how-to/optimize-workload',
-            },
-          ],
-        },
-      ],
+      '/how-to/': howToSidebar,
       '/developer/': developerSidebar,
       '/api/': apiSidebar,
       '/about/': aboutSidebar,

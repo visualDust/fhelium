@@ -5,11 +5,7 @@ description: The FHElium name, pronunciation, design system, logo usage, and dow
 
 # FHElium branding
 
-FHElium's identity connects fully homomorphic encryption with the compact,
-layered structure of a helium nucleus. The name, nucleus mark, color system,
-and typography express one engineering principle: sophisticated encrypted
-execution should be assembled from a small set of typed, inspectable
-interfaces, invariants, and requirements.
+FHElium's identity connects fully homomorphic encryption with the compact, layered structure of a helium nucleus. The name, nucleus mark, color system, and typography express one engineering principle: sophisticated encrypted execution should be assembled from a small set of typed, inspectable interfaces, invariants, and requirements.
 
 <div class="brand-lockup-pair" aria-label="FHElium horizontal logo lockups">
   <figure class="brand-surface is-light">
@@ -30,10 +26,7 @@ The name is formed by placing **F** before **helium**:
   <strong>F</strong><span> + </span><strong>helium</strong><span> = </span><strong>FHElium</strong>
 </p>
 
-The capitalization makes the first three letters, **FHE**, immediately
-visible while retaining *helium* as the spoken and visual base. Use
-`FHElium` for the project and product name, and use lowercase `fhelium` for
-the Python package, import path, command, and filesystem namespace.
+The capitalization makes the first three letters, **FHE**, immediately visible while retaining *helium* as the spoken and visual base. Use `FHElium` for the project and product name, and use lowercase `fhelium` for the Python package, import path, command, and filesystem namespace.
 
 Two pronunciations are accepted:
 
@@ -42,16 +35,11 @@ Two pronunciations are accepted:
 | **“philium”** | /ˈfɪliəm/ | Compact conversational reading |
 | **“F-helium”** | /ˌɛf ˈhiːliəm/ | Letter-by-letter reading that emphasizes FHE |
 
-Written technical material should retain the prescribed `FHElium` capitalization
-regardless of the spoken form.
+Written technical material should retain the prescribed `FHElium` capitalization regardless of the spoken form.
 
 ## Shape
 
-The mark abstracts the **helium-3 nucleus** as three overlapping circular
-fields: two proton fields and one neutron field. Their overlap forms one
-compact body without erasing the outline of any constituent field. The
-12.7-degree rotation prevents the construction from reading as a static
-diagram and gives the mark a directional, computational character.
+The mark abstracts the **helium-3 nucleus** as three overlapping circular fields: two proton fields and one neutron field. Their overlap forms one compact body without erasing the outline of any constituent field. The 12.7-degree rotation prevents the construction from reading as a static diagram and gives the mark a directional, computational character.
 
 <div class="brand-mark-grid" aria-label="FHElium nucleus mark variants">
   <figure class="brand-surface is-light">
@@ -68,20 +56,13 @@ diagram and gives the mark a directional, computational character.
   </figure>
 </div>
 
-The construction is an identity abstraction rather than a physical particle
-diagram. Circle positions, radii, opacity, and color encode visual hierarchy;
-they do not represent measured nuclear geometry or particle color.
+The construction is an identity abstraction rather than a physical particle diagram. Circle positions, radii, opacity, and color encode visual hierarchy; they do not represent measured nuclear geometry or particle color.
 
-The monochrome construction keeps every field opaque and gives each sphere a
-continuous contrast outline. Drawing the spheres from back to front lets the
-outlines meet cleanly while making the front-to-back ordering visible.
+The monochrome construction keeps every field opaque and gives each sphere a continuous contrast outline. Drawing the spheres from back to front lets the outlines meet cleanly while making the front-to-back ordering visible.
 
 ## Design philosophy
 
-The nucleus reflects FHElium's engineering model: distinct layers overlap
-through defined interfaces to form one compact, coherent system. Cobalt
-carries the technical structure, while helium amber adds identity and emphasis
-without obscuring the relationships being shown.
+The nucleus reflects FHElium's engineering model: distinct layers overlap through defined interfaces to form one compact, coherent system. Cobalt carries the technical structure, while helium amber adds identity and emphasis without obscuring the relationships being shown.
 
 ## Color system
 
@@ -118,9 +99,7 @@ without obscuring the relationships being shown.
   </div>
 </div>
 
-The source logo uses cobalt `#3152C7`, amber `#E39A13`, spectral blue
-`#6677CF`, and warm bridge `#B88A5A`. Interface colors may raise luminance for
-dark-mode readability; the source logo colors remain unchanged.
+The source logo uses cobalt `#3152C7`, amber `#E39A13`, spectral blue `#6677CF`, and warm bridge `#B88A5A`. Interface colors may raise luminance for dark-mode readability; the source logo colors remain unchanged.
 
 ## Download assets
 
@@ -151,6 +130,4 @@ dark-mode readability; the source logo colors remain unchanged.
 | Flat color | [256 px](/brand/fhelium-mark-flat-256.png) · [128 px](/brand/fhelium-mark-flat-128.png) · [64 px](/brand/fhelium-mark-flat-64.png) · [32 px](/brand/fhelium-mark-flat-32.png) · [16 px](/brand/fhelium-mark-flat-16.png) |
 | Monochrome | [Black, 256 px](/brand/fhelium-mark-black-256.png) · [White, 256 px](/brand/fhelium-mark-white-256.png) |
 
-All raster assets use transparent backgrounds. Select the fixed white assets
-only when the destination surface is known to be dark; transparent image
-viewers commonly display them against white.
+All raster assets use transparent backgrounds. Select the fixed white assets only when the destination surface is known to be dark; transparent image viewers commonly display them against white.

@@ -9,7 +9,6 @@ from typing import Any, Self, cast
 import torch
 
 from fhelium.values import (
-    COMPRESSED_PLAINTEXT_FORMAT_VERSION,
     Ciphertext,
     CompressedPlaintext,
     ConjugationKey,
@@ -30,6 +29,7 @@ from fhelium.values.state import (
 )
 
 VALUE_SCHEMA_VERSION = 4
+COMPRESSED_PLAINTEXT_FORMAT_VERSION = 1
 
 _KEY_TYPES: dict[str, type] = {
     key_type.__name__: key_type
@@ -113,9 +113,7 @@ def _envelope_from_value(
             metadata={
                 "ring_dimension": value.ring_dimension,
                 "compression_layout": value.compression_layout,
-                "compression_format_version": (
-                    value.compression_format_version
-                ),
+                "compression_format_version": COMPRESSED_PLAINTEXT_FORMAT_VERSION,
                 "depth": value.depth,
                 "scale": value.scale,
                 "polynomial_domain": value.polynomial_domain,
@@ -366,11 +364,6 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
             ),
             prime_ids=_metadata_prime_ids(metadata, value_type),
             implicit_data=tensors.get("implicit_data"),
-            compression_format_version=_metadata_integer(
-                metadata,
-                "compression_format_version",
-                value_type,
-            ),
         )
 
     try:
@@ -601,8 +594,6 @@ def validate_value_description(
                 "CompressedPlaintext layout and implicit_data metadata disagree"
             )
         _validate_required_rns_metadata(typed_metadata, value_type)
-        if typed_metadata["residue_representation"] != "montgomery":
-            raise ValueError("CompressedPlaintext requires Montgomery residues")
         if tensor_metadata is not None:
             _validate_compressed_tensor_metadata(
                 tensor_metadata,

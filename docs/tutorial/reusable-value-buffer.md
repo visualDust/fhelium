@@ -1,187 +1,38 @@
-# Reusable value buffers
+# Double-buffered execution
 
-**Example source:** [`examples/12_reusable_value_buffer.py`](https://github.com/VisualDust/fhelium/blob/main/examples/12_reusable_value_buffer.py)
+**Example source:** [`examples/17_runtime_double_buffer.py`](https://github.com/VisualDust/fhelium/blob/main/examples/17_runtime_double_buffer.py)
 
-This example compares all-resident operation-ready plaintext weights with
-application-managed double buffering from pinned host memory into two fixed
-CUDA allocations. The tutorial explains source lifetime, transfer ordering,
-and the resulting memory bound; the evaluator remains eager CKKS
-code.
-
-## Start with a small resource allocation
-
-The example fixes its CKKS configuration to
-`Preset.slots32768_scale40_depth34_int64` at depth `20`, which is the
-configuration covered by the example's numerical evidence. For a practical
-functional run, reduce only the resource-scaling knobs:
+ReusableValueBuffer owns fixed storage for an ordinary Tensor/value tree. Example 17 alternates two CUDA buffers while streaming operation-ready plaintext tiles from pinned host memory. It demonstrates data-transfer ordering, not a performance comparison or an automatic memory-admission policy.
 
 ```bash
-python examples/12_reusable_value_buffer.py \
-  --num-tiles 4 \
-  --plaintexts-per-tile 4 \
-  --message-size 32
+python examples/17_runtime_double_buffer.py --device cuda:0
+python examples/17_runtime_double_buffer.py --num-tiles 4 --plaintexts-per-tile 4 --message-size 32
 ```
 
-This example is CUDA-specific and selects `cuda:0` internally. It deliberately
-does not expose preset or depth options: changing either would create a new
-numerical validation target rather than a smaller residency experiment.
+The example keeps its established depth-20, logN-16 CKKS configuration and absolute error threshold. The default uses four tiles of four plaintexts, rather than a multi-GiB all-resident benchmark. Two device tiles occupy about 60 MiB; evaluator resources and temporaries are additional allocations.
 
-Run the documented large point only on a GPU with sufficient memory:
+## Prepare the data and storage
 
-```bash
-python examples/12_reusable_value_buffer.py
-```
+Each tile has a different scalar weight sum, at most 0.125. Distinct tile data makes a missed or incorrectly ordered transfer observable. Host plaintexts are independently pinned, and `ReusableValueBuffer.like` initializes two independent CUDA storage trees from the first tile. The example retains each buffer's ordinary `value` view and records its Tensor addresses.
 
-Use `--skip-all-resident` if the complete CUDA weight set cannot fit.
+## Order transfer and computation
 
-## 1. Compare two residency strategies
+At iteration i:
 
-### All resident
+1. Enqueue tile i+1 into the other buffer on the transfer stream.
+2. Its copy waits for the event marking that buffer's previous reader.
+3. The compute stream waits on the current tile's CopyHandle.
+4. Evaluate the current tile using its retained value view.
+5. Record a read-completion event before that buffer can be overwritten.
 
-```mermaid
-flowchart LR
-    pinned["pinned CPU tiles"] --> copy["copy every tile to CUDA"]
-    copy --> retain["retain every CUDA Plaintext"]
-    retain --> evaluate["evaluate tile 0, tile 1, ..."]
-```
+`CopyHandle.wait_on(stream)` orders device work without a host synchronization at each iteration. The application retains the host source values while copies are in flight. Streams are synchronized before releasing buffers.
 
-### Double buffer
+## Check the result
 
-```text
-transfer stream: tile 0 -> A    tile 1 -> B    tile 2 -> A
-compute stream:                  use A          use B
-```
+The example validates every tile, checks that target addresses did not change, and prints host-weight and fixed-buffer byte counts. It does not include a second all-resident execution mode, allocator flushing, or timing statistics.
 
-Both modes call the same `evaluate_weight_tile` function and execute the same
-arithmetic schedule. Their memory footprints follow the application's
-placement and lifetime plan.
-
-## 2. Prepare independent pinned-host values
-
-```python
-data = torch.empty_like(
-    prototype.data,
-    device="cpu",
-    pin_memory=True,
-)
-data.copy_(prototype.data)
-```
-
-Pinned memory enables asynchronous host-to-device copies. Each `Plaintext`
-still carries depth, scale, representation, polynomial domain, modulus basis, residue representation, and
-prime IDs.
-
-The example creates application-selected tiles. FHElium does not decide how
-many values form a tile or in which order they are consumed.
-
-## 3. Allocate two fixed-address CUDA trees
-
-```python
-buffers = [
-    ReusableValueBuffer.like(host_tiles[0], device=torch.get_default_device())
-    for _ in range(2)
-]
-```
-
-[`ReusableValueBuffer`](../api/fhelium/runtime/buffer.md#reusablevaluebuffer) recursively
-allocates a value/tensor tree on the target device. Later copies reuse
-the same allocations.
-
-The example records every tensor `data_ptr()` before and after the workload
-and fails if any address changes.
-
-## 4. Enqueue transfer and retain source lifetime
-
-```python
-copy_handle = buffer.copy_from(
-    pinned_cpu_tile,
-    stream=transfer_stream,
-    non_blocking=True,
-    wait_for=previous_read_done,
-)
-```
-
-[`CopyHandle`](../api/fhelium/runtime/buffer.md#copyhandle) represents the enqueued copy. It
-retains the source tree so Python cannot free pinned memory while CUDA is still
-reading it.
-
-`wait_for` prevents a transfer from overwriting a buffer whose previous
-compute consumer has not finished.
-
-## 5. Order compute without synchronizing the CPU
-
-```python
-with torch.cuda.stream(compute_stream):
-    copy_handle.wait_on(compute_stream)
-    output = evaluate_weight_tile(
-        source,
-        buffer.value,
-        engine=engine,
-    )
-    read_done = torch.cuda.Event()
-    read_done.record(compute_stream)
-```
-
-`wait_on` inserts an event dependency into the consumer stream. It does not
-block the CPU waiting for the copy to finish. The recorded read event later
-protects the buffer against premature overwrite.
-
-## 6. Understand the memory bound
-
-For $T$ tiles of size $B_{\mathrm{tile}}$:
-
-$$
-B_{\mathrm{all}}
-\approx
-T B_{\mathrm{tile}},
-\qquad
-B_{\mathrm{double}}
-\approx
-2 B_{\mathrm{tile}}.
-$$
-
-Peak allocator measurements additionally include the shared ciphertext,
-outputs, evaluator temporaries, CUDA context state, and allocator reserve, so
-they exceed the theoretical weight-only value.
-
-The example reports both:
-
-- `memory_allocated`: live tensor storage;
-- `memory_reserved`: blocks retained by the PyTorch allocator.
-
-## 7. Keep the benchmark semantics clear
-
-Each tile contains operation-ready scalar plaintexts whose sum is the fixed
-workload constant `0.125`. The preset, input depth, and weight sum are fixed;
-`--num-tiles`, `--plaintexts-per-tile`, and `--message-size` scale the residency
-experiment without selecting a different CKKS parameter set. Tiles are
-evaluated sequentially, and the final tile output is checked against the same
-expected scalar product. The fixed `atol=1e-5, rtol=0` check is supported by
-evidence for this CKKS configuration, depth, and weight sum only.
-Expected slot values approach and cross zero, so the check uses an absolute
-criterion rather than a relative allowance that shrinks with the reference
-value.
-
-The example measures transfer and Residency behavior for each tile
-independently. A complete neural-network layer would add an explicit output
-accumulation step.
-
-## 8. Close reusable buffers
-
-```python
-for buffer in buffers:
-    buffer.close()
-```
-
-Closing the buffer makes ownership clear and releases target storage after all
-stream consumers complete.
+[Example 18](cuda-graph-matvec.md) uses CUDA Graph capture/replay instead of manually scheduling a streaming workload. [Example 19](explicit-residency.md) adds managed placement and leases, which are separate from the fixed storage and copy handles demonstrated here.
 
 ::: details Source
-<<< @/../examples/12_reusable_value_buffer.py
+<<< @/../examples/17_runtime_double_buffer.py
 :::
-
-## Related concepts and guides
-
-- [Value signatures and buffers](../concepts/execution/signatures-and-buffers.md)
-- [Residency lifetimes](../concepts/execution/residency-lifetimes.md)
-- [Stream resources with bounded memory](../how-to/stream-bounded-memory.md)

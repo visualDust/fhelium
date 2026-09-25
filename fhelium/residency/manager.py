@@ -879,8 +879,8 @@ class ResidencyManager:
                 return
             streams = consumer_streams
             if not streams:
-                # Defensive fail-safe for an internally malformed or legacy
-                # lease. Never resolve a thread-local current stream here.
+                # Synchronize the device when the lease has no recorded
+                # consumer stream to wait on.
                 with torch.cuda.device(record.location.device):
                     torch.cuda.synchronize(record.location.device)
                 self._remove_active_use_locked(token, record)

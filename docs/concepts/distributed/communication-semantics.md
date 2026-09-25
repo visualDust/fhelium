@@ -1,8 +1,6 @@
 # Communication semantics
 
-Before choosing a collective, identify the **mathematical relationship** among
-rank-local values. Communication compatibility includes this relationship in
-addition to Tensor type and shape.
+The **mathematical relationship** among rank-local values determines the collective's meaning. Communication compatibility includes this relationship as well as Tensor type and shape.
 
 ## Three relationships, three operations
 
@@ -19,16 +17,15 @@ flowchart TD
 
 | Relationship | Example | Correct operation | Arithmetic? |
 | --- | --- | --- | --- |
-| Independent objects | One request per rank | Gather a list | No |
+| Independent objects | Separate requests or sub-batches | Gather a list | No |
 | Additive partials | Diagonal/rotation terms of one matvec | Reduce with CKKS addition | Yes |
 | Disjoint rows | RNS limb shards of one ciphertext | Gather and concatenate limbs | No |
 
-Confusing these relationships can produce a plausible tensor with the wrong
-mathematical meaning.
+Confusing these relationships can produce a plausible tensor with the wrong mathematical meaning.
 
 ## Pattern A: independent ciphertexts
 
-Each rank evaluates a different sample or request:
+Each rank evaluates its assigned samples or requests:
 
 ```mermaid
 sequenceDiagram
@@ -44,8 +41,9 @@ sequenceDiagram
     R2->>Root: gather output 2
 ```
 
-Outputs remain a list. Reducing them would incorrectly add independent
-requests.
+Outputs remain a list. Reducing them would incorrectly add independent requests.
+
+A centralized input can be one homogeneous ciphertext batch. The source creates sub-batch views with `Ciphertext.slice_batch`, then passes those prepared values to `scatter_ciphertexts`. Each rank can receive a different batch size. Gather returns the sub-batches in group-rank order; the application restores sample order according to its partition. A rank-independent model produces the same intended result when the partition changes.
 
 ## Pattern B: additive rotation/offset parallelism
 
@@ -55,8 +53,7 @@ $$
 y=\sum_i p_i\odot\operatorname{Rot}(x,s_i).
 $$
 
-Ranks may own disjoint step sets, produce local partial sums, and then perform
-one ciphertext reduction:
+Ranks may own disjoint step sets, produce local partial sums, and then perform one ciphertext reduction:
 
 ```mermaid
 graph TB
@@ -74,14 +71,11 @@ graph TB
     RED --> Y
 ```
 
-The initial input and needed keys may be replicated, while expensive rotations
-are partitioned. Communication occurs mainly at input provisioning and final
-reduction rather than inside every rotation.
+The initial input and needed keys may be replicated, while expensive rotations are partitioned. Communication occurs mainly at input provisioning and final reduction rather than inside every rotation.
 
 ## Pattern C: RNS limb parallelism
 
-One ciphertext may be structurally split into disjoint prime-row ranges. Some
-operations are row-local, but others require the complete active-row layout.
+One ciphertext may be structurally split into disjoint prime-row ranges. Some operations are row-local, but others require the complete active-row layout.
 
 | Often limb-local under documented partial-layout semantics | Requires every expected active row |
 | --- | --- |
@@ -90,9 +84,7 @@ operations are row-local, but others require the complete active-row layout.
 | Some row-wise RNS/NTT stages | Relinearize/key switch |
 | Local tensor transforms | Rotation |
 
-`Ciphertext.slice_limbs()` creates a storage-sharing local view of selected
-rows. Complete-row operations require the application to reconstruct the full
-active layout first.
+`scatter_ciphertext_limbs` accepts a source ciphertext and caller-selected `limb_ranges`, indexed by stored row position in process-group-rank order. It uses `Ciphertext.slice_limbs()` to select storage-sharing views and their existing row descriptions before transport. It does not infer a partition from rank numbers. Complete-row operations require the application to reconstruct the full active layout first.
 
 ## Why raw integer all-reduce is wrong
 
@@ -102,8 +94,7 @@ $$
 c_i=(a_i+b_i)\bmod q_i.
 $$
 
-A raw NCCL `SUM` over `int64` tensors knows neither $q_i$ nor the required
-standard/lazy residue-range invariant and may overflow machine arithmetic.
+A raw NCCL `SUM` over `int64` tensors knows neither $q_i$ nor the required standard/lazy residue-range invariant and may overflow machine arithmetic.
 
 ```mermaid
 flowchart LR
@@ -117,8 +108,7 @@ flowchart LR
     P --> T --> ADD --> GOOD
 ```
 
-`reduce_ciphertext` combines communication with local modular ciphertext
-addition at reduction receivers.
+`reduce_ciphertext` combines communication with local modular ciphertext addition at reduction receivers.
 
 ## Gather, reduce, and reconstruct at a glance
 
@@ -130,10 +120,15 @@ addition at reduction receivers.
 | Reduce ciphertext | Root receives one modular sum |
 | All-reduce ciphertext | Every rank receives that modular sum |
 
+## Logical values and communication storage
+
+Removing RNS rows changes a value's active basis but does not necessarily compact its underlying allocation. A rescale result can therefore be a valid strided view with gaps between components.
+
+Typed value collectives pack such views when contiguous communication storage is required. In-place results update the original view, preserving its storage aliases and leaving excluded rows untouched. Writable destinations must have non-overlapping elements. Contiguous values already on the transport device are used directly; callers need not compact every typed value before sending it. Raw PyTorch collective calls retain their own buffer requirements.
+
 ## Rank-local CUDA Graph capture
 
-CUDA Graph capture records the deterministic local evaluator on each rank.
-Process-group control remains in the surrounding SPMD program:
+CUDA Graph capture records the deterministic local evaluator on each rank. Process-group control remains in the surrounding SPMD program:
 
 ```mermaid
 graph TB
@@ -148,8 +143,7 @@ graph TB
     RED --> OUT[complete output]
 ```
 
-This keeps collective ordering, ownership, and variable communication outside
-a fixed local capture.
+This keeps collective ordering, ownership, and variable communication outside a fixed local capture.
 
 ## Choosing a partition
 
@@ -168,12 +162,8 @@ flowchart TD
     Q3 -->|no| ONE[Single rank or redesign the packing]
 ```
 
-The decision should be validated with communication volume, key placement,
-load balance, topology, and memory—not only local kernel time.
+The partition's total cost includes communication volume, key placement, load balance, topology, memory, and rank-local computation.
 
-## Continue
+## Related concepts
 
-- [Rotation-parallel matvec tutorial](../../tutorial/spmd-rotation-parallel-matvec.md)
-- [Limb-parallel pipeline tutorial](../../tutorial/spmd-limb-parallel-pipeline.md)
 - [CKKS cost model](../performance/cost-model.md)
-- [Choose a multi-GPU partition](../../how-to/choose-multi-gpu-partition.md)

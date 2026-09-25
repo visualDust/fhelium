@@ -21,9 +21,9 @@ from fhelium.ir import Program
 from fhelium.ir.dialects import core, semantic
 from fhelium.ir.dialects import torch as torch_dialect
 
-from .._constants import ConstantBundle
 from .._compilation import Compilation
 from .._workspace import CompileWorkspace
+from .._materials import named_material_tensors
 from .._errors import CaptureError, CompileInputError
 from ._captured_callable import CapturedCallable
 from ._pytorch_encoding import encode_literal, target_symbol
@@ -171,7 +171,8 @@ class _Emitter:
         function: Callable[..., object],
         signature: inspect.Signature,
         specs: Mapping[str, InputSpec],
-        materials: MutableMapping[str, object],
+        materials: MutableMapping[str, torch.Tensor],
+        material_names: Mapping[str, object] | None = None,
     ) -> None:
         self.graph_module = graph_module
         self.function = function
@@ -186,6 +187,9 @@ class _Emitter:
         self._output_ssa_values: tuple[SSAValue, ...] = ()
 
         self.materials = materials
+        self.material_names = named_material_tensors(material_names)
+        self.material_descriptions: dict[str, dict[str, object]] = {}
+        self.tensor_symbols: dict[int, str] = {}
 
         runtime_specs = [
             spec for spec in specs.values() if spec.role != "static"
@@ -487,13 +491,22 @@ class _Emitter:
     def _emit_tensor_material(
         self, value: torch.Tensor, *, symbol: str
     ) -> SSAValue:
-        candidate = symbol
-        suffix = 2
-        while candidate in self.materials:
-            candidate = f"{symbol}/{suffix}"
-            suffix += 1
-        snapshot = value.detach().clone()
-        self.materials[candidate] = snapshot
+        candidate = self.tensor_symbols.get(id(value))
+        if candidate is None:
+            candidate = self.material_names.get(id(value), symbol)
+            reserved = (
+                set(self.material_names.values())
+                if id(value) not in self.material_names
+                else set()
+            )
+            while candidate in self.materials or candidate in reserved:
+                candidate += "_"
+            self.tensor_symbols[id(value)] = candidate
+        self.materials[candidate] = value
+        self.material_descriptions[candidate] = {
+            "kind": "Tensor",
+            "label": self.material_names.get(id(value), symbol),
+        }
         descriptor = {
             "dtype": str(value.dtype),
             "shape": list(value.shape),
@@ -638,12 +651,13 @@ def capture(
     *,
     inputs: Mapping[str, InputSpec],
     workspace: CompileWorkspace | None = None,
+    material_names: Mapping[str, object] | None = None,
 ) -> Compilation:
     """Trace a Python callable into a neutral mixed-dialect Program.
 
     ``inputs`` declares every parameter's encrypted, message, plaintext, or
     static role. Capture specializes static values, records Tensor constants as
-    symbolic materials in the supplied ``CompileWorkspace``, lowers recognized
+    symbolic materials in ``Compilation.material_bindings``, lowers recognized
     arithmetic to semantic FHElium operations, and preserves other FX calls as
     ``torch.call`` operations. The returned ``Compilation`` carries that
     Program and workspace; a ``CapturedCallable`` workspace entry retains the
@@ -679,28 +693,25 @@ def capture(
     compile_workspace = CompileWorkspace() if workspace is None else workspace
     if not isinstance(compile_workspace, CompileWorkspace):
         raise TypeError("compile workspace must be a CompileWorkspace")
-    materials = compile_workspace.get(ConstantBundle)
-    if materials is None:
-        materials = ConstantBundle()
-        compile_workspace[ConstantBundle] = materials
-    elif not isinstance(materials, ConstantBundle):
-        raise TypeError(
-            "CompileWorkspace ConstantBundle entry has incompatible value"
-        )
-    program = _Emitter(
+    materials: dict[str, torch.Tensor] = {}
+    emitter = _Emitter(
         graph_module,
         function,
         signature,
         specs,
         materials,
-    ).emit()
+        material_names,
+    )
+    program = emitter.emit()
+    for symbol, description in emitter.material_descriptions.items():
+        program.set_material_description(symbol, description)
     compile_workspace[CapturedCallable] = CapturedCallable(
         function=function,
         signature=signature,
         input_specs=MappingProxyType(dict(specs)),
         fx_code=graph_module.code,
     )
-    return Compilation(program, compile_workspace)
+    return Compilation(program, compile_workspace, material_bindings=materials)
 
 
 __all__ = ["capture"]

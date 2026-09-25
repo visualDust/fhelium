@@ -1,23 +1,18 @@
 # Visualize mixed-level IR
 
-`SvgGraphVisualizationPass` renders one selected `fhelium.ir.Program` function
-as an SSA/dataflow SVG. Use it to compare Program snapshots, inspect repeated
-operation patterns, examine lowering attributes, and trace producer-consumer
-relationships without executing or modifying IR.
+`SvgGraphVisualizationPass` renders one selected `fhelium.ir.Program` function as an SSA/dataflow SVG. Use it to compare Program snapshots, inspect repeated operation patterns, examine lowering attributes, and trace producer-consumer relationships without executing or modifying IR.
 
-The pass owns entry traversal, SSA naming, dependency edges, Graphviz
-construction, and file handling. `SvgGraphPresentation` owns node records and
-tooltips; `SvgGraphTheme` owns colors and operation classification.
+The pass owns entry traversal, SSA naming, dependency edges, Graphviz construction, and file handling. `SvgGraphPresentation` owns node records and tooltips; `SvgGraphTheme` owns colors and operation classification.
 
-Visualization is a Compile pass over an IR Program. It requires a
-`Compilation` only to participate in the ordinary pipeline and publish its
-output path; it does not require source capture, lowering, a JIT session,
-execution device, bindings, or a backend.
+Visualization reads the Program in the current Compilation and publishes its output path in the workspace. A parsed, constructed, captured, loaded, or transformed Program can be visualized before numerical execution preparation.
+
+## Prerequisites
+
+Install the Python `pydot` package and the system Graphviz `dot` executable. Choose the Program and function to inspect; [Build and transform a Program](build-program-pipeline.md) supplies manual and capture entry procedures.
 
 ## 1. Obtain a Program snapshot
 
-Parse, load, construct, or receive any structurally valid `Program`. This
-standalone example parses a small semantic-level graph:
+Parse, load, construct, or receive any structurally valid `Program`. This standalone example parses a small semantic-level graph:
 
 ```python
 from pathlib import Path
@@ -47,9 +42,7 @@ program = ir.parse(
 output_dir = Path("graph_exports")
 ```
 
-`ir.Program.load(path)` reads the same textual representation from a file.
-Captured and compile-transformed Programs are also ordinary snapshots, but
-neither producer is required for visualization.
+`ir.Program.load(path)` reads the same textual representation from a file. Captured and compile-transformed Programs are also ordinary snapshots, but neither producer is required for visualization.
 
 ## 2. Render a focused graph
 
@@ -83,15 +76,11 @@ visualized = fh_compile.Pipeline(
 svg_output = visualized.workspace[fh_compile.SvgGraphOutput]
 ```
 
-Arguments, constants, operations, and outputs remain visually distinct. Equal
-operation color keys receive equal colors. Preserved `torch.call` operations
-also include call kind and target in their default color key.
+Arguments, constants, operations, and outputs remain visually distinct. Equal operation color keys receive equal colors. Preserved `torch.call` operations also include call kind and target in their default color key.
 
-Rendering requires the Python `pydot` package and the system Graphviz `dot`
-executable. It needs no JIT session, engine, key, material binding, or backend.
+Rendering requires the Python `pydot` package and the system Graphviz `dot` executable. It needs no prepared callable, engine, key, material binding, or backend.
 
-Omit `output_path` to create a unique file under the operating system's
-temporary directory:
+Omit `output_path` to create a unique file under the operating system's temporary directory:
 
 ```python
 visualized = fh_compile.Pipeline(
@@ -102,16 +91,11 @@ assert svg_output.temporary
 print(svg_output.path)
 ```
 
-When `output_path` is provided, the pass writes to that path instead and
-records `temporary=False`. `CompileWorkspace` records the result but does not
-own a general temporary directory or redirect files produced by other passes.
-The pass does not delete a temporary SVG after returning; callers may inspect,
-copy, or remove the recorded path when it is no longer needed.
+When `output_path` is provided, the pass writes to that path instead and records `temporary=False`. `CompileWorkspace` records the resulting path. The pass does not delete a temporary SVG after returning; callers may inspect, copy, or remove the recorded path when it is no longer needed.
 
 ## 3. Select node fields
 
-`fields=None` displays every supported section. A nonempty set selects the
-record layout:
+`fields=None` displays every supported section. A nonempty set selects the record layout:
 
 | Field | Rendered evidence |
 | --- | --- |
@@ -123,15 +107,9 @@ record layout:
 | `attributes` | Selected operation attributes, one row per attribute |
 | `num_users` | Total SSA uses of the operation results |
 
-A rewrite-pattern view commonly needs `opcode`, `operands`, `attributes`, and
-`num_users`. Add `result_types` when a decision depends on value roles or state.
-Omit sections that do not contribute to the current inspection.
+A rewrite-pattern view commonly needs `opcode`, `operands`, `attributes`, and `num_users`. Add `result_types` when a decision depends on value roles or state. Omit sections that do not contribute to the current inspection.
 
-Inspect CKKS transition placement through the actual
-`fhelium_ckks.relinearize`, `fhelium_ckks.rescale`, and
-`fhelium_ckks.mod_switch` nodes, their SSA edges, and the state carried by
-result types. The visualization does not synthesize a separate pending-work
-field.
+Inspect CKKS transition placement through the actual `fhelium_ckks.relinearize`, `fhelium_ckks.rescale`, and `fhelium_ckks.mod_switch` nodes, their SSA edges, and the state carried by result types. The visualization does not synthesize a separate pending-work field.
 
 Select rank direction at construction:
 
@@ -147,8 +125,7 @@ fh_compile.Pipeline(
 ).run(fh_compile.Compilation(program))
 ```
 
-Supported directions are top-to-bottom (`TB`), bottom-to-top (`BT`),
-left-to-right (`LR`), and right-to-left (`RL`).
+Supported directions are top-to-bottom (`TB`), bottom-to-top (`BT`), left-to-right (`LR`), and right-to-left (`RL`).
 
 ## 4. Control operation attributes
 
@@ -158,19 +135,13 @@ The `attributes` field and `attribute_names` answer different questions:
 - use `attribute_names=None` to include every selected operation attribute;
 - provide an allowlist to include only listed attributes that are present.
 
-The default presentation excludes xDSL's dynamic-operation implementation
-marker from general attribute rows.
+The default presentation excludes xDSL's dynamic-operation implementation marker from general attribute rows.
 
-Each included attribute receives one `attr:<name>` row. Missing allowlist names
-are ignored. Attributes and result types are separate evidence: operation
-attributes carry operation parameters and implementation selections, while
-result types carry SSA value role and arithmetic state.
+Each included attribute receives one `attr:<name>` row. Missing allowlist names are ignored. Attributes and result types are separate evidence: operation attributes carry operation parameters and implementation selections, while result types carry SSA value role and arithmetic state.
 
 ### Limit long values
 
-`attribute_preview_chars=180` includes at most 180 source characters from each
-attribute value in the record. A shortened row reports the omitted character
-count, while the complete text remains in the aggregate node tooltip.
+`attribute_preview_chars=180` includes at most 180 source characters from each attribute value in the record. A shortened row reports the omitted character count, while the complete text remains in the aggregate node tooltip.
 
 ```python
 full_attributes = fh_compile.SvgGraphPresentation(
@@ -179,14 +150,11 @@ full_attributes = fh_compile.SvgGraphPresentation(
 )
 ```
 
-For a large captured Program, select attribute names before disabling the
-preview limit. `fhelium.call.arguments`, for example, can contain a complete
-structured call descriptor.
+For a large captured Program, select attribute names before disabling the preview limit. `fhelium.call.arguments`, for example, can contain a complete structured call descriptor.
 
 ## 5. Customize operation records
 
-Subclass the presentation rather than the visualization pass. The presentation
-exposes pure hooks:
+Subclass the presentation rather than the visualization pass. The presentation exposes pure hooks:
 
 | Hook | Responsibility |
 | --- | --- |
@@ -217,17 +185,13 @@ scale_view = ScaleFirstPresentation(
 )
 ```
 
-`SvgOperationContext` supplies the operation plus assigned result and operand
-names. `SvgNodeSection.value` participates in layout; its optional tooltip adds
-complete or alternate evidence to the containing node.
+`SvgOperationContext` supplies the operation plus assigned result and operand names. `SvgNodeSection.value` participates in layout; its optional tooltip adds complete or alternate evidence to the containing node.
 
-Presentation hooks must not mutate operations or the Program.
-`operation_sections()` must return only `SvgNodeSection` values.
+Presentation hooks must not mutate operations or the Program. `operation_sections()` must return only `SvgNodeSection` values.
 
 ## 6. Customize colors
 
-`SvgGraphTheme` contains the operation palette, color overrides, color-key
-callable, canvas, input/output fills, text, strokes, and edges.
+`SvgGraphTheme` contains the operation palette, color overrides, color-key callable, canvas, input/output fills, text, strokes, and edges.
 
 ```python
 def ckks_family(context):
@@ -257,17 +221,11 @@ custom_view = fh_compile.SvgGraphPresentation(
 )
 ```
 
-A matching override takes precedence over the palette. Other keys map
-deterministically into the nonempty palette. When a classifier handles only
-selected families, delegate other operations to
-`default_svg_operation_color_key()` so preserved Torch call targets use
-their default distinctions.
+A matching override takes precedence over the palette. Other keys map deterministically into the nonempty palette. When a classifier handles only selected families, delegate other operations to `default_svg_operation_color_key()` so preserved Torch call targets use their default distinctions.
 
 ## 7. Compare snapshots
 
-When another tool has produced `source_program` and `transformed_program`,
-render both with one presentation. The visualization code depends only on
-their `Program` interface:
+When another tool has produced `source_program` and `transformed_program`, render both with one presentation. The visualization code depends only on their `Program` interface:
 
 ```python
 comparison_view = fh_compile.SvgGraphPresentation(
@@ -289,12 +247,7 @@ for filename, program_snapshot in (
     ).run(fh_compile.Compilation(program_snapshot))
 ```
 
-Stable color keys support visual comparison, while SSA names, operands,
-attributes, and user counts expose structural changes. The visualization pass
-returns the Program unchanged and reports the rendered operation count. It does
-not establish CKKS consistency, numerical accuracy, key availability, or
-backend coverage. It also does not lower the graph, build a native executable,
-or provide a CKKS Triton implementation.
+Stable color keys support visual comparison, while SSA names, operands, attributes, and user counts expose structural changes. The visualization pass returns the Program unchanged and reports the rendered operation count.
 
 ## Related documentation
 

@@ -1,54 +1,20 @@
 # Key material lifecycle
 
-**Example source:** [`examples/02_key_materials.py`](https://github.com/VisualDust/fhelium/blob/main/examples/02_key_materials.py)
+**Example source:** [`examples/02_eager_key_materials.py`](https://github.com/VisualDust/fhelium/blob/main/examples/02_eager_key_materials.py)
 
-This example creates the major CKKS key types, reports their dense layouts and
-sizes, and optionally persists selected material. The tutorial distinguishes
-stored key state and specialization from application-owned cryptographic
-relations, ownership, and restoration.
-
-## What you will learn
-
-- which keys are needed for encryption, decryption, multiplication, and
-  rotation;
-- how key shapes expose components, decomposition digits, RNS limbs, and
-  coefficients;
-- why a [`RotationKey`](../api/fhelium/values/keys.md#rotationkey) carries one normalized signed
-  step;
-- how
-  [`ArtifactStore`](../api/fhelium/artifacts/store.md#artifactstore) differs from
-  key generation and key placement;
-- why secret-key persistence requires an explicit opt-in.
-
-## Run the example
+Example 02 creates keys from one secret, installs selected evaluator capabilities, and inspects their layouts. File persistence and artifact generations are covered by [09](value-memory-and-persistence.md) and [10](artifact-store.md).
 
 ```bash
-python examples/02_key_materials.py \
-  --preset slots8192-scale40-depth7-int64 \
-  --rotations=-4,-1,1,2,4
+python examples/02_eager_key_materials.py --preset slots8192-scale40-depth7-int64 --rotations=-4,-1,1,2,4
 ```
-
-To retain selected artifacts in a local store:
-
-```bash
-python examples/02_key_materials.py \
-  --preset slots8192-scale40-depth7-int64 \
-  --rotations=1,2,4 \
-  --store /tmp/fhelium-key-demo
-```
-
-The second command persists public, relinearization, and rotation keys. It
-does **not** persist the secret key.
 
 ## 1. Create typed keys
 
 ```python
-secret_key = engine.secret_key
-public_key = engine.public_key
-relinearization_key = engine.relinearization_key
-
-for rotation_step in rotation_steps:
-    engine.rotation_key(rotation_step)
+secret_key = engine.create_secret_key()
+public_key = engine.create_public_key(secret_key)
+relinearization_key = engine.create_relinearization_key(secret_key)
+rotation_key = engine.create_rotation_key(1, secret_key)
 ```
 
 The roles are distinct:
@@ -60,9 +26,7 @@ The roles are distinct:
 | [`RelinearizationKey`](../api/fhelium/values/keys.md#relinearizationkey) | three-component to two-component conversion | `[digit, key component, limb, coefficient]` |
 | [`RotationKey`](../api/fhelium/values/keys.md#rotationkey) | one slot automorphism/key switch | `[digit, key component, limb, coefficient]` |
 
-Calling the engine properties may lazily create missing key material. Code
-that must forbid secret-key creation can construct the engine with
-`allow_automatic_key_generation=False` and install only the keys it owns.
+The example uses factory calls so key creation is visible. Code that must forbid implicit key creation can construct the engine with `allow_automatic_key_generation=False` and install only the keys it owns.
 
 Factory methods select placement directly:
 
@@ -72,17 +36,9 @@ public_key = engine.create_public_key(secret_key)
 rotation_key = engine.create_rotation_key(1, secret_key)
 ```
 
-Derived-key factories infer placement from their secret-key input. Supplying a
-different `device` authorizes a copy of that same secret relation; the Engine
-does not generate an unrelated secret key on the destination.
+Derived-key factories infer placement from their secret-key input. Supplying a different `device` authorizes a copy of that same secret relation; the Engine does not generate an unrelated secret key on the destination.
 
-Operation use does not imply permission to copy a key. By default, a public,
-secret, or evaluation key must already be on the Tensor operation's device.
-Create a copy with `key.to(device)` and pass or install it when placement is
-caller-managed. `Engine(..., allow_automatic_key_replication=True)` instead
-permits the Engine to create and cache device replicas when an installed key is
-first needed there. The source copy remains allocated, and releasing Python
-references does not guarantee device-memory erasure.
+Operation use does not imply permission to copy a key. By default, a public, secret, or evaluation key must already be on the Tensor operation's device. Create a copy with `key.to(device)` and pass or install it when placement is caller-managed. `Engine(..., allow_automatic_key_replication=True)` instead permits the Engine to create and cache device replicas when an installed key is first needed there. The source copy remains allocated, and releasing Python references does not guarantee device-memory erasure.
 
 ## 2. Treat rotation step as stored specialization
 
@@ -91,14 +47,9 @@ key = engine.rotation_keys[rotation_step]
 assert key.rotation_step == rotation_step
 ```
 
-`RotationKeySet` validates normalized signed steps when constructing or updating the mapping. A
-key for step `+1` must not be silently reused as a key for another step, even
-if both tensors happen to have the same shape.
+`RotationKeySet` validates normalized signed steps when constructing or updating the mapping. A key for step `+1` must not be silently reused as a key for another step, even if both tensors happen to have the same shape.
 
-This distinction matters in distributed and multi-user systems: the tensor
-layout alone is not sufficient stored key state, and neither the layout nor
-the runtime key object proves an external ciphertext/key relation. Preserve
-that relation in the application that provisions the key.
+This distinction matters in distributed and multi-user systems: the tensor layout alone is not sufficient stored key state, and neither the layout nor the runtime key object proves an external ciphertext/key relation. Preserve that relation in the application that provisions the key.
 
 ## 3. Inspect key memory
 
@@ -107,66 +58,21 @@ shape = tuple(relinearization_key.data.shape)
 byte_count = relinearization_key.data.nbytes
 ```
 
-Evaluation keys are usually much larger than ciphertexts because they contain
-multiple decomposition digits and both Q and P basis rows. Capacity planning
-should use the actual `nbytes` for the active parameter set instead of a count
-of Python objects.
+Evaluation keys are usually much larger than ciphertexts because they contain multiple decomposition digits and both Q and P basis rows. Capacity planning should use the actual `nbytes` for the active parameter set instead of a count of Python objects.
 
-## 4. Persist selected public/evaluation material
+## 4. Install selected evaluator capabilities
 
 ```python
-store = ArtifactStore(path)
-store.put("keys/public", public_key, overwrite=True)
-relinearization_ref = store.put(
-    "keys/relinearization",
-    relinearization_key,
-    overwrite=True,
-)
-
-rotation_keys = store.collection("keys/rotation")
-rotation_keys.put("1", engine.rotation_keys[1], overwrite=True)
+engine.set_secret_key(secret_key)
+engine.set_public_key(public_key)
+engine.set_relinearization_key(relinearization_key)
+engine.set_rotation_key(rotation_key)
 ```
 
-The store uses a transactional SQLite catalog for logical names and immutable
-safetensors objects for key payloads. It adds typed current-generation
-references, collections, checksums, and local durability policy. Overwriting a
-name creates a new artifact ID and makes the previous reference stale; it does
-not retain prior key versions. The store does not decide which user owns a key,
-where that key should be cached, or when it should move to CUDA.
-
-## 5. Secret-key persistence is deliberately noisy
-
-```python
-store.put(
-    "keys/secret",
-    secret_key,
-    allow_secret=True,
-    overwrite=True,
-)
-```
-
-The explicit `allow_secret=True` prevents an accidental generic save path from
-writing a secret key. It is not encryption at rest. Production systems still
-need an external key-management service (KMS), permissions, encryption, audit
-policy, and deletion policy appropriate to their threat model. The store's
-payload checksum detects accidental corruption; it does not authenticate data
-against an actor who can modify both the catalog and payload.
-
-## 6. Restore the key type
-
-```python
-restored = store.get(relinearization_ref, device=torch.get_default_device())
-assert type(restored) is fh.RelinearizationKey
-torch.testing.assert_close(restored.data, relinearization_key.data)
-```
-
-The serialized metadata reconstructs the key type, modulus basis, polynomial
-domain, prime IDs, and other stored key state. A successful tensor load does
-not establish compatibility with the current configuration, ciphertext, or
-intended operation; the application retains those relations.
+Creation returns a value; installation adds that value to the Engine's inventory. Key placement remains separate. A stored rotation step describes specialization, not the participant or secret that produced the key. Cryptographic correspondence remains the application's responsibility.
 
 ::: details Source
-<<< @/../examples/02_key_materials.py
+<<< @/../examples/02_eager_key_materials.py
 :::
 
 ## Related concepts and guides

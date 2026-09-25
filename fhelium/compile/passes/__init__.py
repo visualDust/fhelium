@@ -1,7 +1,39 @@
 """Built-in partial transforms for captured tensor and CKKS operations."""
 
+from .backend import (
+    AssignImplementationsPass,
+    AssignNttImplementationPass,
+    InitializeResourceBindingsPass,
+    LinkProgramPass,
+    MaterializeResourcesPass,
+    ResolveBackendOperationsPass,
+    ResolveTensorPlaceholdersPass,
+    SelectNttImplementationsPass,
+    ValidateExecutionRepresentationsPass,
+    backend_linking_pipeline,
+)
+from .ckks import (
+    AssignCkksDepthsPass,
+    AssignCkksScalesPass,
+    RotationHoistingPass as RotationHoistingPass,
+    InsertMultiplyNttTransitionsPass,
+    InsertPlaintextPreparationPass,
+    InsertRelinearizationPass,
+    InsertRescalePass,
+    LateRelinearizationPass,
+    LateRescalePass,
+    LowerLogicalToCkksPass,
+    LowerMessagePlaintextPreparationPass,
+    ResolveRotationKeyOperandsPass,
+)
+from .codegen import EmitBackendPythonPass, EmitEagerPythonPass
+from .distributed import LowerSpecializedCollectivesPass
+from .frontend import LowerSemanticToLogicalPass
+from .fusion import FuseOperationsPass
+from .lowering import LowerCkksToRnsNttPass as LowerCkksToRnsNttPass
 from .program import (
     EliminateDeadValuesPass,
+    ReuseIntermediatesPass,
     SvgGraphDirection,
     SvgGraphError,
     SvgGraphField,
@@ -13,47 +45,24 @@ from .program import (
     SvgOperationContext,
     default_svg_operation_color_key,
 )
-from .ckks import (
-    AssignCkksDepthsPass,
-    AssignCkksScalesPass,
-    HoistRotationsPass as HoistRotationsPass,
-    InsertMultiplyNttTransitionsPass,
-    InsertPlaintextPreparationPass,
-    InsertRelinearizationPass,
-    InsertRescalePass,
-    LateRelinearizationPass,
-    LateRescalePass,
-    LowerMessagePlaintextPreparationPass,
-    LowerLogicalToCkksPass,
-    ResolveRotationKeyOperandsPass,
-)
-from .frontend import LowerSemanticToLogicalPass
-from .distributed import LowerSpecializedCollectivesPass
-from .lowering import LowerCkksToRnsNttPass as LowerCkksToRnsNttPass
-from .backend import (
-    BindCkksKeysPass,
-    InitializeResourceBindingsPass,
-    AssignImplementationsPass,
-    AssignNttImplementationPass,
-    LinkProgramPass,
-    MaterializeResourcesPass,
-    ResolveBackendOperationsPass,
-    ValidateExecutionRepresentationsPass,
-    backend_linking_pipeline,
-)
-from .codegen import EmitBackendPythonPass, EmitEagerPythonPass
+
+from .backend import PrepareOperationOperandsPass
 
 __all__ = [
-    "BindCkksKeysPass",
+    "PrepareOperationOperandsPass",
+    "SelectExecutionLoweringsPass",
+    "FuseOperationsPass",
     "InitializeResourceBindingsPass",
     "AssignImplementationsPass",
     "AssignNttImplementationPass",
+    "SelectNttImplementationsPass",
     "AssignCkksDepthsPass",
     "AssignCkksScalesPass",
     "EliminateDeadValuesPass",
+    "ReuseIntermediatesPass",
     "EmitBackendPythonPass",
     "EmitEagerPythonPass",
-    "HoistRotationsPass",
+    "RotationHoistingPass",
     "InsertMultiplyNttTransitionsPass",
     "InsertPlaintextPreparationPass",
     "InsertRelinearizationPass",
@@ -68,6 +77,7 @@ __all__ = [
     "LinkProgramPass",
     "MaterializeResourcesPass",
     "ResolveBackendOperationsPass",
+    "ResolveTensorPlaceholdersPass",
     "ValidateExecutionRepresentationsPass",
     "ResolveRotationKeyOperandsPass",
     "SvgGraphDirection",
@@ -82,3 +92,5 @@ __all__ = [
     "backend_linking_pipeline",
     "default_svg_operation_color_key",
 ]
+
+from .lowering import SelectExecutionLoweringsPass

@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from ..._pipeline import (
     PassResult,
 )
@@ -50,11 +56,9 @@ class EmitEagerPythonPass:
     entry_point: str = "generated_eager"
     name: str = "emit-eager-python"
 
-    def run(
-        self,
-        program: Program,
-        shared_data: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
+        program = compilation.program
+        shared_data = compilation.workspace
         artifact = emit_eager_python(program, entry_point=self.entry_point)
         shared_data[EagerPythonSource] = artifact
         return PassResult.unchanged(
@@ -168,6 +172,10 @@ def _eager_expression(
 ) -> tuple[str | None, tuple[str, ...]]:
     """Return one Eager call expression and implicit resource symbols."""
 
+    if tuple(getattr(operation, "parameters", ())):
+        raise PythonCodegenError(
+            "Tensor-parameterized operations require Backend Python emission; Eager calls select their arithmetic tables through Engine"
+        )
     operands = tuple(names.operand(value) for value in operation.operands)
     resources: tuple[str, ...] = ()
 
@@ -189,18 +197,12 @@ def _eager_expression(
             resources,
         )
     if isinstance(operation, ckks.EncryptOp):
-        symbol = string(operation.key_symbol, label="public-key symbol")
         return (
-            f"engine.encrypt({operands[0]}, resources[{symbol!r}], "
-            f"output_domain={operation.output_domain.data!r})",
-            (symbol,),
+            f"engine.encrypt({operands[0]}, {operands[1]}, output_domain={operation.output_domain.data!r})",
+            resources,
         )
     if isinstance(operation, ckks.DecryptOp):
-        symbol = string(operation.key_symbol, label="secret-key symbol")
-        return (
-            f"engine.decrypt({operands[0]}, resources[{symbol!r}])",
-            (symbol,),
-        )
+        return f"engine.decrypt({operands[0]}, {operands[1]})", resources
     if isinstance(operation, ckks.NegateOp):
         return f"engine.negate({operands[0]})", resources
     if isinstance(operation, ckks.AddOp):
@@ -295,26 +297,17 @@ def _eager_expression(
             f"engine.multiply_plaintext({operands[0]}, {operands[1]})",
             resources,
         )
-    if isinstance(operation, ckks.RelinearizeOp):
-        symbol = "relinearization-key"
+    if isinstance(
+        operation, (ckks.RelinearizeOp, ckks.SwitchKeyOp, ckks.ConjugateOp)
+    ):
+        method = {
+            ckks.RelinearizeOp: "relinearize",
+            ckks.SwitchKeyOp: "switch_key",
+            ckks.ConjugateOp: "conjugate",
+        }[type(operation)]
         return (
-            f"engine.relinearize({operands[0]}, resources[{symbol!r}], "
-            f"output_domain={operation.output_domain.data!r})",
-            (symbol,),
-        )
-    if isinstance(operation, ckks.SwitchKeyOp):
-        symbol = string(operation.key_symbol, label="switch-key symbol")
-        return (
-            f"engine.switch_key({operands[0]}, resources[{symbol!r}], "
-            f"output_domain={operation.output_domain.data!r})",
-            (symbol,),
-        )
-    if isinstance(operation, ckks.ConjugateOp):
-        symbol = "conjugation-key"
-        return (
-            f"engine.conjugate({operands[0]}, resources[{symbol!r}], "
-            f"output_domain={operation.output_domain.data!r})",
-            (symbol,),
+            f"engine.{method}({operands[0]}, {operands[1]}, output_domain={operation.output_domain.data!r})",
+            resources,
         )
     if isinstance(operation, ckks.RescaleOp):
         rounding = (

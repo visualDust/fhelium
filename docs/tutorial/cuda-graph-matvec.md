@@ -1,15 +1,13 @@
 # CUDA Graph matrix-vector multiplication
 
-**Example source:** [`examples/11_cuda_graph_matrix_vector.py`](https://github.com/VisualDust/fhelium/blob/main/examples/11_cuda_graph_matrix_vector.py)
+**Example source:** [`examples/18_runtime_cuda_graph.py`](https://github.com/VisualDust/fhelium/blob/main/examples/18_runtime_cuda_graph.py)
 
-This example captures a fixed packed CKKS matrix-vector evaluator
-$\mathbf{y}=A\mathbf{x}$ while keeping each request ciphertext as a dynamic input. The tutorial explains captured state, replay storage, and the
-steady-state measured region.
+This example captures a fixed packed CKKS matrix-vector evaluator $\mathbf{y}=A\mathbf{x}$ while keeping each request ciphertext as a dynamic input. The tutorial explains captured state, replay storage, and the steady-state measured region.
 
 ## Run the example
 
 ```bash
-python examples/11_cuda_graph_matrix_vector.py \
+python examples/18_runtime_cuda_graph.py \
   --device cuda:0 \
   --preset slots8192-scale40-depth7-int64 \
   --size 8 \
@@ -20,8 +18,7 @@ python examples/11_cuda_graph_matrix_vector.py \
 
 ## 1. Identify static and dynamic state
 
-The workload computes `y = A @ x` with cyclic diagonals. Its state divides
-into:
+The workload computes `y = A @ x` with cyclic diagonals. Its state divides into:
 
 | Static across replays | Dynamic for each replay |
 | --- | --- |
@@ -50,9 +47,7 @@ rotation_keys = {
 }
 ```
 
-These values are captured as callable state. Changing their object identity,
-storage address, depth, or shape after capture would invalidate the captured
-schedule.
+These values are captured as callable state. Changing their object identity, storage address, depth, or shape after capture would invalidate the captured schedule.
 
 ## 3. Bind static state
 
@@ -67,9 +62,7 @@ schedule = partial(
 )
 ```
 
-The resulting callable has one dynamic argument: the source ciphertext. This
-is preferable to a hidden global cache because the captured resources are visible
-through direct Python calls.
+The resulting callable has one dynamic argument: the source ciphertext. This is preferable to a hidden global cache because the captured resources are visible through direct Python calls.
 
 ## 4. Capture from a prototype
 
@@ -81,9 +74,7 @@ program = CudaGraphProgram.capture(
 )
 ```
 
-[`CudaGraphProgram`](../api/fhelium/runtime/cuda_graph.md#cudagraphprogram) performs side-stream
-warmup, allocates fixed dynamic-input storage, captures the evaluator, records
-the output storage, and derives an input signature.
+[`CudaGraphProgram`](../api/fhelium/runtime/cuda_graph.md#cudagraphprogram) performs side-stream warmup, allocates fixed dynamic-input storage, captures the evaluator, records the output storage, and derives an input signature.
 
 The prototype determines structure, including:
 
@@ -102,12 +93,9 @@ result = program.replay(
 )
 ```
 
-Replay validates the new value before staging its payload into the fixed
-input allocation. A mismatched depth or representation is rejected rather
-than silently converted inside the graph wrapper.
+Replay validates the new value before staging its payload into the fixed input allocation. A mismatched depth or representation is rejected rather than silently converted inside the graph wrapper.
 
-The example uses three different encrypted vectors and verifies all three
-against `matrix @ vector`.
+The example uses three different encrypted vectors and verifies all three against `matrix @ vector`.
 
 ## 6. Understand borrowed output storage
 
@@ -115,9 +103,7 @@ against `matrix @ vector`.
 borrowed_pointer = result.data.data_ptr()
 ```
 
-The default result references graph-owned output storage. The next replay can
-overwrite it. This avoids an extra device copy when the caller consumes the
-output immediately.
+The default result references graph-owned output storage. The next replay can overwrite it. This avoids an extra device copy when the caller consumes the output immediately.
 
 Use:
 
@@ -125,8 +111,7 @@ Use:
 owned = program.replay(encrypted, copy_output=True)
 ```
 
-when a result must survive a later replay or escape into another asynchronous
-lifetime.
+when a result must survive a later replay or escape into another asynchronous lifetime.
 
 ## 7. Separate construction and steady-state cost
 
@@ -138,8 +123,7 @@ The example reports:
 - eager mean latency;
 - graph replay mean latency.
 
-Capture is a one-time program-construction cost. Compare steady-state replay
-only when the same static schedule will execute enough times to amortize it.
+Capture is a one-time program-construction cost. Compare steady-state replay only when the same static schedule will execute enough times to amortize it.
 
 ## Close the program
 
@@ -147,12 +131,10 @@ only when the same static schedule will execute enough times to amortize it.
 program.close()
 ```
 
-Closing releases graph-owned inputs, outputs, and capture state. Do not treat
-a captured program as an unbounded global singleton when different parameter sets,
-models, or input signatures require independent storage.
+Closing releases graph-owned inputs, outputs, and capture state. Do not treat a captured program as an unbounded global singleton when different parameter sets, models, or input signatures require independent storage.
 
 ::: details Source
-<<< @/../examples/11_cuda_graph_matrix_vector.py
+<<< @/../examples/18_runtime_cuda_graph.py
 :::
 
 ## Related concepts and guides

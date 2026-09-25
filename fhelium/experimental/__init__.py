@@ -1,3 +1,3 @@
-"""Experimental CKKS and runtime-specialization interfaces."""
+"""Experimental bootstrapping and multiparty CKKS interfaces."""
 
 __all__: list[str] = []

@@ -75,13 +75,18 @@ def _string(value: str | StringAttr | None) -> StringAttr | None:
 
 @irdl_op_definition
 class MaterialRefOp(IRDLOperation):
-    """Introduce graph-external material by symbolic identity."""
+    """Reference an external Tensor by its entry in the material table.
+
+    Missing Tensor dimensions or state may remain unknown in a saved Program.
+    The symbol names data; it does not select a resource class or a factory.
+    """
 
     name = "fhelium.material.ref"
 
     value = result_def()
     symbol = opt_attr_def(StringAttr)
     kind = opt_attr_def(StringAttr)
+    traits = traits_def(Pure())
 
     def __init__(
         self,
@@ -101,13 +106,18 @@ class MaterialRefOp(IRDLOperation):
 
 @irdl_op_definition
 class ResourceRefOp(IRDLOperation):
-    """Introduce a graph-external execution resource by symbolic identity."""
+    """Reference an execution resource supplied by Backend binding.
+
+    The operation returns the bound value without materializing or mutating it.
+    An unused reference can be removed with its unused resource requirement.
+    """
 
     name = "fhelium.resource.ref"
 
     value = result_def()
     symbol = opt_attr_def(StringAttr)
     kind = opt_attr_def(StringAttr)
+    traits = traits_def(Pure())
 
     def __init__(
         self,
@@ -169,13 +179,13 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
     registered_operation_spec(
         MaterialRefOp,
         "auxiliary",
-        effect="opaque",
+        effect="pure",
         validator=_reference_specification,
     ),
     registered_operation_spec(
         ResourceRefOp,
         "auxiliary",
-        effect="opaque",
+        effect="pure",
         validator=_reference_specification,
     ),
     registered_operation_spec(

@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from typing import Literal, cast
+import json
 
 from ..._pipeline import (
     PassResult,
@@ -16,6 +23,7 @@ from xdsl.dialects.builtin import (
     Float64Type,
     FloatAttr,
     IntegerAttr,
+    StringAttr,
     UnrealizedConversionCastOp,
 )
 from xdsl.ir import Attribute, Operation, SSAValue, Use
@@ -182,6 +190,10 @@ def _materialize_rescale(
             f"{representation!r}"
         )
 
+    if config is None:
+        represented_config = operation.attributes.get("ckks_config")
+        if isinstance(represented_config, StringAttr):
+            config = CkksConfig.parse(json.loads(represented_config.data))
     source_type = ciphertext_type(
         source,
         domain=representation[0],
@@ -220,6 +232,11 @@ def _materialize_rescale(
         source,
         ckks.CiphertextType().with_state(result_state),
         rounding=request.rounding,
+        attributes={
+            name: value
+            for name, value in operation.attributes.items()
+            if name in {"ckks_config", "ntt_backend"}
+        },
         polynomial_domain=cast(
             Literal["coefficient", "ntt"], representation[0]
         ),
@@ -404,11 +421,9 @@ class InsertRescalePass:
 
     name: str = "insert-rescale"
 
-    def run(
-        self,
-        program: Program,
-        workspace: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
+        program = compilation.program
+        workspace = compilation.workspace
         config = workspace.get(CkksConfig)
         return _place_rescales(
             program,
@@ -423,11 +438,9 @@ class LateRescalePass:
 
     name: str = "late-rescale"
 
-    def run(
-        self,
-        program: Program,
-        workspace: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
+        program = compilation.program
+        workspace = compilation.workspace
         config = workspace.get(CkksConfig)
         return _place_rescales(
             program,

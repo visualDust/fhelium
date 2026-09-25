@@ -5,9 +5,13 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
+
 
 from ._specs import InputSpec
+
+if TYPE_CHECKING:
+    pass
 
 ReturnT = TypeVar("ReturnT")
 

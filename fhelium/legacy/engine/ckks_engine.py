@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from collections.abc import Sequence
 from numbers import Integral
 from typing import Literal, cast, overload
@@ -2587,7 +2588,7 @@ class CkksEngine:
 
         if not isinstance(key, KeySwitchKey):
             raise TypeError(f"Expected KeySwitchKey, got {type(key).__name__}")
-        key._with_resident_tensors((key.data,))
+        replace(key)
         self._assert_engine_key(
             key,
             expected_type=type(key),

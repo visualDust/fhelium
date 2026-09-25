@@ -74,17 +74,13 @@ class _BufferNode:
 
 
 class CopyHandle:
-    """Future-like handle for one copy enqueued into a reusable buffer.
+    """Track completion and source storage for a copy into a reusable buffer.
 
     A handle owns the submitted tensor leaves until the CUDA event reports
     completion. This prevents a mutable source tree from releasing or replacing
     pinned host or device storage while an asynchronous copy may still read it.
     ``wait_on`` inserts a stream dependency without blocking the CPU;
     ``synchronize`` blocks the caller.
-
-    ``CopyHandle`` is intentionally not an :mod:`asyncio` Future and is not
-    awaitable. A future extension may bridge CUDA events to an async scheduler,
-    but the core object currently exposes CUDA stream/event ordering only.
 
     Instances are returned by :meth:`ReusableValueBuffer.copy_from`; direct
     construction is not part of the public API. Internally, ``event`` tracks

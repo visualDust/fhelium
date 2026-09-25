@@ -1,10 +1,6 @@
 # Native operator workflow
 
-Add or modify a native operator from the public mathematical specification
-outward. One operator uses a backend-neutral schema and device-specific
-registrations; its Python semantics, dispatcher mutation rules, row mapping,
-CPU implementation, CUDA implementation, generated wrappers, and tests must
-agree wherever those backends are supported.
+Add or modify a native operator from the public mathematical specification outward. One operator uses a backend-neutral schema and device-specific registrations; its Python semantics, dispatcher mutation rules, row mapping, CPU implementation, CUDA implementation, generated wrappers, and tests must agree wherever those backends are supported.
 
 ## 1. Define the operation requirements first
 
@@ -23,8 +19,7 @@ functional or mutating behavior
 supported singleton/partial-layout cases
 ```
 
-Decide which layer reconstructs public output metadata and which invalid inputs
-must fail before native launch.
+Decide which layer reconstructs public output metadata and which invalid inputs must fail before native launch.
 
 ## 2. Add a deterministic public reproducer
 
@@ -49,28 +44,17 @@ The C++ registration layer owns:
 - mutation and alias annotations;
 - pre-launch shape/dtype/device checks.
 
-Use a trailing underscore and correct alias schema for mutating operators. Do
-not make a functional name mutate storage silently.
+Use a trailing underscore and correct alias schema for mutating operators. Do not make a functional name mutate storage silently.
 
-Names should describe mathematical/state transitions; backend execution policy
-such as grouping or shared-memory strategy belongs at the backend/operator
-variant layer rather than public CKKS semantics.
+Names should describe mathematical/state transitions; backend execution policy such as grouping or shared-memory strategy belongs at the backend/operator variant layer rather than public CKKS semantics.
 
 ## 4. Implement the selected device paths
 
-Pass operand, table, and parameter tensors. Avoid hidden device-global context whose
-state cannot be represented in the dispatcher schema.
+Pass operand, table, and parameter tensors. Avoid hidden device-global context whose state cannot be represented in the dispatcher schema.
 
-For CPU support, register the schema under the `CPU` dispatch key and use ATen
-tensor accessors, integral dtype dispatch, and `at::parallel_for` where the
-work size justifies intra-op parallelism. Compile against the parallel backend
-selected by the installed Torch package; do not introduce an independent FHElium
-thread pool or link a second OpenMP runtime.
+For CPU support, register the schema under the `CPU` dispatch key and use ATen tensor accessors, integral dtype dispatch, and `at::parallel_for` where the work size justifies intra-op parallelism. Compile against the parallel backend selected by the installed Torch package; do not introduce an independent FHElium thread pool or link a second OpenMP runtime.
 
-For CUDA support, register the same schema under the `CUDA` dispatch key. The
-C++ adapter validates the tensors before launch; the CUDA implementation uses
-the operand device and PyTorch's current CUDA stream. Do not add a hidden host
-copy or a device fallback to make a schema appear portable.
+For CUDA support, register the same schema under the `CUDA` dispatch key. The C++ adapter validates the tensors before launch; the CUDA implementation uses the operand device and PyTorch's current CUDA stream. Do not add a hidden host copy or a device fallback to make a schema appear portable.
 
 Audit:
 
@@ -84,15 +68,11 @@ Audit:
 - lazy/standard residue-range preconditions and outputs;
 - integer overflow and modular reduction bounds.
 
-If an operation is intentionally supported by only one backend, document that
-support in its Python owner and tests. Missing CPU or CUDA registration must
-fail through normal PyTorch dispatch or the engine's backend validation rather
-than execute a different algorithm silently.
+If an operation is intentionally supported by only one backend, document that support in its Python owner and tests. Missing CPU or CUDA registration must fail through normal PyTorch dispatch or the engine's backend validation rather than execute a different algorithm silently.
 
 ## 5. Build from a clean enough state
 
-Rebuild the editable native extension through the selected environment
-frontend. The uv-managed environment uses:
+Rebuild the editable native extension through the selected environment frontend. The uv-managed environment uses:
 
 ```bash
 uv --preview-features extra-build-dependencies \
@@ -106,25 +86,18 @@ python -m pip install \
   --editable . --verbose --no-build-isolation --no-cache-dir
 ```
 
-Set `CMAKE_ARGS=-DFHELIUM_NATIVE_BACKENDS=CPU` or `CPU+CUDA` in the current
-shell before either command when backend coverage matters. Set
-`CMAKE_BUILD_PARALLEL_LEVEL` to control build parallelism. Contributors who
-install `just` may use the corresponding optional shortcuts:
+Set `CMAKE_ARGS=-DFHELIUM_NATIVE_BACKENDS=CPU` or `CPU+CUDA` in the current shell before either command when backend coverage matters. Set `CMAKE_BUILD_PARALLEL_LEVEL` to control build parallelism. Contributors who install `just` may use the corresponding optional shortcuts:
 
 ```bash
 just NATIVE_BACKENDS=CPU build-uv
 just NATIVE_BACKENDS=CPU+CUDA build-pip
 ```
 
-Use the project environment and the selected Python/Torch/CUDA toolchain.
-Confirm which shared library Python actually loads and which native backends
-its ABI manifest records.
+Use the project environment and the selected Python/Torch/CUDA toolchain. Confirm which shared library Python actually loads and which native backends its ABI manifest records.
 
 ## 6. Regenerate and check wrappers
 
-Generated wrapper files live under `fhelium/native/wrapper/`. After compiled
-schemas are available, generate or verify them through the generator rather
-than editing files manually:
+Generated wrapper files live under `fhelium/native/wrapper/`. After compiled schemas are available, generate or verify them through the generator rather than editing files manually:
 
 ```bash
 python scripts/generate_native_wrappers.py \
@@ -135,12 +108,7 @@ python scripts/generate_native_wrappers.py \
   --check
 ```
 
-The direct script is the supported invocation; it is deliberately outside the
-runtime package so generating wrappers never imports a partially initialized
-`fhelium.native.wrapper` package. Callable wrappers retain `require_native()`
-guards, resolved lazily at call time. The generated FakeTensor registration
-module omits that import and is loaded by `fhelium.native` only after `_ops` has
-registered its schemas.
+The direct script is the supported invocation; it is deliberately outside the runtime package so generating wrappers never imports a partially initialized `fhelium.native.wrapper` package. Callable wrappers retain `require_native()` guards, resolved lazily at call time. The generated FakeTensor registration module omits that import and is loaded by `fhelium.native` only after `_ops` has registered its schemas.
 
 For a configured CMake tree, prefer its fresh-target check:
 
@@ -148,9 +116,7 @@ For a configured CMake tree, prefer its fresh-target check:
 cmake --build <build-directory> --target native_wrappers_check
 ```
 
-That target depends on `_ops`, so the schemas being compared cannot come from
-an unrelated installed extension. Adjust paths only if a direct invocation
-uses a different compiled-op directory.
+That target depends on `_ops`, so the schemas being compared cannot come from an unrelated installed extension. Adjust paths only if a direct invocation uses a different compiled-op directory.
 
 ## 7. Run the validation ladder
 
@@ -184,8 +150,7 @@ At minimum run the focused tests and then the broader relevant suite. Include:
 
 ## 8. Profile only after correctness
 
-Profile the actual target shape and surrounding workload. Report whether a
-kernel change alters:
+Profile the actual target shape and surrounding workload. Report whether a kernel change alters:
 
 - launch count;
 - global-memory traffic;
@@ -204,8 +169,7 @@ git status --short
 git diff --check
 ```
 
-Ensure wrapper diffs are intentional, build products are not accidentally
-tracked, and source/build/wheel tests use matching commits.
+Ensure wrapper diffs are intentional, build products are not accidentally tracked, and source/build/wheel tests use matching commits.
 
 ## 10. Document the operation
 
@@ -245,12 +209,7 @@ Mutation and aliasing:
     functional; output does not alias an input
 ```
 
-The documented axes and table orientation must match the dispatcher schema and
-implementation. During review, trace the public semantic equation to each
-native tensor axis, verify prime-row and key-digit mappings, confirm rounding
-and residue-range laws against implementation and tests, and check mutation,
-aliasing, thread, and stream behavior. Use the definitions from
-[Terminology and mathematical model](../concepts/terminology-and-mathematical-model.md).
+The documented axes and table orientation must match the dispatcher schema and implementation. During review, trace the public semantic equation to each native tensor axis, verify prime-row and key-digit mappings, confirm rounding and residue-range laws against implementation and tests, and check mutation, aliasing, thread, and stream behavior. Use the definitions from [Terminology and mathematical model](../concepts/terminology-and-mathematical-model.md).
 
 ## Related documentation
 

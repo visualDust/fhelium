@@ -1,13 +1,12 @@
 # Choose a homogeneous batch size
 
-Homogeneous batching is a workload execution choice. It can
-reduce launch overhead and execute several independent messages together, but
-it also multiplies the active RNS/NTT working set. There is no batch size that
-is optimal for every preset, depth, GPU, and evaluator.
+Homogeneous batching is a workload execution choice. It can reduce launch overhead and execute several independent messages together, but it also multiplies the active RNS/NTT working set. There is no batch size that is optimal for every preset, depth, GPU, and evaluator.
 
-Use the runnable
-[homogeneous batching tutorial](../tutorial/homogeneous-batching.md) before
-following this guide.
+Use the runnable [homogeneous batching tutorial](../tutorial/homogeneous-batching.md) before following this guide.
+
+## Prerequisites
+
+Start with ciphertexts sharing configuration, key relation, value state, and placement, and a correct per-message evaluator. Prepare a distinct callable specialization for each admitted batch shape when using `fc.compile`; keep preparation outside warmed throughput measurements.
 
 ## 1. Preserve one mathematical comparison
 
@@ -26,13 +25,9 @@ Keep fixed:
 - evaluator schedule, graph mode, and hoisting policy;
 - warmup, timed region, and synchronization rule.
 
-All ciphertext members must have one effective encryption-key lineage.
-Runtime values do not prove parameter or key compatibility; retain both
-relations in the benchmark setup.
+All ciphertext members must have one effective encryption-key lineage. Runtime values do not prove parameter or key compatibility; retain both relations in the benchmark setup.
 
-Validate batched ciphertext data exactly against a stacked loop result when
-the paths begin from the same ciphertext members, then decrypt both against a
-cleartext oracle.
+Validate batched ciphertext data exactly against a stacked loop result when the paths begin from the same ciphertext members, then decrypt both against a cleartext oracle.
 
 ## 2. Separate three reproducible questions
 
@@ -44,9 +39,7 @@ Do not report a single ratio as “batch performance.” Measure:
 | One B4/B8 evaluation vs a loop over the same B members | Does batching reduce latency for the same logical work? |
 | Complete batched evaluator vs complete loop, with peak memory | Which policy fits the deployed workload and memory budget? |
 
-Run every side of these comparisons from the same installed build and with the
-same evaluator. A development branch, an earlier commit, or an implementation
-that readers cannot run is not a valid baseline for this public guide.
+Run every side of these comparisons from the same installed build and with the same evaluator. Record the source revision, software versions, and input construction so the batch-size comparison can be reproduced.
 
 ## 3. Estimate the active working set
 
@@ -56,10 +49,7 @@ $$
 W_{digit}=B\cdot |QP_{active}|\cdot N\cdot 8\ \text{bytes}.
 $$
 
-The full peak additionally includes NTT read/write traffic, key rows, two
-key-switch accumulators, automorphism temporaries, ciphertext outputs, and
-allocator behavior. The proxy still explains why the same B can be favorable
-at a later depth and unfavorable at depth zero.
+The full peak additionally includes NTT read/write traffic, key rows, two key-switch accumulators, automorphism temporaries, ciphertext outputs, and allocator behavior. The proxy still explains why the same B can be favorable at a later depth and unfavorable at depth zero.
 
 ```mermaid
 flowchart LR
@@ -75,14 +65,11 @@ flowchart LR
     C -->|working set crosses threshold| S
 ```
 
-Compare the complete active set with effective cache capacity. Multiple live
-tensors can cross the effective capacity threshold
-even when one digit alone is smaller than L2.
+Compare the complete active set with effective cache capacity. Multiple live tensors can cross the effective capacity threshold even when one digit alone is smaller than L2.
 
 ## 4. Sweep the depths used by the evaluator
 
-Depth reduces the active Q rows. For
-`Preset.slots32768_scale40_depth34_int64` in the reference configuration:
+Depth reduces the active Q rows. For `Preset.slots32768_scale40_depth34_int64` in the reference configuration:
 
 | Depth | Active QP rows | One-message extended QP digit |
 | ---: | ---: | ---: |
@@ -94,36 +81,28 @@ Depth reduces the active Q rows. For
 | 25 | 14 | 7.0 MiB |
 | 30 | 9 | 4.5 MiB |
 
-Do not benchmark only depth zero if production work mostly occurs near the end
-of the chain.
+Do not benchmark only depth zero if production work mostly occurs near the end of the chain.
 
 ## 5. Measure latency and peak memory together
 
 Run:
 
 ```bash
-python examples/15_homogeneous_batching.py \
+python examples/07_eager_batching.py \
   --preset slots32768-scale40-depth34-int64 --depth 0 --batch-sizes 1,4,8
 
-python examples/15_homogeneous_batching.py \
+python examples/07_eager_batching.py \
   --preset slots32768-scale40-depth34-int64 --depth 20 --batch-sizes 1,4,8
 
-python examples/15_homogeneous_batching.py \
+python examples/07_eager_batching.py \
   --preset slots32768-scale40-depth34-int64 --depth 30 --batch-sizes 1,4,8
 ```
 
-Repeat enough times for stable medians. If the production evaluator uses CUDA
-Graph, compare batch graph with a loop captured under the same policy; graph
-capture can remove much of the host-launch disadvantage of the loop.
+Repeat enough times for stable medians. If the production evaluator uses CUDA Graph, compare batch graph with a loop captured under the same policy; graph capture can remove much of the host-launch disadvantage of the loop.
 
 ## Reference measurement: RTX PRO 6000 Blackwell
 
-The following data is a dated historical worked example for the measured
-platform and workload. It preserves the original FHElium 0.20-era values and
-configuration rather than representing the current benchmark catalog. The
-page does not retain the PRO 6000 run's source commit or complete software
-provenance, so use it as context and rerun the workload before making a
-deployment decision.
+The following data is a dated historical worked example for the measured platform and workload. It preserves the original FHElium 0.20-era values and configuration rather than representing the current benchmark catalog. The page does not retain the PRO 6000 run's source commit or complete software provenance, so use it as context and rerun the workload before making a deployment decision.
 
 | Field | Reference value |
 | --- | --- |
@@ -136,15 +115,13 @@ deployment decision.
 | Timing | CUDA-synchronized warm runs; median wall latency |
 | Correctness | Bit-for-bit batched-vs-loop ciphertext data plus cleartext oracle |
 
-Setup, key generation, and constant preparation were outside operator and
-workload timing unless the row names an end-to-end public API.
+Setup, key generation, and constant preparation were outside operator and workload timing unless the row names an end-to-end public API.
 
 ### Singleton batch
 
 For `[1, slots]` versus `[slots]`:
 
-- NTT, plaintext multiply, relinearize, rotation, and decryption were generally
-  within 0–4%;
+- NTT, plaintext multiply, relinearize, rotation, and decryption were generally within 0–4%;
 - later-depth rescale reached about 6% overhead;
 - encode reached 12–13%, but the absolute difference was about 0.018 ms;
 - complete matrix-vector (MxV) and rotate-many workloads were approximately at parity.
@@ -153,8 +130,7 @@ This establishes B1 compatibility; it does not predict B4/B8 scaling.
 
 ### Operator speedup over an explicit loop
 
-Values below are `loop latency / batch latency`; values below one favor the
-loop.
+Values below are `loop latency / batch latency`; values below one favor the loop.
 
 | Configuration | B | NTT | Rescale | Ct multiply | Relinearize | Rotate | Decrypt | Encrypt |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -165,8 +141,7 @@ loop.
 | `logN = 16`, L30 | 4 | 1.93x | 3.47x | 3.47x | 1.52x | 1.57x | 2.58x | 2.38x |
 |  | 8 | 2.27x | 5.11x | 2.29x | 1.55x | 1.56x | 3.66x | 3.37x |
 
-The mechanism is operation-specific. Encode and decrypt can benefit while a
-key-switch-heavy evaluator at the same depth loses.
+The mechanism is operation-specific. Encode and decrypt can benefit while a key-switch-heavy evaluator at the same depth loses.
 
 ### `logN = 16` crossover
 
@@ -180,9 +155,7 @@ key-switch-heavy evaluator at the same depth loses.
 | 25 | 1.54x | 1.45x | 1.26x | 1.16x | 1.26x | 1.12x |
 | 30 | 1.96x | 2.26x | 1.51x | 1.55x | 1.76x | 1.71x |
 
-On this GPU, B4 became useful earlier than B8. Key-switch and complete-workload
-crossovers occurred later than the raw NTT crossover because keys,
-accumulators, automorphism, and output tensors enlarge the working set.
+On this GPU, B4 became useful earlier than B8. Key-switch and complete-workload crossovers occurred later than the raw NTT crossover because keys, accumulators, automorphism, and output tensors enlarge the working set.
 
 ### Complete workload and peak memory
 
@@ -199,15 +172,9 @@ accumulators, automorphism, and output tensors enlarge the working set.
 
 ## Hardware contrast: RTX A6000
 
-A second historical measurement on 2026-07-25 used commit
-`9f4a1756bc20dd17f172b70ae88b9cf1ffd855c4` and one NVIDIA RTX A6000
-(SM86, 6 MiB L2, 47.4 GiB device memory). The same-build batch and loop paths
-matched exactly at the ciphertext-data depth. Singleton batches remained at
-parity: the median loop/batch ratio was 1.001x for `logN = 14` and 1.000x for
-both `logN = 15` and `logN = 16`.
+A second historical measurement on 2026-07-25 used commit `9f4a1756bc20dd17f172b70ae88b9cf1ffd855c4` and one NVIDIA RTX A6000 (SM86, 6 MiB L2, 47.4 GiB device memory). The same-build batch and loop paths matched exactly at the ciphertext-data depth. Singleton batches remained at parity: the median loop/batch ratio was 1.001x for `logN = 14` and 1.000x for both `logN = 15` and `logN = 16`.
 
-The one-message QP digit size identifies whether increasing B creates a new
-fit-to-spill transition:
+The one-message QP digit size identifies whether increasing B creates a new fit-to-spill transition:
 
 | `logN` / depth | Active QP rows | QP digit per message | Measured behavior |
 | --- | ---: | ---: | --- |
@@ -219,12 +186,9 @@ fit-to-spill transition:
 | 16 / L25 | 14 | 7.000 MiB | B8 MxV-8 was 1.07x with `radix16_compact`. |
 | 16 / L30 | 9 | 4.500 MiB | B8 MxV-8 was 1.09x with `radix16_compact`. |
 
-The full active set remains larger than the digit proxy. Ask whether B changes
-the cache-residency regime, which can happen even when a single digit tensor is
-smaller than nominal L2 capacity.
+The full active set remains larger than the digit proxy. Ask whether B changes the cache-residency regime, which can happen even when a single digit tensor is smaller than nominal L2 capacity.
 
-CUDA Graph also changed the policy because it removed most of the explicit
-loop's host-submission disadvantage. Values remain `loop / batch`:
+CUDA Graph also changed the policy because it removed most of the explicit loop's host-submission disadvantage. Values remain `loop / batch`:
 
 | Configuration | Eager | Graph replay |
 | --- | ---: | ---: |
@@ -234,12 +198,7 @@ loop's host-submission disadvantage. Values remain `loop / batch`:
 | `logN = 16`, L0 B8 MxV-8, radix16 | 1.05x | 1.04x |
 | `logN = 16`, L25 B8 MxV-8, radix16 | 1.07x | 1.03x |
 
-On this A6000, `logN = 15` exposed the clearest fit-to-spill loss: one
-depth-zero message was close to the 6 MiB L2 capacity, while even B2 was not.
-At `logN = 16`, L0 B1 was already larger than L2, so increasing B did not
-introduce the same new cache transition. The genuine radix-16 backend reduced enough transform
-work to retain small batch gains. A dispatch rule therefore needs measured
-backend structure and graph policy in addition to L2 size.
+On this A6000, `logN = 15` exposed the clearest fit-to-spill loss: one depth-zero message was close to the 6 MiB L2 capacity, while even B2 was not. At `logN = 16`, L0 B1 was already larger than L2, so increasing B did not introduce the same new cache transition. The genuine radix-16 backend reduced enough transform work to retain small batch gains. A dispatch rule therefore needs measured backend structure and graph policy in addition to L2 size.
 
 ## 6. Put the choice in application code
 
@@ -252,9 +211,7 @@ def evaluate_requests(requests, *, use_homogeneous_batch, evaluator):
     return [evaluator(request) for request in requests]
 ```
 
-In a real application, prefer creating the batch before encryption so
-`stack_batch` does not add a copy. The snippet only makes the selection point
-visible.
+In a real application, prefer creating the batch before encryption so `stack_batch` does not add a copy. The snippet only makes the selection point visible.
 
 A reasonable starting policy for the reference GPU was:
 
@@ -288,9 +245,11 @@ logN = 16:
     begin with radix16_compact and treat measured batch gains as modest
 ```
 
-Do not encode this table as a universal library heuristic. Re-run the example
-when the GPU, backend, preset, depth distribution, graph policy, workload, or
-memory budget changes.
+Re-run the example when the GPU, backend, preset, depth distribution, graph policy, workload, or memory budget changes.
+
+## Verify the outcome
+
+Choose the smallest batch that meets the application’s throughput target without violating latency or memory limits. Retain unbatched, B1, and larger-batch results with active depth and operation schedule; do not merge measurements across incompatible signatures.
 
 ## Related documentation
 

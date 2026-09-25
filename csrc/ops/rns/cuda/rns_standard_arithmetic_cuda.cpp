@@ -35,9 +35,16 @@ torch::Tensor montgomery_mul_row_scalars_standard(
       residues, row_scalars, rns_params);
 }
 
+torch::Tensor sum_standard_batch(const torch::Tensor source,
+                                 const int64_t dim,
+                                 const torch::Tensor rns_params) {
+  return rns_sum_standard_batch_cuda(source, dim, rns_params);
+}
+
 TORCH_LIBRARY_IMPL(fhelium_rns_ops, CUDA, m) {
   m.impl("add_standard", &add_standard);
   m.impl("add_standard_", &add_standard_);
+  m.impl("sum_standard_batch", &sum_standard_batch);
   m.impl("sub_standard", &sub_standard);
   m.impl("sub_standard_", &sub_standard_);
   m.impl("montgomery_mul_row_scalars_standard",

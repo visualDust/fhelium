@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from ..._pipeline import (
     DecisionRecord,
     PassResult,
@@ -15,10 +21,10 @@ from fhelium.backend.execution import (
 )
 from fhelium.backend.implementation import (
     OperationImplementationRegistry,
+    PreparingOperationImplementation,
     operation_invocation,
     requested_implementation,
 )
-from fhelium.ir import Program
 
 from ._operations import executable_operations
 from ._validate_representations import ValidateExecutionRepresentationsPass
@@ -32,12 +38,10 @@ class ResolveBackendOperationsPass:
     in_place: bool = False
     name: str = "resolve-backend-operations"
 
-    def run(
-        self,
-        program: Program,
-        shared_data: dict[object, object],
-    ) -> PassResult:
-        ValidateExecutionRepresentationsPass().run(program, shared_data)
+    def run(self, compilation: "Compilation") -> PassResult:
+        program = compilation.program
+        shared_data = compilation.workspace
+        ValidateExecutionRepresentationsPass().run(compilation)
         operations = executable_operations(program)
         if self.in_place and len(operations) != 1:
             raise ValueError(
@@ -53,12 +57,17 @@ class ResolveBackendOperationsPass:
                 requested=requested_implementation(operation),
                 in_place=self.in_place,
             )
+            prepared_regions = False
+            if isinstance(implementation, PreparingOperationImplementation):
+                implementation = implementation.prepare_operation(operation)
+                prepared_regions = bool(operation.regions)
             dispatches[operation] = OperationDispatch(
                 invocation,
                 implementation,
                 implementation.resource_requirements(invocation),
                 self.registry.effect(type(operation)),
                 self.in_place,
+                prepared_regions,
             )
             decisions.append(
                 DecisionRecord(

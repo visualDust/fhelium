@@ -223,6 +223,33 @@ class OperationImplementation(Protocol):
 RegionCallable = Callable[[tuple[torch.Tensor, ...]], tuple[torch.Tensor, ...]]
 
 
+class FusionImplementation(OperationImplementation, Protocol):
+    """Describe region support supplied by one joint-execution implementation."""
+
+    def match_fusion(self, operations: Sequence[Operation]) -> int | None:
+        """Return supported computational-op count, zero for plumbing, or None.
+
+        The count identifies which operations contribute to a fusion candidate.
+        Unknown facts remain unresolved until
+        execution binding. Known unsupported operations or facts return None.
+        """
+        ...
+
+
+@runtime_checkable
+class PreparingOperationImplementation(OperationImplementation, Protocol):
+    """Prepare one represented operation for direct Tensor execution.
+
+    Code-generating implementations consume the operation and its regions once
+    during Backend resolution. The returned implementation executes the complete
+    operation without interpreting its nested operations at runtime.
+    """
+
+    def prepare_operation(
+        self, operation: Operation
+    ) -> OperationImplementation: ...
+
+
 @runtime_checkable
 class RegionOperationImplementation(OperationImplementation, Protocol):
     """Execute an operation whose regions contain callable Tensor programs."""
@@ -471,10 +498,12 @@ class OperationImplementationRegistry:
 
 
 __all__ = [
+    "FusionImplementation",
     "ImplementationRegistry",
     "OperationImplementation",
     "OperationImplementationRegistry",
     "OperationInvocation",
+    "PreparingOperationImplementation",
     "RegionCallable",
     "RegionOperationImplementation",
     "operation_invocation",

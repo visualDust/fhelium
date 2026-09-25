@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fhelium.compile._compilation import Compilation
+
+
 from ..._pipeline import (
     PassResult,
     PassStats,
@@ -12,10 +18,6 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from fhelium.config import CkksConfig
-from fhelium.ir import (
-    Program,
-)
-from .._operation_transforms import program_operations
 from ._core import CkksLoweringRegistry
 from ._driver import DEFAULT_CKKS_LOWERINGS, lower_ckks_program
 
@@ -53,30 +55,16 @@ class LowerCkksToRnsNttPass:
         object.__setattr__(self, "selections", MappingProxyType(selections))
         object.__setattr__(self, "preserve", preserve)
 
-    def run(
-        self,
-        program: Program,
-        workspace: dict[object, object],
-    ) -> PassResult:
+    def run(self, compilation: "Compilation") -> PassResult:
+        program = compilation.program
+        workspace = compilation.workspace
         config = workspace.get(CkksConfig)
-        if config is None:
-            matched = sum(
-                1
-                for operation in program_operations(program)
-                if self.registry.supports(operation)
-            )
-            return PassResult.unchanged(
-                program,
-                matched=matched,
-                skipped=matched,
-                diagnostics=("CKKS configuration is not available",),
-            )
-        if not isinstance(config, CkksConfig):
+        if config is not None and not isinstance(config, CkksConfig):
             raise TypeError(
                 "Compile workspace CkksConfig entry has incompatible value"
             )
         result = lower_ckks_program(
-            program,
+            compilation,
             config,
             registry=self.registry,
             selections=self.selections,

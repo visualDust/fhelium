@@ -2,13 +2,16 @@
 
 Compose CKKS bootstrapping through the experimental public component interfaces. Use `FullSlotBootstrap` with the standard full-slot topology and configurable mathematical strategies. Direct Python composition supports custom topologies.
 
+## Prerequisites
+
+Have a CKKS configuration, an input-state and magnitude contract, and the resources required by the selected components. Use the experimental example with synthetic data before applying a new coordinate or depth schedule.
+
 ## Establish the coordinate convention
 
 A periodic reduction has two coordinates:
 
 - raw branch coordinate $r$, with the application precondition $|r|\le B$;
-- normalized polynomial coordinate $x=r/B\in[-1,1]$, where
-  $B=$ `input_bound`.
+- normalized polynomial coordinate $x=r/B\in[-1,1]$, where $B=$ `input_bound`.
 
 The built-in target is
 
@@ -17,10 +20,7 @@ $$
           =\frac{\sin(\pi r)}{\pi}.
 $$
 
-`reference(values)` always takes normalized $x$. `evaluate(...)` takes raw $r$
-when `fuse_input_normalization=False`; it takes already normalized $x$ when
-fusion is enabled. `FullSlotBootstrap` honors fusion by folding $1/B$ into the
-first CoeffsToSlots numerical stage.
+`reference(values)` always takes normalized $x$. `evaluate(...)` takes raw $r$ when `fuse_input_normalization=False`; it takes already normalized $x$ when fusion is enabled. `FullSlotBootstrap` honors fusion by folding $1/B$ into the first CoeffsToSlots numerical stage.
 
 ## Assemble the built-in topology
 
@@ -54,25 +54,18 @@ bootstrap = bs.FullSlotBootstrap(
 
 Before using this object, establish all of the following:
 
-1. the input is a two-component coefficient-domain standard-RNS Q ciphertext
-   at `bootstrap.input_depth`, with input precision suitable for the circuit;
+1. the input is a two-component coefficient-domain standard-RNS Q ciphertext at `bootstrap.input_depth`, with input precision suitable for the circuit;
 2. every batch member uses all $S=N/2$ slots and the active `prime_ids`;
 3. both raw branch coordinates lie within `[-input_bound, input_bound]`;
-4. the selected polynomial degree and evaluator meet the application's error
-   model;
+4. the selected polynomial degree and evaluator meet the application's error model;
 5. the modulus chain accommodates `bootstrap.output_depth`;
-6. the supplied `EvaluationKeySet` contains the reported rotations and the
-   compatible relinearization and conjugation capabilities.
+6. the supplied `EvaluationKeySet` contains the reported rotations and the compatible relinearization and conjugation capabilities.
 
-Construction checks structural-base/default-scale proximity, transform slot
-counts, target depth, and depth. It cannot inspect the encrypted coordinate
-range or certify an application error bound.
+Construction checks structural-base/default-scale proximity, transform slot counts, target depth, and depth. It cannot inspect the encrypted coordinate range or certify an application error bound.
 
 ## Replace BSGS with direct evaluation
 
-The compiler synthesizes each transform; the evaluator decides how its stages
-are executed. Replacing BSGS with direct diagonal evaluation changes only the
-evaluator argument:
+The compiler synthesizes each transform; the evaluator decides how its stages are executed. Replacing BSGS with direct diagonal evaluation changes only the evaluator argument:
 
 ```python
 direct = bs.FullSlotBootstrap(
@@ -91,21 +84,15 @@ $$
 L(x)=\sum_kd_k\mathbin{\odot}\operatorname{Rot}_k(x),
 $$
 
-BSGS splits $k=g+b$ and moves the final giant rotation outside each group. This
-is algebraically equivalent to direct evaluation. Both consume one Q depth per
-stage. If the input scale is $\Delta_{\rm in}$ and the evaluator prepares the
-diagonal at scale $\Delta_p$, the dropped Q group has product $M_d$, and the
-stage uses
+BSGS splits $k=g+b$ and moves the final giant rotation outside each group. This is algebraically equivalent to direct evaluation. Both consume one Q depth per stage. If the input scale is $\Delta_{\rm in}$ and the evaluator prepares the diagonal at scale $\Delta_p$, the dropped Q group has product $M_d$, and the stage uses
 
 $
 \Delta_{\rm out}=\frac{\Delta_{\rm in}\Delta_p}{M_d}.
 $
 
-`BootstrapArithmetic` selects $\Delta_p$ from the circuit's target schedule;
-it is not necessarily `config.default_scale`.
+`BootstrapArithmetic` selects $\Delta_p$ from the circuit's target schedule; it is not necessarily `config.default_scale`.
 
-They can differ in rotation inventory, operation ordering, memory use, and CKKS
-rounding, so compare decoded semantics rather than requiring bitwise residues.
+They can differ in rotation inventory, operation ordering, memory use, and CKKS rounding, so compare decoded semantics rather than requiring bitwise residues.
 
 ## Replace periodic reduction (`modular_reduction`)
 
@@ -127,10 +114,7 @@ bootstrap = bs.FullSlotBootstrap(
 )
 ```
 
-The exponential component stores ascending power coefficients
-$a_n=(i\pi)^n/n!$, squares $\log_2 B$ times, and extracts sine by conjugation.
-It has its own depth and key needs. The constructor computes the resulting
-output depth from the selected components.
+The exponential component stores ascending power coefficients $a_n=(i\pi)^n/n!$, squares $\log_2 B$ times, and extracts sine by conjugation. It has its own depth and key needs. The constructor computes the resulting output depth from the selected components.
 
 ## Respect polynomial basis conventions
 
@@ -139,28 +123,13 @@ output depth from the selected components.
 - `basis="power"`: $p(x)=\sum_n a_nx^n$;
 - `basis="chebyshev"`: $p(x)=\sum_n a_nT_n(x)$.
 
-For an approximation designed on physical $[a,b]$, the stored coefficient
-coordinate is $x=(2t-a-b)/(b-a)$. `evaluate_plaintext()` and homomorphic
-evaluators do not insert this affine map. Apply the input normalization and
-include the resulting depth cost in the component's declared depth budget.
+For an approximation designed on physical $[a,b]$, the stored coefficient coordinate is $x=(2t-a-b)/(b-a)$. `evaluate_plaintext()` and homomorphic evaluators do not insert this affine map. Apply the input normalization and include the resulting depth cost in the component's declared depth budget.
 
-Polynomial evaluators derive their basis scale recurrence from the input's
-actual scale. This preserves the polynomial's coefficients and does not
-require guessing a full-slot stage's target scale. For a high-degree
-polynomial, inspect `arithmetic.for_input(value, depths).target_scales` when
-planning precision. If the resulting scalar plaintexts cannot fit the integer
-encoding range, prepare the value with `arithmetic.advance_depth(value)` and
-include that real transition in the depth budget; evaluation does not add it
-silently.
+Polynomial evaluators derive their basis scale recurrence from the input's actual scale. This preserves the polynomial's coefficients and does not require guessing a full-slot stage's target scale. For a high-degree polynomial, inspect `arithmetic.for_input(value, depths).target_scales` when planning precision. If the resulting scalar plaintexts cannot fit the integer encoding range, prepare the value with `arithmetic.advance_depth(value)` and include that real transition in the depth budget; evaluation does not add it silently.
 
 ## Change the complete topology
 
-A complete custom algorithm is a Python callable. `BootstrapArithmetic` owns
-one Engine plus the prepared-constant cache used by Bootstrap's depth-dependent
-multiplication, depth advancement, and scalar operations. Pass that owner to
-component `evaluate()` methods so nested reduction and polynomial schedules
-share the same material lifecycle. Application code may interleave these
-components with ordinary Engine operations in any order:
+A complete custom algorithm is a Python callable. `BootstrapArithmetic` owns one Engine plus the prepared-constant cache used by Bootstrap's depth-dependent multiplication, depth advancement, and scalar operations. Pass that owner to component `evaluate()` methods so nested reduction and polynomial schedules share the same material lifecycle. Application code may interleave these components with ordinary Engine operations in any order:
 
 ```python
 class MyBootstrap:
@@ -203,10 +172,7 @@ class MyBootstrap:
         )
 ```
 
-Document the custom callable's tensor axes, depth/scale/domain/basis
-transitions, raw range, normalization owner, and output target. Ordinary
-dictionaries or tensors can hold caches; runtime value serialization and artifact
-facilities remain available for persistence.
+Document the custom callable's tensor axes, depth/scale/domain/basis transitions, raw range, normalization owner, and output target. Ordinary dictionaries or tensors can hold caches; runtime value serialization and artifact facilities remain available for persistence.
 
 ## Generate or supply keys
 
@@ -230,16 +196,11 @@ refreshed = bootstrap(
 )
 ```
 
-`rotation_strategy="direct"` requests a direct key for every transform rotation.
-`"power_of_two"` stores compact signed-power keys and composes missing direct
-steps online. Generate or provision the relinearization and conjugation keys
-independently because they serve different operations and are not part of the
-rotation inventory.
+`rotation_strategy="direct"` requests a direct key for every transform rotation. `"power_of_two"` stores compact signed-power keys and composes missing direct steps online. Generate or provision the relinearization and conjugation keys independently because they serve different operations and are not part of the rotation inventory.
 
 ## Use the versioned factories correctly
 
-The experimental `logn16` factory names identify documented bootstrap
-configurations rather than runtime validators. Their documented setup is:
+The experimental `logn16` factory names identify documented bootstrap configurations. Their documented setup is:
 
 ```python
 from fhelium.eager import Engine
@@ -251,6 +212,8 @@ config = fh.CkksConfig.parse(
 engine = Engine(config)
 ```
 
-Factories do not enforce this preset and do not prove the raw branch range
-or output error. Treat a different engine, range, polynomial profile, or
-application tolerance as a new validation target.
+Factories do not enforce this preset and do not prove the raw branch range or output error. Treat a different engine, range, polynomial profile, or application tolerance as a new validation target.
+
+## Verify the outcome
+
+Inspect the composed plan, compare its clear reference and encrypted evaluation on the supported input range, and account for output depth and actual scale. `examples/25_experimental_bootstrap.py` provides an end-to-end composition; [bootstrap internals](../developer/composable-ckks-bootstrap.md) describes component contracts.

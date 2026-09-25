@@ -17,10 +17,10 @@ from fhelium.values import (
     RotationKey,
     SecretKey,
 )
-from ._galois import (
+from fhelium.backend.rns.automorphism import (
     apply_coefficient_galois_automorphism,
-    rotation_galois_element,
 )
+from ..rotation._galois import rotation_galois_element
 from fhelium.errors import (
     PolynomialDomainError,
     ResidueRepresentationError,
@@ -263,11 +263,7 @@ class CkksKeyGenerator:
         resources.ntt_context.forward_to_montgomery_(error, include_p=include_p)
 
         if uniform_component is None:
-            repeats = (
-                resources.config.num_p_primes
-                if include_p
-                else 0
-            )
+            repeats = resources.config.num_p_primes if include_p else 0
             uniform_component_data = resources.rng.randint(
                 [
                     resources.rns_context.moduli_for_basis(
@@ -312,9 +308,7 @@ class CkksKeyGenerator:
     ) -> KeySwitchKey:
         r"""Create a hybrid-RNS key from source to destination secret relation.
 
-        Key construction belongs here rather than in the key-switch executor:
-        it repeatedly creates public-key encryptions and does not participate
-        in either the direct-streaming or prepared execution plans.
+        Each hybrid digit is constructed through a public-key encryption.
 
         Stable key digit $d$ satisfies, on that digit's embedded source rows,
         $k_{d,0}+k_{d,1}s_{\mathrm{dst}}=P s_{\mathrm{src}}+e_d$.

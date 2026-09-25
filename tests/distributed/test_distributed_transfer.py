@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -174,3 +176,25 @@ def test_tree_schedule_covers_arbitrary_non_power_of_two_world_sizes() -> None:
             range(1, world_size)
         )
         assert all(sender > receiver for sender, receiver in edges)
+
+
+def test_single_rank_limb_scatter_selects_source_positions(
+    tmp_path: Path,
+) -> None:
+    from fhelium.distributed import scatter_ciphertext_limbs
+
+    torch.distributed.init_process_group(
+        "gloo", init_method=(tmp_path / "group").as_uri(), rank=0, world_size=1
+    )
+    try:
+        source = _ciphertext()
+        selected = scatter_ciphertext_limbs(source, limb_ranges=[(1, 3)])
+        assert selected.prime_ids == (3, 4)
+        assert selected.batch_shape == source.batch_shape
+        assert (
+            selected.data.untyped_storage().data_ptr()
+            == source.data.untyped_storage().data_ptr()
+        )
+        torch.testing.assert_close(selected.data, source.data[..., 1:3, :])
+    finally:
+        torch.distributed.destroy_process_group()

@@ -2,7 +2,7 @@
 
 from ._assign_depths import AssignCkksDepthsPass
 from ._assign_scales import AssignCkksScalesPass
-from ._hoist_rotations import HoistRotationsPass
+from ._rotation_hoisting import RotationHoistingPass
 from ._insert_multiply_ntt_transitions import InsertMultiplyNttTransitionsPass
 from ._insert_plaintext_preparation import InsertPlaintextPreparationPass
 from ._relinearization import (
@@ -17,7 +17,7 @@ from ._resolve_rotation_keys import ResolveRotationKeyOperandsPass
 __all__ = [
     "AssignCkksDepthsPass",
     "AssignCkksScalesPass",
-    "HoistRotationsPass",
+    "RotationHoistingPass",
     "InsertMultiplyNttTransitionsPass",
     "InsertPlaintextPreparationPass",
     "InsertRelinearizationPass",

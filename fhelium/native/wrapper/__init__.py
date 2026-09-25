@@ -27,6 +27,7 @@ from .ntt_diagnostic_ops import (
     inverse_ntt_montgomery_power_of_two_radix_compact_override_,
 )
 from .ntt_ops import (
+    compact_ntt_stage_range_,
     forward_ntt_montgomery_compact_grouped_smem_,
     forward_ntt_montgomery_compact_keyswitch_accumulate_,
     forward_ntt_montgomery_indexed_,
@@ -73,6 +74,7 @@ from .rns_ops import (
     sub_lazy,
     sub_standard,
     sub_standard_,
+    sum_standard_batch,
     to_montgomery_,
 )
 
@@ -92,6 +94,7 @@ __all__ = [
     'apply_coefficient_galois_automorphism',
     'apply_ntt_galois_automorphism',
     'center_residues_',
+    'compact_ntt_stage_range_',
     'forward_ntt_montgomery_compact_grouped_smem_',
     'forward_ntt_montgomery_compact_grouped_smem_override_',
     'forward_ntt_montgomery_compact_keyswitch_accumulate_',
@@ -142,5 +145,6 @@ __all__ = [
     'sub_lazy',
     'sub_standard',
     'sub_standard_',
+    'sum_standard_batch',
     'to_montgomery_',
 ]

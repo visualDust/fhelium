@@ -1,13 +1,13 @@
 # Transform rank-local collective IR
 
-**Example source:** [`examples/21_rank_local_collective_ir.py`](https://github.com/VisualDust/fhelium/blob/main/examples/21_rank_local_collective_ir.py)
+**Example source:** [`examples/24_distributed_collective_ir.py`](https://github.com/VisualDust/fhelium/blob/main/examples/24_distributed_collective_ir.py)
 
-Example 21 constructs a rank-local Program containing collective operations and applies a caller-selected Compile pass to expose a generic reduction region. It compares two valid representations of ciphertext-add all-reduce without launching distributed execution.
+Example 24 constructs a rank-local Program containing collective operations and applies a caller-selected Compile pass to expose a generic reduction region. It compares two valid representations of ciphertext-add all-reduce without launching distributed execution.
 
 ## Run the example
 
 ```bash
-python examples/21_rank_local_collective_ir.py
+python examples/24_distributed_collective_ir.py
 ```
 
 The script requires neither a process group nor multiple devices because it only builds and transforms IR.
@@ -55,8 +55,7 @@ The first request records a `preserve` decision. The second records a `generic-c
 
 ## Protocol checks beyond Program structure
 
-Structural construction and transformation establish local IR validity.
-Distributed execution additionally requires checks for:
+Structural construction and transformation establish local IR validity. Distributed execution additionally requires checks for:
 
 - that all ranks enter the same collective;
 - that collectives occur in the same cross-rank order;
@@ -65,8 +64,7 @@ Distributed execution additionally requires checks for:
 - that execution is free of deadlock;
 - that process-group resources match the Program.
 
-A caller may compose diagnostic passes for a particular protocol and run them
-before linking or execution.
+A caller may compose diagnostic passes for a particular protocol and run them before linking or execution.
 
 ## Why preserve both forms
 
@@ -81,7 +79,7 @@ Neither choice becomes a permanent framework-wide lowering policy.
 
 ::: details Source
 
-<<< @/../examples/21_rank_local_collective_ir.py
+<<< @/../examples/24_distributed_collective_ir.py
 
 :::
 

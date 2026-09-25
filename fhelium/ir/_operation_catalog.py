@@ -11,6 +11,8 @@ from typing import Literal, TypeAlias, cast
 from xdsl.dialects.builtin import StringAttr
 from xdsl.ir import Attribute, Operation, SSAValue
 
+from ._dependencies import DependencyDescription, OperationDependencies
+
 ValueRole = Literal["encrypted", "message", "plaintext", "static"]
 
 OperationEffect = Literal["pure", "rng-write", "mutation", "opaque"]
@@ -68,6 +70,16 @@ class OperationSpec:
     effect: OperationEffect = "pure"
     validator: OperationValidator | None = None
     operation_type: type[Operation] | None = None
+    dependencies: DependencyDescription = None
+
+    def resolve_dependencies(
+        self, operation: Operation
+    ) -> OperationDependencies:
+        """Resolve fixed or instance-dependent element relationships."""
+        description = self.dependencies
+        if description is None:
+            return OperationDependencies()
+        return description(operation) if callable(description) else description
 
     def __post_init__(self) -> None:
         if not self.name or not self.family:
@@ -213,6 +225,7 @@ def operation_spec(
     *,
     effect: OperationEffect = "pure",
     validator: OperationValidator | None = None,
+    dependencies: DependencyDescription = None,
 ) -> OperationSpec:
     """Construct a role-bearing specification for an open operation."""
 
@@ -225,6 +238,7 @@ def operation_spec(
         results,
         effect,
         validator,
+        dependencies=dependencies,
     )
 
 
@@ -235,7 +249,7 @@ def registered_operation_spec(
     effect: OperationEffect = "pure",
     validator: OperationValidator | None = None,
 ) -> OperationSpec:
-    """Construct a specification for one registered xDSL operation class."""
+    """Collect the semantic specification of a registered operation class."""
 
     return OperationSpec(
         operation_type.name,
@@ -245,6 +259,7 @@ def registered_operation_spec(
         effect=effect,
         validator=validator,
         operation_type=operation_type,
+        dependencies=getattr(operation_type, "dependencies", None),
     )
 
 
@@ -258,6 +273,46 @@ def unsupported_attributes(
         "op_name__",
         EXECUTION_IMPLEMENTATION_ATTRIBUTE,
     }
+    if operation.name.startswith("fhelium_ckks."):
+        common.update(
+            {
+                "ckks_config",
+                "parameter_names",
+                "digits",
+                "q_count",
+                "p_count",
+                "key_row_start",
+                "galois_generator",
+                "ntt_backend",
+                "ntt_algorithm",
+                "ntt_group_width",
+                "ntt_radix",
+                "ntt_table_layout",
+                "rotation_step",
+                "rotation_steps",
+                "half_primes",
+                "centered_lift",
+                "min_modulus",
+            }
+        )
+    if operation.name in {
+        "fhelium_rns.hybrid_modup_digit",
+        "fhelium_rns.moddown_qp_to_q",
+        "fhelium_rns.moddown_ntt_qp_to_q",
+        "fhelium_rns.key_switch_digit_product",
+        "fhelium_rns.rescale_drop_leading_primes",
+    }:
+        common.update(
+            {
+                "parameter_names",
+                "digits",
+                "p_count",
+                "q_count",
+                "key_row_start",
+                "ntt_backend",
+                "half_primes",
+            }
+        )
     return tuple(sorted(set(operation.attributes) - common - set(allowed)))
 
 
@@ -265,7 +320,10 @@ def flat_operation(operation: Operation) -> tuple[str, ...]:
     """Require an operation without properties, regions, or successors."""
 
     diagnostics: list[str] = []
-    if operation.properties:
+    if set(operation.properties) - {
+        "operandSegmentSizes",
+        "resultSegmentSizes",
+    }:
         diagnostics.append("properties are unsupported")
     if operation.regions:
         diagnostics.append("regions are unsupported")
