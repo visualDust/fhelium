@@ -162,6 +162,9 @@ jobs:
           rm -rf "$verification_root"
           python -m venv "$verification_root"
           verification_python="$verification_root/bin/python"
+          export PATH="$verification_root/bin:$PATH"
+          "$verification_python" -I -m pip install --only-binary=:all: \
+            "pip==26.2.1"
           "$verification_python" -I -m pip install --only-binary=:all: \
             "jsonschema==4.26.0"
           configuration=$(
@@ -186,7 +189,7 @@ jobs:
             fhelium tests examples scripts packaging; then
             echo '::warning::Source formatting differs from Ruff output; see the formatting report above.'
           fi
-          "$verification_python" -I -m pyright
+          "$verification_python" -I -m pyright --pythonpath "$verification_python"
           "$verification_python" -I -m pytest -q
           "$verification_python" -I -m pytest \
             packaging/test_release_repository.py -q
