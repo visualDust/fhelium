@@ -1,10 +1,6 @@
-"""Structural signatures for reusable FHElium execution values.
+"""Describe copy-compatible Tensor topology and FHElium value state.
 
-Signatures describe copy-compatible tensor topology and FHElium value
-state. They deliberately exclude tensor residency: a CPU value and a CUDA value
-may have the same signature and can therefore be copied through a
-:class:`~fhelium.runtime.ReusableValueBuffer` whose target device is tracked
-separately.
+Signatures are device-independent: matching CPU and CUDA values can share a signature. A ``ReusableValueBuffer`` records the target placement separately from its accepted payload signature.
 """
 
 from __future__ import annotations
@@ -26,10 +22,7 @@ TreeKind = Literal["tensor", "value", "list", "tuple", "dict"]
 class TensorSignature:
     """Device-independent tensor topology accepted by one execution buffer.
 
-    ``device`` is intentionally absent. Shape, stride, dtype, layout, and
-    ``requires_grad`` determine whether payload can be copied into fixed target
-    storage; the target residency belongs to the buffer or program that owns
-    that storage.
+    Shape, stride, dtype, layout, and ``requires_grad`` determine copy compatibility with fixed target storage. The owning buffer or program records that storage's device.
 
     Args:
         shape: Tensor dimensions.
@@ -70,11 +63,7 @@ class TensorSignature:
 class ValueSignature:
     """FHElium value state plus device-independent tensor topology.
 
-    A value signature fixes value state such as depth, scale, plaintext
-    representation, polynomial domain, modulus basis, residue
-    representation, prime identities, schema version, and key identity.
-    A value signature is storage-independent metadata. Model, user, request,
-    and cache associations remain external.
+    The signature combines the serialized value type and schema version, frozen value metadata, and named Tensor signatures. Matching compares these recorded fields.
 
     Args:
         type_name: Registered serialized-value class name.
@@ -124,16 +113,9 @@ def _value_signature_from_envelope(envelope: ValueEnvelope) -> ValueSignature:
 class ValueTreeSignature:
     """Structure of tensors and FHElium values in a reusable execution payload.
 
-    Supported leaves are :class:`torch.Tensor` and serializable FHElium
-    :class:`~fhelium.values.TensorResident` values. Lists, tuples, and
-    dictionaries may nest those leaves. Arbitrary Python scalars and control
-    objects are intentionally unsupported; bind them statically in a callable
-    or keep them in the application control plane.
+    Supported leaves are :class:`torch.Tensor` and serializable FHElium :class:`~fhelium.values.TensorResident` values. Lists, tuples, and dictionaries may nest those leaves. Bind Python scalars and control objects statically in the callable.
 
-    ``ValueTreeSignature`` composes :class:`TensorSignature` and
-    :class:`ValueSignature` rather than replacing them: tensor leaves need only
-    tensor topology, while FHElium-value leaves additionally require
-    cryptographic metadata.
+    Each Tensor leaf uses a :class:`TensorSignature`; each FHElium-value leaf uses a :class:`ValueSignature` containing its value metadata and Tensor topology.
 
     Args:
         kind: Node kind: tensor, FHElium value, list, tuple, or dictionary.

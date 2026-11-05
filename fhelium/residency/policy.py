@@ -1,10 +1,6 @@
 """Pure deterministic policy inputs and built-in eviction ordering.
 
-Policies receive only frozen tensor-free candidates that have already passed
-manager-invariant filtering. They rank candidates and expose configured
-fallback tiers; they never inspect concrete values or execute
-residency actions.
-"""
+Policies receive only frozen tensor-free candidates that have already passed manager-invariant filtering. They rank eligible candidates and expose configured fallback tiers for controller decisions."""
 
 from __future__ import annotations
 
@@ -136,12 +132,9 @@ class ResidencyPolicy(Protocol):
 
 
 class DeterministicTieredLRU:
-    """Deterministic priority-aware LRU ordering over configured tier edges.
+    """Rank eviction candidates by priority and logical recency over configured fallback tiers.
 
-    Fallback locations are never inferred. An omitted source location has no
-    spill path. Candidate order is lower priority, then older access epoch,
-    then application stable key or manager registration order. Wall-clock time,
-    UUID text, allocator free-memory readings, and random state are not inputs.
+    Candidates are ordered by lower priority, older access epoch, then application stable key or manager registration order. The configured edges determine available spill paths; a source with no edge has no spill destination.
     """
 
     def __init__(

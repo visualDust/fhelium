@@ -1,6 +1,6 @@
 # Choose a preset and chain depth
 
-Choose a CKKS parameter set from the circuit's slot capacity, rescale schedule, precision, range, security budget, and memory requirements. Validate the resulting exact configuration against a cleartext oracle before optimizing its execution.
+Choose a CKKS parameter set from the circuit's slot capacity, rescale schedule, precision, range, security budget, and memory requirements. Validate the resulting parameter set against a cleartext oracle before optimizing its execution.
 
 ## Prerequisites
 
@@ -16,13 +16,13 @@ slots{capacity}_scale{target}_depth{maximum}_{default_rns_dtype}
 
 For example, `slots32768_scale50_depth27_int64` resolves to a configuration with 32,768 complex slots, default scale $2^{50}$, public depths `0..27`, and primes that select `torch.int64` as the Engine's default RNS dtype.
 
-The scale field describes `log2(config.default_scale)`. The depth field is `config.max_depth`; it is already the number of public rescale transitions available from depth zero. The dtype field reports the default native residue format implied by the preset's exact primes.
+The scale field describes `log2(config.default_scale)`. The depth field is `config.max_depth`; it is already the number of public rescale transitions available from depth zero. The dtype field reports the default native residue format implied by the preset's prime values.
 
 [Scale, depth, and native RNS dispatch](../concepts/ckks/scale-depth-and-execution-format.md) traces how these quantities interact.
 
 ## Built-in parameter baselines
 
-Every Preset resolves to exact `q_depth_groups` and `p_moduli`. The table lists the current complete QP product and built-in security budget.
+Every Preset resolves to prime values in `q_depth_groups` and `p_moduli`. The table lists the current complete QP product and built-in security budget.
 
 | Python member | `logN` | slots | default scale bits | max depth | Q / P rows | QP bits / budget |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -44,7 +44,7 @@ Every Preset resolves to exact `q_depth_groups` and `p_moduli`. The table lists 
 | `Preset.slots65536_scale40_depth72_int64` | 17 | 65,536 | 40 | 72 | 73 / 6 | 3,280 / 3,523 |
 | `Preset.slots65536_scale50_depth58_int64` | 17 | 65,536 | 50 | 58 | 59 / 6 | 3,310 / 3,523 |
 
-Preset recipes are reviewed fixed baselines. `CkksConfig.parse(preset)` resolves a recipe to exact primes. Expert parameter work constructs a new `CkksConfig` with exact nested Q groups and exact P primes rather than changing a Preset by count.
+Preset recipes are reviewed fixed baselines. `CkksConfig.parse(preset)` resolves a recipe to prime values. To define another parameter set, construct a `CkksConfig` with the desired nested Q groups and P primes.
 
 ## 1. Specify the cleartext workload
 
@@ -103,12 +103,12 @@ Record the observed error distribution under the intended output criterion. Do n
 
 At each important depth, record the active Q-row count and value size. Evaluation-key storage also depends on the QP basis, hybrid digit decomposition, and required rotation inventory. Measure peak temporary storage for the actual operation schedule.
 
-## 6. Preserve the exact parameter identity
+## 6. Preserve parameter identity
 
 Store or report:
 
 - Preset, when one was used;
-- `CkksConfig.dumps()` output or its exact Q groups and P primes;
+- `CkksConfig.dumps()` output or its Q-group and P-prime values;
 - default and actual scales;
 - `max_depth` and checkpoint depths;
 - active `prime_ids` at a failure;

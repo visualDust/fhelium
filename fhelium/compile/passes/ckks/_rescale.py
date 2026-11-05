@@ -78,7 +78,10 @@ def _classify_rescale_use(use: Use) -> tuple[bool, tuple[Use, ...]]:
     """Find manual satisfaction and unsatisfied frontiers below one edge."""
 
     operation = use.operation
-    if isinstance(operation, ckks.RescaleOp):
+    if isinstance(operation, ckks.RescaleOp) or (
+        isinstance(operation, ckks.RelinearizeOp)
+        and operation.rescale.value.data
+    ):
         return True, ()
     if is_same_dialect_ckks_cast(operation):
         assert isinstance(operation, UnrealizedConversionCastOp)
@@ -276,7 +279,10 @@ def _place_rescales(
     while changed:
         changed = False
         for operation in tuple(block.ops):
-            if isinstance(operation, ckks.RescaleOp):
+            if isinstance(operation, ckks.RescaleOp) or (
+                isinstance(operation, ckks.RelinearizeOp)
+                and operation.rescale.value.data
+            ):
                 source, source_value, _ = source_through_casts(operation.value)
                 if (
                     source in pending

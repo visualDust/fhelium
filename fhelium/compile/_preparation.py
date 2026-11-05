@@ -42,15 +42,9 @@ class _CompiledVariant:
 
 @dataclass(frozen=True)
 class Specialization:
-    """Expose one prepared input variant, its Programs, and linked execution.
+    """Pair an input-specialized computation with its linked executable.
 
-    ``source`` precedes input-state specialization and optimization.
-    ``compilation`` includes the selected Compile passes and their reports.
-    ``backend`` is the selected implementation registry and resource workspace;
-    it can also link the optimized Compilation directly.
-    ``executable.manifest`` identifies the bound implementations/resources.
-    Programs and workspace materials are inspectable; mutating them after
-    preparation is not a supported way to update an existing callable.
+    ``source`` records the computation before specialization. ``compilation`` contains the transformed Program and pass reports; ``backend`` and ``executable`` provide its linked execution. The executable retains its prepared bindings. Replacing a Program or binding requires preparing and linking a new specialization.
     """
 
     _variant: _CompiledVariant

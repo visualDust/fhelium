@@ -86,10 +86,7 @@ def broadcast_ciphertext(
 ) -> Ciphertext:
     """Broadcast one complete ciphertext and allocate non-source receivers.
 
-    A small internal object descriptor carries shape and CKKS metadata; the
-    dense payload then uses the ordinary tensor broadcast.  No placement or
-    owner policy is inferred.  The operation is synchronous: it accepts no
-    ``async_op`` argument and returns no :class:`torch.distributed.Work`.
+    A small internal object descriptor carries shape and CKKS metadata; the dense payload then uses the ordinary tensor broadcast. The operation is synchronous: it accepts no ``async_op`` argument and returns no :class:`torch.distributed.Work`.
 
     Args:
         value_or_none: Ciphertext supplied only by ``src``.  Every non-source
@@ -194,10 +191,7 @@ def broadcast_key(
 ) -> _KeyT:
     """Broadcast selected key material with typed allocation.
 
-    The function performs no key generation, owner inference, or automatic
-    placement.  Calling it is the program's visible decision to communicate
-    one selected key.  It is synchronous, accepts no ``async_op`` argument,
-    and returns no :class:`torch.distributed.Work`.
+    The call synchronously distributes the source rank's selected key and returns the received value.
 
     Args:
         key_or_none: Supported dense FHElium key supplied only by ``src``.
@@ -378,12 +372,7 @@ def scatter_ciphertexts(
 ) -> Ciphertext:
     """Scatter caller-prepared ciphertext values from one source.
 
-    The source supplies the values to send, whether independent workload items
-    or views it has already prepared. This interface performs no slicing or
-    reconstruction. This is representation-preserving transport, not an arithmetic operation.
-    Sequence position is process-group-rank order even though ``src`` is a
-    global rank.  The operation is synchronous, accepts no ``async_op``
-    argument, and returns no :class:`torch.distributed.Work`.
+    The source supplies the values to send, whether independent workload items or views it has already prepared. Each received value preserves its source representation. Sequence position is process-group-rank order even though ``src`` is a global rank. The operation is synchronous, accepts no ``async_op`` argument, and returns no :class:`torch.distributed.Work`.
 
     Args:
         values_or_none: On ``src``, one prepared ciphertext per group rank
@@ -551,12 +540,7 @@ def all_gather_ciphertexts(
 ) -> list[Ciphertext]:
     """All-gather independent ciphertexts with one identical layout.
 
-    Equality covers context, depth, scale, components, prime IDs, domain,
-    basis, Montgomery state, degree, shape, and dtype.  Rank-local CUDA device
-    indices may differ because descriptors intentionally preserve device type
-    rather than one global device index.  This is transport of independent
-    values, not algebraic reduction.  The operation is synchronous, accepts no
-    ``async_op`` argument, and returns no :class:`torch.distributed.Work`.
+    Equality covers context, depth, scale, components, prime IDs, domain, basis, Montgomery state, degree, shape, and dtype. Rank-local CUDA device indices may differ because descriptors preserve device type rather than one global device index. This is transport of independent values, not algebraic reduction. The operation is synchronous, accepts no ``async_op`` argument, and returns no :class:`torch.distributed.Work`.
 
     Args:
         value: One independent rank-local ciphertext.  All group ranks must

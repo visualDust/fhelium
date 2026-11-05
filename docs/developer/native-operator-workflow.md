@@ -68,7 +68,7 @@ Audit:
 - lazy/standard residue-range preconditions and outputs;
 - integer overflow and modular reduction bounds.
 
-If an operation is intentionally supported by only one backend, document that support in its Python owner and tests. Missing CPU or CUDA registration must fail through normal PyTorch dispatch or the engine's backend validation rather than execute a different algorithm silently.
+If an operation is supported by only one backend, document that support in its Python owner and tests. Missing CPU or CUDA registration must fail through normal PyTorch dispatch or the engine's backend validation rather than execute a different algorithm silently.
 
 ## 5. Build from a clean enough state
 
@@ -108,7 +108,7 @@ python scripts/generate_native_wrappers.py \
   --check
 ```
 
-The direct script is the supported invocation; it is deliberately outside the runtime package so generating wrappers never imports a partially initialized `fhelium.native.wrapper` package. Callable wrappers retain `require_native()` guards, resolved lazily at call time. The generated FakeTensor registration module omits that import and is loaded by `fhelium.native` only after `_ops` has registered its schemas.
+The direct script discovers operator schemas without importing the partially initialized `fhelium.native.wrapper` package. Callable wrappers retain `require_native()` guards, resolved lazily at call time. The generated FakeTensor registration module omits that import and is loaded by `fhelium.native` only after `_ops` has registered its schemas.
 
 For a configured CMake tree, prefer its fresh-target check:
 

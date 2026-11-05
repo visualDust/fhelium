@@ -1,9 +1,6 @@
-"""Inspectable deterministic automation over explicit residency mechanisms.
+"""Choose residency transitions from working-set requests and manager state.
 
-A controller owns no tensor materializations. It decides placement for one
-manager state version
-from declarative requests and delegates all validation, copying, accounting,
-and lifetime enforcement to one :class:`ResidencyManager`.
+A controller produces a placement decision for one manager state version. The associated ``ResidencyManager`` validates and executes transfers, accounting changes, and protected lifetimes.
 """
 
 from __future__ import annotations
@@ -294,13 +291,9 @@ class _SearchMemo:
 
 
 class ResidencyController:
-    """Deterministic optional automation configured for one residency manager.
+    """Choose placement and eviction actions for one residency manager.
 
-    The manager remains the only materialization owner and transition executor.
-    This controller stores only policy metadata and logical access epochs. It
-    decides only when called, emits an inspectable decision, and never
-    runs background eviction, waits for protected victims, retries a failed
-    source, rolls back completed actions, or silently replans a stale decision.
+    The controller tracks policy metadata and logical access epochs. Each call produces a decision tied to the observed manager state. Protected materializations are ineligible for eviction; stale decisions and failed actions are reported to the caller for a new decision. The manager executes the selected transitions, retaining any actions completed before a failure.
     """
 
     def __init__(

@@ -35,9 +35,7 @@ class DiagonalLinearTransform:
 
     Each stored diagonal is a CPU `complex128` NumPy vector with shape
     `[slot]`; `reference` accepts and returns the same one-dimensional shape.
-    This object contains no choice of execution algorithm. The matching
-    evaluator independently decides whether to use
-    direct diagonals, BSGS, hoisting, distribution, or a user implementation.
+    An evaluator chooses the execution algorithm for these diagonals.
     Offsets are cyclic modulo $S$; duplicate representatives such as `-1` and
     `slots - 1` are combined by `normalized_diagonals`.
     """

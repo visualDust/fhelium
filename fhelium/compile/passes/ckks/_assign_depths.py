@@ -343,6 +343,18 @@ class AssignCkksDepthsPass:
                         f"{operand_depths[0]} and {operand_depths[1]}"
                     )
                 depth = operand_depths[0]
+            elif isinstance(operation, ckks.RotationSumOp):
+                source_depths = {
+                    require(value, operation=operation.name)
+                    for value in operation.values
+                }
+                if len(source_depths) != 1:
+                    raise ValueError(
+                        f"{operation.name} requires equal source depths"
+                    )
+                depth = source_depths.pop() + int(
+                    bool(operation.rescale.value.data)
+                )
             elif isinstance(operation, ckks.GroupedRotationWeightedSumOp):
                 depth = require(operation.value, operation=operation.name)
                 plaintext_depths = {
@@ -353,7 +365,10 @@ class AssignCkksDepthsPass:
                     raise ValueError(
                         f"{operation.name} requires one ciphertext/plaintext depth"
                     )
-            elif isinstance(operation, ckks.RescaleOp):
+            elif isinstance(operation, ckks.RescaleOp) or (
+                isinstance(operation, ckks.RelinearizeOp)
+                and operation.rescale.value.data
+            ):
                 source_depth = require(
                     operation.value,
                     operation=operation.name,
@@ -364,6 +379,20 @@ class AssignCkksDepthsPass:
                         "without a bootstrapping schedule"
                     )
                 depth = source_depth + 1
+            elif isinstance(
+                operation,
+                (ckks.ModulusRaiseOp, ckks.EncapsulatedModulusRaiseOp),
+            ):
+                source_depth = require(
+                    operation.value, operation=operation.name
+                )
+                target_depth = int(operation.target_depth.value.data)
+                if target_depth > source_depth:
+                    raise ValueError(
+                        "Modulus raise target must precede or equal source depth"
+                    )
+                _prime_ids(config, target_depth)
+                depth = target_depth
             elif isinstance(operation, ckks.ModSwitchOp):
                 source_depth = require(
                     operation.value, operation=operation.name

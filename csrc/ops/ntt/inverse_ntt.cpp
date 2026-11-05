@@ -12,6 +12,12 @@
 // operand device, residue tables are Montgomery, and inputs other than the
 // operand are read-only.
 //
+// Indexed execution consumes a schedule accepted by validate_indexed_schedule.
+// Its index values and layout remain unchanged during the lifetime of prepared
+// execution; violating this precondition is undefined behavior. Raw callers
+// validate their schedules before execution. Twiddles and RNS parameters remain
+// live numerical inputs, read-only during each call.
+//
 // These kernels invert
 // $A_i[k]=\sum_n a_i[n]\psi_i^{(2\operatorname{br}(k)+1)n}\bmod q_i$
 // and normalize by $N^{-1}\bmod q_i$. Every schema mutates and preserves the

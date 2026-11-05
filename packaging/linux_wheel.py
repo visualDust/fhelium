@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and validate one configured FHElium manylinux wheel."""
+"""Build and validate one configured FHElium Linux wheel."""
 
 from __future__ import annotations
 
@@ -21,11 +21,23 @@ class ReleaseConfiguration(Protocol):
     torch_index_url: str
     torch_runtime_version: str
     torch_cuda_version: str | None
+    torch_hip_version: str | None
+    runtime_requirements: tuple[str, ...]
     torch_cxx11_abi: bool
     native_backends: tuple[str, ...]
     toolkit_version: str | None
     cuda_architectures: tuple[str, ...]
     cuda_ptx_architectures: tuple[str, ...]
+    hip_architectures: tuple[str, ...]
+
+    @property
+    def has_hip(self) -> bool: ...
+
+    @property
+    def has_gpu(self) -> bool: ...
+
+    @property
+    def expected_runtime_soname(self) -> str | None: ...
 
     @property
     def has_cuda(self) -> bool: ...
@@ -59,9 +71,13 @@ def load_release_matrix_module(source: Path) -> Any:
     return module
 
 
-def load_release_matrix(source: Path) -> ReleaseMatrix:
+def load_release_matrix(
+    source: Path, matrix_path: Path | None = None
+) -> ReleaseMatrix:
     module = load_release_matrix_module(source)
-    return module.load_matrix(source / "packaging" / "release_matrix.json")
+    return module.load_matrix(
+        matrix_path or source / "packaging" / "release_matrix.json"
+    )
 
 
 def assert_torch_identity(
@@ -73,6 +89,7 @@ import torch
 print(json.dumps({
     'version': str(torch.__version__),
     'cuda': torch.version.cuda,
+    'hip': torch.version.hip,
     'cxx11_abi': bool(torch.compiled_with_cxx11_abi()),
 }))
 """
@@ -87,6 +104,7 @@ print(json.dumps({
     expected = {
         "version": configuration.torch_runtime_version,
         "cuda": configuration.torch_cuda_version,
+        "hip": configuration.torch_hip_version,
         "cxx11_abi": configuration.torch_cxx11_abi,
     }
     if actual != expected:
@@ -128,6 +146,14 @@ def build_environment(
                 f"-DCUDA_TOOLKIT_ROOT_DIR={toolkit_root}",
             )
         )
+    if configuration.has_hip:
+        cmake_arguments.append(
+            "-DCMAKE_HIP_ARCHITECTURES="
+            + ";".join(configuration.hip_architectures)
+        )
+        environment["PYTORCH_ROCM_ARCH"] = ";".join(
+            configuration.hip_architectures
+        )
     environment["CMAKE_BUILD_PARALLEL_LEVEL"] = environment.get(
         "CMAKE_BUILD_PARALLEL_LEVEL", str(os.cpu_count() or 1)
     )
@@ -142,6 +168,12 @@ def build_environment(
     environment["FHELIUM_RELEASE_CUDA_PTX_ARCHITECTURES"] = ";".join(
         configuration.cuda_ptx_architectures
     )
+    environment["FHELIUM_RELEASE_HIP_ARCHITECTURES"] = ";".join(
+        configuration.hip_architectures
+    )
+    environment["FHELIUM_RELEASE_RUNTIME_REQUIREMENTS"] = json.dumps(
+        configuration.runtime_requirements
+    )
     environment["FHELIUM_RELEASE_TORCH_REQUIREMENT"] = (
         configuration.torch_requirement
     )
@@ -154,12 +186,28 @@ def external_libraries(
     libraries = ["libtorch*.so", "libc10*.so"]
     if configuration.has_cuda:
         libraries.append("libcudart.so.*")
+    if configuration.has_hip:
+        assert configuration.expected_runtime_soname is not None
+        libraries.append(configuration.expected_runtime_soname)
     return tuple(libraries)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--configuration", required=True)
+    parser.add_argument("--matrix", type=Path)
+    parser.add_argument(
+        "--platform-tag",
+        choices=("manylinux_2_28_x86_64", "linux_x86_64"),
+        default="manylinux_2_28_x86_64",
+        help="raw linux_x86_64 preserves the host ABI; manylinux runs auditwheel",
+    )
+    parser.add_argument(
+        "--use-installed-torch",
+        action="store_true",
+        help="reuse the preinstalled Torch after checking its declared ABI identity",
+    )
+    parser.add_argument("--llvm-objdump", type=Path)
     parser.add_argument("--python", type=Path, required=True)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -180,7 +228,7 @@ def torch_external_library_paths(python: Path) -> str:
 from pathlib import Path
 import torch
 root = Path(torch.__file__).resolve().parent.parent
-paths = [root / 'torch' / 'lib', *root.glob('nvidia/*/lib')]
+paths = [root / 'torch' / 'lib', *root.glob('nvidia/*/lib'), *root.glob('_rocm_sdk_core/lib')]
 print(':'.join(str(path) for path in paths if path.is_dir()))
 """
     return subprocess.run(
@@ -193,10 +241,15 @@ print(':'.join(str(path) for path in paths if path.is_dir()))
 
 def main() -> None:
     args = parse_args()
-    python = args.python.resolve()
+    python = Path(os.path.abspath(args.python))
     source = args.source.resolve()
     output = args.output.resolve()
-    release_matrix = load_release_matrix(source)
+    matrix_path = (
+        args.matrix.resolve()
+        if args.matrix
+        else source / "packaging" / "release_matrix.json"
+    )
+    release_matrix = load_release_matrix(source, matrix_path)
     configuration = release_matrix.configuration(args.configuration)
     project = tomllib.loads(
         (source / "pyproject.toml").read_text(encoding="utf-8")
@@ -216,15 +269,17 @@ def main() -> None:
         "install",
         f"scikit-build-core=={release_matrix.scikit_build_core_version}",
     )
-    run(
-        str(python),
-        "-m",
-        "pip",
-        "install",
-        configuration.torch_requirement,
-        "--index-url",
-        configuration.torch_index_url,
-    )
+    if not args.use_installed_torch:
+        run(
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            configuration.torch_requirement,
+            *configuration.runtime_requirements,
+            "--index-url",
+            configuration.torch_index_url,
+        )
 
     assert_torch_identity(python, configuration)
     environment = build_environment(configuration)
@@ -245,20 +300,18 @@ def main() -> None:
     if len(wheels) != 1:
         raise RuntimeError(f"expected one raw wheel, found {wheels!r}")
 
-    audit_environment = os.environ.copy()
-    audit_environment["AUDITWHEEL_LD_LIBRARY_PATH"] = (
-        torch_external_library_paths(python)
-    )
-    repair_command = [
-        "auditwheel",
-        "repair",
-        "--plat",
-        "manylinux_2_28_x86_64",
-    ]
-    for library in external_libraries(configuration):
-        repair_command.extend(("--exclude", library))
-    repair_command.extend(("--wheel-dir", str(wheelhouse), str(wheels[0])))
-    run(*repair_command, env=audit_environment)
+    if args.platform_tag == "linux_x86_64":
+        shutil.copy2(wheels[0], wheelhouse / wheels[0].name)
+    else:
+        audit_environment = os.environ.copy()
+        audit_environment["AUDITWHEEL_LD_LIBRARY_PATH"] = (
+            torch_external_library_paths(python)
+        )
+        repair_command = ["auditwheel", "repair", "--plat", args.platform_tag]
+        for library in external_libraries(configuration):
+            repair_command.extend(("--exclude", library))
+        repair_command.extend(("--wheel-dir", str(wheelhouse), str(wheels[0])))
+        run(*repair_command, env=audit_environment)
 
     repaired_wheels = list(wheelhouse.glob("fhelium-*.whl"))
     if len(repaired_wheels) != 1:
@@ -270,11 +323,13 @@ def main() -> None:
         str(source / "packaging" / "linux_wheel_check.py"),
         str(repaired_wheels[0]),
         "--matrix",
-        str(source / "packaging" / "release_matrix.json"),
+        str(matrix_path),
         "--configuration",
         configuration.id,
         "--project-version",
         project_version,
+        "--platform-tag",
+        args.platform_tag,
     ]
     if configuration.has_cuda:
         if configuration.torch_cuda_version is None:
@@ -283,6 +338,19 @@ def main() -> None:
             )
         toolkit_root = "/usr/local/cuda-" + configuration.torch_cuda_version
         check_command.extend(("--cuobjdump", f"{toolkit_root}/bin/cuobjdump"))
+    if configuration.has_hip:
+        llvm_objdump = args.llvm_objdump
+        if llvm_objdump is None:
+            code = "from pathlib import Path; from torch.utils.cpp_extension import ROCM_HOME; print(Path(ROCM_HOME) / 'llvm/bin/llvm-objdump')"
+            llvm_objdump = Path(
+                subprocess.run(
+                    [str(python), "-c", code],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+            )
+        check_command.extend(("--llvm-objdump", str(llvm_objdump)))
     run(*check_command)
     if args.verify_install:
         run(
@@ -311,7 +379,7 @@ from fhelium.native import native_status
 status = native_status()
 assert status.available, status
 assert set(status.backends) == set(expected_backends)
-if 'cuda' in expected_backends:
+if {'cuda', 'hip'} & set(expected_backends):
     importlib.import_module('fhelium.native.cuda.cuda_info')
 lhs = torch.tensor([[[1, 2, 3, 4]]], dtype=torch.int64)
 parameters = torch.zeros((8, 1), dtype=torch.int64)

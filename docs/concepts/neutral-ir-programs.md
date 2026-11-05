@@ -50,7 +50,7 @@ For the registered executable vocabulary, semantic meaning belongs to a provider
 
 Known encrypted types use open state dictionaries. A value may omit a scale, depth, basis, polynomial domain, or other CKKS fact because the fact is not yet known. A Program may also represent a candidate schedule in which two addition operands have incompatible scales, a rescale has no valid Q depth group to drop, or an approximation has no established error bound.
 
-These states are useful inputs to analysis, diagnostics, and experimental transforms. CKKS consistency, approximation error, security parameters, key sufficiency, and schedule cost require analyses with explicit assumptions and scopes.
+These states are useful inputs to analysis, diagnostics, and experimental transforms. CKKS consistency, approximation error, security parameters, key sufficiency, and schedule cost require analyses that state their assumptions and scope.
 
 ## Mixed abstraction levels and registered dialects
 
@@ -73,7 +73,7 @@ The textual namespace uses underscores between `fhelium` and a specialized level
 
 One module can contain operations from all of these levels together with application, vendor, or research extensions. A pass transforms the registered patterns it recognizes and leaves the rest unchanged. Different functions may retain different abstraction levels, and a single function may connect several levels while its values carry independent CKKS state. Structural verification accepts this mixed-level composition.
 
-Registration gives first-party operations and types structural constructors and IRDL verification. Explicit analyses check CKKS schedule consistency, while Backend coverage checks external bindings and implementation availability.
+Registration gives first-party operations and types structural constructors and IRDL verification. CKKS analyses check schedule consistency, while Backend coverage checks external bindings and implementation availability.
 
 ## Open value types and external state
 
@@ -119,7 +119,7 @@ An analysis result is interpreted according to its stated scope. A selected-entr
 
 `OperationSpecRegistry` is the centralized lookup for registered executable operation semantics. Each `OperationSpec` records:
 
-- the exact registered operation name and a descriptive semantic family;
+- the registered operation name and a descriptive semantic family;
 - operand and result arities where they are fixed;
 - expected value roles;
 - an effect classification of `pure`, `rng-write`, `mutation`, or `opaque`;

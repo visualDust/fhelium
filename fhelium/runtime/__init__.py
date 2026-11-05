@@ -8,6 +8,7 @@ from fhelium.runtime.buffer import (
 )
 from fhelium.runtime.cuda_graph import (
     CudaGraphCaptureStats,
+    CudaGraphPool,
     CudaGraphProgram,
 )
 from fhelium.runtime.topology import (
@@ -27,6 +28,7 @@ __all__ = [
     "CpuTopology",
     "CudaDeviceInfo",
     "CudaGraphCaptureStats",
+    "CudaGraphPool",
     "CudaGraphProgram",
     "CudaTopology",
     "MemorySnapshot",

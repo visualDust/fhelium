@@ -18,11 +18,11 @@ WINDOWS = "win_amd64"
 
 @dataclass(frozen=True)
 class Toolkit:
-    """Platform-specific CUDA Toolkit and runtime identity."""
+    """Platform-specific GPU toolkit and runtime identity."""
 
     version: str
     packages: tuple[str, ...]
-    runtime_library: str
+    runtime_library: str | None
 
     @classmethod
     def parse(cls, value: dict[str, Any]) -> Toolkit:
@@ -70,6 +70,9 @@ class Configuration:
     toolkits: dict[str, Toolkit | None]
     cuda_architectures: tuple[str, ...]
     cuda_ptx_architectures: tuple[str, ...]
+    torch_hip_version: str | None = None
+    hip_architectures: tuple[str, ...] = ()
+    runtime_requirements: tuple[str, ...] = ()
 
     @classmethod
     def parse(cls, value: dict[str, Any]) -> Configuration:
@@ -89,11 +92,30 @@ class Configuration:
             },
             cuda_architectures=tuple(value["cuda_architectures"]),
             cuda_ptx_architectures=tuple(value["cuda_ptx_architectures"]),
+            torch_hip_version=value.get("torch_hip_version"),
+            hip_architectures=tuple(value.get("hip_architectures", ())),
+            runtime_requirements=tuple(value.get("runtime_requirements", ())),
         )
 
     @property
     def has_cuda(self) -> bool:
         return "cuda" in self.native_backends
+
+    @property
+    def has_hip(self) -> bool:
+        return "hip" in self.native_backends
+
+    @property
+    def has_gpu(self) -> bool:
+        return self.has_cuda or self.has_hip
+
+    @property
+    def compute_backend(self) -> str:
+        """Return the GPU backend, or CPU for a CPU-only configuration."""
+
+        if self.has_hip:
+            return "hip"
+        return "cuda" if self.has_cuda else "cpu"
 
     def supports(self, platform: str) -> bool:
         return platform in self.platform_targets
@@ -107,8 +129,10 @@ class Configuration:
 
     @property
     def builder_environment(self) -> str:
-        toolkit = self.toolkit(LINUX)
-        return "cpu" if toolkit is None else f"cuda-{self.torch_cuda_version}"
+        if self.has_hip:
+            variant = _torch_variant(self.torch_requirement)
+            return f"rocm-{variant.removeprefix('rocm')}"
+        return f"cuda-{self.torch_cuda_version}" if self.has_cuda else "cpu"
 
     @property
     def toolkit_version(self) -> str | None:
@@ -121,9 +145,13 @@ class Configuration:
         return () if toolkit is None else toolkit.packages
 
     @property
-    def expected_cuda_runtime_soname(self) -> str | None:
+    def expected_runtime_soname(self) -> str | None:
         toolkit = self.toolkit(LINUX)
         return None if toolkit is None else toolkit.runtime_library
+
+    @property
+    def expected_cuda_runtime_soname(self) -> str | None:
+        return self.expected_runtime_soname if self.has_cuda else None
 
     @property
     def cmake_cuda_architectures(self) -> tuple[str, ...]:
@@ -202,7 +230,8 @@ def _json(path: Path) -> dict[str, Any]:
 
 def _torch_variant(requirement: str) -> str:
     match = re.fullmatch(
-        r"torch==[0-9]+(?:\.[0-9]+){2}\+([a-z0-9]+)", requirement
+        r"torch==[0-9]+(?:\.[0-9]+){2}\+(cpu|cu[0-9]+|rocm[0-9]+(?:\.[0-9]+)+)",
+        requirement,
     )
     if match is None:
         raise ValueError(f"Torch requirement is not pinned: {requirement}")
@@ -246,7 +275,13 @@ def _validate(matrix: Matrix) -> None:
         for platform in configuration.platform_targets:
             matrix.platform(platform)
         if configuration.has_cuda:
-            if configuration.native_backends != ("cpu", "cuda"):
+            if (
+                configuration.native_backends != ("cpu", "cuda")
+                or not variant.startswith("cu")
+                or not configuration.torch_cuda_version
+                or configuration.torch_hip_version is not None
+                or configuration.hip_architectures
+            ):
                 raise ValueError(
                     f"{configuration.id}: invalid CUDA backend set"
                 )
@@ -265,8 +300,34 @@ def _validate(matrix: Matrix) -> None:
                 for platform in configuration.platform_targets
             ):
                 raise ValueError(f"{configuration.id}: missing CUDA Toolkit")
+        elif configuration.has_hip:
+            if (
+                configuration.native_backends != ("cpu", "hip")
+                or not variant.startswith("rocm")
+                or not configuration.torch_hip_version
+                or configuration.torch_cuda_version is not None
+                or configuration.cuda_architectures
+                or configuration.cuda_ptx_architectures
+            ):
+                raise ValueError(
+                    f"{configuration.id}: inconsistent HIP backend identity"
+                )
+            if configuration.platform_targets != (LINUX,):
+                raise ValueError(
+                    f"{configuration.id}: HIP releases require Linux x64"
+                )
+            if not configuration.hip_architectures:
+                raise ValueError(
+                    f"{configuration.id}: missing HIP architectures"
+                )
+            if configuration.toolkit(LINUX) is None:
+                raise ValueError(f"{configuration.id}: missing HIP toolkit")
         elif (
             configuration.native_backends != ("cpu",)
+            or variant != "cpu"
+            or configuration.torch_cuda_version is not None
+            or configuration.torch_hip_version is not None
+            or configuration.hip_architectures
             or any(
                 configuration.toolkit(platform) is not None
                 for platform in configuration.platform_targets
@@ -275,15 +336,9 @@ def _validate(matrix: Matrix) -> None:
             or configuration.cuda_ptx_architectures
         ):
             raise ValueError(
-                f"{configuration.id}: CPU configuration contains CUDA data"
+                f"{configuration.id}: CPU configuration contains GPU data"
             )
 
-    cells = sum(
-        len(matrix.python_abis) * len(configuration.platform_targets)
-        for configuration in matrix.configurations
-    )
-    if cells != 16:
-        raise ValueError(f"release matrix must declare 16 cells, got {cells}")
     linux_environments = {
         item.builder_environment for item in matrix.configurations_for(LINUX)
     }
@@ -332,11 +387,12 @@ def selector_catalog(matrix: Matrix, *, fhelium_version: str) -> dict[str, Any]:
     recipes = []
     for configuration in matrix.configurations:
         series = _series(configuration.torch_runtime_version)
-        compute = (
-            "cpu"
-            if configuration.torch_cuda_version is None
-            else f"cuda-{configuration.torch_cuda_version.replace('.', '')}"
-        )
+        if configuration.has_hip:
+            compute = configuration.builder_environment
+        elif configuration.torch_cuda_version is not None:
+            compute = f"cuda-{configuration.torch_cuda_version.replace('.', '')}"
+        else:
+            compute = "cpu"
         for platform_id in configuration.platform_targets:
             platform = matrix.platform(platform_id)
             key = (platform.catalog_os, series, compute)
@@ -359,7 +415,7 @@ def selector_catalog(matrix: Matrix, *, fhelium_version: str) -> dict[str, Any]:
                     "published": False,
                 }
             )
-        if not configuration.has_cuda:
+        if not configuration.has_gpu:
             distributions[("macos-arm64", series, "cpu")] = {
                 "os": "macos-arm64",
                 "torch": series,

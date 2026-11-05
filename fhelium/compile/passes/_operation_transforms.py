@@ -133,7 +133,7 @@ def ciphertext_type(
     residues: str | None = None,
     components: int | None = None,
 ) -> ckks.CiphertextType:
-    """Refine one encrypted value into an explicit CKKS ciphertext type."""
+    """Refine an encrypted value with CKKS ciphertext state."""
 
     state_attribute = getattr(value.type, "state", None)
     state = dict(getattr(state_attribute, "data", {}))

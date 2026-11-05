@@ -15,15 +15,9 @@ from ._workspace import CompileWorkspace
 
 @dataclass(frozen=True)
 class Compilation:
-    """Carry one Program and the state accumulated while transforming it.
+    """Carry a Program, its bindings, workspace, and transformation reports.
 
-    ``material_bindings`` maps Program symbols to live Tensor data. Every pass
-    receives the current Compilation and uses this same dictionary.
-    ``workspace`` holds caller inputs and pass-produced data that do not belong
-    in portable IR. ``reports`` records the ordered pass history. A Pipeline
-    returns a new Compilation with a transformed Program while retaining the
-    same workspace and binding dictionary. Copy the dictionary when preparing
-    independent assignments; copying it does not copy Tensor storage.
+    ``material_bindings`` maps Program symbols to live Tensors. ``workspace`` carries caller inputs and pass-produced Python data; ``reports`` records the ordered pass history. Pipeline execution returns a new Compilation with the transformed Program and shares the workspace and binding dictionary across its passes.
     """
 
     program: Program

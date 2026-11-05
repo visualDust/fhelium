@@ -1,8 +1,4 @@
-"""Private aggregation point for FHElium's typed collectives.
-
-Implementations live in responsibility-specific modules.  The public
-``fhelium.distributed`` facade imports through this module to keep its surface
-unchanged.
+"""Collect typed value and ciphertext-arithmetic collectives for the public distributed interface.
 """
 
 from fhelium.distributed._ciphertext_reduction import (

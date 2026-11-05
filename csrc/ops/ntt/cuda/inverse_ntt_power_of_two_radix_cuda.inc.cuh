@@ -1,7 +1,7 @@
 #pragma once
 
 // Power-of-two radix INTT entry points share one transform body and select only
-// the explicit representation epilogue at compile time. Shared-memory coverage
+// the output-representation epilogue at compile time. Shared-memory coverage
 // is native-owned and is overridable only through the separate diagnostic
 // operator namespace.
 

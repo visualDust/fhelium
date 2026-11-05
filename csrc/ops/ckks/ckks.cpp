@@ -88,7 +88,8 @@ TORCH_LIBRARY_FRAGMENT(fhelium_ckks_ops, m) {
       "source_indices) -> Tensor");
   m.def(
       "keyswitch_moddown_qp_to_q(Tensor q_residues, Tensor p_residues, Tensor "
-      "moddown_p_drop_inverses_montgomery, Tensor rns_params) -> Tensor");
+      "moddown_p_drop_inverses_montgomery, Tensor rns_params, "
+      "Tensor? moddown_half=None, str rounding=\"nearest\") -> Tensor");
   m.def(
       "keyswitch_accumulate_digit_products_(Tensor(a!) accumulator0_qp, "
       "Tensor(b!) accumulator1_qp, Tensor extended_digit_ntt_qp, Tensor "

@@ -12,6 +12,12 @@
 // are int32 [stage, N/2]; compact tables are [limb, N], while strict-radix
 // tables are [limb, N-1] and [limb, radix]. Twiddles are Montgomery residues.
 //
+// Indexed execution consumes a schedule accepted by validate_indexed_schedule.
+// Its index values and layout remain unchanged during the lifetime of prepared
+// execution; violating this precondition is undefined behavior. Raw callers
+// validate their schedules before execution. Twiddles and RNS parameters remain
+// live numerical inputs, read-only during each call.
+//
 // For primitive 2N-th root $\psi_i$ and bit reversal $\operatorname{br}$,
 // each limb computes
 // $A_i[k]=\sum_{n=0}^{N-1}a_i[n]

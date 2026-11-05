@@ -111,7 +111,7 @@ The following data is a dated historical worked example for the measured platfor
 | L2 | 128 MiB |
 | Device | `cuda:0` |
 | Presets | 40-bit scale family at each recorded slot capacity |
-| Default backend | `radix2_compact_group8_smem8` |
+| Measured backend | `radix2_compact_group8_smem8` |
 | Timing | CUDA-synchronized warm runs; median wall latency |
 | Correctness | Bit-for-bit batched-vs-loop ciphertext data plus cleartext oracle |
 
@@ -128,7 +128,7 @@ For `[1, slots]` versus `[slots]`:
 
 This establishes B1 compatibility; it does not predict B4/B8 scaling.
 
-### Operator speedup over an explicit loop
+### Operator speedup over a per-message loop
 
 Values below are `loop latency / batch latency`; values below one favor the loop.
 
@@ -188,7 +188,7 @@ The one-message QP digit size identifies whether increasing B creates a new fit-
 
 The full active set remains larger than the digit proxy. Ask whether B changes the cache-residency regime, which can happen even when a single digit tensor is smaller than nominal L2 capacity.
 
-CUDA Graph also changed the policy because it removed most of the explicit loop's host-submission disadvantage. Values remain `loop / batch`:
+CUDA Graph also changed the policy because it removed most of the loop's host-submission disadvantage. Values remain `loop / batch`:
 
 | Configuration | Eager | Graph replay |
 | --- | ---: | ---: |

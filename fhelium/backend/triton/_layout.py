@@ -7,7 +7,6 @@ from math import prod
 
 from xdsl.ir import Operation
 
-from fhelium.config.ntt import CompactRadix2Policy, resolve_ntt_backend_policy
 from fhelium.ir.dialects import ckks, rns
 
 Shape = tuple[int, ...] | None
@@ -115,13 +114,3 @@ def check_ntt_layouts(layouts: Sequence[tuple[Shape, bool]]) -> None:
                 "One NTT fusion region requires a common batch shape and prime extent"
             )
         check_ntt_extent(shape[-1])
-
-
-def compact_policy(policy: object) -> bool:
-    """Recognize compact-radix-2 policy objects or declared Backend names."""
-    if isinstance(policy, str):
-        try:
-            policy = resolve_ntt_backend_policy(policy)
-        except ValueError:
-            return False
-    return isinstance(policy, CompactRadix2Policy)

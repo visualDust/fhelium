@@ -109,9 +109,20 @@ class RotationHoistingPass:
         return int(step.value.data) if isinstance(step, IntegerAttr) else None
 
     @staticmethod
+    def _key_layout(rotation: ckks.RotateOp) -> tuple[object, ...]:
+        state = cast(ckks.EvaluationKeyType, rotation.key.type).state.data
+        rows, digits = state.get("prime_ids"), state.get("digit_prime_ids")
+        if rows is None or digits is None:
+            return (rotation.key,)
+        return (rows, digits)
+
+    @staticmethod
     def _signature(rotation: ckks.RotateOp) -> tuple[object, ...]:
         return (
             rotation.value,
+            RotationHoistingPass._key_layout(rotation),
+            rotation.moddown_rounding,
+            rotation.modup_method,
             tuple(rotation.parameters),
             tuple(
                 sorted(
@@ -155,6 +166,8 @@ class RotationHoistingPass:
                     for name, value in first.attributes.items()
                     if name not in {"rotation_step", "input_domain"}
                 },
+                "moddown_rounding": first.moddown_rounding,
+                "modup_method": first.modup_method,
                 "rotation_steps": ArrayAttr(
                     IntegerAttr(step, 64) for step in steps
                 ),

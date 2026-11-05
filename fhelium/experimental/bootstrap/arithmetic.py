@@ -2,15 +2,37 @@ r"""CKKS arithmetic and depth-dependent scale targets for Bootstrap components."
 
 from __future__ import annotations
 
-from collections.abc import MutableMapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cached_property
+from typing import Literal
 import math
 
 import torch
 
 from fhelium.eager import Engine
-from fhelium.values import Ciphertext, Plaintext, RelinearizationKey
+from fhelium.values import (
+    Ciphertext,
+    CompressedPlaintext,
+    RelinearizationKey,
+    EvaluationKeySet,
+)
+
+
+def _cached_constant(
+    cache: MutableMapping[object, object] | None,
+    key: object,
+    *,
+    prepare: bool,
+) -> object | None:
+    """Read a constant from the preparation cache or bound execution table."""
+    if prepare:
+        return None if cache is None else cache.get(key)
+    if cache is None:
+        raise ValueError(
+            "Prepared Bootstrap arithmetic requires bound constants"
+        )
+    return cache[key]
 
 
 def _multiply_by_monomial(
@@ -19,6 +41,7 @@ def _multiply_by_monomial(
     exponent: int,
     *,
     constant_cache: MutableMapping[object, object] | None = None,
+    prepare_materials: bool = True,
 ) -> Ciphertext:
     r"""Multiply every component by $X^e$ in $R=\mathbb{Z}[X]/(X^N+1)$.
 
@@ -44,27 +67,28 @@ def _multiply_by_monomial(
     exponent %= 2 * degree
     sign = -1 if exponent >= degree else 1
     shift = exponent % degree
-    data = ciphertext.data.clone()
+    data = (
+        torch.roll(ciphertext.data, shift, dims=-1)
+        if shift
+        else ciphertext.data.clone()
+    )
     if shift:
-        original = data.clone()
-        data[..., shift:] = original[..., : degree - shift]
-        data[..., :shift] = -original[..., degree - shift :]
+        data = torch.cat((-data[..., :shift], data[..., shift:]), dim=-1)
     if sign < 0:
-        data.neg_()
+        data = -data
     cache_key = (
         'bootstrap-monomial-moduli',
+        engine,
+        ciphertext.data.dtype,
         ciphertext.device,
         ciphertext.prime_ids,
     )
-    moduli = None if constant_cache is None else constant_cache.get(cache_key)
+    moduli = _cached_constant(
+        constant_cache, cache_key, prepare=prepare_materials
+    )
     if not isinstance(moduli, torch.Tensor):
         moduli = torch.tensor(
-            [
-                engine._rns_context_for(
-                    ciphertext.device
-                ).montgomery_parameters.moduli[index]
-                for index in ciphertext.prime_ids
-            ],
+            [engine.config.moduli[index] for index in ciphertext.prime_ids],
             dtype=data.dtype,
             device=data.device,
         )
@@ -135,7 +159,9 @@ def _multiply_relinearize_rescale(
     lhs: Ciphertext,
     rhs: Ciphertext,
     *,
-    relinearization_key: RelinearizationKey,
+    relinearization_key: RelinearizationKey
+    | EvaluationKeySet
+    | Mapping[int, RelinearizationKey],
     constant_cache: MutableMapping[object, object] | None = None,
     retain_ntt: bool = True,
 ) -> Ciphertext:
@@ -145,7 +171,9 @@ def _multiply_relinearize_rescale(
     $\Delta_l\Delta_r$. Relinearization restores two components; rescale
     divides the scale by $M_d$. When both operands have scheduled scale
     $s_d$, the result has $s_{d+1}=s_d^2/M_d$. No scale metadata is replaced.
-    The result retains NTT form when requested by ``retain_ntt`` and the
+    An evaluation-key inventory is looked up at the product depth; a supplied
+    primitive key is used directly. The result retains NTT form when requested
+    by ``retain_ntt`` and the
     input representation; otherwise it is coefficient/standard.
     """
 
@@ -178,15 +206,14 @@ def _multiply_relinearize_rescale(
         else engine.coefficient_domain_to_ntt_domain(rhs)
     )
     product = engine.multiply(lhs_ntt, rhs_ntt)
-    if retain_ntt and input_domain == 'ntt':
-        product = engine.relinearize(
-            product,
-            relinearization_key,
-            output_domain='ntt',
-        )
-    else:
-        product = engine.relinearize(product, relinearization_key)
-    return _rescale(engine, product, retain_ntt=retain_ntt)
+    return arithmetic.relinearize(
+        product,
+        relinearization_key,
+        rescale=True,
+        output_domain='ntt'
+        if retain_ntt and input_domain == 'ntt'
+        else 'coefficient',
+    )
 
 
 def _rescale(
@@ -216,9 +243,10 @@ def _multiply_scalar(
 ) -> Ciphertext:
     r"""Multiply the represented message by $a$ and advance one Q group.
 
-    The scalar plaintext uses scale $M_d s_{d+1}/\Delta(c)$ so that the
-    resulting quotient has scale $s_{d+1}$. The operation preserves the
-    message apart from encoding and quotient rounding. It retains the
+    The scalar plaintext scale targets $s_{d+1}$ through
+    $p=M_d s_{d+1}/\Delta(c)$; execution records the actual binary64
+    quotient $(\Delta(c)p)/M_d$. It preserves the represented multiplication
+    apart from encoding and quotient rounding. It retains the
     input representation unless coefficient output is requested.
     """
 
@@ -252,42 +280,78 @@ def _prepare_multiply_scalar(
     scalar: complex,
     *,
     constant_cache: MutableMapping[object, object] | None = None,
-) -> Plaintext:
+) -> CompressedPlaintext:
     """Prepare one scalar plaintext for a pending multiplication."""
 
     engine = arithmetic.engine
 
-    plaintext_scale = arithmetic.plaintext_scale(ciphertext.scale, ciphertext.depth)
-    coefficient_bound = max(abs(complex(scalar).real), abs(complex(scalar).imag)) * plaintext_scale
+    plaintext_scale = arithmetic.plaintext_scale(
+        ciphertext.scale, ciphertext.depth
+    )
+    return _prepare_scalar(
+        engine,
+        ciphertext,
+        scalar,
+        plaintext_scale,
+        'ntt',
+        constant_cache=constant_cache,
+        prepare_materials=arithmetic._prepare_materials,
+    )
+
+
+def _prepare_scalar(
+    engine: Engine,
+    ciphertext: Ciphertext,
+    scalar: complex,
+    scale: float,
+    domain: Literal["coefficient", "ntt"],
+    *,
+    constant_cache: MutableMapping[object, object] | None = None,
+    prepare_materials: bool = True,
+) -> CompressedPlaintext:
+    r"""Encode a constant slot message with the target ring's periodic map.
+
+    The period-one message uses the Engine's generator-dependent compact
+    polynomial and actual Q rows. The first preparation consumes stochastic
+    rounding state. A cache hit reuses that encoded sample without consuming
+    further randomness; clearing the caller's cache permits fresh encoding.
+    Engine identity separates independently configured material owners.
+    """
+
+    coefficient_bound = (
+        max(abs(complex(scalar).real), abs(complex(scalar).imag)) * scale
+    )
     if coefficient_bound >= 2**63:
         raise ValueError(
             'scalar plaintext coefficients exceed the signed integer encoding range; '
             'advance the input to a suitable arithmetic scale before polynomial evaluation'
         )
     cache_key = (
-        'bootstrap-multiply-scalar',
+        'bootstrap-scalar',
+        engine,
         ciphertext.device,
+        ciphertext.data.dtype,
         ciphertext.depth,
-        plaintext_scale,
+        ciphertext.prime_ids,
+        scale,
+        domain,
         complex(scalar),
     )
-    plaintext = (
-        None if constant_cache is None else constant_cache.get(cache_key)
+    plaintext = _cached_constant(
+        constant_cache, cache_key, prepare=prepare_materials
     )
-    if not isinstance(plaintext, Plaintext):
-        plaintext = engine.prepare_plaintext_for_multiplication(
-            engine.encode(
-                torch.full(
-                    (engine.num_slots,),
-                    complex(scalar),
-                    dtype=torch.complex128,
-                    device=ciphertext.device,
-                ),
-                depth=ciphertext.depth,
-                scale=plaintext_scale,
+    if not isinstance(plaintext, CompressedPlaintext):
+        plaintext = engine.prepare_compressed_plaintext(
+            torch.full(
+                (1,),
+                complex(scalar),
+                dtype=torch.complex128,
                 device=ciphertext.device,
             ),
-            modulus_basis='Q',
+            depth=ciphertext.depth,
+            scale=scale,
+            device=ciphertext.device,
+            polynomial_domain=domain,
         )
         if constant_cache is not None:
             constant_cache[cache_key] = plaintext
@@ -346,6 +410,7 @@ def _add_scalar(
     scalar: complex,
     *,
     constant_cache: MutableMapping[object, object] | None = None,
+    prepare_materials: bool = True,
     retain_ntt: bool = True,
 ) -> Ciphertext:
     r"""Compute $c_{\rm out}=c+a$ without changing CKKS state metadata.
@@ -360,42 +425,15 @@ def _add_scalar(
 
     if not retain_ntt and ciphertext.polynomial_domain == 'ntt':
         ciphertext = engine.ntt_domain_to_coefficient_domain(ciphertext)
-    cache_key = (
-        'bootstrap-add-scalar',
-        ciphertext.device,
-        ciphertext.depth,
+    plaintext = _prepare_scalar(
+        engine,
+        ciphertext,
+        scalar,
         ciphertext.scale,
         ciphertext.polynomial_domain,
-        complex(scalar),
+        constant_cache=constant_cache,
+        prepare_materials=prepare_materials,
     )
-    plaintext = (
-        None if constant_cache is None else constant_cache.get(cache_key)
-    )
-    if not isinstance(plaintext, Plaintext):
-        encoded = engine.encode(
-            torch.full(
-                (engine.num_slots,),
-                complex(scalar),
-                dtype=torch.complex128,
-                device=ciphertext.device,
-            ),
-            depth=ciphertext.depth,
-            scale=ciphertext.scale,
-            device=ciphertext.device,
-        )
-        if retain_ntt:
-            plaintext = engine.prepare_plaintext_for_addition(
-                encoded,
-                modulus_basis='Q',
-                polynomial_domain=ciphertext.polynomial_domain,
-            )
-        else:
-            plaintext = engine.prepare_plaintext_for_addition(
-                encoded,
-                modulus_basis='Q',
-            )
-        if constant_cache is not None:
-            constant_cache[cache_key] = plaintext
     return engine.add_plaintext(ciphertext, plaintext)
 
 
@@ -406,8 +444,14 @@ class BootstrapArithmetic:
     ``target_scales`` gives an inspectable multiplication schedule derived
     from Q group products. Scalar and diagonal products select their plaintext
     scales to reach that schedule; ciphertext products retain actual scales.
-    ``constant_cache`` retains prepared scalar and monomial plaintexts for
-    reuse across evaluation calls.
+    ``constant_cache`` retains compact scalar plaintexts and monomial tables
+    for reuse across evaluation calls. Scalar entries preserve the first
+    stochastic encoding sample; a hit does not advance rounding state.
+    Clearing or omitting the cache permits fresh encoding.
+    Scalar preparation requires ``max(abs(real(c)), abs(imag(c))) * scale
+    < 2**63`` before conversion to signed-integer polynomial coefficients.
+    Addition uses the ciphertext scale; multiplication uses its selected
+    plaintext scale. Values outside this preparation bound raise ValueError.
     ``retain_ntt=False`` selects coefficient-domain results for callers that
     compose Bootstrap without NTT-retaining Eager operations.
     FullSlotBootstrap creates this owner internally; custom compositions pass
@@ -417,7 +461,15 @@ class BootstrapArithmetic:
     engine: Engine
     constant_cache: MutableMapping[object, object] | None = None
     retain_ntt: bool = True
+    modup_method: Literal["exact", "crt", "normalized_crt"] = "exact"
+    _prepare_materials: bool = field(default=True, repr=False)
     _scales: tuple[float, ...] | None = field(default=None, repr=False)
+    _relinearization_bindings: (
+        MutableMapping[int, RelinearizationKey] | None
+    ) = field(default=None, repr=False)
+    _explicit_relinearization_keys: (
+        MutableMapping[int, RelinearizationKey] | None
+    ) = field(default=None, repr=False)
 
     @cached_property
     def target_scales(self) -> tuple[float, ...]:
@@ -431,7 +483,9 @@ class BootstrapArithmetic:
 
         if self._scales is not None:
             return self._scales
-        scales = [self.engine.config.default_scale] * (self.engine.max_depth + 1)
+        scales = [self.engine.config.default_scale] * (
+            self.engine.max_depth + 1
+        )
         for depth in reversed(range(self.engine.max_depth)):
             scales[depth] = math.sqrt(
                 self.engine.config.rescale_divisor(depth) * scales[depth + 1]
@@ -449,9 +503,12 @@ class BootstrapArithmetic:
 
         scales = list(self.target_scales)
         scales[ciphertext.depth] = ciphertext.scale
-        for depth in range(ciphertext.depth, ciphertext.depth + required_depths):
+        for depth in range(
+            ciphertext.depth, ciphertext.depth + required_depths
+        ):
             scales[depth + 1] = (
-                scales[depth] * scales[depth]
+                scales[depth]
+                * scales[depth]
                 / self.engine.config.rescale_divisor(depth)
             )
         return replace(self, _scales=tuple(scales))
@@ -459,11 +516,17 @@ class BootstrapArithmetic:
     def scaled_targets(self, factor: float) -> BootstrapArithmetic:
         """Use a common scale factor for polynomial coefficient accumulators."""
 
-        return replace(self, _scales=tuple(scale * factor for scale in self.target_scales))
+        return replace(
+            self, _scales=tuple(scale * factor for scale in self.target_scales)
+        )
 
     def plaintext_scale(self, input_scale: float, depth: int) -> float:
         r"""Choose $s_{d+1}M_d/\Delta$ for a plaintext product and rescale."""
 
+        divisor = self.engine.config.rescale_divisor(depth)
+        target = self.target_scales[depth + 1]
+        if target == (input_scale * input_scale) / divisor:
+            return input_scale
         return (
             self.target_scales[depth + 1]
             * self.engine.config.rescale_divisor(depth)
@@ -480,6 +543,7 @@ class BootstrapArithmetic:
             ciphertext,
             exponent,
             constant_cache=self.constant_cache,
+            prepare_materials=self._prepare_materials,
         )
 
     def align_depths(
@@ -505,12 +569,68 @@ class BootstrapArithmetic:
             retain_ntt=self.retain_ntt,
         )
 
+    def relinearize(
+        self,
+        ciphertext: Ciphertext,
+        key: RelinearizationKey
+        | EvaluationKeySet
+        | Mapping[int, RelinearizationKey],
+        *,
+        output_domain: Literal["coefficient", "ntt"] = "coefficient",
+        rescale: bool = False,
+    ) -> Ciphertext:
+        r"""Reduce $c_0+c_1s+c_2s^2$ to two components, optionally rescaling.
+
+        A primitive key is consumed directly. During material preparation an
+        inventory selects a key covering the product's Q rows. Prepared execution
+        reads its selected per-depth references. The lift method and requested
+        polynomial representation are forwarded to the Eager operation. Without
+        rescaling, Q depth and actual scale are preserved. With ``rescale=True``,
+        the operation removes the next complete Q group $D$, advances depth once
+        and returns actual scale $\Delta/D$ using a common quotient over $PD$.
+        """
+        if isinstance(key, EvaluationKeySet):
+            selected = key.select_relinearization(
+                q_prime_ids=ciphertext.prime_ids,
+                p_prime_ids=None,
+                ring_dimension=self.engine.config.N,
+                dtype=ciphertext.data.dtype,
+                device=ciphertext.device,
+            )
+            if selected is None:
+                raise ValueError(
+                    f"Missing relinearization key at depth {ciphertext.depth}"
+                )
+            key = selected
+            if (
+                self._prepare_materials
+                and self._relinearization_bindings is not None
+            ):
+                self._relinearization_bindings[ciphertext.depth] = key
+        else:
+            if isinstance(key, Mapping):
+                key = key[ciphertext.depth]
+            if (
+                self._prepare_materials
+                and self._explicit_relinearization_keys is not None
+            ):
+                self._explicit_relinearization_keys[id(key)] = key
+        return self.engine.relinearize(
+            ciphertext,
+            key,
+            output_domain=output_domain,
+            rescale=rescale,
+            modup_method=self.modup_method,
+        )
+
     def multiply_relinearize_rescale(
         self,
         lhs: Ciphertext,
         rhs: Ciphertext,
         *,
-        relinearization_key: RelinearizationKey,
+        relinearization_key: RelinearizationKey
+        | EvaluationKeySet
+        | Mapping[int, RelinearizationKey],
     ) -> Ciphertext:
         r"""Return relinearized $c_{lhs}c_{rhs}$ after one Q rescale."""
 
@@ -556,5 +676,6 @@ class BootstrapArithmetic:
             ciphertext,
             scalar,
             constant_cache=self.constant_cache,
+            prepare_materials=self._prepare_materials,
             retain_ntt=self.retain_ntt,
         )

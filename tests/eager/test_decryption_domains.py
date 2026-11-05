@@ -50,7 +50,7 @@ def test_decryption_phase_matches_across_input_domains(
     coefficient_before = coefficient.data.clone()
     ntt_before = ntt.data.clone()
     secret_before = secret.data.clone()
-    rns_context = engine._rns_context_for(torch.device("cpu"))
+    rns_context = engine.rns_context(torch.device("cpu"))
     ntt_context = engine._ntt_context_for(torch.device("cpu"))
     ids = coefficient.prime_ids
     tables = dict(

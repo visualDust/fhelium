@@ -2,12 +2,13 @@ r"""Encrypted evaluators for power-basis polynomials."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import math
 from dataclasses import dataclass
-from functools import cache
 from typing import TYPE_CHECKING
 
-from fhelium.values import Ciphertext, RelinearizationKey
+from fhelium.values import EvaluationKeySet, Ciphertext, RelinearizationKey
 from fhelium.experimental.bootstrap.arithmetic import BootstrapArithmetic
 from fhelium.experimental.bootstrap.polynomial.evaluation import (
     _inventory,
@@ -47,9 +48,9 @@ class BalancedPowerEvaluator:
 
     skip_near_zero: float = 0.0
 
-    def operation_inventory(
+    def _schedule(
         self, polynomial: PolynomialApproximation
-    ) -> dict[str, int]:
+    ) -> tuple[dict[int, int], dict[str, int]]:
         """Return multiplying operations executed by :meth:`evaluate`.
 
         Coefficient multiplication counts only active nonconstant terms.
@@ -66,7 +67,7 @@ class BalancedPowerEvaluator:
             if index and abs(coefficient) > self.skip_near_zero
         ]
         if not degrees:
-            return _inventory(
+            return {1: 0}, _inventory(
                 ciphertext_multiplications=0,
                 coefficient_multiplications=1,
                 alignment_multiplications=0,
@@ -97,33 +98,35 @@ class BalancedPowerEvaluator:
             else:
                 alignment_multiplications += abs(result_depth - term_depth)
                 result_depth = max(result_depth, term_depth)
-        return _inventory(
+        return power_depths, _inventory(
             ciphertext_multiplications=ciphertext_multiplications,
             coefficient_multiplications=len(degrees),
             alignment_multiplications=alignment_multiplications,
         )
 
+    def operation_inventory(
+        self, polynomial: PolynomialApproximation
+    ) -> dict[str, int]:
+        """Return multiplying operations in the shared power schedule."""
+        return self._schedule(polynomial)[1]
+
     def required_depths(self, polynomial: PolynomialApproximation) -> int:
-        """Count the deepest balanced-product path and coefficient product."""
+        """Count the deepest shared power node plus its coefficient rescale."""
+        return max(self._schedule(polynomial)[0].values()) + 1
 
-        if polynomial.basis != 'power':
-            raise ValueError('BalancedPowerEvaluator requires power basis')
-        degrees = [
-            index
-            for index, coefficient in enumerate(polynomial.coefficients)
-            if index and abs(coefficient) > self.skip_near_zero
-        ]
-        if not degrees:
-            return 1
-
-        @cache
-        def depth(exponent: int) -> int:
-            if exponent <= 1:
-                return 0
-            left = exponent // 2
-            return max(depth(left), depth(exponent - left)) + 1
-
-        return max(depth(degree) for degree in degrees) + 1
+    def relinearization_depths(
+        self, polynomial: PolynomialApproximation, *, input_depth: int = 0
+    ) -> tuple[int, ...]:
+        """Return product-input depths of the required shared power nodes."""
+        return tuple(
+            sorted(
+                {
+                    input_depth + depth - 1
+                    for degree, depth in self._schedule(polynomial)[0].items()
+                    if degree > 1
+                }
+            )
+        )
 
     def evaluate(
         self,
@@ -131,7 +134,10 @@ class BalancedPowerEvaluator:
         ciphertext: Ciphertext,
         polynomial: PolynomialApproximation,
         *,
-        relinearization_key: RelinearizationKey | None = None,
+        relinearization_key: RelinearizationKey
+        | EvaluationKeySet
+        | Mapping[int, RelinearizationKey]
+        | None = None,
     ) -> Ciphertext:
         r"""Evaluate $p(x)=\sum_n a_nx^n$ at a common CKKS depth.
 
@@ -181,7 +187,8 @@ class BalancedPowerEvaluator:
                         'nonlinear power evaluation requires relinearization key'
                     )
                 powers[current] = basis_ops.multiply_relinearize_rescale(
-                    powers[left], powers[right],
+                    powers[left],
+                    powers[right],
                     relinearization_key=relinearization_key,
                 )
                 pending.pop()
@@ -223,7 +230,7 @@ class HornerPowerEvaluator:
     not omit zero coefficients: the declared algebraic degree and execution
     schedule are stable properties of the coefficient tuple.
 
-    A constant polynomial deliberately consumes one depth by multiplying the
+    A constant polynomial consumes one depth by multiplying the
     input by zero. A linear polynomial consumes one coefficient-multiplication
     depth and requires no relinearization key. Degree $d\geq2$ consumes exactly
     $d$ depths and requires one compatible QP relinearization key.
@@ -235,6 +242,13 @@ class HornerPowerEvaluator:
         if polynomial.basis != 'power':
             raise ValueError('HornerPowerEvaluator requires power basis')
         return max(1, polynomial.degree)
+
+    def relinearization_depths(
+        self, polynomial: PolynomialApproximation, *, input_depth: int = 0
+    ) -> tuple[int, ...]:
+        """Return Horner product depths after the leading coefficient rescale."""
+        self.required_depths(polynomial)
+        return tuple(range(input_depth + 1, input_depth + polynomial.degree))
 
     def operation_inventory(
         self, polynomial: PolynomialApproximation
@@ -262,7 +276,10 @@ class HornerPowerEvaluator:
         ciphertext: Ciphertext,
         polynomial: PolynomialApproximation,
         *,
-        relinearization_key: RelinearizationKey | None = None,
+        relinearization_key: RelinearizationKey
+        | EvaluationKeySet
+        | Mapping[int, RelinearizationKey]
+        | None = None,
     ) -> Ciphertext:
         r"""Evaluate a power polynomial with a corrected Horner recurrence.
 
@@ -338,8 +355,7 @@ class PatersonStockmeyerPowerEvaluator:
     without changing the polynomial's coefficients or its input coordinate.
 
     The declared coefficient tuple, including zero entries, fixes the schedule.
-    ``baby_step`` therefore controls a reproducible DAG rather than an
-    unreliable degree-only estimate.
+    ``baby_step`` determines the product DAG and its required depths.
     """
 
     baby_step: int
@@ -352,8 +368,8 @@ class PatersonStockmeyerPowerEvaluator:
 
     def _schedule(
         self, polynomial: PolynomialApproximation
-    ) -> tuple[int, dict[str, int]]:
-        """Simulate relative depths and multiplying operations."""
+    ) -> tuple[int, dict[str, int], tuple[int, ...]]:
+        """Return output depth, operation counts and relinearization consumers."""
 
         if polynomial.basis != 'power':
             raise ValueError(
@@ -361,12 +377,17 @@ class PatersonStockmeyerPowerEvaluator:
             )
         degree = polynomial.degree
         if degree == 0:
-            return 1, _inventory(
-                ciphertext_multiplications=0,
-                coefficient_multiplications=1,
-                alignment_multiplications=0,
+            return (
+                1,
+                _inventory(
+                    ciphertext_multiplications=0,
+                    coefficient_multiplications=1,
+                    alignment_multiplications=0,
+                ),
+                (),
             )
 
+        relinearization_depths: set[int] = set()
         ciphertext_multiplications = 0
         coefficient_multiplications = 0
         alignment_multiplications = 0
@@ -397,6 +418,7 @@ class PatersonStockmeyerPowerEvaluator:
             at_depth(left_exponent, target)
             at_depth(right_exponent, target)
             result = target + 1
+            relinearization_depths.add(target)
             ciphertext_multiplications += 1
             base_depths[exponent] = result
             cached_depths[exponent] = {result}
@@ -450,16 +472,21 @@ class PatersonStockmeyerPowerEvaluator:
                     alignment_multiplications += xk_depth - result_depth
                     product_input_depth = xk_depth
                 ciphertext_multiplications += 1
+                relinearization_depths.add(product_input_depth)
                 result_depth = product_input_depth + 1
                 term_depth = count_group(group)
                 alignment_multiplications += abs(result_depth - term_depth)
                 result_depth = max(result_depth, term_depth)
                 group -= 1
 
-        return result_depth, _inventory(
-            ciphertext_multiplications=ciphertext_multiplications,
-            coefficient_multiplications=coefficient_multiplications,
-            alignment_multiplications=alignment_multiplications,
+        return (
+            result_depth,
+            _inventory(
+                ciphertext_multiplications=ciphertext_multiplications,
+                coefficient_multiplications=coefficient_multiplications,
+                alignment_multiplications=alignment_multiplications,
+            ),
+            tuple(sorted(relinearization_depths)),
         )
 
     def required_depths(self, polynomial: PolynomialApproximation) -> int:
@@ -474,13 +501,24 @@ class PatersonStockmeyerPowerEvaluator:
 
         return self._schedule(polynomial)[1]
 
+    def relinearization_depths(
+        self, polynomial: PolynomialApproximation, *, input_depth: int = 0
+    ) -> tuple[int, ...]:
+        """Return basis and aligned giant-product depths from the fixed schedule."""
+        return tuple(
+            input_depth + depth for depth in self._schedule(polynomial)[2]
+        )
+
     def evaluate(
         self,
         arithmetic: BootstrapArithmetic,
         ciphertext: Ciphertext,
         polynomial: PolynomialApproximation,
         *,
-        relinearization_key: RelinearizationKey | None = None,
+        relinearization_key: RelinearizationKey
+        | EvaluationKeySet
+        | Mapping[int, RelinearizationKey]
+        | None = None,
     ) -> Ciphertext:
         r"""Evaluate with the fixed baby/giant schedule and depth caches."""
 
@@ -544,7 +582,8 @@ class PatersonStockmeyerPowerEvaluator:
 
         baby_maximum = min(self.baby_step - 1, degree)
         baby_target = max(
-            base_powers[exponent].depth for exponent in range(1, baby_maximum + 1)
+            base_powers[exponent].depth
+            for exponent in range(1, baby_maximum + 1)
         )
         for exponent in range(1, baby_maximum + 1):
             at_depth(exponent, baby_target)

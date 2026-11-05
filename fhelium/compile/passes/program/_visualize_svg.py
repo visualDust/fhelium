@@ -207,11 +207,10 @@ class SvgGraphTheme:
 
     An operation first receives a key from ``operation_color_key``. A matching
     ``operation_colors`` entry wins; otherwise the key is deterministically
-    mapped into ``operation_palette``. The hash implementation is private, but
-    equal keys under one theme always receive equal colors. ``None`` selects
+    mapped into ``operation_palette``. Equal keys under one theme receive equal colors. ``None`` selects
     the FHElium default palette or color-key function. ``operation_colors=None``
     uses the default constant color, while an empty mapping removes it.
-    Theme configuration is read-only and deliberately unhashable because a
+    Theme configuration is read-only and unhashable because a
     caller-supplied color-key callable does not define a general cache identity.
     """
 
@@ -321,7 +320,6 @@ class SvgGraphTheme:
 class SvgGraphPresentation:
     """Select and format operation details for an SVG graph.
 
-    The presentation is independent of graph traversal and file production.
     Subclasses can override ``select_attributes`` for filtering,
     ``format_attribute_value`` for one-value display policy,
     ``operation_sections`` for complete operation-row transformation, or

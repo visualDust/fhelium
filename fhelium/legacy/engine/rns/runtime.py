@@ -169,13 +169,6 @@ class RnsRuntime:
             self.montgomery_parameters.neg_inv_modulus_higher_bits
         )
 
-        self.ntt_tables = prepare_ntt_tables(
-            self.ntt_policy,
-            self.config,
-            materialize_parameter_rows=self._materialize_parameter_rows,
-            device=self.device,
-        )
-
         self.inverse_ntt_scale_montgomery = (
             self._prepare_inverse_ntt_scale_montgomery()
         )
@@ -200,8 +193,12 @@ class RnsRuntime:
             ]
         ).contiguous()
 
-        self.ntt_tables.convert_twiddles_to_montgomery_(
-            self.rns_parameter_tensor
+        self.ntt_tables = prepare_ntt_tables(
+            self.ntt_policy,
+            self.config,
+            materialize_parameter_rows=self._materialize_parameter_rows,
+            device=self.device,
+            rns_params=self.rns_parameter_tensor,
         )
 
         self.montgomery_reduction_parameter_tables = (
@@ -285,7 +282,7 @@ class RnsRuntime:
         rns_dimension: int = -2,
         parameter_row_start: int | None = None,
     ) -> tuple[torch.Tensor, int]:
-        """Return parameters whose rows exactly match ``tensor``'s RNS rows.
+        """Return parameter rows in the operand's RNS prime order.
 
         The engine stores one complete ``[parameter, Q | P]`` tensor.  Native
         primitives should not know that storage convention: they receive a
@@ -331,9 +328,7 @@ class RnsRuntime:
     ) -> torch.Tensor:
         """Return ``[parameter, limb]`` parameters aligned with an RNS operand.
 
-        The result is a zero-copy CUDA view with the engine integral dtype.
-        Column ``j`` describes ``tensor[..., j, :]`` exactly; this method does
-        not mutate or alias the operand itself.
+        The result is a zero-copy view of the Engine parameter table, on its device and with its integral dtype. Column ``j`` describes ``tensor[..., j, :]``. The operand remains unchanged and shares no storage with this parameter view.
         """
 
         params, _ = self._active_rns_parameters(

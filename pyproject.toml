@@ -1,10 +1,9 @@
 [project]
 name = "fhelium"
-version = "0.30.0"
-description = "A tensor-native CKKS framework for fully homomorphic encryption on CPU and NVIDIA CUDA with Python and PyTorch."
+version = "0.40.0"
+description = "A tensor-native CKKS framework with Python and PyTorch for CPU, NVIDIA CUDA, and experimental AMD ROCm source builds."
 authors = [
     { name = "Gavin Gong", email = "gavin@gong.host" },
-    { name = "PuQing", email = "me@puqing.work" },
 ]
 maintainers = [
     { name = "Gavin Gong", email = "gavin@gong.host" },
@@ -24,6 +23,7 @@ keywords = [
     "tensor computing",
     "cpu",
     "cuda",
+    "rocm",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -98,7 +98,7 @@ ignore = [
     "F405",
     # Local variable name is assigned to but never used
     "F841",
-    # It not met the "Explicit is better than implicit" rule
+    # Retain file-open mode arguments.
     "UP015",
 ]
 

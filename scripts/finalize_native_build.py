@@ -34,6 +34,10 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Comma-separated native execution backends included in _ops.",
     )
+    parser.add_argument("--hip-architectures", default="")
+    parser.add_argument("--hip-compiler-id", default="")
+    parser.add_argument("--hip-compiler-version", default="")
+    parser.add_argument("--hip-version", default="")
     return parser.parse_args()
 
 
@@ -65,9 +69,11 @@ def main() -> None:
         if part.strip()
     )
     if not backends or any(
-        backend not in {"cpu", "cuda"} for backend in backends
+        backend not in helpers.SUPPORTED_NATIVE_BACKENDS for backend in backends
     ):
-        raise RuntimeError("--backends must select one or both of: cpu, cuda")
+        raise RuntimeError(
+            "--backends must select native backends from: cpu, cuda, hip"
+        )
     project = tomllib.loads(
         (source_root / "pyproject.toml").read_text(encoding="utf-8")
     )["project"]
@@ -85,6 +91,22 @@ def main() -> None:
             "manifest_schema_version": helpers.MANIFEST_SCHEMA_VERSION,
             "project_version": project["version"],
             "native_backends": list(backends),
+            **(
+                {
+                    "build_hip_architectures": [
+                        value
+                        for value in args.hip_architectures.split(";")
+                        if value
+                    ],
+                    "build_hip_toolchain": {
+                        "compiler_id": args.hip_compiler_id,
+                        "compiler_version": args.hip_compiler_version,
+                        "hip_version": args.hip_version,
+                    },
+                }
+                if "hip" in backends
+                else {}
+            ),
             **(
                 {
                     "release_configuration_id": release_configuration_id,

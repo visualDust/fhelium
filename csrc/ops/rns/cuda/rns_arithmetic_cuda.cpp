@@ -144,7 +144,14 @@ TORCH_LIBRARY_IMPL(fhelium_rns_ops, CUDA, m) {
   m.impl("center_residues_", &center_residues_);
   m.impl("shift_residues_positive_", &shift_residues_positive_);
   m.impl("lift_centered_coefficients", &lift_centered_coefficients);
+  m.impl("crt_basis_extend_out_", &crt_basis_extend_out_cuda);
+  m.impl("crt_basis_extend", &crt_basis_extend_cuda);
+  m.impl("mixed_radix_modup_tiled", &mixed_radix_modup_tiled_cuda);
+  m.impl("mixed_radix_modup_tiled_out_", &mixed_radix_modup_tiled_out_cuda);
   m.impl("mixed_radix_decompose", &mixed_radix_decompose);
+  m.impl("mixed_radix_decompose_out_", &mixed_radix_decompose_out_cuda);
   m.impl("mixed_radix_basis_extend_to_montgomery",
          &mixed_radix_basis_extend_to_montgomery);
+  m.impl("mixed_radix_basis_extend_to_montgomery_out_",
+         &mixed_radix_basis_extend_to_montgomery_out_cuda);
 }

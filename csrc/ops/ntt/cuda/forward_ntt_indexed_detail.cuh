@@ -35,11 +35,7 @@ __global__ void forward_ntt_indexed_stage_kernel(
       S, O, modulus_lo, modulus_hi, neg_inv_modulus_lo, neg_inv_modulus_hi);
 
   // Store back.
-  const scalar_t UplusV = U + V;
-  const scalar_t UminusV = U + twice_modulus - V;
 
-  a_acc[batch][row][even_j] =
-      (UplusV < twice_modulus) ? UplusV : UplusV - twice_modulus;
-  a_acc[batch][row][odd_j] =
-      (UminusV < twice_modulus) ? UminusV : UminusV - twice_modulus;
+  a_acc[batch][row][even_j] = add_lazy_residues(U, V, twice_modulus);
+  a_acc[batch][row][odd_j] = sub_lazy_residues(U, V, twice_modulus);
 }

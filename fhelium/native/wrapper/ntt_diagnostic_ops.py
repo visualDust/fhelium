@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import torch
 
+import torch
 
 def _require_native() -> None:
     from fhelium.native import require_native
@@ -12,13 +12,7 @@ def _require_native() -> None:
     require_native()
 
 
-def forward_ntt_montgomery_compact_grouped_smem_override_(
-    montgomery_residues: torch.Tensor,
-    forward_twiddles: torch.Tensor,
-    rns_params: torch.Tensor,
-    grouped_stage_count: int,
-    shared_memory_log_n: int,
-) -> None:
+def forward_ntt_montgomery_compact_grouped_smem_override_(montgomery_residues: torch.Tensor, forward_twiddles: torch.Tensor, rns_params: torch.Tensor, grouped_stage_count: int, shared_memory_log_n: int) -> None:
     """
     Typed wrapper for ``fhelium_ntt_diagnostic_ops::forward_ntt_montgomery_compact_grouped_smem_override_``.
 
@@ -36,22 +30,10 @@ def forward_ntt_montgomery_compact_grouped_smem_override_(
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_diagnostic_ops.forward_ntt_montgomery_compact_grouped_smem_override_(
-        montgomery_residues,
-        forward_twiddles,
-        rns_params,
-        grouped_stage_count,
-        shared_memory_log_n,
-    )
+    torch.ops.fhelium_ntt_diagnostic_ops.forward_ntt_montgomery_compact_grouped_smem_override_(montgomery_residues, forward_twiddles, rns_params, grouped_stage_count, shared_memory_log_n)
 
 
-def forward_ntt_montgomery_power_of_two_radix_compact_override_(
-    montgomery_residues: torch.Tensor,
-    outer_twiddles: torch.Tensor,
-    radix_root_powers: torch.Tensor,
-    rns_params: torch.Tensor,
-    shared_memory_log_n: int,
-) -> None:
+def forward_ntt_montgomery_power_of_two_radix_compact_override_(montgomery_residues: torch.Tensor, outer_twiddles: torch.Tensor, radix_root_powers: torch.Tensor, rns_params: torch.Tensor, shared_memory_log_n: int) -> None:
     """
     Typed wrapper for ``fhelium_ntt_diagnostic_ops::forward_ntt_montgomery_power_of_two_radix_compact_override_``.
 
@@ -69,22 +51,10 @@ def forward_ntt_montgomery_power_of_two_radix_compact_override_(
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_diagnostic_ops.forward_ntt_montgomery_power_of_two_radix_compact_override_(
-        montgomery_residues,
-        outer_twiddles,
-        radix_root_powers,
-        rns_params,
-        shared_memory_log_n,
-    )
+    torch.ops.fhelium_ntt_diagnostic_ops.forward_ntt_montgomery_power_of_two_radix_compact_override_(montgomery_residues, outer_twiddles, radix_root_powers, rns_params, shared_memory_log_n)
 
 
-def inverse_ntt_montgomery_power_of_two_radix_compact_override_(
-    montgomery_residues: torch.Tensor,
-    outer_twiddles: torch.Tensor,
-    radix_root_powers: torch.Tensor,
-    rns_params: torch.Tensor,
-    shared_memory_log_n: int,
-) -> None:
+def inverse_ntt_montgomery_power_of_two_radix_compact_override_(montgomery_residues: torch.Tensor, outer_twiddles: torch.Tensor, radix_root_powers: torch.Tensor, rns_params: torch.Tensor, shared_memory_log_n: int) -> None:
     """
     Typed wrapper for ``fhelium_ntt_diagnostic_ops::inverse_ntt_montgomery_power_of_two_radix_compact_override_``.
 
@@ -102,10 +72,4 @@ def inverse_ntt_montgomery_power_of_two_radix_compact_override_(
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_diagnostic_ops.inverse_ntt_montgomery_power_of_two_radix_compact_override_(
-        montgomery_residues,
-        outer_twiddles,
-        radix_root_powers,
-        rns_params,
-        shared_memory_log_n,
-    )
+    torch.ops.fhelium_ntt_diagnostic_ops.inverse_ntt_montgomery_power_of_two_radix_compact_override_(montgomery_residues, outer_twiddles, radix_root_powers, rns_params, shared_memory_log_n)

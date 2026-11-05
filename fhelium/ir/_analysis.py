@@ -23,8 +23,7 @@ class ProgramInventory:
 
     ``operation_counts`` counts every walked operation by its registered or
     textual name. ``dialects`` contains the first namespace component of those
-    names. ``functions`` preserves top-level function order. The inventory
-    does not classify semantic validity, backend support, or executability.
+    names. ``functions`` preserves top-level function order.
     """
 
     operation_counts: Mapping[str, int]
@@ -152,6 +151,12 @@ def analyze_evaluation_key_requirements(
                 )
             if step:
                 rotation_steps.add(step)
+        elif isinstance(operation, ckks.RotationSumOp):
+            rotation_steps.update(
+                int(step.value.data)
+                for step in operation.rotation_steps
+                if step.value.data
+            )
         elif isinstance(operation, ckks.RotateManyOp):
             for key in operation.keys:
                 step = _rotation_key_step(key)

@@ -263,16 +263,12 @@ class RnsContext:
         rns_dimension: int = -2,
         parameter_row_start: int | None = None,
     ) -> tuple[torch.Tensor, int]:
-        """Return parameters whose rows exactly match ``tensor``'s RNS rows.
+        """Return parameter rows in the operand's RNS prime order.
 
-        The context stores one complete ``[parameter, Q | P]`` tensor. Native
-        primitives should not know that storage convention: they receive a
-        view with the same row count and order as their operand and therefore
-        index parameter row ``i`` for operand row ``i``.
+        The context stores one complete ``[parameter, Q | P]`` tensor. Native primitives receive a view with the same row count and order as their operand, so parameter row ``i`` describes operand row ``i``.
 
         Full-basis operands infer their dropped-Q prefix from the row count and
-        whether the basis is ``Q`` or ``QP``. Internal digit operations pass an
-        explicit ``parameter_row_start`` because a key-switch digit is not a
+        whether the basis is ``Q`` or ``QP``. Internal digit operations pass a ``parameter_row_start`` because a key-switch digit is not a
         complete depth basis.
         """
 
@@ -327,9 +323,7 @@ class RnsContext:
     ) -> torch.Tensor:
         """Return ``[parameter, limb]`` parameters aligned with an RNS operand.
 
-        The result is a zero-copy CUDA view with the context integral dtype.
-        Column ``j`` describes ``tensor[..., j, :]`` exactly; this method does
-        not mutate or alias the operand itself.
+        The result is a zero-copy view of the context parameter table, on its device and with its integral dtype. Column ``j`` describes ``tensor[..., j, :]``. The operand remains unchanged and shares no storage with this parameter view.
         """
 
         params, _ = self._active_rns_parameters(
@@ -343,25 +337,31 @@ class RnsContext:
     def rns_parameters_for_prime_ids(
         self, prime_ids: tuple[int, ...]
     ) -> torch.Tensor:
-        """Return a zero-copy parameter view for contiguous local RNS rows."""
+        """Return parameters in requested catalog order, viewing contiguous intervals."""
 
         cached = self._native_parameter_views_by_prime_ids.get(prime_ids)
         if cached is not None:
             return cached
-        if not prime_ids:
-            raise ValueError("RNS prime_ids cannot be empty")
+        if (
+            not prime_ids
+            or len(set(prime_ids)) != len(prime_ids)
+            or any(
+                type(i) is not int or not 0 <= i < self.qp_row_stop
+                for i in prime_ids
+            )
+        ):
+            raise ValueError("RNS prime_ids must be distinct catalog row IDs")
         start = prime_ids[0]
         stop = start + len(prime_ids)
-        if prime_ids != tuple(range(start, stop)):
-            raise ValueError(
-                "RNS prime_ids must be a contiguous parameter interval: "
-                f"{prime_ids}"
+        if prime_ids == tuple(range(start, stop)):
+            cached = self._native_parameter_view(start, stop)
+        else:
+            indices = torch.tensor(
+                prime_ids, dtype=torch.long, device=self.device
             )
-        if not 0 <= start < stop <= self.qp_row_stop:
-            raise ValueError(
-                f"RNS prime_ids are outside [0, {self.qp_row_stop}): {prime_ids}"
-            )
-        cached = self._native_parameter_view(start, stop)
+            cached = self._native_parameter_view(
+                0, self.qp_row_stop
+            ).index_select(1, indices)
         self._native_parameter_views_by_prime_ids[prime_ids] = cached
         return cached
 

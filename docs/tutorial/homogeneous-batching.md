@@ -2,7 +2,7 @@
 
 **Example source:** [`examples/07_eager_batching.py`](https://github.com/VisualDust/fhelium/blob/main/examples/07_eager_batching.py)
 
-This example compares one homogeneous CKKS batch with an explicit loop over the same packed matrix-vector workload. The tutorial explains leading batch dimensions and keeps the latency-memory execution choice in application code.
+This example compares one homogeneous CKKS batch with a per-message loop over the same packed matrix-vector workload. The tutorial explains leading batch dimensions and keeps the latency-memory execution choice in application code.
 
 ## Run the example
 
@@ -131,7 +131,7 @@ Batched submission:
 batched_result = matrix_vector(source, ...)
 ```
 
-Explicit loop:
+Per-message loop:
 
 ```python
 individual_sources = tuple(
@@ -192,9 +192,9 @@ The `faster` column describes only the current command. The example does not wri
 
 Use these rules as a measurement plan, not as hard-coded library behavior:
 
-1. Verify the batched result exactly against an explicit loop from the same installed build.
+1. Compare batched ciphertext data bit-for-bit with a per-message loop from the same installed build.
 2. Compare `[1, slots]` with `[slots]` to isolate B1 overhead.
-3. Compare B4/B8 with an explicit loop over the same members at the same preset and depth.
+3. Compare B4/B8 with a per-message loop over the same members at the same preset and depth.
 4. Repeat at the depths used by the real evaluator.
 5. Measure the complete workload and peak memory, not only an NTT kernel.
 6. Keep the resulting choice in application or scheduler code.

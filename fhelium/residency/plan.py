@@ -31,7 +31,7 @@ class EnsureResident(Generic[ValueT_co]):
 
 @dataclass(frozen=True, slots=True)
 class MoveResident(Generic[ValueT_co]):
-    """Move a managed value to ``to`` from an optional explicit source.
+    """Move a managed value to ``to`` from a selected or manager-resolved source.
 
     ``from_location=None`` delegates source resolution to the manager while
     preserving move semantics: successful completion does not retain the

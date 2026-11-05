@@ -103,7 +103,7 @@ Limb partitioning is useful when:
 
 - one complete value or prepared parameter is too large for the desired per-device budget;
 - there is enough expensive limb-local work between scatter/gather phases;
-- the application can keep operations requiring every active row sparse and explicit.
+- the application can schedule a small number of complete-basis stages.
 
 It is less attractive when every operation immediately needs reconstruction; communication then dominates the local modular arithmetic.
 

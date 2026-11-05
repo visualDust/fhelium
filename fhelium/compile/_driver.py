@@ -72,28 +72,9 @@ def compile(
     CompiledCallable[_P, _R]
     | Callable[[Callable[_P, _R]], CompiledCallable[_P, _R]]
 ):
-    """Create a lazily prepared callable or decorate a pure Python function.
+    """Create a ``CompiledCallable`` directly or as a decorator.
 
-    Python functions capture ordinary Tensor expressions and Eager calls in
-    one Program unless ``inputs`` selects the role-declared FX frontend.
-    Ordinary Tensor computations retain their public numerical role; a
-    Ciphertext input does not encrypt other inputs or the entire function. Programs and Compilations skip Python capture.
-    There is no frontend fallback: unsupported capture or execution raises.
-    The original Python reference and standard function metadata are retained.
-
-    An omitted Backend uses the standard operation registry. Capture retains
-    actual Tensor materials; it does not bind an Engine owner or generate keys.
-    ``material_names`` assigns stable symbols to fixed Tensor/value objects.
-
-    When ``pipeline`` is omitted, preparation uses ``default_lower_and_fuse_pipeline``.
-    A supplied Pipeline, or function from ``CallSignature`` to Pipeline, replaces
-    that recipe rather than extending it. ``on_miss='error'`` requires ``prepare`` before
-    calls with new input conditions or new Backend bindings. Lazy Backend kernel
-    compilation may still occur on the first actual execution.
-
-    Use ``capture``, ``capture_eager``, ``Compilation``, and ``Pipeline.run`` when
-    a transformed Program rather than a callable executable is the desired
-    product. Those lower-level operations do not require a Backend.
+    ``compile(source, **options)`` returns a callable for a Python callable, Program, or Compilation. For Python sources, ``@compile`` uses default options and ``@compile(**options)`` configures the decorator. Options are passed to ``CompiledCallable`` construction.
     """
 
     def wrap(

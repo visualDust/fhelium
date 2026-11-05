@@ -2,9 +2,9 @@
 
 set(FHELIUM_NATIVE_BACKENDS
     "AUTO"
-    CACHE STRING "Native execution backends: AUTO, CPU, CUDA, or CPU+CUDA")
-set_property(CACHE FHELIUM_NATIVE_BACKENDS PROPERTY STRINGS AUTO CPU CUDA
-                                                    "CPU;CUDA")
+    CACHE STRING "Native execution backends: AUTO, CPU, CUDA, HIP, CPU+CUDA, or CPU+HIP")
+set_property(CACHE FHELIUM_NATIVE_BACKENDS PROPERTY STRINGS AUTO CPU CUDA HIP
+                                                    "CPU+CUDA" "CPU+HIP")
 
 function(fhelium_normalize_backend_list input output)
   string(TOUPPER "${input}" _requested)
@@ -16,10 +16,11 @@ function(fhelium_normalize_backend_list input output)
   foreach(_backend IN LISTS _requested)
     if(NOT _backend STREQUAL "AUTO"
        AND NOT _backend STREQUAL "CPU"
-       AND NOT _backend STREQUAL "CUDA")
+       AND NOT _backend STREQUAL "CUDA"
+       AND NOT _backend STREQUAL "HIP")
       message(
         FATAL_ERROR
-          "Unknown FHELIUM_NATIVE_BACKENDS entry '${_backend}'; expected AUTO, CPU, CUDA, or CPU+CUDA"
+          "Unknown FHELIUM_NATIVE_BACKENDS entry '${_backend}'; expected AUTO, CPU, CUDA, HIP, CPU+CUDA, or CPU+HIP"
       )
     endif()
   endforeach()
@@ -37,7 +38,9 @@ fhelium_normalize_backend_list("${FHELIUM_NATIVE_BACKENDS}"
                                _FHELIUM_REQUESTED_BACKENDS)
 if(_FHELIUM_REQUESTED_BACKENDS STREQUAL "AUTO")
   set(_FHELIUM_ENABLED_BACKENDS CPU)
-  if(FHELIUM_TORCH_CUDA_VERSION)
+  if(FHELIUM_TORCH_HIP_VERSION)
+    list(APPEND _FHELIUM_ENABLED_BACKENDS HIP)
+  elseif(FHELIUM_TORCH_CUDA_VERSION)
     list(APPEND _FHELIUM_ENABLED_BACKENDS CUDA)
   endif()
 else()
@@ -49,17 +52,28 @@ endif()
 
 set(FHELIUM_BUILD_CPU OFF)
 set(FHELIUM_BUILD_CUDA OFF)
+set(FHELIUM_BUILD_HIP OFF)
 if("CPU" IN_LIST _FHELIUM_ENABLED_BACKENDS)
   set(FHELIUM_BUILD_CPU ON)
 endif()
 if("CUDA" IN_LIST _FHELIUM_ENABLED_BACKENDS)
   set(FHELIUM_BUILD_CUDA ON)
 endif()
+if("HIP" IN_LIST _FHELIUM_ENABLED_BACKENDS)
+  set(FHELIUM_BUILD_HIP ON)
+endif()
+if(FHELIUM_BUILD_CUDA AND FHELIUM_BUILD_HIP)
+  message(FATAL_ERROR "CUDA and HIP require separate target Torch installations")
+endif()
+if(FHELIUM_BUILD_HIP AND NOT FHELIUM_TORCH_HIP_VERSION)
+  message(FATAL_ERROR "FHELIUM_NATIVE_BACKENDS requests HIP, but the selected "
+                      "target Torch package is not a ROCm build")
+endif()
 if(FHELIUM_BUILD_CUDA AND NOT FHELIUM_TORCH_CUDA_VERSION)
   message(
     FATAL_ERROR
       "FHELIUM_NATIVE_BACKENDS requests CUDA, but the selected target Torch "
-      "package is CPU-only")
+      "package is not a CUDA build")
 endif()
 
 find_program(CCACHE_FOUND ccache)

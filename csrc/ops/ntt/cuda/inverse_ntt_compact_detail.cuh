@@ -1,11 +1,47 @@
 #pragma once
 
+#include "compact_twiddles.cuh"
+
 // Private compact INTT kernels and launch helpers.
 
-template <typename scalar_t>
+// Complete inverse transforms apply their representation transition while
+// storing the final butterfly. Partial stage ranges remain unnormalized.
+enum class CompactInverseOutput {
+  Unnormalized,
+  Montgomery,
+  StandardLazy,
+  Standard,
+  Centered,
+};
+
+template <CompactInverseOutput OUTPUT, typename scalar_t>
+__device__ __forceinline__ scalar_t compact_inverse_output(
+    scalar_t value, int row, const CudaTensorAccessor32<scalar_t, 2>& params) {
+  if constexpr (OUTPUT == CompactInverseOutput::Unnormalized) {
+    return value;
+  } else if constexpr (OUTPUT == CompactInverseOutput::Montgomery) {
+    return inverse_ntt_normalize(value, row, params);
+  } else {
+    value = inverse_ntt_to_standard_lazy(value, row, params);
+    if constexpr (OUTPUT == CompactInverseOutput::StandardLazy) {
+      return value;
+    } else {
+      value = reduce_lazy_residue(value, params[RNS_PARAM_TWICE_MODULUS][row]);
+      if constexpr (OUTPUT == CompactInverseOutput::Centered) {
+        return center_residue(value, params[RNS_PARAM_TWICE_MODULUS][row]);
+      } else {
+        return value;
+      }
+    }
+  }
+}
+
+
+template <typename scalar_t, CompactInverseOutput OUTPUT = CompactInverseOutput::Unnormalized,
+          typename TwiddleAccessor>
 __global__ void inverse_ntt_compact_stage_kernel(
     CudaTensorAccessor32<scalar_t, 3> a_acc,
-    const CudaTensorAccessor32<scalar_t, 2> inverse_twiddles_compact_acc,
+    const TwiddleAccessor inverse_twiddles_compact_acc,
     const CudaTensorAccessor32<scalar_t, 2> params_acc,
     const int stage) {
   const int row = blockIdx.x;
@@ -29,26 +65,22 @@ __global__ void inverse_ntt_compact_stage_kernel(
 
   const scalar_t U = a_acc[batch][row][even_j];
   const int twiddle_group = j >> stage;
-  const scalar_t S =
-      inverse_twiddles_compact_acc[row][(N >> (stage + 1)) + twiddle_group];
   const scalar_t V = a_acc[batch][row][odd_j];
 
-  const scalar_t UminusV = U + twice_modulus - V;
-  const scalar_t O =
-      (UminusV < twice_modulus) ? UminusV : UminusV - twice_modulus;
-  const scalar_t W = montgomery_mul(
-      S, O, modulus_lo, modulus_hi, neg_inv_modulus_lo, neg_inv_modulus_hi);
-  const scalar_t UplusV = U + V;
+  const scalar_t O = sub_lazy_residues(U, V, twice_modulus);
+  const scalar_t W = compact_twiddle_multiply(inverse_twiddles_compact_acc, row, (N >> (stage + 1)) + twiddle_group, O, modulus_lo, modulus_hi, neg_inv_modulus_lo, neg_inv_modulus_hi);
 
-  a_acc[batch][row][odd_j] = W;
-  a_acc[batch][row][even_j] =
-      (UplusV < twice_modulus) ? UplusV : UplusV - twice_modulus;
+  a_acc[batch][row][odd_j] = compact_inverse_output<OUTPUT>(W, row, params_acc);
+  a_acc[batch][row][even_j] = compact_inverse_output<OUTPUT>(
+      add_lazy_residues(U, V, twice_modulus), row, params_acc);
 }
 
-template <typename scalar_t, int GROUPED_STAGE_COUNT>
+template <typename scalar_t, int GROUPED_STAGE_COUNT,
+          CompactInverseOutput OUTPUT = CompactInverseOutput::Unnormalized,
+          typename TwiddleAccessor>
 __global__ void inverse_ntt_compact_grouped_stages_kernel(
     CudaTensorAccessor32<scalar_t, 3> a_acc,
-    const CudaTensorAccessor32<scalar_t, 2> inverse_twiddles_compact_acc,
+    const TwiddleAccessor inverse_twiddles_compact_acc,
     const CudaTensorAccessor32<scalar_t, 2> params_acc,
     const int start_stage) {
   static_assert(GROUPED_STAGE_COUNT == 2 || GROUPED_STAGE_COUNT == 3 ||
@@ -100,36 +132,33 @@ __global__ void inverse_ntt_compact_grouped_stages_kernel(
 
         const scalar_t U = x[lo];
         const int twiddle_group = flat >> stage;
-        const scalar_t S =
-            inverse_twiddles_compact_acc[twiddle_row]
-                                        [(N >> (stage + 1)) + twiddle_group];
         const scalar_t V = x[hi];
 
-        const scalar_t UminusV = U + twice_modulus - V;
-        const scalar_t O =
-            (UminusV < twice_modulus) ? UminusV : UminusV - twice_modulus;
-        const scalar_t W = montgomery_mul(S,
-                                          O,
+        const scalar_t O = sub_lazy_residues(U, V, twice_modulus);
+        const scalar_t W = compact_twiddle_multiply(inverse_twiddles_compact_acc, twiddle_row, (N >> (stage + 1)) + twiddle_group, O,
                                           modulus_lo,
                                           modulus_hi,
                                           neg_inv_modulus_lo,
                                           neg_inv_modulus_hi);
-        const scalar_t UplusV = U + V;
 
         x[hi] = W;
-        x[lo] = (UplusV < twice_modulus) ? UplusV : UplusV - twice_modulus;
+        x[lo] = add_lazy_residues(U, V, twice_modulus);
       }
     }
   }
 
 #pragma unroll
-  for (int k = 0; k < GROUP; ++k) a_acc[batch][row][base + k * q] = x[k];
+  for (int k = 0; k < GROUP; ++k) {
+    a_acc[batch][row][base + k * q] =
+        compact_inverse_output<OUTPUT>(x[k], row, params_acc);
+  }
 }
 
-template <typename scalar_t>
+template <typename scalar_t, CompactInverseOutput OUTPUT = CompactInverseOutput::Unnormalized,
+          typename TwiddleAccessor>
 __global__ void inverse_ntt_compact_smem_prefix_kernel(
     CudaTensorAccessor32<scalar_t, 3> a_acc,
-    const CudaTensorAccessor32<scalar_t, 2> inverse_twiddles_compact_acc,
+    const TwiddleAccessor inverse_twiddles_compact_acc,
     const CudaTensorAccessor32<scalar_t, 2> params_acc,
     const int end_stage) {
   const int row = blockIdx.x;
@@ -166,38 +195,34 @@ __global__ void inverse_ntt_compact_smem_prefix_kernel(
     const int global_lo = tile_base + lo;
     const scalar_t U = smem[lo];
     const int twiddle_group = global_lo >> (stage + 1);
-    const scalar_t S =
-        inverse_twiddles_compact_acc[twiddle_row]
-                                    [(N >> (stage + 1)) + twiddle_group];
     const scalar_t V = smem[hi];
-    const scalar_t UminusV = U + twice_modulus - V;
-    const scalar_t O =
-        (UminusV < twice_modulus) ? UminusV : UminusV - twice_modulus;
-    const scalar_t W = montgomery_mul(
-        S, O, modulus_lo, modulus_hi, neg_inv_modulus_lo, neg_inv_modulus_hi);
-    const scalar_t UplusV = U + V;
+    const scalar_t O = sub_lazy_residues(U, V, twice_modulus);
+    const scalar_t W = compact_twiddle_multiply(inverse_twiddles_compact_acc, twiddle_row, (N >> (stage + 1)) + twiddle_group, O, modulus_lo, modulus_hi, neg_inv_modulus_lo, neg_inv_modulus_hi);
 
     smem[hi] = W;
-    smem[lo] = (UplusV < twice_modulus) ? UplusV : UplusV - twice_modulus;
+    smem[lo] = add_lazy_residues(U, V, twice_modulus);
     __syncthreads();
   }
 
-  a_acc[batch][row][tile_base + thread_offset] = smem[thread_offset];
+  a_acc[batch][row][tile_base + thread_offset] =
+      compact_inverse_output<OUTPUT>(smem[thread_offset], row, params_acc);
   a_acc[batch][row][tile_base + thread_offset + HALF_TILE_COEFFICIENT_COUNT] =
-      smem[thread_offset + HALF_TILE_COEFFICIENT_COUNT];
+      compact_inverse_output<OUTPUT>(
+          smem[thread_offset + HALF_TILE_COEFFICIENT_COUNT], row, params_acc);
 }
 
-template <typename scalar_t>
+template <typename scalar_t, CompactInverseOutput OUTPUT = CompactInverseOutput::Unnormalized,
+          typename TwiddleAccessor>
 void launch_inverse_ntt_compact_grouped_stages_cuda(
     CudaTensorAccessor32<scalar_t, 3> a_acc,
-    CudaTensorAccessor32<scalar_t, 2> inverse_twiddles_compact_acc,
+    TwiddleAccessor inverse_twiddles_compact_acc,
     CudaTensorAccessor32<scalar_t, 2> params_acc,
     const int stage,
     const int grouped_stage_count,
     const dim3 dim_grid_stage,
     cudaStream_t stream) {
   if (grouped_stage_count == 1) {
-    inverse_ntt_compact_stage_kernel<scalar_t>
+    inverse_ntt_compact_stage_kernel<scalar_t, OUTPUT>
         <<<dim_grid_stage, kCudaBlockSize, 0, stream>>>(
             a_acc, inverse_twiddles_compact_acc, params_acc, stage);
     return;
@@ -210,21 +235,21 @@ void launch_inverse_ntt_compact_grouped_stages_cuda(
                       (tuples_per_prime + kCudaBlockSize - 1) / kCudaBlockSize,
                       dim_grid_stage.z);
   if (grouped_stage_count == 4) {
-    inverse_ntt_compact_grouped_stages_kernel<scalar_t, 4>
+    inverse_ntt_compact_grouped_stages_kernel<scalar_t, 4, OUTPUT>
         <<<dim_grid, kCudaBlockSize, 0, stream>>>(
             a_acc, inverse_twiddles_compact_acc, params_acc, stage);
   } else if (grouped_stage_count == 3) {
-    inverse_ntt_compact_grouped_stages_kernel<scalar_t, 3>
+    inverse_ntt_compact_grouped_stages_kernel<scalar_t, 3, OUTPUT>
         <<<dim_grid, kCudaBlockSize, 0, stream>>>(
             a_acc, inverse_twiddles_compact_acc, params_acc, stage);
   } else {
-    inverse_ntt_compact_grouped_stages_kernel<scalar_t, 2>
+    inverse_ntt_compact_grouped_stages_kernel<scalar_t, 2, OUTPUT>
         <<<dim_grid, kCudaBlockSize, 0, stream>>>(
             a_acc, inverse_twiddles_compact_acc, params_acc, stage);
   }
 }
 
-template <typename scalar_t>
+template <typename scalar_t, CompactInverseOutput OUTPUT = CompactInverseOutput::Unnormalized>
 void launch_inverse_ntt_compact_grouped_stage_range_cuda(
     torch::Tensor a,
     const torch::Tensor inverse_twiddles,
@@ -239,25 +264,27 @@ void launch_inverse_ntt_compact_grouped_stage_range_cuda(
   dim3 dim_grid_stage(transform_rows, (N_half + kCudaBlockSize - 1) / kCudaBlockSize, a.size(0));
 
   auto a_acc = FHELIUM_CUDA_ACCESSOR32(a, scalar_t, 3);
-  const auto inverse_twiddles_compact_acc =
-      FHELIUM_CUDA_ACCESSOR32(inverse_twiddles, scalar_t, 2);
+  with_compact_twiddles<scalar_t>(
+      inverse_twiddles, [&](auto inverse_twiddles_compact_acc) {
 
-  for (int stage = start_stage; stage < end_stage;) {
-    const int remaining = end_stage - stage;
-    const int grouped_stages = std::min(grouped_stage_count, remaining);
-    launch_inverse_ntt_compact_grouped_stages_cuda<scalar_t>(
-        a_acc,
-        inverse_twiddles_compact_acc,
-        params_acc,
-        stage,
-        grouped_stages,
-        dim_grid_stage,
-        stream);
-    stage += grouped_stages;
-  }
+    for (int stage = start_stage; stage < end_stage;) {
+      const int remaining = end_stage - stage;
+      const int grouped_stages = std::min(grouped_stage_count, remaining);
+      if (stage + grouped_stages == end_stage) {
+        launch_inverse_ntt_compact_grouped_stages_cuda<scalar_t, OUTPUT>(
+            a_acc, inverse_twiddles_compact_acc, params_acc, stage,
+            grouped_stages, dim_grid_stage, stream);
+      } else {
+        launch_inverse_ntt_compact_grouped_stages_cuda<scalar_t>(
+            a_acc, inverse_twiddles_compact_acc, params_acc, stage,
+            grouped_stages, dim_grid_stage, stream);
+      }
+      stage += grouped_stages;
+    }
+  });
 }
 
-template <typename scalar_t>
+template <typename scalar_t, CompactInverseOutput OUTPUT = CompactInverseOutput::Unnormalized>
 void launch_inverse_ntt_compact_grouped_smem_cuda(
     torch::Tensor a,
     const torch::Tensor inverse_twiddles,
@@ -277,20 +304,26 @@ void launch_inverse_ntt_compact_grouped_smem_cuda(
 
   if (effective_smem_stage_count > 0) {
     auto a_acc = FHELIUM_CUDA_ACCESSOR32(a, scalar_t, 3);
-    const auto inverse_twiddles_compact_acc =
-        FHELIUM_CUDA_ACCESSOR32(inverse_twiddles, scalar_t, 2);
-    dim3 dim_grid(transform_rows, N / kCudaBlockSize, a.size(0));
-    inverse_ntt_compact_smem_prefix_kernel<scalar_t>
-        <<<dim_grid,
-           kCudaBlockSize / 2,
-           kCudaBlockSize * sizeof(scalar_t),
-           stream>>>(a_acc,
-                     inverse_twiddles_compact_acc,
-                     params_acc,
-                     effective_smem_stage_count);
+    with_compact_twiddles<scalar_t>(
+        inverse_twiddles, [&](auto inverse_twiddles_compact_acc) {
+      dim3 dim_grid(transform_rows, N / kCudaBlockSize, a.size(0));
+      if (effective_smem_stage_count == logN) {
+        inverse_ntt_compact_smem_prefix_kernel<scalar_t, OUTPUT>
+            <<<dim_grid, kCudaBlockSize / 2,
+               kCudaBlockSize * sizeof(scalar_t), stream>>>(
+                a_acc, inverse_twiddles_compact_acc, params_acc,
+                effective_smem_stage_count);
+      } else {
+        inverse_ntt_compact_smem_prefix_kernel<scalar_t>
+            <<<dim_grid, kCudaBlockSize / 2,
+               kCudaBlockSize * sizeof(scalar_t), stream>>>(
+                a_acc, inverse_twiddles_compact_acc, params_acc,
+                effective_smem_stage_count);
+      }
+    });
   }
 
-  launch_inverse_ntt_compact_grouped_stage_range_cuda<scalar_t>(
+  launch_inverse_ntt_compact_grouped_stage_range_cuda<scalar_t, OUTPUT>(
       a,
       inverse_twiddles,
       rns_params,

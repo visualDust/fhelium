@@ -34,11 +34,11 @@ fhelium/
   utils/           narrowly shared algorithms such as rotation decomposition
   _cli/            command-line entry points
 csrc/
-  ops/rns/         PyTorch schemas and CPU/CUDA residue arithmetic
-  ops/ntt/         PyTorch schemas and CPU/CUDA NTT implementations
-  ops/ckks/        PyTorch schemas and CPU/CUDA CKKS Tensor primitives
+  ops/rns/         PyTorch schemas and CPU/CUDA/HIP residue arithmetic
+  ops/ntt/         PyTorch schemas and CPU/CUDA/HIP NTT implementations
+  ops/ckks/        PyTorch schemas and CPU/CUDA/HIP CKKS Tensor primitives
   ops/common/      shared native validation, parameters, and arithmetic helpers
-  runtime/         CUDA device and peer-topology inspection extension
+  runtime/         CUDA and HIP device/peer inspection implementations
 examples/          numbered Eager, Compile, execution, distributed, and research workflows
 tests/             focused tests organized by owning package
 packaging/         wheel, release, repository, and package-index tooling
@@ -72,7 +72,7 @@ graph TB
     IMPL[Registered Backend implementation]
     PY[CKKS, RNS, and NTT Python execution]
     NATIVE[Typed wrapper and torch.ops]
-    DEVICE[CPU C++ or CUDA kernel]
+    DEVICE[CPU C++, CUDA, or HIP kernel]
 
     APP --> ENG
     APP --> MANUAL
@@ -166,8 +166,9 @@ A Program may retain unknown CKKS state until a selected pass requires and assig
 | Backend-neutral PyTorch schemas | `csrc/ops/<family>/*.cpp` |
 | CPU dispatcher registrations and implementations | `csrc/ops/<family>/cpu/` |
 | CUDA dispatcher registrations and implementations | `csrc/ops/<family>/cuda/` |
+| HIP dispatcher registrations and implementations | `csrc/ops/<family>/hip/` |
 | Shared Tensor and RNS helpers | `csrc/ops/common/` |
-| CUDA topology inspection | `fhelium/native/cuda/`, `csrc/runtime/cuda_info.{h,cpp}` |
+| GPU topology inspection | `fhelium/native/cuda/`, `csrc/runtime/{cuda_info,hip_info}.{h,cpp}` |
 
 Run `python scripts/generate_native_wrappers.py` after changing a native schema or the generator, then regenerate the wrapper output.
 
@@ -176,7 +177,7 @@ Run `python scripts/generate_native_wrappers.py` after changing a native schema 
 | Goal | Location |
 | --- | --- |
 | Callable preparation and specialization | `fhelium/compile/` |
-| CPU/CUDA topology and memory observation | `fhelium/runtime/topology.py`, `fhelium/runtime/memory.py` |
+| CPU/GPU topology and memory observation | `fhelium/runtime/topology.py`, `fhelium/runtime/memory.py` |
 | Reusable buffers and CUDA Graphs | `fhelium/runtime/buffer.py`, `fhelium/runtime/cuda_graph.py` |
 | Rank and process-group initialization | `fhelium/distributed/_state.py` |
 | Typed value transport and collectives | `fhelium/distributed/_transfer.py`, `fhelium/distributed/_value_collectives.py` |
@@ -227,3 +228,9 @@ Program → Compilation → Pipeline.run(compilation) → Backend linking passes
 For callable specialization, `compile.compile` captures or accepts the same Program, prepares it through a Pipeline, and caches its linked executable. See [prepared host execution](prepared-host-execution.md).
 
 Read the focused tests beside each owner before changing an execution path. They capture value-state, mutation, resource, singleton-row, last-depth, and Q/QP behavior that may not be visible from a benchmark.
+
+## Native GPU backends
+
+Each native operation family defines its Torch schemas independently of execution backends. Its `cpu/`, `cuda/`, and `hip/` directories own platform implementations. CUDA kernels and their launch schedules remain under `cuda/`; HIP kernels and their launch schedules live under `hip/`. The GPU implementations share word-level Montgomery arithmetic in `csrc/ops/common/montgomery.hpp`. Platform launch helpers, NTT stage scheduling, and runtime queries remain separately maintained.
+
+CMake compiles CUDA `.cu` sources with NVCC or HIP `.hip` sources with HIP Clang according to `FHELIUM_NATIVE_BACKENDS` and the selected Torch environment. Both GPU builds register Torch's `CUDA` dispatch key because ROCm PyTorch uses the `cuda` Tensor device type. The native manifest distinguishes the CUDA and HIP binaries, records their Torch/runtime ABI identity, and records the HIP code-object targets. Eager and Compile continue dispatching Tensor operations through the same native schemas.

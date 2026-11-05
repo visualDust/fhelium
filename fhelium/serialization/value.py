@@ -28,7 +28,7 @@ from fhelium.values.state import (
     ResidueRepresentation,
 )
 
-VALUE_SCHEMA_VERSION = 4
+VALUE_SCHEMA_VERSION = 5
 COMPRESSED_PLAINTEXT_FORMAT_VERSION = 1
 
 _KEY_TYPES: dict[str, type] = {
@@ -46,11 +46,9 @@ _KEY_TYPES: dict[str, type] = {
 
 @dataclass(frozen=True)
 class ValueEnvelope:
-    """A value description with tensors but no path or store policy.
+    """A value's serialization metadata and named Tensor payloads.
 
-    The envelope is the shared representation for application-owned storage and
-    memory managers. Its tensors may be moved or persisted by the caller, then passed
-    to :meth:`to_value` to reconstruct the original FHElium value type.
+    ``from_value`` collects this representation from a live value; ``to_value`` reconstructs the corresponding FHElium value from it.
     """
 
     schema_version: int
@@ -60,7 +58,7 @@ class ValueEnvelope:
 
     @classmethod
     def from_value(cls, value: TensorResident) -> Self:
-        """Describe one live value without choosing storage policy."""
+        """Collect one live value's metadata and Tensor payloads."""
 
         return cast(Self, _envelope_from_value(value, cls))
 
@@ -161,6 +159,15 @@ def _envelope_from_value(
                 "polynomial_domain": key_value.polynomial_domain,
                 "modulus_basis": key_value.modulus_basis,
                 "residue_representation": key_value.residue_representation,
+                **(
+                    {
+                        "digit_prime_ids": [
+                            list(rows) for rows in key_value.digit_prime_ids
+                        ]
+                    }
+                    if isinstance(key_value, KeySwitchKey)
+                    else {}
+                ),
                 **(
                     {"rotation_step": value.rotation_step}
                     if isinstance(value, RotationKey)
@@ -378,6 +385,8 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
         "modulus_basis",
         "residue_representation",
     }
+    if issubclass(key_type, KeySwitchKey):
+        required_key_metadata.add("digit_prime_ids")
     if key_type is RotationKey:
         required_key_metadata.add("rotation_step")
     _require_metadata_fields(
@@ -397,6 +406,10 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
             metadata, value_type
         ),
     )
+    if issubclass(key_type, KeySwitchKey):
+        key_arguments["digit_prime_ids"] = tuple(
+            tuple(rows) for rows in metadata["digit_prime_ids"]
+        )
     if key_type is RotationKey:
         key_arguments["rotation_step"] = _metadata_integer(
             metadata, "rotation_step", value_type
@@ -614,6 +627,8 @@ def validate_value_description(
         "modulus_basis",
         "residue_representation",
     }
+    if issubclass(key_type, KeySwitchKey):
+        fields.add("digit_prime_ids")
     if key_type is RotationKey:
         fields.add("rotation_step")
     _require_metadata_fields(typed_metadata, value_type, fields)

@@ -143,6 +143,7 @@ def numeric_call(capture: _Capture, function, args, kwargs) -> _Value:
                 torch.select,
                 torch.narrow,
                 torch.reshape,
+                torch.Tensor.view,
                 torch.transpose,
                 torch.permute,
                 torch.clone,

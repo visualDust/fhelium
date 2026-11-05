@@ -6,7 +6,7 @@
 #include <cstdint>
 
 #include "../../common/cuda/kernel_support.cuh"
-#include "../../common/cuda/montgomery.cuh"
+#include "../../common/montgomery.hpp"
 #include "../ciphertext_components.h"
 
 namespace {

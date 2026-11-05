@@ -15,7 +15,12 @@ from fhelium.native.wrapper import ckks_ops, rns_ops, ntt_ops
 
 from fhelium.config.ntt import CompactRadix2Policy, resolve_ntt_backend_policy
 from fhelium.backend.rns.modup import modup_digit
-from fhelium.backend.rns.moddown import moddown_ntt_qp_to_q, moddown_qp_to_q
+from fhelium.backend.rns.crt import CRT_OPERANDS, crt_basis_extend
+from fhelium.backend.rns.moddown import (
+    moddown_ntt_qp_to_q,
+    moddown_qp_to_q,
+    moddown_add_rescale,
+)
 from fhelium.backend.rns.automorphism import coefficient_galois_gather_indices
 from fhelium.backend.ntt.operations import execute_named_transform
 from ._key_switch_preparation import (
@@ -24,22 +29,53 @@ from ._key_switch_preparation import (
 )
 
 
-def key_switch_corrections(
+def lift_key_switch_digit(
+    source, tensors, attributes, digit_index, span, *, out=None, scratch=None
+):
+    r"""Lift one supplied digit a modulo D=product(q_i) into QP Montgomery form.
+
+    Exact lifting uses the representative in [0,D). For D_i=D/q_i and
+    u_i=D_i^{-1} mod q_i, raw CRT uses sum_i(a_i D_i u_i); normalized CRT
+    uses sum_i((a_i u_i mod q_i) D_i). CRT tables are live Tensor operands.
+    Only exact lifting consumes the optional Garner scratch buffer.
+    """
+    method = attributes.get("modup_method", "exact")
+    if method == "exact":
+        return modup_digit(
+            source, tensors, digit_index, span, out=out, scratch=scratch
+        )
+    if method not in {"crt", "normalized_crt"}:
+        raise ValueError("modup_method must be exact, crt, or normalized_crt")
+    start, stop, _ = span
+    return crt_basis_extend(
+        source[..., start:stop, :],
+        {
+            name: tensors[f"digit{digit_index}_crt_{name}"]
+            for name in CRT_OPERANDS
+        },
+        out=out,
+    )
+
+
+def accumulate_key_switch_products(
     source: torch.Tensor,
     *,
     tensors: Mapping[str, torch.Tensor],
     attributes: Mapping[str, object],
     key: torch.Tensor,
-    output_ntt: bool = False,
-    coefficient_c0: torch.Tensor | None = None,
+    accumulator: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Stream hybrid digit products into QP accumulators and remove P."""
-    accumulator: torch.Tensor | None = None
+    """Accumulate hybrid digit key products into CT2 NTT/Montgomery QP.
+
+    ``source`` is one coefficient/standard Q polynomial. The optional
+    accumulator is owned by the caller and is updated in place. Keys and
+    digit tables have the same active QP order for every contribution.
+    """
     policy = resolve_ntt_backend_policy(str(attributes["ntt_backend"]))
     for index, span in enumerate(
         cast(tuple[tuple[int, int, int], ...], attributes["digits"])
     ):
-        lifted = modup_digit(source, tensors, index, span)
+        lifted = lift_key_switch_digit(source, tensors, attributes, index, span)
         if accumulator is None:
             accumulator = torch.zeros(
                 (2, *lifted.shape), dtype=lifted.dtype, device=lifted.device
@@ -70,6 +106,22 @@ def key_switch_corrections(
         del lifted
     if accumulator is None:
         raise ValueError("Key switching requires at least one RNS digit")
+    return accumulator
+
+
+def key_switch_corrections(
+    source: torch.Tensor,
+    *,
+    tensors: Mapping[str, torch.Tensor],
+    attributes: Mapping[str, object],
+    key: torch.Tensor,
+    output_ntt: bool = False,
+    coefficient_c0: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Stream hybrid digit products into QP accumulators and remove P."""
+    accumulator = accumulate_key_switch_products(
+        source, tensors=tensors, attributes=attributes, key=key
+    )
     if output_ntt:
         return moddown_ntt_qp_to_q(
             accumulator, tensors, attributes, coefficient_c0=coefficient_c0
@@ -202,6 +254,18 @@ class NativeRelinearizeImplementation:
             "q",
             "inverse_to_standard_",
         )
+        if bool(invocation.attributes.get("rescale", False)):
+            products = accumulate_key_switch_products(
+                component,
+                tensors=tensors,
+                attributes=invocation.attributes,
+                key=key,
+            )
+            return (
+                moddown_add_rescale(
+                    products, source, tensors, invocation.attributes
+                ),
+            )
         corrections = key_switch_corrections(
             component,
             tensors=tensors,

@@ -6,6 +6,8 @@ import {
   type InstallSelection,
 } from './installSelector'
 import {
+  changeSelection,
+  defaultSelection,
   optionsFor,
   resolveInstall,
   validateCatalog,
@@ -88,7 +90,7 @@ assert.deepEqual(
     },
     windowsCatalog,
   ),
-  ['cpu'],
+  ['cuda-130', 'cpu'],
 )
 
 const sourceSelection: InstallSelection = {
@@ -136,3 +138,18 @@ const linux = resolveInstall(
 assert.match(linux.commands[1], /--only-binary=fhelium/u)
 assert.match(linux.commands[1], /--extra-index-url/u)
 assert.doesNotMatch(linux.commands[1], /\$env:|`/u)
+
+// Compute selection determines the available package methods.
+const amd = changeSelection(defaultSelection(), 'compute', 'rocm')
+assert.equal(amd.method, 'source-local')
+assert.deepEqual(optionsFor('method', amd), ['source-local'])
+const amdCommands = resolveInstall(amd).commands.join('\n')
+assert.match(amdCommands, /FHELIUM_NATIVE_BACKENDS=CPU\+HIP/u)
+assert.match(amdCommands, /pip install \. --no-build-isolation --no-cache-dir/u)
+assert.doesNotMatch(amdCommands, /--only-binary|--extra-index-url|fhelium==|git clone/u)
+assert.ok(!optionsFor('compute', { os: 'windows-x86_64' }).includes('rocm'))
+assert.ok(!optionsFor('compute', { os: 'macos-arm64' }).includes('rocm'))
+const backToCuda = changeSelection(amd, 'compute', 'cuda-130')
+assert.equal(backToCuda.method, 'prebuilt-pip')
+assert.equal(backToCuda.torch, '2.13')
+assert.match(resolveInstall(backToCuda).commands[1], /--only-binary=fhelium/u)

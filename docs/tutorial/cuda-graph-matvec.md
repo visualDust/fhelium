@@ -131,7 +131,19 @@ Capture is a one-time program-construction cost. Compare steady-state replay onl
 program.close()
 ```
 
-Closing releases graph-owned inputs, outputs, and capture state. Do not treat a captured program as an unbounded global singleton when different parameter sets, models, or input signatures require independent storage.
+Closing releases graph-owned inputs, outputs, and capture state.
+
+## Share scratch across two specializations
+
+Add `--shared-pool` to run the example's optional two-program demonstration:
+
+```bash
+python examples/18_runtime_cuda_graph.py --device cuda:0 --shared-pool
+```
+
+The same matrix-vector evaluator is captured for two input scales, $\Delta$ and $2\Delta$, using one `CudaGraphPool`. Each program keeps its own input signature and retained output. The example replays the second program before the first, checks that the second output survives the first replay unchanged, and compares both decrypted results with the clear matrix-vector product. Both programs close when the pool context ends.
+
+Pooled output leaves have independent cloned storage without autograd history or alias relationships to inputs or other output leaves. The [shared-storage guide](../how-to/capture-repeated-evaluator.md#share-temporary-storage-across-specializations) describes stream ordering and the lifetime of persistent resources. The single-program capture and benchmark remain the default example path.
 
 ::: details Source
 <<< @/../examples/18_runtime_cuda_graph.py

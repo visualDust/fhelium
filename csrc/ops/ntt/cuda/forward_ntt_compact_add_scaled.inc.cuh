@@ -4,10 +4,10 @@
 // write forming NTT(correction) + multiplier * NTT_addend in Montgomery form.
 // The full Q addend remains in NTT form; neither it nor the row multipliers is
 // modified. This epilogue serves the represented NTT-domain ModDown operation.
-template <typename scalar_t>
+template <typename scalar_t, typename TwiddleAccessor>
 __global__ void forward_ntt_compact_add_scaled_tail_kernel(
     CudaTensorAccessor32<scalar_t, 3> digit,
-    const CudaTensorAccessor32<scalar_t, 2> forward_twiddles,
+    const TwiddleAccessor forward_twiddles,
     const CudaTensorAccessor32<scalar_t, 2> params,
     const CudaTensorAccessor32<scalar_t, 3> q_source,
     const CudaTensorAccessor32<scalar_t, 1> p_inverse,
@@ -45,17 +45,14 @@ __global__ void forward_ntt_compact_add_scaled_tail_kernel(
     const int twiddle_group = global_lo >> (t_log + 1);
     const scalar_t U = values[lo];
     const scalar_t V =
-        montgomery_mul(forward_twiddles[row][(1 << stage) + twiddle_group],
-                       values[hi],
+        compact_twiddle_multiply(forward_twiddles, row,
+                       (1 << stage) + twiddle_group, values[hi],
                        modulus_lo,
                        modulus_hi,
                        neg_inv_modulus_lo,
                        neg_inv_modulus_hi);
-    const scalar_t sum = U + V;
-    const scalar_t difference = U + twice_modulus - V;
-    values[lo] = sum < twice_modulus ? sum : sum - twice_modulus;
-    values[hi] =
-        difference < twice_modulus ? difference : difference - twice_modulus;
+    values[lo] = add_lazy_residues(U, V, twice_modulus);
+    values[hi] = sub_lazy_residues(U, V, twice_modulus);
     __syncthreads();
   }
 
@@ -78,7 +75,7 @@ void forward_ntt_to_montgomery_compact_add_scaled_inplace_cuda(
     const torch::Tensor tw,
     const torch::Tensor params,
     const int64_t group) {
-  fhelium::ntt::validate_compact_tables(correction, tw, params, group);
+  fhelium::ntt::validate_compact_tables(correction, tw, params, group, true);
   TORCH_CHECK(q.device() == correction.device() &&
                   q.scalar_type() == correction.scalar_type() &&
                   q.sizes() == correction.sizes(),
@@ -107,12 +104,14 @@ void forward_ntt_to_montgomery_compact_add_scaled_inplace_cuda(
         launch_forward_ntt_compact_grouped_stage_range_cuda<scalar_t>(
             destination, tw, params, static_cast<int>(group),
             static_cast<int>(destination.size(1)), 0, logN - 8, stream);
-        forward_ntt_compact_add_scaled_tail_kernel<scalar_t>
-            <<<grid, kCudaBlockSize / 2,
-               kCudaBlockSize * sizeof(scalar_t), stream>>>(
-                data, FHELIUM_CUDA_ACCESSOR32(tw, scalar_t, 2), parameters,
-                FHELIUM_CUDA_ACCESSOR32(source, scalar_t, 3),
-                FHELIUM_CUDA_ACCESSOR32(inv, scalar_t, 1), logN - 8);
+        with_compact_twiddles<scalar_t>(tw, [&](auto twiddle_reader) {
+          forward_ntt_compact_add_scaled_tail_kernel<scalar_t>
+              <<<grid, kCudaBlockSize / 2,
+                 kCudaBlockSize * sizeof(scalar_t), stream>>>(
+                  data, twiddle_reader, parameters,
+                  FHELIUM_CUDA_ACCESSOR32(source, scalar_t, 3),
+                  FHELIUM_CUDA_ACCESSOR32(inv, scalar_t, 1), logN - 8);
+        });
       });
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 }

@@ -25,7 +25,7 @@ One versioned safetensors value file contains:
 - named tensor payloads;
 - enough information to reconstruct the typed value.
 
-Applications preserve the `CkksConfig` association beside the file and select compatible parameters and keys after loading.
+Key files retain the actual ordered `prime_ids`, `digit_prime_ids` and operation specialization together with the key Tensor. Loading reconstructs the stored digit planes and physical rows. Applications preserve the `CkksConfig` association and secret relations beside the file, then assemble loaded evaluation keys into their shared inventory. Inventory selection uses those restored facts for the consuming operation.
 
 ```mermaid
 graph LR
@@ -119,7 +119,7 @@ Publication writes the complete payload before committing the catalog entry. An 
 
 ## Value identity versus logical identity
 
-These are intentionally separate:
+The model distinguishes value identity from logical artifact identity:
 
 ```mermaid
 flowchart LR

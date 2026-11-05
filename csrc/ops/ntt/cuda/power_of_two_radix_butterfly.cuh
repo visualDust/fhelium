@@ -8,15 +8,13 @@
 template <typename scalar_t>
 __device__ __forceinline__ scalar_t power_of_two_radix_add(
     const scalar_t a, const scalar_t b, const scalar_t twice_modulus) {
-  const scalar_t sum = a + b;
-  return (sum < twice_modulus) ? sum : sum - twice_modulus;
+  return add_lazy_residues(a, b, twice_modulus);
 }
 
 template <typename scalar_t>
 __device__ __forceinline__ scalar_t power_of_two_radix_sub(
     const scalar_t a, const scalar_t b, const scalar_t twice_modulus) {
-  const scalar_t difference = a + twice_modulus - b;
-  return (difference < twice_modulus) ? difference : difference - twice_modulus;
+  return sub_lazy_residues(a, b, twice_modulus);
 }
 
 template <int BIT_COUNT>

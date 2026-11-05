@@ -46,7 +46,7 @@ product_triplet = engine.multiply(mul_x, mul_y)
 ct_product = engine.rescale_to_next_depth(engine.relinearize(product_triplet))
 ```
 
-FHElium deliberately does not hide rescale or relinearization. This makes the depth, representation, and key-switch transitions visible to algorithms that reuse NTT-domain operands or delay relinearization. With default-scale inputs, the product carries scale $\Delta^2$; the post-relinearization rescale consumes one depth and records the actual scale $\Delta^2/M_0$, where $M_0$ is the product of the primes in the leading Q depth group.
+Eager exposes multiplication, relinearization, and rescale as separate operations. Algorithms can reuse NTT-domain operands and choose when to reduce the component count or depth. With default-scale inputs, the product carries scale $\Delta^2$; the post-relinearization rescale consumes one depth and records the actual scale $\Delta^2/M_0$, where $M_0$ is the product of the primes in the leading Q depth group.
 
 ## 5. Rotate with a key
 

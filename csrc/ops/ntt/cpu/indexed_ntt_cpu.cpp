@@ -4,7 +4,6 @@
 #include <torch/torch.h>
 
 #include <algorithm>
-#include <vector>
 
 #include "../../common/cpu/montgomery.h"
 #include "../../common/rns_batch.h"
@@ -322,36 +321,6 @@ void validate_cpu_indexed(const torch::Tensor& residues,
               "indexed NTT CPU implementation requires CPU residues");
   fhelium::ntt::validate_indexed_tables(
       residues, even_indices, odd_indices, twiddles, rns_params);
-
-  const int64_t coefficient_count = residues.size(-1);
-  const int64_t expected_stage_count = even_indices.size(0);
-  const auto even = even_indices.accessor<int32_t, 2>();
-  const auto odd = odd_indices.accessor<int32_t, 2>();
-  std::vector<uint8_t> seen(static_cast<size_t>(coefficient_count));
-  for (int64_t stage = 0; stage < expected_stage_count; ++stage) {
-    std::fill(seen.begin(), seen.end(), uint8_t{0});
-    for (int64_t butterfly = 0; butterfly < even_indices.size(1); ++butterfly) {
-      const int64_t even_index = even[stage][butterfly];
-      const int64_t odd_index = odd[stage][butterfly];
-      TORCH_CHECK(even_index >= 0 && even_index < coefficient_count &&
-                      odd_index >= 0 && odd_index < coefficient_count,
-                  "Indexed NTT schedule contains an out-of-range coefficient "
-                  "index at stage ",
-                  stage,
-                  ", butterfly ",
-                  butterfly);
-      TORCH_CHECK(!seen[static_cast<size_t>(even_index)] &&
-                      !seen[static_cast<size_t>(odd_index)] &&
-                      even_index != odd_index,
-                  "Indexed NTT schedule must partition every coefficient "
-                  "exactly once per stage; duplicate at stage ",
-                  stage,
-                  ", butterfly ",
-                  butterfly);
-      seen[static_cast<size_t>(even_index)] = uint8_t{1};
-      seen[static_cast<size_t>(odd_index)] = uint8_t{1};
-    }
-  }
 }
 
 template <CpuForwardInput input>

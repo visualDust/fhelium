@@ -315,6 +315,12 @@ def _allocate_rotation_key_buffer(
             dtype=engine.dtype,
         ),
         prime_ids=prime_ids,
+        digit_prime_ids=tuple(
+            spec.prime_ids
+            for spec in engine.rns_context(
+                dist.local_device()
+            ).rns_layout.digit_specs(0)
+        ),
         rotation_step=1,
     )
 

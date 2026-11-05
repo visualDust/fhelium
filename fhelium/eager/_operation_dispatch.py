@@ -13,6 +13,9 @@ from fhelium.backend.ckks import (
     CkksDeviceResources,
 )
 from fhelium.backend.ckks.crypto import KeyGenerationResource
+from fhelium.backend.ckks._key_switch_preparation import (
+    key_switch_runtime_attributes,
+)
 from fhelium.backend.execution import OperationBackend
 from fhelium.backend.implementation import (
     OperationImplementation,
@@ -300,15 +303,48 @@ class _EagerOperationDispatcher:
             depth = self.rns_context.rns_layout.depth_for_active_row_count(
                 inputs[0].size(-2), include_p=False
             )
-            tensors, facts = self.device_resources.key_switch_operands(depth)
+            rounding = str(
+                invocation.attributes.get("moddown_rounding", "nearest")
+            )
+            if rounding not in {"floor", "nearest"}:
+                raise ValueError(
+                    "moddown_rounding must be 'floor' or 'nearest'"
+                )
+            tensors, facts = self.device_resources.key_switch_operands(
+                depth,
+                moddown_rounding=rounding,
+                modup_method=str(
+                    invocation.attributes.get("modup_method", "exact")
+                ),
+                rescale=operation_type is ckks.RelinearizeOp
+                and bool(invocation.attributes.get("rescale", False)),
+                rescale_rounding=str(
+                    invocation.attributes.get("rescale_rounding", "nearest")
+                ),
+                output_domain=str(
+                    invocation.attributes.get("output_domain", "coefficient")
+                ),
+                key_prime_ids=cast(
+                    tuple[int, ...] | None,
+                    invocation.attributes.get("key_prime_ids"),
+                ),
+                digit_prime_ids=cast(
+                    tuple[tuple[int, ...], ...] | None,
+                    invocation.attributes.get("digit_prime_ids"),
+                ),
+            )
             inputs = (*inputs, *tensors.values())
             invocation = OperationInvocation._from_eager(
                 operation_type,
                 len(inputs),
                 result_count,
                 {
-                    **invocation.attributes,
-                    **facts,
+                    **{
+                        name: value
+                        for name, value in invocation.attributes.items()
+                        if name not in {"key_prime_ids", "digit_prime_ids"}
+                    },
+                    **key_switch_runtime_attributes(facts),
                     "parameter_names": tuple(tensors),
                 },
             )

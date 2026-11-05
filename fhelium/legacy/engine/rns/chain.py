@@ -20,7 +20,7 @@ class RnsChain:
 
     ``include_p=True`` appends every P id and therefore describes $Q_\ell P$;
     it is an internal layout selector rather than semantic value metadata.
-    These ids map limb row ``j`` to parameter prime ``prime_ids[j]`` exactly.
+    Limb row ``j`` uses parameter prime ``prime_ids[j]``.
     """
 
     num_q_primes: int

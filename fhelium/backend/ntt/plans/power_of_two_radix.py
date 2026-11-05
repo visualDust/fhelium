@@ -24,7 +24,7 @@ class CompactPowerOfTwoRadixNttPlan:
 
     Outer tables have integral shape ``[prime, N - 1]`` and root-power tables
     have shape ``[prime, radix]`` on ``device`` in standard representation.
-    Prime rows follow ``ckks_config.moduli`` exactly; the four tables are
+    Prime rows follow ``ckks_config.moduli`` order; the four tables are
     separately allocated and do not alias.
     """
 

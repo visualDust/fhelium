@@ -2,7 +2,7 @@
 #include <torch/torch.h>
 
 #include "../../common/cuda/kernel_support.cuh"
-#include "../../common/cuda/montgomery.cuh"
+#include "../../common/montgomery.hpp"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
 
@@ -13,7 +13,8 @@ namespace {
 // p_residues [*batch, P_limb, coefficient] in [0, p_j). rns_params columns are
 // concatenated QP prime_ids order. moddown_p_drop_inverses_montgomery has shape
 // [P_limb, at least Q_limb+P_limb-1] and stores each sequentially dropped P
-// prime inverse in Montgomery form. It computes a rounded divide by
+// prime inverse in Montgomery form. Nearest adds H=(P-1)/2 on input loads;
+// floor uses the original residues. Both compute division by
 // $P=\prod_jp_j$ and returns newly allocated Q-only standard
 // [*batch, Q_limb, coefficient]. Public inputs are read-only: P preparation
 // writes only an operator-owned scratch tensor.
@@ -57,14 +58,15 @@ inline void check_keyswitch_cuda_peer(const torch::Tensor& reference,
 
 // Prepare an operator-owned P-basis scratch tensor for sequential
 // divide-and-round. Each batch item is independent.
-template <typename scalar_t>
+template <typename scalar_t, bool Nearest>
 __global__ void keyswitch_moddown_prepare_p_basis_kernel(
     CudaTensorAccessor32<scalar_t, 3> p_scratch,
     const CudaTensorAccessor32<scalar_t, 3> p_residues,
     const CudaTensorAccessor32<scalar_t, 2> inverse,
     const CudaTensorAccessor32<scalar_t, 2> params,
     const int q_row_count,
-    const int p_row_count) {
+    const int p_row_count,
+    const scalar_t* half) {
   const int coefficient = blockIdx.y * blockDim.x + threadIdx.x;
   const int batch = blockIdx.z;
   if (coefficient >= p_scratch.size(2)) return;
@@ -78,6 +80,11 @@ __global__ void keyswitch_moddown_prepare_p_basis_kernel(
         params[RNS_PARAM_NEG_INV_MODULUS_LO][param_row];
     const scalar_t neg_inv_modulus_hi =
         params[RNS_PARAM_NEG_INV_MODULUS_HI][param_row];
+    if constexpr (Nearest) {
+      value = reduce_lazy_residue(
+          add_lazy_residues(value, half[q_row_count + row], twice_modulus),
+          twice_modulus);
+    }
     const int half_nbits = kMontgomeryRadixBits<scalar_t> / 2;
     const scalar_t modulus = modulus_lo + (modulus_hi << half_nbits);
     for (int lower = p_row_count - 1; lower > row; --lower) {
@@ -105,13 +112,14 @@ __global__ void keyswitch_moddown_prepare_p_basis_kernel(
   }
 }
 
-template <typename scalar_t>
+template <typename scalar_t, bool Nearest>
 __global__ void keyswitch_moddown_qp_to_q_kernel(
     CudaTensorAccessor32<scalar_t, 3> out,
     const CudaTensorAccessor32<scalar_t, 3> q_residues,
     const CudaTensorAccessor32<scalar_t, 3> p_scratch,
     const CudaTensorAccessor32<scalar_t, 2> inverse,
-    const CudaTensorAccessor32<scalar_t, 2> params) {
+    const CudaTensorAccessor32<scalar_t, 2> params,
+    const scalar_t* half) {
   const int row = blockIdx.x;
   const int coefficient = blockIdx.y * blockDim.x + threadIdx.x;
   const int batch = blockIdx.z;
@@ -142,7 +150,12 @@ __global__ void keyswitch_moddown_qp_to_q_kernel(
   }
   __syncthreads();
   if (coefficient >= q_residues.size(2)) return;
-  scalar_t value = montgomery_mul(q_residues[batch][row][coefficient],
+  scalar_t source = q_residues[batch][row][coefficient];
+  if constexpr (Nearest) {
+    source = reduce_lazy_residue(
+        add_lazy_residues(source, half[row], twice_modulus), twice_modulus);
+  }
+  scalar_t value = montgomery_mul(source,
                                   prefix_inverse[p_count - 1],
                                   modulus_lo, modulus_hi,
                                   neg_inv_modulus_lo, neg_inv_modulus_hi);
@@ -161,11 +174,13 @@ __global__ void keyswitch_moddown_qp_to_q_kernel(
   out[batch][row][coefficient] = reduce_lazy_residue(value, twice_modulus);
 }
 
-torch::Tensor keyswitch_moddown_qp_to_q_cuda(
+template <bool Nearest>
+torch::Tensor keyswitch_moddown_qp_to_q_cuda_impl(
     const torch::Tensor q_residues,
     const torch::Tensor p_residues,
     const torch::Tensor moddown_p_drop_inverses_montgomery,
-    const torch::Tensor rns_params) {
+    const torch::Tensor rns_params,
+    const std::optional<torch::Tensor> half) {
   constexpr const char* operation = "keyswitch_moddown_qp_to_q";
   check_keyswitch_cuda_peer(q_residues, p_residues, operation, "p_residues");
   check_keyswitch_cuda_peer(q_residues,
@@ -173,6 +188,13 @@ torch::Tensor keyswitch_moddown_qp_to_q_cuda(
                             operation,
                             "moddown_p_drop_inverses_montgomery");
   check_keyswitch_cuda_peer(q_residues, rns_params, operation, "rns_params");
+  if constexpr (Nearest) {
+    TORCH_CHECK(half.has_value(), operation, " nearest requires moddown_half");
+    check_keyswitch_cuda_peer(q_residues, *half, operation, "moddown_half");
+    TORCH_CHECK(half->dim() == 1 && half->is_contiguous() &&
+                    half->numel() == q_residues.size(-2) + p_residues.size(-2),
+                operation, " moddown_half must contain one value per QP row");
+  }
   auto out = torch::empty_like(q_residues);
   auto p_scratch_public = torch::empty_like(p_residues);
   const auto q = view_rns_batch_3d(q_residues, "q_residues");
@@ -198,7 +220,9 @@ torch::Tensor keyswitch_moddown_qp_to_q_cuda(
       q.size(1), (q.size(2) + kCudaBlockSize - 1) / kCudaBlockSize, q.size(0));
   AT_DISPATCH_INTEGRAL_TYPES(
       q_residues.scalar_type(), "keyswitch_moddown_qp_to_q", [&] {
-        keyswitch_moddown_prepare_p_basis_kernel<scalar_t>
+        const scalar_t* half_values = nullptr;
+        if constexpr (Nearest) half_values = half->data_ptr<scalar_t>();
+        keyswitch_moddown_prepare_p_basis_kernel<scalar_t, Nearest>
             <<<prepare_grid, kCudaBlockSize, 0, stream>>>(
                 FHELIUM_CUDA_ACCESSOR32(p, scalar_t, 3),
                 FHELIUM_CUDA_ACCESSOR32(p_source, scalar_t, 3),
@@ -206,17 +230,29 @@ torch::Tensor keyswitch_moddown_qp_to_q_cuda(
                     moddown_p_drop_inverses_montgomery, scalar_t, 2),
                 FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2),
                 q.size(1),
-                p.size(1));
-        keyswitch_moddown_qp_to_q_kernel<scalar_t>
+                p.size(1), half_values);
+        keyswitch_moddown_qp_to_q_kernel<scalar_t, Nearest>
             <<<moddown_grid, kCudaBlockSize, p.size(1) * sizeof(scalar_t), stream>>>(
                 FHELIUM_CUDA_ACCESSOR32(output, scalar_t, 3),
                 FHELIUM_CUDA_ACCESSOR32(q, scalar_t, 3),
                 FHELIUM_CUDA_ACCESSOR32(p, scalar_t, 3),
                 FHELIUM_CUDA_ACCESSOR32(
                     moddown_p_drop_inverses_montgomery, scalar_t, 2),
-                FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2));
+                FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2), half_values);
       });
   return out;
+}
+
+torch::Tensor keyswitch_moddown_qp_to_q_cuda(
+    const torch::Tensor q, const torch::Tensor p,
+    const torch::Tensor inverse, const torch::Tensor parameters,
+    const std::optional<torch::Tensor> half, const std::string& rounding) {
+  TORCH_CHECK(rounding == "nearest" || rounding == "floor",
+              "ModDown rounding must be 'nearest' or 'floor'");
+  if (rounding == "nearest") {
+    return keyswitch_moddown_qp_to_q_cuda_impl<true>(q, p, inverse, parameters, half);
+  }
+  return keyswitch_moddown_qp_to_q_cuda_impl<false>(q, p, inverse, parameters, half);
 }
 
 // Multiply one ModUp digit by one unbatched key-switch-key pair and accumulate

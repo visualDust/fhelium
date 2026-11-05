@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../../common/cuda/kernel_support.cuh"
-#include "../../common/cuda/montgomery.cuh"
+#include "../../common/montgomery.hpp"
 #include "../../common/rns_parameters.h"
 
 // Representation-changing NTT kernels use the standard

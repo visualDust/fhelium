@@ -112,7 +112,7 @@ Add the opt-in bandwidth probe only on an idle system where allocating and copyi
 fhelium cuda topo --bandwidth
 ```
 
-Topology describes a transfer capability; it does not select a distributed schedule, partition values, or establish the ownership of cryptographic material. Use [Choose a multi-GPU partition](choose-multi-gpu-partition.md) for those partitioning requirements.
+Topology records device properties and peer-access capability for application scheduling. Use [Choose a multi-GPU partition](choose-multi-gpu-partition.md) for those partitioning requirements.
 
 ## Discover benchmark commands
 

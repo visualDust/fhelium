@@ -32,15 +32,11 @@ __global__ void inverse_ntt_indexed_stage_kernel(
   const scalar_t S = inverse_twiddles_acc[row][stage][j];
   const scalar_t V = a_acc[batch][row][odd_j];
 
-  const scalar_t UminusV = U + twice_modulus - V;
-  const scalar_t O =
-      (UminusV < twice_modulus) ? UminusV : UminusV - twice_modulus;
+  const scalar_t O = sub_lazy_residues(U, V, twice_modulus);
 
   const scalar_t W = montgomery_mul(
       S, O, modulus_lo, modulus_hi, neg_inv_modulus_lo, neg_inv_modulus_hi);
   a_acc[batch][row][odd_j] = W;
 
-  const scalar_t UplusV = U + V;
-  a_acc[batch][row][even_j] =
-      (UplusV < twice_modulus) ? UplusV : UplusV - twice_modulus;
+  a_acc[batch][row][even_j] = add_lazy_residues(U, V, twice_modulus);
 }

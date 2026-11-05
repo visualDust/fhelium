@@ -54,7 +54,7 @@ $$
 (c_0d_0,\;c_0d_1+c_1d_0,\;c_1d_1).
 $$
 
-Two-component multiplication requires compatible NTT/Montgomery inputs and returns a three-component NTT/Montgomery ciphertext. The result scale is the product $\Delta_c\Delta_d$; equal input scales give $\Delta^2$. Relinearization and rescale are separately represented transitions placed by the caller or selected scheduling passes.
+Two-component multiplication requires compatible NTT/Montgomery inputs and returns a three-component NTT/Montgomery ciphertext. The result scale is the product $\Delta_c\Delta_d$; equal input scales give $\Delta^2$. The caller or selected scheduling passes place relinearization and rescale. A caller may request them separately or select a relinearization that also consumes the next complete Q group.
 
 ## Relinearization
 
@@ -74,7 +74,19 @@ graph LR
     T --> OUT
 ```
 
-The original first two components are combined with corrections that replace the $s^2$ dependency represented by `e2`. Coefficient output inverses all required terms. NTT output inverses only `e2` for digit decomposition, retains the first two components as evaluations, and adds NTT-domain corrections.
+The original first two components are combined with corrections that replace the $s^2$ dependency represented by `e2`. With `rescale=False`, depth, Q rows and actual scale are preserved. Coefficient output inverses all required terms. NTT output inverses only `e2` for digit decomposition, retains the first two components as evaluations, and adds NTT-domain corrections.
+
+`Engine.relinearize(product, key, rescale=True, ...)` combines relinearization with removal of the next complete Q group. Let $P$ be the key's auxiliary product, $D$ the dropped Q-group product, $v_i$ the accumulated key products before adding the original component $a_i$, and $H_P,H_D$ the respective rounding offsets. Floor uses offset zero; nearest uses $(M-1)/2$ for an odd divisor $M$. Coefficient-wise integer division satisfies
+
+$$
+\left\lfloor\frac{\left\lfloor(v_i+H_P)/P\right\rfloor+a_i+H_D}{D}\right\rfloor
+=
+\left\lfloor\frac{v_i+P a_i+H_P+P H_D}{P D}\right\rfloor.
+$$
+
+The key is selected at the product's input depth. The result has two components, advances depth by one, removes every prime in $D$, and carries actual scale $\Delta_{product}/D$. `moddown_rounding` and `rescale_rounding` choose the two offsets independently. When both select nearest, their combined offset is $(PD-1)/2$.
+
+RNS owns the shared quotient over $PD$ and its ordered numerical operands. The numerator adds $P a_i$ on Q rows and zero on P rows. Coefficient output evaluates this quotient in coefficient representation. NTT output retains the surviving Q evaluations, inverses only the dropped Q and P rows, and transforms the resulting quotient correction. Whole execution and logical lowering use the same numerator, offset and output-state equations. Capture records the compound operation's joint materials; separately requested relinearization and rescale retain their own operands and transitions.
 
 ## Hybrid key-switch pipeline
 
@@ -97,25 +109,15 @@ Each stage has distinct row, basis, and representation requirements. Fusing stag
 
 ## Hybrid digits across depths
 
-All Q primes, including the terminal group, are partitioned into contiguous digits by their products. Each digit takes the longest next Q prefix whose product is below the special modulus P; a single prime at or above P occupies its own digit. At later depths, consumed Q groups shorten or remove digits.
+`KeySwitchKey.digit_prime_ids` records the mathematical Q-prime support of each stored key plane. `prime_ids` records the stored QP rows. These facts travel with copies, device moves, subclasses and serialized keys; neither an Engine default nor a Tensor shape supplies a missing partition.
 
-```mermaid
-graph LR
-    subgraph L0[depth 0]
-      D0[q0 q1 q2 q3]
-      D1[q4 q5 q6 q_base]
-    end
-    subgraph L2[later depth]
-      E0[q2 q3]
-      E1[q4 q5 q6 q_base]
-    end
-    D0 -->|same key_digit_index| E0
-    D1 --> E1
-```
+Reusing an existing key on a smaller Q basis intersects each original digit support with active Q and retains its stored Tensor plane index. Fresh generation with `source_depth=0` and the default P uses the configured depth-zero decomposition. Selecting another source depth or supplying `p_prime_ids` uses a greedy partition of the active Q basis constrained by the chosen auxiliary product. In either scope, `digit_prime_ids=` supplies a caller-selected partition. The resulting supports are recorded on the new key. Restricting an existing key and generating a compact key therefore retain their respective mathematical digit definitions.
 
-`RnsDigitSpec` keeps both the active digit index and stable depth-zero `key_digit_index` used to select the correct evaluation-key axis. A local digit index is not necessarily the key tensor index.
+Key generation stores `[Q_source | P_key]` in that order. Operand preparation projects parameters and NTT tables into `[Q_active | P_key]`, retaining the key's physical Q offset and original digit-plane indices. RNS quotient tables use the same ordered basis. The product $P_{key}^{-1}$ is computed only on the active Q rows, which are disjoint from P; inactive catalog Q rows may themselves belong to P. Prepared numerical operands carry these projections through whole execution and logical lowering. When supplied operands already determine the physical extent, absent depth or row identities remain unknown rather than being inferred from the configuration's default P.
 
-The partition determines the evaluation key's digit axis. Key generation, Compile lowering, and execution derive that axis from the same decomposition. Changing the partition requires regenerating the key.
+`key_row_start` is a physical offset into the supplied key Tensor. Operand preparation, whole-operation execution and lowering use the actual partition and ordered row IDs. A shared `EvaluationKeySet` may contain multiple layouts for one role or step. Selection checks active Q support, P rows, physical layout, ring dimension, dtype and device. Keys selected for one hoisted or aggregated group must share the effective digit partition and physical interpretation required by that operation.
+
+The `modup_method` argument defaults to `"exact"` and also accepts `"crt"` or `"normalized_crt"`. Exact uses the canonical Garner lift; the CRT alternatives use the linear lifts defined in [RNS and NTT architecture](rns-and-ntt.md#linear-crt-lifts). The source-Q congruence is preserved, while the larger integer representative changes evaluation-key noise. Choose the lift together with P, the digit partition, actual ciphertext scale and the required output error. The selected method remains an operation fact through capture, hoisting and lowering; implementations consume its supplied numerical tables.
 
 ## Rotation and hoisting
 
@@ -140,7 +142,7 @@ The native product accumulator can gather the prepared digit's NTT indices while
 
 ### Keeping key-switch outputs in NTT representation
 
-`Engine.rotate_with_key(..., output_domain="ntt")`, `Engine.rotate_many_with_keys(..., output_domain="ntt")`, `relinearize`, `switch_key`, `conjugate`, and the corresponding CKKS operation attributes request NTT/Montgomery outputs. The default remains coefficient/standard. Both choices preserve Q rows, depth and actual scale.
+`Engine.rotate_with_key(..., output_domain="ntt")`, `Engine.rotate_many_with_keys(..., output_domain="ntt")`, `relinearize`, `switch_key`, `conjugate`, and the corresponding CKKS operation attributes request NTT/Montgomery outputs. The default remains coefficient/standard. Output representation alone preserves Q rows, depth and actual scale; `relinearize(..., rescale=True)` additionally applies the complete-group state transition described above.
 
 The logical `rns.ModDownNttQpToQOp` removes P without inverting the Q rows. For QP NTT data $\widehat{x}$, let $r\in[0,P)$ be the coefficient representative reconstructed from the P residues. Then
 
@@ -178,7 +180,7 @@ flowchart LR
 
 The implementation must select constants using configured prime identities, not an ambiguous compact row position. Output metadata must increase depth, remove all IDs in the dropped group, reduce row count by that group's size, and update scale by $M_l$.
 
-NTT/Montgomery input can remain in that representation. The implementation inverts only the dropped row to obtain the rounding value, forms the quotient correction on surviving Q rows, transforms that correction, and adds it to the surviving evaluations multiplied by $M_l^{-1}$. This is congruent to coefficient rescale followed by a forward NTT without inverting the surviving input rows.
+NTT/Montgomery input can remain in that representation. The implementation inverts the dropped group's rows to obtain the rounding value, forms the quotient correction on surviving Q rows, transforms that correction, and adds it to the surviving evaluations multiplied by $M_l^{-1}$. This is congruent to coefficient rescale followed by a forward NTT without inverting the surviving input rows.
 
 ## Correctness hazards
 

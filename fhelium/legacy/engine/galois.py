@@ -14,8 +14,7 @@ def rotation_galois_element(
 
     The slot convention is ``torch.roll(slots, shifts=rotation_step)``. The
     result $g$ identifies automorphism $\sigma_g:X\mapsto X^g$ modulo
-    $X^N+1$. The step and element are related but intentionally retain distinct
-    names.
+    $X^N+1$. ``rotation_step`` counts slot displacement; ``galois_element`` is the polynomial exponent.
     """
 
     exponent = -int(rotation_step) if generator == 5 else int(rotation_step)

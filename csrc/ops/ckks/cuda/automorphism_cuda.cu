@@ -2,7 +2,7 @@
 #include <torch/torch.h>
 
 #include "../../common/cuda/kernel_support.cuh"
-#include "../../common/cuda/montgomery.cuh"
+#include "../../common/montgomery.hpp"
 #include "../../common/rns_batch.h"
 
 namespace {
@@ -41,8 +41,9 @@ __global__ void ntt_galois_automorphism_kernel(
   const int destination = blockIdx.y * blockDim.x + threadIdx.x;
   const int batch = blockIdx.z;
   if (destination >= residues.size(2)) return;
-  out[batch][row][destination] =
-      residues[batch][row][source_indices[destination]];
+  const int source = source_indices[destination];
+  CUDA_KERNEL_ASSERT(source >= 0 && source < residues.size(2));
+  out[batch][row][destination] = residues[batch][row][source];
 }
 
 void validate_automorphism(const torch::Tensor& residues,
@@ -96,6 +97,9 @@ torch::Tensor apply_ntt_galois_automorphism_cuda(
   const auto input = view_rns_batch_3d(residues_ntt, "residues_ntt");
   auto output = view_rns_batch_3d(out, "out");
   validate_automorphism(input, source_indices, "apply_ntt_galois_automorphism");
+  TORCH_CHECK(source_indices.scalar_type() == torch::kInt32 &&
+                  source_indices.device() == residues_ntt.device(),
+              "apply_ntt_galois_automorphism indices must be int32 on the operand device");
   const int device = residues_ntt.device().index();
   cudaSetDevice(device);
   auto stream = at::cuda::getCurrentCUDAStream(device);

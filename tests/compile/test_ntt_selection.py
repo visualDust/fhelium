@@ -1,5 +1,7 @@
 """NTT selection with partial choices and caller-supplied table data."""
 
+from typing import cast
+
 import pytest
 import torch
 from xdsl.dialects.builtin import ArrayAttr, IntegerAttr, StringAttr
@@ -102,3 +104,123 @@ def test_partial_ntt_selection_preserves_supplied_tables_and_open_device(
         torch.testing.assert_close(restored, source, rtol=0, atol=0)
         assert result.shape == source.shape
         source.add_(1)
+
+    if device == "cpu":
+        linked_forward = next(
+            operation
+            for operation in compilation.program.single_block("main").walk()
+            if isinstance(operation, ntt.CoefficientStandardToNttMontgomeryOp)
+        )
+        index_ref = linked_forward.tables[1].owner
+        assert isinstance(index_ref, core.MaterialRefOp)
+        assert index_ref.symbol is not None
+        symbol = index_ref.symbol.data
+        original = compilation.material_bindings[symbol]
+        invalid = original.clone()
+        invalid[0, 0] = config.N
+        compilation.material_bindings[symbol] = invalid
+        with pytest.raises(
+            RuntimeError, match="out-of-range coefficient index"
+        ):
+            backend.link(compilation)
+        # A new dictionary binding does not change the already linked Tensor.
+        torch.testing.assert_close(
+            cast(tuple[torch.Tensor, ...], executable.run(source))[1],
+            source,
+            rtol=0,
+            atol=0,
+        )
+        compilation.material_bindings[symbol] = original.clone()
+        relinked = backend.link(compilation)
+        torch.testing.assert_close(
+            cast(tuple[torch.Tensor, ...], relinked.run(source))[1],
+            source,
+            rtol=0,
+            atol=0,
+        )
+
+
+@pytest.mark.parametrize(
+    "policy",
+    ["radix2_compact_group16_smem8", "radix2_compact_group16_shoup32_smem8"],
+)
+def test_ntt_fusion_preserves_surrounding_arithmetic_and_escaping_results(
+    policy,
+):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    from fhelium import compile as fc
+    from fhelium.eager import Engine
+    from fhelium.ir.dialects import fusion
+
+    base = CkksConfig.parse(Preset.slots8192_scale25_depth14_int32)
+    config = CkksConfig(
+        logN=8,
+        q_depth_groups=base.q_depth_groups[-3:],
+        p_moduli=base.p_moduli,
+        default_scale=base.default_scale,
+        enforce_security_budget=False,
+    )
+    engine = Engine(config, ntt_backend=policy, rng_seed=913, rng_nonce=41)
+    secret = engine.create_secret_key(device="cuda")
+    public = engine.create_public_key(secret)
+    message = torch.linspace(
+        -0.02, 0.03, config.num_slots, device="cuda", dtype=torch.float64
+    )
+    value = engine.encrypt_message(message, public, device="cuda")
+    original = value.data.clone()
+
+    def source(x):
+        added = engine.add(x, x)
+        transformed = engine.coefficient_domain_to_ntt_domain(added)
+        doubled = engine.add(transformed, transformed)
+        restored = engine.ntt_domain_to_coefficient_domain(doubled)
+        return engine.add(restored, x), transformed
+
+    compiled = fc.compile(source)
+    prepared = compiled.prepare(value)
+    regions = [
+        op
+        for op in prepared.compilation.program.module.walk()
+        if isinstance(op, fusion.FusedOp)
+    ]
+    assert any(
+        isinstance(
+            op,
+            (
+                ntt.CoefficientStandardToNttMontgomeryOp,
+                ntt.NttMontgomeryToCoefficientStandardOp,
+            ),
+        )
+        for region in regions
+        for op in region.body.block.walk()
+    )
+    moduli = torch.tensor(
+        [config.moduli[i] for i in value.prime_ids],
+        device="cuda",
+        dtype=torch.int64,
+    ).reshape(1, -1, 1)
+    for argument in (value, engine.negate(value)):
+        actual = compiled(argument)
+        expected = source(argument)
+        for result, reference in zip(actual, expected, strict=True):
+            torch.testing.assert_close(
+                result.data.to(torch.int64) % moduli,
+                reference.data.to(torch.int64) % moduli,
+                rtol=0,
+                atol=0,
+            )
+            assert (
+                result.depth,
+                result.scale,
+                result.prime_ids,
+                result.polynomial_domain,
+                result.residue_representation,
+            ) == (
+                reference.depth,
+                reference.scale,
+                reference.prime_ids,
+                reference.polynomial_domain,
+                reference.residue_representation,
+            )
+    torch.testing.assert_close(value.data, original, rtol=0, atol=0)

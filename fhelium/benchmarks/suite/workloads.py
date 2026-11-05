@@ -110,7 +110,7 @@ class WorkloadInputs:
             if self.device.type == "cpu" and cell.plan != "radix2_indexed":
                 raise NotImplementedError("Grouped-stage NTT is implemented for CUDA only")
             return self.ntt(cell)
-        rns = self.engine._rns_context_for(self.device)
+        rns = self.engine.rns_context(self.device)
         basis = rns.basis_parameters(cell.depth)
         multiply = cell.workload == "rns_multiply"
         lhs, rhs, expected = rns_operands(
@@ -128,7 +128,7 @@ class WorkloadInputs:
         )
 
     def ntt(self, cell: SuiteCell) -> PreparedWorkload:
-        rns = self.engine._rns_context_for(self.device)
+        rns = self.engine.rns_context(self.device)
         if cell.plan not in self._ntt_contexts:
             self._ntt_contexts[cell.plan] = NttContext(rns, cell.plan)
         context = self._ntt_contexts[cell.plan]

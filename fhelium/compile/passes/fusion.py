@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from fhelium.compile._compilation import Compilation
@@ -16,10 +16,10 @@ from xdsl.ir import Operation, SSAValue, Block
 
 from fhelium.ir import EXECUTION_IMPLEMENTATION_ATTRIBUTE
 from fhelium.ir.dialects import core, fusion
-from fhelium.backend.implementation import FusionImplementation
+from fhelium.backend.implementation import FusionImplementation, FusionMatcher
 
 from .._pipeline import DecisionRecord, PassResult, PassStats
-from .program._purity import known_region_blocks
+from .program._purity import known_pure, known_region_blocks
 
 
 def _fuse(
@@ -59,7 +59,7 @@ def _fuse(
                 inputs.append(value)
 
     # Resource references have no execution effect. Move the retained references
-    # before the region so every explicit outer operand dominates its use.
+    # before the region so every outer operand dominates its use.
     first = operations[0]
     resource_ops = [
         op
@@ -97,55 +97,131 @@ def _fuse(
     return fused
 
 
+def _fusion_schedule(
+    operations: Sequence[Operation],
+    implementations: Sequence[FusionImplementation],
+) -> tuple[
+    list[Operation], list[tuple[list[Operation], FusionImplementation, int]]
+]:
+    """Schedule registered pure dependencies while preserving effect and assignment order."""
+    scheduled: list[Operation] = []
+    segments: list[tuple[list[Operation], FusionImplementation, int]] = []
+
+    def window(items):
+        matchers: list[FusionMatcher | None] = [
+            cast(FusionMatcher, factory())
+            if callable(
+                factory := getattr(implementation, "new_fusion_matcher", None)
+            )
+            else None
+            for implementation in implementations
+        ]
+
+        def match(operation):
+            for implementation, matcher in zip(
+                implementations, matchers, strict=True
+            ):
+                count = (
+                    matcher.probe(operation)
+                    if matcher is not None
+                    else implementation.match_fusion([*pending, operation])
+                )
+                if count is not None:
+                    return implementation, count
+            return None
+
+        def reset():
+            for matcher in matchers:
+                if matcher is not None:
+                    matcher.reset()
+
+        def append(operation):
+            for matcher in matchers:
+                if matcher is not None:
+                    matcher.append(operation)
+
+        selected = set(items)
+        position = {operation: index for index, operation in enumerate(items)}
+        dependencies = {
+            operation: {
+                operand.owner
+                for operand in operation.operands
+                if operand.owner in selected
+            }
+            for operation in items
+        }
+        consumers = {operation: [] for operation in items}
+        for operation, producers in dependencies.items():
+            for producer in producers:
+                consumers[producer].append(operation)
+        ready = [
+            operation for operation in items if not dependencies[operation]
+        ]
+        pending: list[Operation] = []
+        current = None
+        while ready:
+            ready.sort(key=position.__getitem__)
+            choice = None
+            for operation in ready:
+                candidate = match(operation)
+                if candidate is not None:
+                    choice = operation, candidate
+                    break
+            if choice is None:
+                if pending and current is not None:
+                    segments.append((pending, *current))
+                pending = []
+                current = None
+                operation = ready[0]
+                reset()
+                candidate = match(operation)
+                if candidate is not None:
+                    pending = [operation]
+                    current = candidate
+                    append(operation)
+            else:
+                operation, current = choice
+                pending.append(operation)
+                append(operation)
+            ready.remove(operation)
+            scheduled.append(operation)
+            for consumer in consumers[operation]:
+                dependencies[consumer].remove(operation)
+                if not dependencies[consumer]:
+                    ready.append(consumer)
+        if pending and current is not None:
+            segments.append((pending, *current))
+
+    pending = []
+    for operation in operations:
+        if (
+            known_pure(operation)
+            and EXECUTION_IMPLEMENTATION_ATTRIBUTE not in operation.attributes
+            and not isinstance(operation, fusion.FusedOp)
+        ):
+            pending.append(operation)
+        else:
+            window(pending)
+            pending = []
+            scheduled.append(operation)
+    window(pending)
+    return scheduled, segments
+
+
 def _fusion_segments(
     operations: Sequence[Operation],
     implementations: Sequence[FusionImplementation],
 ) -> list[tuple[list[Operation], FusionImplementation, int]]:
-    """Find supported consecutive regions without changing operations or uses."""
-    pending: list[Operation] = []
-    segments: list[tuple[list[Operation], FusionImplementation, int]] = []
-
-    def match(
-        operations: list[Operation],
-    ) -> tuple[FusionImplementation, int] | None:
-        for implementation in implementations:
-            count = implementation.match_fusion(operations)
-            if count is not None:
-                return implementation, count
-        return None
-
-    current: tuple[FusionImplementation, int] | None = None
-    for operation in operations:
-        assigned = EXECUTION_IMPLEMENTATION_ATTRIBUTE in operation.attributes
-        candidate = None if assigned else match([*pending, operation])
-        if candidate is not None:
-            pending.append(operation)
-            current = candidate
-            continue
-        if pending and current is not None:
-            segments.append((pending, *current))
-        pending = []
-        current = None
-        if not assigned:
-            candidate = match([operation])
-            if candidate is not None:
-                pending = [operation]
-                current = candidate
-    if pending and current is not None:
-        segments.append((pending, *current))
-    return segments
+    return _fusion_schedule(operations, implementations)[1]
 
 
 @dataclass(frozen=True)
 class FuseOperationsPass:
-    """Select contiguous SSA regions using caller-supplied Backend support.
+    """Group pure SSA dependencies using caller-supplied Backend support.
 
-    Implementations own operation, resource and layout admissibility. The pass
-    grows a window while at least one supplied implementation accepts it, then
-    selects the first matching implementation in caller order. An incompatible
-    operation ends the current window without
-    discarding compatible operations on either side. Recorded implementation
-    assignments remain barriers, including assignments on plumbing operations.
+    Independent pure work can be scheduled around a supported region. Effects,
+    opaque operations and caller implementation assignments preserve their order.
+    Implementations determine operation, parameter and layout support.
     """
 
     implementations: Sequence[FusionImplementation]
@@ -175,10 +251,19 @@ class FuseOperationsPass:
         matched = transformed = removed = 0
         decisions: list[DecisionRecord] = []
         for block in blocks:
-            segments = _fusion_segments(tuple(block.ops), self.implementations)
+            scheduled, segments = _fusion_schedule(
+                tuple(block.ops), self.implementations
+            )
+            if scheduled != list(block.ops):
+                for operation in tuple(block.ops):
+                    block.detach_op(operation)
+                block.add_ops(scheduled)
 
             for operations, implementation, count in segments:
                 if count < self.min_ops:
+                    continue
+                eligible = implementation.match_fusion(operations)
+                if eligible is None or eligible < self.min_ops:
                     continue
                 matched += 1
                 fused = _fuse(block, operations, implementation.name)

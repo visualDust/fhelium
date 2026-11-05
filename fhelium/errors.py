@@ -1,8 +1,6 @@
 """Typed public exceptions raised by FHElium.
 
-The exception hierarchy is intentionally small and centralized. Callers may
-catch :class:`FHEliumError` for package-depth failures or a narrower category
-such as :class:`ConfigurationError` or :class:`StateError`.
+Callers may catch :class:`FHEliumError` for package errors or a narrower category such as :class:`ConfigurationError` or :class:`StateError`.
 """
 
 from __future__ import annotations

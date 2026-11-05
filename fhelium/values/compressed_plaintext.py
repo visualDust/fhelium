@@ -66,8 +66,7 @@ class CompressedPlaintext(TensorResident):
     ``data``. Direct construction retains supplied storage. :meth:`clone` and
     decompression allocate independent storage; batch selection and unbinding
     return storage-sharing views. All batch entries share depth, actual scale
-    $\Delta(p)$, domain, basis, residue form, and ``prime_ids``. The value
-    has no engine, cache, placement, or persistence policy.
+    $\Delta(p)$, domain, basis, residue form, and ``prime_ids``.
     """
 
     data: torch.Tensor
@@ -271,6 +270,36 @@ class CompressedPlaintext(TensorResident):
         ``prime_ids`` are preserved.
         """
 
+        if unique_count is None:
+            raise TypeError("unique_count must be an integer")
+        result = cls._from_plaintext_if_representable(
+            plaintext,
+            unique_count=unique_count,
+            compression_layout=compression_layout,
+        )
+        if result is None:
+            raise ValueError(
+                "Plaintext encoded data is not exactly representable by the "
+                f"requested {compression_layout!r} compression layout with "
+                f"unique_count={unique_count}"
+            )
+        return result
+
+    @classmethod
+    def _from_plaintext_if_representable(
+        cls,
+        plaintext: Plaintext,
+        *,
+        unique_count: int | None,
+        compression_layout: CompressedPlaintextLayout,
+    ) -> CompressedPlaintext | None:
+        """Convert an encoded layout, returning None when it needs dense storage.
+
+        A missing unique count selects the minimum contiguous extent. Changes
+        between adjacent values must lie on repeat-block boundaries in every
+        row; the smallest lowbit of a change index gives the largest block.
+        """
+
         if not plaintext.is_rns or plaintext.data is None:
             raise ValueError(
                 "CompressedPlaintext.from_plaintext requires an "
@@ -281,56 +310,86 @@ class CompressedPlaintext(TensorResident):
                 f"Unsupported compression_layout: {compression_layout!r}"
             )
         ring_dimension = plaintext.data.size(-1)
-        if unique_count <= 0 or unique_count >= ring_dimension:
-            raise ValueError(
-                "unique_count must be positive and smaller than the encoded "
-                f"last axis: {unique_count} vs {ring_dimension}"
-            )
-        if unique_count & (unique_count - 1):
-            raise ValueError(
-                f"unique_count must be a power of two: {unique_count}"
-            )
-        if ring_dimension % unique_count:
-            raise ValueError(
-                "unique_count must divide the encoded last axis: "
-                f"{unique_count} does not divide {ring_dimension}"
-            )
-
-        repeat_count = ring_dimension // unique_count
-        data = plaintext.data
-        implicit_data = None
-        if compression_layout == "cyclic":
-            groups = data.reshape(*data.shape[:-1], repeat_count, unique_count)
-            compact = groups[..., 0, :]
-            expected = compact.unsqueeze(-2).expand_as(groups)
-            representable = torch.equal(groups, expected)
-        elif compression_layout == "contiguous":
-            groups = data.reshape(*data.shape[:-1], unique_count, repeat_count)
-            compact = groups[..., :, 0]
-            expected = compact.unsqueeze(-1).expand_as(groups)
-            representable = torch.equal(groups, expected)
-        else:
-            groups = data.reshape(*data.shape[:-1], unique_count, repeat_count)
-            compact = groups[..., :, 0]
-            implicit_data = groups[..., 0, 1]
-            expected = (
-                implicit_data.unsqueeze(-1)
-                .unsqueeze(-1)
-                .expand_as(groups[..., :, 1:])
-            )
-            representable = torch.equal(groups[..., :, 1:], expected)
-        if not representable:
-            raise ValueError(
-                "Plaintext encoded data is not exactly representable by the "
-                f"requested {compression_layout!r} compression layout with "
-                f"unique_count={unique_count}"
-            )
         if (
             plaintext.polynomial_domain is None
             or plaintext.modulus_basis is None
             or plaintext.residue_representation is None
         ):
             raise ValueError("Encoded RNS Plaintext has incomplete state")
+        if unique_count is None:
+            if compression_layout != "contiguous":
+                raise ValueError(
+                    "Automatic extent selection requires contiguous layout"
+                )
+            if ring_dimension < 2:
+                return None
+            if ring_dimension & (ring_dimension - 1):
+                raise ValueError("Encoded axis must have power-of-two extent")
+            data = plaintext.data
+            changes = (
+                (data[..., 1:] != data[..., :-1])
+                .reshape(-1, ring_dimension - 1)
+                .any(dim=0)
+            )
+            positions = torch.arange(
+                1, ring_dimension, dtype=torch.int64, device=data.device
+            )
+            alignment = torch.where(
+                changes, positions & -positions, ring_dimension
+            )
+            repeat_count = int(alignment.amin().item())
+            unique_count = ring_dimension // repeat_count
+            if repeat_count == 1:
+                return None
+            compact = data[..., ::repeat_count]
+            implicit_data = None
+        else:
+            if unique_count <= 0 or unique_count >= ring_dimension:
+                raise ValueError(
+                    "unique_count must be positive and smaller than the encoded "
+                    f"last axis: {unique_count} vs {ring_dimension}"
+                )
+            if unique_count & (unique_count - 1):
+                raise ValueError(
+                    f"unique_count must be a power of two: {unique_count}"
+                )
+            if ring_dimension % unique_count:
+                raise ValueError(
+                    "unique_count must divide the encoded last axis: "
+                    f"{unique_count} does not divide {ring_dimension}"
+                )
+
+            repeat_count = ring_dimension // unique_count
+            data = plaintext.data
+            implicit_data = None
+            if compression_layout == "cyclic":
+                groups = data.reshape(
+                    *data.shape[:-1], repeat_count, unique_count
+                )
+                compact = groups[..., 0, :]
+                expected = compact.unsqueeze(-2).expand_as(groups)
+                representable = torch.equal(groups, expected)
+            elif compression_layout == "contiguous":
+                groups = data.reshape(
+                    *data.shape[:-1], unique_count, repeat_count
+                )
+                compact = groups[..., :, 0]
+                expected = compact.unsqueeze(-1).expand_as(groups)
+                representable = torch.equal(groups, expected)
+            else:
+                groups = data.reshape(
+                    *data.shape[:-1], unique_count, repeat_count
+                )
+                compact = groups[..., :, 0]
+                implicit_data = groups[..., 0, 1]
+                expected = (
+                    implicit_data.unsqueeze(-1)
+                    .unsqueeze(-1)
+                    .expand_as(groups[..., :, 1:])
+                )
+                representable = torch.equal(groups[..., :, 1:], expected)
+            if not representable:
+                return None
         return cls(
             data=compact.clone(),
             ring_dimension=ring_dimension,
@@ -377,8 +436,7 @@ class CompressedPlaintext(TensorResident):
     def to_plaintext(self) -> Plaintext:
         """Materialize the equivalent dense RNS :class:`Plaintext`.
 
-        "Standard" here means the ordinary dense value type; the returned
-        residue representation remains exactly ``self.residue_representation``.
+        The dense result retains ``self.residue_representation``.
         """
 
         return Plaintext(

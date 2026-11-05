@@ -56,8 +56,7 @@ def build_compact_twiddles(
 
     For row ``i`` with primitive $2N$-th root $\psi_i$, column ``k`` stores
     $\psi_i^{\operatorname{br}(k)}\bmod q_i$ for forward execution and its
-    inverse for inverse execution. Rows follow the input ``moduli`` order
-    exactly. Outputs use ``dtype`` on ``device`` in standard representation;
+    inverse for inverse execution. Rows follow the input ``moduli`` order. Outputs use ``dtype`` on ``device`` in standard representation;
     callers convert the tables to Montgomery form before CUDA NTT.
     """
 
@@ -164,7 +163,7 @@ def build_power_of_two_radix_twiddles(
     shape ``[prime, radix]`` and contain powers of the fixed
     primitive radix root used by the digit-local butterfly.
 
-    Rows map exactly to the input ``moduli`` order. Every returned tensor uses
+    Rows follow the input ``moduli`` order. Every returned tensor uses
     integral ``dtype`` on ``device`` and standard residues; the NTT context later
     converts all four tables to Montgomery representation in place.
     """
@@ -225,3 +224,28 @@ def build_power_of_two_radix_twiddles(
         torch.stack(forward_root_rows).to(device=device),
         torch.stack(inverse_root_rows).to(device=device),
     )
+
+
+def encode_compact_shoup32(
+    standard_twiddles: torch.Tensor, moduli: Iterable[int]
+) -> torch.Tensor:
+    r"""Build ``[prime, N, 2]`` root/quotient pairs from standard roots.
+
+    Pair ``(w, floor(w*2^32/q))`` uses int32 storage; the second entry carries
+    its uint32 bit pattern. For ``0 <= x < 2q`` and ``q < 2^30``, the native
+    product ``x*w - high32(x*quotient)*q`` belongs to ``[0,2q)`` and represents
+    ``x*w`` modulo q. A Montgomery x therefore remains in Montgomery form.
+    Callers changing a root must update its quotient in the same live Tensor.
+    The returned Tensor is newly allocated and never aliases the root input.
+    """
+    primes = tuple(moduli)
+    if standard_twiddles.dtype != torch.int32 or any(
+        q >= 1 << 30 for q in primes
+    ):
+        raise ValueError("Shoup32 tables require int32 roots and q < 2^30")
+    q = torch.tensor(
+        primes, dtype=torch.int64, device=standard_twiddles.device
+    )[:, None]
+    roots = standard_twiddles.to(torch.int64)
+    quotient = (roots << 32) // q
+    return torch.stack((roots, quotient), dim=-1).to(torch.int32)

@@ -150,7 +150,7 @@ class Pass(Protocol):
 
 @dataclass(frozen=True)
 class Pipeline:
-    """Run an ordered, dependency-free tuple of partial transformations."""
+    """Run a tuple of transformations in caller-specified order."""
 
     passes: tuple[Pass, ...] = ()
 

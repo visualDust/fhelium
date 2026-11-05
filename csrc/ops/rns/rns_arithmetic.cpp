@@ -19,13 +19,12 @@
 // [component, *batch, limb, index] shape; each plaintext has
 // [*batch, limb, index] shape and broadcasts over components. It returns one
 // canonical [0, q_i) Tensor with the first ciphertext's shape and does not
-// alias or mutate an operand. Implementations may fuse the term loop but do
-// not select the caller's term grouping.
+// alias or mutate an operand. Implementations may fuse the supplied term loop.
 // `montgomery_weighted_sums` applies a caller-supplied dense plaintext matrix:
 // `group_count` consecutive groups of one plaintext per ciphertext. It returns
 // `[component, group, *batch, limb, index]`, with
 // `out[g] = sum_t ciphertexts[t] * plaintexts[g*T+t] mod q_i`. The operation
-// executes the supplied matrix and does not choose its groups.
+// evaluates the groups in the supplied matrix order.
 // The cyclic/contiguous compressed variants apply the same product after
 // expanding [*compressed_batch, limb, unique_index] to the lhs final extent;
 // compact batch count must be one or equal to lhs after *batch is collapsed.
@@ -48,6 +47,11 @@
 // [*batch, limb, coefficient]; the caller aligns twice_modulus[j] with the
 // prime_ids[j] for limb j. It allocates non-aliasing standard lazy
 // output.
+//
+// The mixed-radix `_out` forms write the same digits or Montgomery residues
+// into caller-owned storage without resizing it. Output shape matches the
+// functional result; dtype/device match the input. Outputs require disjoint
+// element addresses and must not overlap inputs or arithmetic tables.
 
 TORCH_LIBRARY_FRAGMENT(fhelium_rns_ops, m) {
   m.def("montgomery_mul(Tensor lhs, Tensor rhs, Tensor rns_params) -> Tensor");
@@ -96,6 +100,18 @@ TORCH_LIBRARY_FRAGMENT(fhelium_rns_ops, m) {
   m.def(
       "lift_centered_coefficients(Tensor centered_coefficients, Tensor "
       "twice_modulus) -> Tensor");
+  m.def("crt_basis_extend_out_(Tensor source_residues, Tensor source_parameters, "
+        "Tensor target_parameters, Tensor matrix, Tensor target_reciprocals, "
+        "Tensor? source_normalizers, Tensor? source_reciprocals, Tensor(a!) output) -> ()");
+  m.def("crt_basis_extend(Tensor source_residues, Tensor source_parameters, "
+        "Tensor target_parameters, Tensor matrix, Tensor target_reciprocals, "
+        "Tensor? source_normalizers=None, Tensor? source_reciprocals=None) -> Tensor");
+  m.def(
+      "mixed_radix_modup_tiled(Tensor source_residues, Tensor[] decomposition_tables, "
+      "Tensor extension, Tensor parameters) -> Tensor");
+  m.def(
+      "mixed_radix_modup_tiled_out_(Tensor source_residues, Tensor[] decomposition_tables, "
+      "Tensor extension, Tensor parameters, Tensor(a!) out) -> ()");
   m.def(
       "mixed_radix_decompose(Tensor source_residues, Tensor "
       "mixed_radix_normalizers, Tensor mixed_radix_propagation_coefficients, "
@@ -105,4 +121,13 @@ TORCH_LIBRARY_FRAGMENT(fhelium_rns_ops, m) {
       "mixed_radix_basis_extend_to_montgomery(Tensor "
       "mixed_radix_components, Tensor basis_extension_coefficients, Tensor "
       "rns_params, int destination_row_count) -> Tensor");
+  m.def(
+      "mixed_radix_decompose_out_(Tensor source_residues, Tensor "
+      "mixed_radix_normalizers, Tensor mixed_radix_propagation_coefficients, "
+      "Tensor modulus_lo, Tensor modulus_hi, Tensor neg_inv_modulus_lo, Tensor "
+      "neg_inv_modulus_hi, Tensor(a!) out) -> ()");
+  m.def(
+      "mixed_radix_basis_extend_to_montgomery_out_(Tensor "
+      "mixed_radix_components, Tensor basis_extension_coefficients, Tensor "
+      "rns_params, int destination_row_count, Tensor(a!) out) -> ()");
 }

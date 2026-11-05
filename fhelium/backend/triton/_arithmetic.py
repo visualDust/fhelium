@@ -1,4 +1,4 @@
-"""Integer Montgomery arithmetic shared by generated Triton kernels."""
+"""Integer modular arithmetic shared by generated Triton kernels."""
 
 import triton
 import triton.language as tl
@@ -48,3 +48,18 @@ def subtract_lazy(a, b, q):
 @triton.jit
 def canonicalize(a, q):
     return tl.where(a >= q, a - q, a)
+
+
+@triton.jit
+def shoup32_mul(value, root, quotient, q):
+    """Return value*root modulo q in [0,2q) for value<2q and q<2^30.
+
+    quotient carries floor(root*2^32/q) as an unsigned word. The low-word
+    difference equals the nonnegative remainder because its value is below 2q.
+    A standard root preserves the input's Montgomery representation.
+    """
+    value = value.to(tl.uint32)
+    root = root.to(tl.uint32)
+    quotient = quotient.to(tl.uint32)
+    q = q.to(tl.uint32)
+    return (value * root - tl.umulhi(value, quotient) * q).to(tl.int64)

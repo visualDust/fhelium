@@ -188,16 +188,9 @@ class ReusableValueBuffer(Generic[_ValueT]):
     validates the complete source before copying anything, and preserves every
     target tensor address.
 
-    The buffer identifies payloads solely by its structural signature.
-    Applications or extensions associate it with model weights, user keys,
-    request ciphertexts,
-    and cache/prefetch/eviction policy.
+    The buffer accepts payloads matching its structural signature.
 
-    The :attr:`value` property reconstructs ordinary tensors and FHElium
-    values around the fixed storage, so an eager callable can consume it without
-    a buffer-specific evaluator API. Do not retain a reconstructed tree as an
-    ownership or readiness signal; use the buffer and the :class:`CopyHandle`
-    returned by :meth:`copy_from` for lifetime and stream ordering.
+    The :attr:`value` property reconstructs ordinary tensors and FHElium values around the fixed storage for the evaluator to consume. Do not retain a reconstructed tree as an ownership or readiness signal; use the buffer and the :class:`CopyHandle` returned by :meth:`copy_from` for lifetime and stream ordering.
 
     Examples:
         Reuse one CUDA allocation for changing plaintext tiles::

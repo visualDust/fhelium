@@ -235,11 +235,13 @@ class Radix2FourierTransformCompiler:
     consumes fewer CKKS depths but materializes more diagonals in each stage;
     a larger value retains sparse butterflies but spends more depths.  The
     choice of direct, BSGS, distributed, or custom execution remains
-    independent.
+    independent. ``scale_stage`` places the transform's numerical factor in
+    one selected stage; None uses the first forward or final inverse stage.
     """
 
     stage_count: int
     imaginary_unit_correction: bool = False
+    scale_stage: int | None = None
 
     def __post_init__(self) -> None:
         if self.stage_count <= 0:
@@ -326,7 +328,13 @@ class Radix2FourierTransformCompiler:
             compiled_stages.append(composed)
             cursor += group_size
 
-        scale_index = 0 if direction == 'coeffs_to_slots' else -1
+        scale_index = (
+            (0 if direction == 'coeffs_to_slots' else -1)
+            if self.scale_stage is None
+            else self.scale_stage
+        )
+        if not -len(compiled_stages) <= scale_index < len(compiled_stages):
+            raise ValueError("scale_stage is outside the compiled Fourier plan")
         selected = compiled_stages[scale_index]
         compiled_stages[scale_index] = DiagonalLinearTransform(
             diagonals={

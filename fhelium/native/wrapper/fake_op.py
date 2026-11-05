@@ -150,6 +150,8 @@ def _fake_fhelium_ckks_ops_keyswitch__moddown__qp__to__q(
     p_residues: torch.Tensor,
     moddown_p_drop_inverses_montgomery: torch.Tensor,
     rns_params: torch.Tensor,
+    moddown_half: torch.Tensor | None = None,
+    rounding: str = 'nearest',
 ) -> torch.Tensor:
     return torch.empty_like(q_residues)
 
@@ -263,6 +265,19 @@ def _fake_fhelium_ntt_ops_compact__ntt__stage__range__(
     start_stage: int,
     end_stage: int,
     grouped_stage_count: int,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_ntt_ops::fixed_radix_ntt_stage_range_")
+def _fake_fhelium_ntt_ops_fixed__radix__ntt__stage__range__(
+    residues: torch.Tensor,
+    outer_twiddles: torch.Tensor,
+    root_powers: torch.Tensor,
+    rns_params: torch.Tensor,
+    inverse: bool,
+    start_stage: int,
+    end_stage: int,
 ) -> None:
     pass
 
@@ -552,6 +567,13 @@ def _fake_fhelium_ntt_ops_inverse__ntt__to__standard__power__of__two__radix__com
     pass
 
 
+@torch.library.register_fake("fhelium_ntt_ops::validate_indexed_schedule")
+def _fake_fhelium_ntt_ops_validate__indexed__schedule(
+    even_indices: torch.Tensor, odd_indices: torch.Tensor, ring_dimension: int
+) -> None:
+    pass
+
+
 @torch.library.register_fake("fhelium_rns_ops::add_lazy")
 def _fake_fhelium_rns_ops_add__lazy(
     lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
@@ -583,6 +605,39 @@ def _fake_fhelium_rns_ops_add__standard__(
 @torch.library.register_fake("fhelium_rns_ops::center_residues_")
 def _fake_fhelium_rns_ops_center__residues__(
     standard_residues: torch.Tensor, rns_params: torch.Tensor
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_rns_ops::crt_basis_extend")
+def _fake_fhelium_rns_ops_crt__basis__extend(
+    source_residues: torch.Tensor,
+    source_parameters: torch.Tensor,
+    target_parameters: torch.Tensor,
+    matrix: torch.Tensor,
+    target_reciprocals: torch.Tensor,
+    source_normalizers: torch.Tensor | None = None,
+    source_reciprocals: torch.Tensor | None = None,
+) -> torch.Tensor:
+    return source_residues.new_empty(
+        (
+            *source_residues.shape[:-2],
+            matrix.shape[1],
+            source_residues.shape[-1],
+        )
+    )
+
+
+@torch.library.register_fake("fhelium_rns_ops::crt_basis_extend_out_")
+def _fake_fhelium_rns_ops_crt__basis__extend__out__(
+    source_residues: torch.Tensor,
+    source_parameters: torch.Tensor,
+    target_parameters: torch.Tensor,
+    matrix: torch.Tensor,
+    target_reciprocals: torch.Tensor,
+    source_normalizers: torch.Tensor | None,
+    source_reciprocals: torch.Tensor | None,
+    output: torch.Tensor,
 ) -> None:
     pass
 
@@ -625,6 +680,19 @@ def _fake_fhelium_rns_ops_mixed__radix__basis__extend__to__montgomery(
     )
 
 
+@torch.library.register_fake(
+    "fhelium_rns_ops::mixed_radix_basis_extend_to_montgomery_out_"
+)
+def _fake_fhelium_rns_ops_mixed__radix__basis__extend__to__montgomery__out__(
+    mixed_radix_components: torch.Tensor,
+    basis_extension_coefficients: torch.Tensor,
+    rns_params: torch.Tensor,
+    destination_row_count: int,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
 @torch.library.register_fake("fhelium_rns_ops::mixed_radix_decompose")
 def _fake_fhelium_rns_ops_mixed__radix__decompose(
     source_residues: torch.Tensor,
@@ -636,6 +704,47 @@ def _fake_fhelium_rns_ops_mixed__radix__decompose(
     neg_inv_modulus_hi: torch.Tensor,
 ) -> torch.Tensor:
     return torch.empty_like(source_residues)
+
+
+@torch.library.register_fake("fhelium_rns_ops::mixed_radix_decompose_out_")
+def _fake_fhelium_rns_ops_mixed__radix__decompose__out__(
+    source_residues: torch.Tensor,
+    mixed_radix_normalizers: torch.Tensor,
+    mixed_radix_propagation_coefficients: torch.Tensor,
+    modulus_lo: torch.Tensor,
+    modulus_hi: torch.Tensor,
+    neg_inv_modulus_lo: torch.Tensor,
+    neg_inv_modulus_hi: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_rns_ops::mixed_radix_modup_tiled")
+def _fake_fhelium_rns_ops_mixed__radix__modup__tiled(
+    source_residues: torch.Tensor,
+    decomposition_tables: list[torch.Tensor],
+    extension: torch.Tensor,
+    parameters: torch.Tensor,
+) -> torch.Tensor:
+    return source_residues.new_empty(
+        (
+            *source_residues.shape[:-2],
+            parameters.size(1),
+            source_residues.size(-1),
+        )
+    )
+
+
+@torch.library.register_fake("fhelium_rns_ops::mixed_radix_modup_tiled_out_")
+def _fake_fhelium_rns_ops_mixed__radix__modup__tiled__out__(
+    source_residues: torch.Tensor,
+    decomposition_tables: list[torch.Tensor],
+    extension: torch.Tensor,
+    parameters: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
 
 
 @torch.library.register_fake("fhelium_rns_ops::montgomery_mul")

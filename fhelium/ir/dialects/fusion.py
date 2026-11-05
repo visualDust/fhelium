@@ -39,8 +39,7 @@ class FusedOp(IRDLOperation):
 
     The body preserves the original operation semantics and returns every value
     used outside the region. Block arguments correspond to the outer operands,
-    including resource bindings. Fusion itself does not change value state or
-    imply a particular device, code generator, or CUDA Graph capture.
+    including resource bindings. Value state is preserved across the region.
     """
 
     name = "fhelium_fusion.execute"

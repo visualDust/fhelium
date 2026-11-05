@@ -24,8 +24,9 @@ def validate_prime_ids(
     prime_ids: Iterable[object],
     *,
     value_name: str,
+    require_increasing: bool = True,
 ) -> tuple[int, ...]:
-    """Require non-bool, non-negative, strictly ordered prime IDs."""
+    """Require distinct non-negative integer IDs, optionally in increasing order."""
 
     values = tuple(prime_ids)
     if not values:
@@ -37,7 +38,11 @@ def validate_prime_ids(
     integer_values = cast(tuple[int, ...], values)
     if any(prime_id < 0 for prime_id in integer_values):
         raise ValueError(f"{value_name} prime_ids must be non-negative")
-    if any(
+    if not require_increasing and len(set(integer_values)) != len(
+        integer_values
+    ):
+        raise ValueError(f"{value_name} prime_ids must be unique: {values}")
+    if require_increasing and any(
         current >= following
         for current, following in zip(integer_values, integer_values[1:])
     ):

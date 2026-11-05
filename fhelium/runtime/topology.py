@@ -114,7 +114,11 @@ class CpuTopology:
 
 @dataclass(frozen=True)
 class CudaDeviceInfo:
-    """Describe one process-visible CUDA device and its hardware properties."""
+    """Describe one process-visible PyTorch GPU and its hardware properties.
+
+    ``architecture`` identifies the CUDA SM or AMD GCN target. On HIP,
+    ``compute_capability`` contains the runtime's compatibility version pair.
+    """
 
     device: torch.device
     name: str
@@ -134,6 +138,7 @@ class CudaDeviceInfo:
     max_threads_per_multiprocessor: int
     shared_memory_per_block_bytes: int
     shared_memory_per_multiprocessor_bytes: int
+    architecture: str | None = None
 
     def __post_init__(self) -> None:
         device = torch.device(self.device)
@@ -203,6 +208,11 @@ class CudaDeviceInfo:
                 int(properties.major),
                 int(properties.minor),
             ),
+            architecture=(
+                str(properties.gcnArchName)
+                if torch.version.hip
+                else f"sm_{properties.major}{properties.minor}"
+            ),
             total_memory_bytes=int(properties.total_memory),
             multiprocessor_count=int(properties.multi_processor_count),
             warp_size=int(properties.warp_size),
@@ -234,6 +244,7 @@ class CudaDeviceInfo:
             "pci_bus_id": self.pci_bus_id,
             "pci_device_id": self.pci_device_id,
             "compute_capability": self.compute_capability,
+            "architecture": self.architecture,
             "total_memory_bytes": self.total_memory_bytes,
             "multiprocessor_count": self.multiprocessor_count,
             "warp_size": self.warp_size,

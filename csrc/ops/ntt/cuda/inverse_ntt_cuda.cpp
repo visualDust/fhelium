@@ -78,7 +78,7 @@ void inverse_ntt_montgomery_compact_grouped_smem_(
     const torch::Tensor rns_params,
     const int64_t grouped_stage_count) {
   fhelium::ntt::validate_compact_tables(
-      montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count);
+      montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count, true);
   inverse_ntt_montgomery_compact_grouped_smem_inplace_cuda(
       montgomery_residues,
       inverse_twiddles,
@@ -93,7 +93,7 @@ void inverse_ntt_to_standard_lazy_compact_grouped_smem_(
     const torch::Tensor rns_params,
     const int64_t grouped_stage_count) {
   fhelium::ntt::validate_compact_tables(
-      montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count);
+      montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count, true);
   inverse_ntt_to_standard_lazy_compact_grouped_smem_inplace_cuda(
       montgomery_residues,
       inverse_twiddles,
@@ -108,7 +108,7 @@ void inverse_ntt_to_standard_compact_grouped_smem_(
     const torch::Tensor rns_params,
     const int64_t grouped_stage_count) {
   fhelium::ntt::validate_compact_tables(
-      montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count);
+      montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count, true);
   inverse_ntt_to_standard_compact_grouped_smem_inplace_cuda(
       montgomery_residues,
       inverse_twiddles,
@@ -123,7 +123,7 @@ void inverse_ntt_to_centered_compact_grouped_smem_(
     const torch::Tensor rns_params,
     const int64_t grouped_stage_count) {
   fhelium::ntt::validate_compact_tables(
-      montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count);
+      montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count, true);
   inverse_ntt_to_centered_compact_grouped_smem_inplace_cuda(
       montgomery_residues,
       inverse_twiddles,

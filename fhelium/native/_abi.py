@@ -12,7 +12,7 @@ from typing import Any
 
 MANIFEST_SCHEMA_VERSION = 1
 
-SUPPORTED_NATIVE_BACKENDS = frozenset({"cpu", "cuda"})
+SUPPORTED_NATIVE_BACKENDS = frozenset({"cpu", "cuda", "hip"})
 
 
 def manifest_native_backends(manifest: Mapping[str, Any]) -> tuple[str, ...]:
@@ -70,6 +70,7 @@ def runtime_identity(torch_module: Any) -> dict[str, Any]:
         "torch": {
             "version": str(torch_module.__version__),
             "cuda_version": torch_module.version.cuda,
+            "hip_version": torch_module.version.hip,
             "cxx11_abi": torch_cxx11_abi(torch_module),
         },
     }
@@ -142,7 +143,7 @@ def compatibility_mismatches(
     elif not isinstance(runtime_torch, Mapping):
         mismatches.append("Torch ABI identity is unavailable at runtime")
     else:
-        for field in ("version", "cuda_version", "cxx11_abi"):
+        for field in ("version", "cuda_version", "hip_version", "cxx11_abi"):
             compare(
                 f"Torch {field}",
                 manifest_torch.get(field),

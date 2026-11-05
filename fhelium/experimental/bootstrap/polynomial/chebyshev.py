@@ -2,19 +2,21 @@ r"""Binary-decomposition evaluation of encrypted Chebyshev series."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from functools import cache
-from typing import TYPE_CHECKING
+from collections.abc import Mapping
 
-from fhelium.values import Ciphertext, RelinearizationKey
-from fhelium.experimental.bootstrap.arithmetic import BootstrapArithmetic
+from collections import Counter
+from dataclasses import dataclass
+
+from fhelium.values import EvaluationKeySet, Ciphertext, RelinearizationKey
+from fhelium.experimental.bootstrap.arithmetic import (
+    BootstrapArithmetic,
+    _prepare_multiply_scalar,
+    _rescale,
+)
 from fhelium.experimental.bootstrap.polynomial.evaluation import _inventory
 from fhelium.experimental.bootstrap.polynomial.approximation import (
     PolynomialApproximation,
 )
-
-if TYPE_CHECKING:
-    pass
 
 
 @dataclass(frozen=True)
@@ -29,7 +31,8 @@ class BinaryDecompositionChebyshevEvaluator:
     T_{2n+1}(x)=2T_n(x)T_{n+1}(x)-T_1(x),
     $$
 
-    caching every required $T_n$ and each depth-specific $T_1$ for one call.
+    Shared basis nodes are retained until their last polynomial or recurrence
+    consumer. Depth-specific $T_1$ copies serve the odd recurrences.
     Basis-node scales follow the input scale through each product and group
     rescale; the advanced copies of $T_1$ use that same recurrence.
     Coefficient products built from basis values at one depth are accumulated
@@ -45,9 +48,9 @@ class BinaryDecompositionChebyshevEvaluator:
 
     skip_near_zero: float = 0.0
 
-    def operation_inventory(
+    def _schedule(
         self, polynomial: PolynomialApproximation
-    ) -> dict[str, int]:
+    ) -> tuple[dict[int, int], dict[str, int]]:
         """Return multiplying operations executed by :meth:`evaluate`.
 
         Alignment includes operand advancement within odd recurrences, the
@@ -66,7 +69,7 @@ class BinaryDecompositionChebyshevEvaluator:
             if index and abs(coefficient) > self.skip_near_zero
         ]
         if not degrees:
-            return _inventory(
+            return {1: 0}, _inventory(
                 ciphertext_multiplications=0,
                 coefficient_multiplications=1,
                 alignment_multiplications=0,
@@ -102,38 +105,36 @@ class BinaryDecompositionChebyshevEvaluator:
             + maximum_linear_depth
             + grouped_term_alignment
         )
-        return _inventory(
+        return basis_depths, _inventory(
             ciphertext_multiplications=ciphertext_multiplications,
             coefficient_multiplications=len(degrees),
             alignment_multiplications=alignment_multiplications,
             coefficient_rescales=len(term_depths),
         )
 
+    def operation_inventory(
+        self, polynomial: PolynomialApproximation
+    ) -> dict[str, int]:
+        """Return multiplying operations in the shared basis schedule."""
+        return self._schedule(polynomial)[1]
+
     def required_depths(self, polynomial: PolynomialApproximation) -> int:
-        """Count the deepest required recurrence plus coefficient product."""
+        """Count the deepest shared basis node plus its coefficient rescale."""
+        return max(self._schedule(polynomial)[0].values()) + 1
 
-        if polynomial.basis != 'chebyshev':
-            raise ValueError(
-                'BinaryDecompositionChebyshevEvaluator requires Chebyshev basis'
+    def relinearization_depths(
+        self, polynomial: PolynomialApproximation, *, input_depth: int = 0
+    ) -> tuple[int, ...]:
+        """Return product-input depths of the required shared basis nodes."""
+        return tuple(
+            sorted(
+                {
+                    input_depth + depth - 1
+                    for degree, depth in self._schedule(polynomial)[0].items()
+                    if degree > 1
+                }
             )
-        degrees = [
-            index
-            for index, coefficient in enumerate(polynomial.coefficients)
-            if index and abs(coefficient) > self.skip_near_zero
-        ]
-        if not degrees:
-            return 1
-
-        @cache
-        def depth(index: int) -> int:
-            if index <= 1:
-                return 0
-            half = index // 2
-            if index % 2 == 0:
-                return depth(half) + 1
-            return max(depth(half), depth(half + 1)) + 1
-
-        return max(depth(degree) for degree in degrees) + 1
+        )
 
     def evaluate(
         self,
@@ -141,13 +142,14 @@ class BinaryDecompositionChebyshevEvaluator:
         ciphertext: Ciphertext,
         polynomial: PolynomialApproximation,
         *,
-        relinearization_key: RelinearizationKey | None = None,
+        relinearization_key: RelinearizationKey
+        | EvaluationKeySet
+        | Mapping[int, RelinearizationKey]
+        | None = None,
     ) -> Ciphertext:
         r"""Build required $T_n(x)$ values, align term depths, and sum them.
 
-        Terms at or below `skip_near_zero` are omitted. As in the power
-        evaluator, the constant-only case deliberately consumes one depth so
-        its execution agrees with `required_depths`. The method is functional
+        Terms at or below `skip_near_zero` are omitted. A constant-only polynomial consumes one depth, as reported by `required_depths`. The method is functional
         and returns a two-component coefficient-domain standard-RNS Q value at
         the arithmetic owner's target scale.
         """
@@ -171,7 +173,28 @@ class BinaryDecompositionChebyshevEvaluator:
         if not degrees:
             zero = ops.multiply_scalar(ciphertext, 0.0)
             return ops.add_scalar(zero, coefficients[0])
+        consumers: Counter[int] = Counter(degrees)
+        nodes: set[int] = {1}
+
+        def count_dependencies(degree: int) -> None:
+            if degree in nodes:
+                return
+            nodes.add(degree)
+            half = degree // 2
+            right = half if degree % 2 == 0 else half + 1
+            consumers.update((half, right))
+            count_dependencies(half)
+            count_dependencies(right)
+
+        for degree in degrees:
+            count_dependencies(degree)
         basis_values: dict[int, Ciphertext] = {1: ciphertext}
+
+        def consume(degree: int) -> None:
+            consumers[degree] -= 1
+            if consumers[degree] == 0:
+                del basis_values[degree]
+
         linear_depths: dict[int, Ciphertext] = {ciphertext.depth: ciphertext}
 
         def linear_at_depth(target_depth: int) -> Ciphertext:
@@ -208,7 +231,8 @@ class BinaryDecompositionChebyshevEvaluator:
                         'relinearization key'
                     )
                 product = basis_ops.multiply_relinearize_rescale(
-                    basis_values[half], basis_values[right],
+                    basis_values[half],
+                    basis_values[right],
                     relinearization_key=relinearization_key,
                 )
                 doubled = engine.add(product, product)
@@ -216,32 +240,59 @@ class BinaryDecompositionChebyshevEvaluator:
                     ops.add_scalar(doubled, -1.0)
                     if current % 2 == 0
                     else engine.subtract(
-                        doubled, linear_at_depth(doubled.depth),
+                        doubled,
+                        linear_at_depth(doubled.depth),
                     )
                 )
+                consume(half)
+                consume(right)
+                del product, doubled
                 pending.pop()
             return basis_values[degree]
 
-        terms_by_depth: dict[int, list[tuple[Ciphertext, complex]]] = {}
+        pending_terms: dict[int, Ciphertext] = {}
+        domains: dict[int, str] = {}
         for degree in degrees:
-            basis_value = basis(degree)
-            terms_by_depth.setdefault(basis_value.depth, []).append(
-                (basis_value, coefficients[degree])
+            value = basis(degree)
+            depth = value.depth
+            domains[depth] = value.polynomial_domain
+            value_ntt = (
+                value
+                if value.polynomial_domain == 'ntt'
+                else engine.coefficient_domain_to_ntt_domain(value)
             )
-        if not terms_by_depth:
-            raise RuntimeError('Chebyshev evaluation produced no ciphertext')
-        ordered_depths = sorted(terms_by_depth)
-        grouped_terms = {
-            depth: ops.weighted_scalar_sum(terms)
-            for depth, terms in terms_by_depth.items()
-        }
-        result = grouped_terms[ordered_depths[0]]
+            term = engine.multiply_plaintext(
+                value_ntt,
+                _prepare_multiply_scalar(
+                    ops,
+                    value,
+                    coefficients[degree],
+                    constant_cache=ops.constant_cache,
+                ),
+            )
+            accumulator = pending_terms.get(depth)
+            pending_terms[depth] = (
+                term if accumulator is None else engine.add(accumulator, term)
+            )
+            consume(degree)
+            del value, value_ntt, term, accumulator
+        ordered_depths = sorted(pending_terms)
+        grouped_terms: dict[int, Ciphertext] = {}
+        for depth in ordered_depths:
+            term = pending_terms.pop(depth)
+            term = _rescale(engine, term, retain_ntt=ops.retain_ntt)
+            if domains[depth] == 'coefficient' and ops.retain_ntt:
+                term = engine.ntt_domain_to_coefficient_domain(term)
+            grouped_terms[depth] = term
+        del term
+        result = grouped_terms.pop(ordered_depths[0])
         for depth in ordered_depths[1:]:
             result, term = ops.align_depths(
                 result,
-                grouped_terms[depth],
+                grouped_terms.pop(depth),
             )
             result = engine.add(result, term)
+            del term
         if abs(coefficients[0]) > self.skip_near_zero:
             result = ops.add_scalar(result, coefficients[0])
         return result

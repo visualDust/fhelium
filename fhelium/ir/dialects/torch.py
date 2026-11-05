@@ -147,6 +147,7 @@ TENSOR_FUNCTION_TARGETS = frozenset(
         "torch.transpose",
         "torch.permute",
         "torch.clone",
+        "torch.zeros_like",
         "torch.stack",
         "torch.cat",
         "torch.getitem",

@@ -40,11 +40,7 @@ if TYPE_CHECKING:
 class PreparedRotationKeySwitch:
     """Reusable NTT-domain QP digits for rotations of one component.
 
-    Decomposition, ModUp, and forward NTT are independent of the rotation
-    step and are therefore materialized once.  Coefficient-domain and
-    mixed-radix intermediates are deliberately not retained: consumers need
-    only the final NTT digits, while tests can construct debug references
-    explicitly without expanding the production artifact representation.
+    Decomposition, ModUp, and forward NTT are shared across rotation steps. The prepared object retains the resulting NTT digits for reuse.
 
     ``ntt_digits_qp`` is an integral tensor on the engine device with shape
     ``[digit, *batch, limb, ntt_index]``. Limb order is the active
@@ -308,7 +304,7 @@ class HybridKeySwitcher:
         # at large parameter sets (for example logN=16 at depth 0), regressing even
         # a genuinely unbatched ciphertext.  Stream one disposable digit for
         # every backend; only the final NTT/consumer implementation differs.
-        # ``prepare_rotation_digits`` remains the explicit materialization
+        # ``prepare_rotation_digits`` is the shared-digit materialization
         # point for rotate-many hoisting, where multiple keys reuse the
         # same digits.
         return self._apply_key_switch_streaming(
@@ -391,7 +387,7 @@ class HybridKeySwitcher:
             # A hybrid digit is an internal decomposition stage, not another
             # public message batch member. Transforming one digit at a time
             # preserves cross-stage cache locality; only the final NTT values
-            # are copied into the explicit rotation-hoisting artifact.
+            # are copied into the retained rotation-hoisting artifact.
             self.rns_runtime.forward_montgomery_(
                 digit_qp,
                 include_p=True,
@@ -557,12 +553,14 @@ class HybridKeySwitcher:
             accumulator0_qp[..., -p_count:, :],
             moddown_p_drop_inverses_montgomery,
             active_params,
+            rounding="floor",
         )
         correction1 = ckks_ops.keyswitch_moddown_qp_to_q(
             accumulator1_qp[..., :-p_count, :],
             accumulator1_qp[..., -p_count:, :],
             moddown_p_drop_inverses_montgomery,
             active_params,
+            rounding="floor",
         )
         return correction0, correction1
 

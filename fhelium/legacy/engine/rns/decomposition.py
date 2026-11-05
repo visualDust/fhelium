@@ -22,9 +22,7 @@ class HybridRnsDecomposition:
     $|P|$.  The base Q prime forms the final singleton digit.  Dropping a Q
     prefix at a later depth may shrink or remove an active digit, but every
     remaining digit retains its depth-zero ``key_digit_index`` so it selects
-    the correct axis of the depth-zero key-switching key. The enumeration index
-    returned at one depth is only local ``digit_index`` and is intentionally
-    distinct from that stable key index.
+    the correct axis of the depth-zero key-switching key. ``digit_index`` enumerates the active digits at the requested depth; ``key_digit_index`` identifies their stored key planes.
     """
 
     def __init__(self, chain: RnsChain) -> None:

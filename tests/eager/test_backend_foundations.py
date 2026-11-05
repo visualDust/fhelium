@@ -156,25 +156,33 @@ def test_eager_key_operations_match_handwritten_engine(device: str) -> None:
     ntt = engine.coefficient_domain_to_ntt_domain(ciphertext)
     product = engine.multiply(ntt, ntt)
     assert torch.equal(
-        runtime.relinearize(product, relinearization_key).data,
+        runtime.relinearize(
+            product, relinearization_key, moddown_rounding="floor"
+        ).data,
         engine.relinearize(product, relinearization_key).data,
     )
 
     key_switch_key = engine.create_key_switch_key(secret_key, secret_key)
     assert torch.equal(
-        runtime.switch_key(ciphertext, key_switch_key).data,
+        runtime.switch_key(
+            ciphertext, key_switch_key, moddown_rounding="floor"
+        ).data,
         engine.switch_key(ciphertext, key_switch_key).data,
     )
 
     rotation_key = engine.create_rotation_key(1, secret_key)
     assert torch.equal(
-        runtime.rotate_with_key(ciphertext, rotation_key).data,
+        runtime.rotate_with_key(
+            ciphertext, rotation_key, moddown_rounding="floor"
+        ).data,
         engine.rotate_with_key(ciphertext, rotation_key).data,
     )
 
     conjugation_key = engine.create_conjugation_key(secret_key)
     assert torch.equal(
-        runtime.conjugate(ciphertext, conjugation_key).data,
+        runtime.conjugate(
+            ciphertext, conjugation_key, moddown_rounding="floor"
+        ).data,
         engine.conjugate(ciphertext, conjugation_key).data,
     )
 
@@ -280,7 +288,9 @@ def test_eager_runtime_matches_boundary_and_computation_sequence_on_cpu() -> (
         engine.multiply_plaintext(ntt, compressed).data,
     )
     relinearization_key = engine.create_relinearization_key(secret_engine)
-    relinearized = runtime.relinearize(product, relinearization_key)
+    relinearized = runtime.relinearize(
+        product, relinearization_key, moddown_rounding="floor"
+    )
     expected_relinearized = engine.relinearize(
         expected_product,
         relinearization_key,
@@ -302,8 +312,7 @@ def test_eager_runtime_matches_boundary_and_computation_sequence_on_cpu() -> (
         engine.create_rotation_key(step, secret_engine) for step in (1, -3)
     ]
     actual_rotations = runtime.rotate_many_with_keys(
-        ciphertext_engine,
-        rotation_keys,
+        ciphertext_engine, rotation_keys, moddown_rounding="floor"
     )
     expected_rotations = engine.rotate_many_with_keys(
         ciphertext_engine,
@@ -353,7 +362,9 @@ def test_eager_runtime_cuda_exact_differential_sequence() -> None:
     assert torch.equal(product_runtime.data, product_engine.data)
     key_engine = engine.create_relinearization_key(secret_engine)
     actual = runtime.rescale_to_next_depth(
-        runtime.relinearize(product_runtime, key_engine)
+        runtime.relinearize(
+            product_runtime, key_engine, moddown_rounding="floor"
+        )
     )
     expected = engine.rescale_to_next_depth(
         engine.relinearize(product_engine, key_engine)
@@ -366,6 +377,7 @@ def test_eager_runtime_cuda_exact_differential_sequence() -> None:
         ciphertext_runtime,
         rotation_keys,
         use_hoisting=True,
+        moddown_rounding="floor",
     )
     expected_rotations = engine.rotate_many_with_keys(
         ciphertext_engine,
@@ -522,4 +534,56 @@ def test_eager_limb_arithmetic_uses_declared_prime_rows(device: str) -> None:
         assert actual.prime_ids == shard.prime_ids
         torch.testing.assert_close(
             actual.data, expected.data[..., start:stop, :], rtol=0, atol=0
+        )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+def test_secret_key_weight_and_basis_conversion(device):
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    from fhelium import CkksConfig
+
+    config = CkksConfig(
+        logN=8,
+        q_depth_groups=((254279681, 253493249), (205651969, 204865537)),
+        p_moduli=(257949697, 258605057),
+        default_scale=2.0**40,
+        galois_generator=5,
+        enforce_security_budget=False,
+    )
+    base = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    target = CkksConfig(
+        logN=8,
+        q_depth_groups=base.q_depth_groups[:3],
+        p_moduli=base.p_moduli,
+        default_scale=2.0**40,
+        galois_generator=5,
+        enforce_security_budget=False,
+    )
+    engine, other = Engine(config, rng_seed=327), Engine(target)
+    for weight in (0, 32, config.N):
+        key = engine.create_secret_key(hamming_weight=weight, device=device)
+        from fhelium.backend.ntt import NttContext
+
+        coefficients = key.data.clone()
+        NttContext(engine.rns_context(device)).inverse_to_standard_(
+            coefficients, include_p=True
+        )
+        row = coefficients[0]
+        assert int((row != 0).sum()) == weight
+        assert bool(
+            ((row == 0) | (row == 1) | (row == config.q_moduli[0] - 1)).all()
+        )
+        converted = engine.convert_secret_key(key, target, dtype=torch.int64)
+        returned = other.convert_secret_key(
+            converted, config, dtype=torch.int32
+        )
+        moduli = torch.tensor(
+            config.moduli, dtype=torch.int64, device=device
+        ).view(-1, 1)
+        torch.testing.assert_close(
+            returned.data.to(torch.int64) % moduli,
+            key.data.to(torch.int64) % moduli,
+            rtol=0,
+            atol=0,
         )

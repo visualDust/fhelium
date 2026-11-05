@@ -66,7 +66,15 @@ def _require_values(
 
 
 def _validate_ckks(operation: Operation) -> bool:
-    if isinstance(operation, ckks.ToNttOp):
+    if isinstance(
+        operation, (ckks.ModulusRaiseOp, ckks.EncapsulatedModulusRaiseOp)
+    ):
+        _require_values(
+            operation,
+            (operation.value, operation.result),
+            {_COEFFICIENT_STANDARD},
+        )
+    elif isinstance(operation, ckks.ToNttOp):
         _require(
             operation.value,
             {_COEFFICIENT_STANDARD, _COEFFICIENT_MONTGOMERY},
@@ -237,6 +245,7 @@ def _validate_ntt(operation: Operation) -> bool:
     expectations: dict[
         type[Operation], tuple[_Representation, _Representation]
     ] = {
+        ntt.AutomorphismOp: (_NTT_MONTGOMERY, _NTT_MONTGOMERY),
         ntt.CoefficientStandardToNttMontgomeryOp: (
             _COEFFICIENT_STANDARD,
             _NTT_MONTGOMERY,
@@ -267,6 +276,24 @@ def _validate_ntt(operation: Operation) -> bool:
 
 
 def _validate_rns(operation: Operation) -> bool:
+    if isinstance(operation, rns.ModDownAddRescaleOp):
+        for index in (0, 1):
+            _require(
+                operation.operands[index],
+                {_NTT_MONTGOMERY},
+                label=f"{operation.name} input {index}",
+            )
+        domain = operation.output_domain.data
+        if domain not in {"coefficient", "ntt"}:
+            raise ValueError(
+                "Joint quotient output_domain must be coefficient or ntt"
+            )
+        _require(
+            operation.result,
+            {_NTT_MONTGOMERY if domain == "ntt" else _COEFFICIENT_STANDARD},
+            label=f"{operation.name} result",
+        )
+        return True
     fixed_same: dict[type[Operation], tuple[int, _Representation]] = {
         rns.MultiplyPlaintextOp: (2, _NTT_MONTGOMERY),
         rns.MontgomeryMultiplyOp: (2, _NTT_MONTGOMERY),
@@ -274,9 +301,19 @@ def _validate_rns(operation: Operation) -> bool:
         rns.AddMontgomeryLazyOp: (2, _NTT_MONTGOMERY),
         rns.ModDownNttQpToQOp: (1, _NTT_MONTGOMERY),
         rns.ModDownQpToQOp: (1, _COEFFICIENT_STANDARD),
+        rns.CenteredBasisExtendOp: (1, _COEFFICIENT_STANDARD),
         rns.CoefficientAutomorphismOp: (1, _COEFFICIENT_STANDARD),
     }
     fixed = fixed_same.get(type(operation))
+    if (
+        isinstance(operation, rns.ModDownNttQpToQOp)
+        and operation.coefficient_c0 is not None
+    ):
+        _require(
+            operation.coefficient_c0,
+            {_COEFFICIENT_STANDARD},
+            label=f"{operation.name} coefficient_c0",
+        )
     if isinstance(
         operation,
         (rns.MontgomeryWeightedSumOp, rns.MontgomeryWeightedSumsOp),
@@ -325,6 +362,17 @@ def _validate_rns(operation: Operation) -> bool:
             operation,
             (operation.value, operation.result),
             {representation},
+        )
+    elif isinstance(operation, rns.CrtBasisExtendOp):
+        _require(
+            operation.value,
+            {_COEFFICIENT_STANDARD},
+            label=f"{operation.name} input",
+        )
+        _require(
+            operation.result,
+            {_COEFFICIENT_MONTGOMERY},
+            label=f"{operation.name} result",
         )
     elif isinstance(operation, rns.HybridModUpDigitOp):
         _require(

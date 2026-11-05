@@ -33,6 +33,7 @@ from ..._materials import (
     material_sources,
     declare_material,
     rns_parameter_identity,
+    parameter_request_identity,
     parameter_description,
     prepare_material_bindings,
 )
@@ -56,8 +57,7 @@ class PrepareOperationOperandsPass:
     missing operands; supplied Tensors, assignments, and existing symbols remain
     unchanged. Optional caller-supplied resources and keys populate missing
     entries in the current Compilation's material table through the shared
-    preparation utility. No keys are generated. Implementations can defer
-    requirements when execution facts are insufficient.
+    preparation utility. Implementations can defer requirements when execution facts are insufficient.
     """
 
     registry: OperationImplementationRegistry
@@ -84,6 +84,8 @@ class PrepareOperationOperandsPass:
         workspace = compilation.workspace
         matched = transformed = inserted = skipped = 0
         decisions = []
+        if self.keys:
+            prepare_material_bindings(compilation, keys=self.keys)
         for operation in program_operations(program):
             if not self.registry.supports(operation):
                 continue
@@ -163,7 +165,7 @@ class PrepareOperationOperandsPass:
                         physical,
                     )
                     if kind == "rns_parameters"
-                    else None
+                    else parameter_request_identity(declared, physical)
                 )
                 created, value = declare_material(
                     compilation,

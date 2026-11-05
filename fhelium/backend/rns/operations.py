@@ -217,6 +217,23 @@ class NativePlaintextArithmeticImplementation(_TensorOperandImplementation):
         )
 
 
+def weighted_sum_operands(invocation, values):
+    """Separate ciphertexts, represented plaintexts, sparse rows and parameters."""
+    terms = int(invocation.attributes["term_count"])
+    groups = int(invocation.attributes.get("group_count", 1))
+    layouts = tuple(invocation.attributes.get("plaintext_layouts", ())) or (
+        "dense",
+    ) * (terms * groups)
+    ciphertexts = values[:terms]
+    plaintexts = values[terms : terms * (groups + 1)]
+    implicit = iter(values[terms * (groups + 1) : -1])
+    represented = tuple(
+        (p, layout, next(implicit) if layout == "strided_sparse" else None)
+        for p, layout in zip(plaintexts, layouts, strict=True)
+    )
+    return ciphertexts, represented, values[-1]
+
+
 @dataclass(frozen=True)
 class NativeMontgomeryWeightedSumImplementation(_TensorOperandImplementation):
     r"""Compute one or more $\sum_t c_t p_t$ results without term products."""
@@ -238,11 +255,57 @@ class NativeMontgomeryWeightedSumImplementation(_TensorOperandImplementation):
     ) -> tuple[torch.Tensor, ...]:
         del resources, in_place
         count = cast(int, invocation.attributes["term_count"])
-        ciphertexts, plaintexts, parameters = (
-            values[:count],
-            values[count:-1],
-            values[-1],
+        ciphertexts, represented, parameters = weighted_sum_operands(
+            invocation, values
         )
+        plaintexts = tuple(p for p, _, _ in represented)
+        if any(layout != "dense" for _, layout, _ in represented):
+            from fhelium.backend.ckks.arithmetic import (
+                NativeCompressedPlaintextImplementation,
+            )
+            from fhelium.ir.dialects import ckks
+
+            compact = NativeCompressedPlaintextImplementation()
+            dense = NativePlaintextArithmeticImplementation()
+            outputs = []
+            for start in range(0, len(represented), count):
+                total = None
+                for ciphertext, (plaintext, layout, implicit) in zip(
+                    ciphertexts, represented[start : start + count], strict=True
+                ):
+                    operands = (ciphertext, plaintext)
+                    if implicit is not None:
+                        operands += (implicit.unsqueeze(-1),)
+                    operands += (parameters,)
+                    op_type = (
+                        rns.MultiplyPlaintextOp
+                        if layout == "dense"
+                        else ckks.MultiplyCompressedPlaintextOp
+                    )
+                    call = OperationInvocation._from_eager(
+                        op_type,
+                        len(operands),
+                        1,
+                        {
+                            "compression_layout": layout,
+                            "polynomial_domain": "ntt",
+                        }
+                        if layout != "dense"
+                        else {},
+                    )
+                    term = (dense if layout == "dense" else compact).execute(
+                        call, operands, (), in_place=False
+                    )[0]
+                    if total is None:
+                        total = term
+                    else:
+                        rns_ops.add_standard_(total, term, parameters)
+                outputs.append(total)
+            return (
+                torch.stack(outputs, dim=1)
+                if invocation.operation_type is rns.MontgomeryWeightedSumsOp
+                else outputs[0],
+            )
         if invocation.operation_type is rns.MontgomeryWeightedSumsOp:
             return (
                 rns_ops.montgomery_weighted_sums(
@@ -290,6 +353,8 @@ class NativeRnsStructureImplementation(_TensorOperandImplementation):
         rns.ExtractComponentOp,
         rns.PackTwoComponentsOp,
         rns.PackThreeComponentsOp,
+        rns.ScaleAndPadRowsOp,
+        rns.SliceRowsOp,
     )
 
     def execute(
@@ -303,6 +368,26 @@ class NativeRnsStructureImplementation(_TensorOperandImplementation):
         del in_place
         if resources:
             raise ValueError("RNS structural operations accept no resources")
+        if invocation.operation_type is rns.SliceRowsOp:
+            return (
+                values[0].narrow(
+                    -2,
+                    cast(int, invocation.attributes["start"]),
+                    cast(int, invocation.attributes["count"]),
+                ),
+            )
+        if invocation.operation_type is rns.ScaleAndPadRowsOp:
+            source, scalars, parameters = values
+            result = source.clone()
+            rns_ops.montgomery_mul_row_scalars_(result, scalars, parameters)
+            zero = result.new_zeros(
+                (
+                    *result.shape[:-2],
+                    cast(int, invocation.attributes["pad_rows"]),
+                    result.shape[-1],
+                )
+            )
+            return (torch.cat((result, zero), dim=-2),)
         if invocation.operation_type is rns.ExtractComponentOp:
             if len(values) != 1:
                 raise ValueError("RNS component extraction requires one value")

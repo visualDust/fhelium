@@ -2,11 +2,14 @@
 
 import collections
 
+from typing import Any
+
 import pytest
 import torch
 
 from fhelium import CkksConfig, Preset, compile as fc
 from fhelium.eager import Engine
+from xdsl.utils.exceptions import VerifyException
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda:0"])
@@ -465,7 +468,11 @@ def test_callable_batch_reduction_uses_one_reduction(device):
         -0.02, 0.03, config.num_slots, dtype=torch.float64, device=device
     )
     batch = engine.encrypt_message(
-        torch.stack((messages, -messages, messages, -messages, messages, -messages))
+        torch.stack(
+            (messages, -messages, messages, -messages, messages, -messages)
+        ),
+        public,
+        device=device,
     )
     before = batch.data.clone()
 
@@ -490,3 +497,670 @@ def test_callable_batch_reduction_uses_one_reduction(device):
     )
     assert names["fhelium_rns.sum_standard_batch"] == 1
     assert names["fhelium_rns.add_standard"] == 0
+
+
+@pytest.mark.parametrize(
+    "policy", ["radix2_compact_group8_smem8", "radix4_compact"]
+)
+def test_callable_ntt_chain_preserves_fanout_and_live_inputs(policy):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    preset = {
+        "radix8_compact": Preset.slots16384_scale40_depth16_int64,
+        "radix16_compact": Preset.slots32768_scale40_depth34_int64,
+    }.get(policy, Preset.slots8192_scale40_depth7_int64)
+    engine = Engine(
+        preset,
+        ntt_backend=policy,
+        rng_seed=137,
+        rng_nonce=7,
+    )
+    secret = engine.create_secret_key(device="cuda:0")
+    public = engine.create_public_key(secret, device="cuda:0")
+    x = engine.encrypt_message(
+        torch.linspace(-0.02, 0.03, 32, dtype=torch.float64, device="cuda:0"),
+        public,
+        device="cuda:0",
+    )
+    weight = engine.prepare_plaintext_for_multiplication(
+        engine.encode(0.25, device="cuda:0")
+    )
+
+    def source(x, weight):
+        first = engine.coefficient_domain_to_ntt_domain(x)
+        product = engine.multiply_plaintext(first, weight)
+        side = engine.rescale_to_next_depth(x)
+        coefficient = engine.ntt_domain_to_coefficient_domain(product)
+        doubled = engine.add(coefficient, coefficient)
+        second = engine.coefficient_domain_to_ntt_domain(doubled)
+        result = engine.ntt_domain_to_coefficient_domain(
+            engine.multiply_plaintext(second, weight)
+        )
+        return first, result, side
+
+    compiled = fc.compile(source)
+    for _ in range(2):
+        actual, expected = compiled(x, weight), source(x, weight)
+        for got, reference in zip(actual, expected, strict=True):
+            torch.testing.assert_close(got.data, reference.data, rtol=0, atol=0)
+            assert (
+                got.depth,
+                got.scale,
+                got.prime_ids,
+                got.component_count,
+                got.polynomial_domain,
+                got.residue_representation,
+            ) == (
+                reference.depth,
+                reference.scale,
+                reference.prime_ids,
+                reference.component_count,
+                reference.polynomial_domain,
+                reference.residue_representation,
+            )
+        x = engine.negate(x)
+        weight.data.copy_(
+            engine.prepare_plaintext_for_multiplication(
+                engine.encode(0.5, device="cuda:0")
+            ).data
+        )
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        "radix2_compact_group8_smem8",
+        "radix4_compact",
+        "radix8_compact",
+        "radix16_compact",
+    ],
+)
+def test_callable_ntt_join_preserves_branch_outputs(policy):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    preset = {
+        "radix8_compact": Preset.slots16384_scale40_depth16_int64,
+        "radix16_compact": Preset.slots32768_scale40_depth34_int64,
+    }.get(policy, Preset.slots8192_scale40_depth7_int64)
+    from fhelium import Ciphertext
+
+    engine = Engine(preset, ntt_backend=policy)
+    data = torch.stack(
+        [
+            torch.randint(
+                0,
+                modulus,
+                (2, engine.config.N),
+                device="cuda:0",
+                dtype=engine.dtype,
+            )
+            for modulus in engine.config.q_moduli
+        ],
+        dim=-2,
+    )
+    x = Ciphertext(
+        data,
+        depth=0,
+        scale=engine.config.default_scale,
+        prime_ids=tuple(range(engine.config.num_q_primes)),
+    )
+    y = engine.add(x, x)
+    weight = engine.prepare_plaintext_for_multiplication(
+        engine.encode(0.25, device="cuda:0")
+    )
+
+    def source(x, y):
+        first = engine.coefficient_domain_to_ntt_domain(x)
+        left = engine.ntt_domain_to_coefficient_domain(
+            engine.multiply_plaintext(first, weight)
+        )
+        second = engine.coefficient_domain_to_ntt_domain(y)
+        right = engine.ntt_domain_to_coefficient_domain(
+            engine.multiply_plaintext(second, weight)
+        )
+        joined = engine.coefficient_domain_to_ntt_domain(
+            engine.add(left, right)
+        )
+        result = engine.ntt_domain_to_coefficient_domain(joined)
+        return first, left, right, result
+
+    compiled = fc.compile(source)
+    actual, expected = compiled(x, y), source(x, y)
+    for got, reference in zip(actual, expected, strict=True):
+        torch.testing.assert_close(got.data, reference.data, rtol=0, atol=0)
+        assert (got.depth, got.scale, got.prime_ids, got.polynomial_domain) == (
+            reference.depth,
+            reference.scale,
+            reference.prime_ids,
+            reference.polynomial_domain,
+        )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+def test_callable_preserves_key_switch_rounding(device):
+    """Capture and execution retain each requested ModDown quotient rule."""
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    engine = Engine(config, rng_seed=211)
+    secret = engine.create_secret_key(device=device)
+    public = engine.create_public_key(secret, device=device)
+    rotation = engine.create_rotation_key(1, secret, device=device)
+    conjugation = engine.create_conjugation_key(secret, device=device)
+    relin = engine.create_relinearization_key(secret, device=device)
+    x = engine.encrypt_message(
+        torch.linspace(-0.02, 0.03, 32, device=device), public, device=device
+    )
+    x_ntt = engine.coefficient_domain_to_ntt_domain(x)
+    triplet = engine.multiply(x_ntt, x_ntt)
+
+    def source(value, product, rounding="nearest"):
+        return (
+            engine.rotate_with_key(value, rotation, moddown_rounding=rounding),
+            engine.conjugate(
+                value,
+                conjugation,
+                output_domain="ntt",
+                moddown_rounding=rounding,
+            ),
+            engine.relinearize(product, relin, moddown_rounding=rounding),
+        )
+
+    reference = engine.decrypt_message(x, secret)
+    mathematical_outputs = (
+        torch.roll(reference, 1),
+        reference.conj(),
+        reference.square(),
+    )
+    compiled = fc.compile(source)
+    for rounding in ("nearest", "floor"):
+        expected = source(x, triplet, rounding)
+        actual = compiled(x, triplet, rounding)
+        for a, e, mathematical in zip(
+            actual, expected, mathematical_outputs, strict=True
+        ):
+            moduli = torch.tensor(
+                [config.moduli[i] for i in a.prime_ids],
+                device=a.device,
+                dtype=a.data.dtype,
+            )[:, None]
+            # NTT implementations may return different representatives in [0, 2q).
+            assert bool(((a.data >= 0) & (a.data < 2 * moduli)).all())
+            assert bool(((e.data >= 0) & (e.data < 2 * moduli)).all())
+            torch.testing.assert_close(
+                a.data % moduli, e.data % moduli, rtol=0, atol=0
+            )
+            torch.testing.assert_close(
+                engine.decrypt_message(a, secret),
+                mathematical,
+                rtol=0,
+                atol=1e-6,
+            )
+            assert (a.polynomial_domain, a.residue_representation) == (
+                e.polynomial_domain,
+                e.residue_representation,
+            )
+            assert (a.depth, a.scale, a.prime_ids) == (
+                e.depth,
+                e.scale,
+                e.prime_ids,
+            )
+    default = engine.rotate_with_key(x, rotation)
+    explicit = engine.rotate_with_key(x, rotation, moddown_rounding="nearest")
+    torch.testing.assert_close(default.data, explicit.data, rtol=0, atol=0)
+    assert len(compiled.specializations) == 2
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+def test_callable_weighted_sum_keeps_requested_backend_and_sparse_operands(
+    device,
+):
+    from fhelium.ir import EXECUTION_IMPLEMENTATION_ATTRIBUTE, Program
+    from fhelium.ir.dialects import rns
+    from fhelium.runtime.signature import ValueSignature
+    from fhelium.values import Ciphertext, CompressedPlaintext
+
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    base = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    config = CkksConfig.parse(
+        base.dumps(),
+        logN=8,
+        q_depth_groups=base.q_depth_groups[:2],
+        enforce_security_budget=False,
+    )
+    engine = Engine(config)
+    state: dict[str, Any] = dict(
+        depth=0,
+        scale=8.0,
+        prime_ids=(0, 1),
+        polynomial_domain="ntt",
+        residue_representation="montgomery",
+        modulus_basis="Q",
+    )
+    x = Ciphertext(
+        data=torch.arange(1024, dtype=torch.int64, device=device).reshape(
+            2, 2, 256
+        ),
+        **state,
+    )
+    data = torch.arange(16, dtype=torch.int64, device=device).reshape(2, 8) + 17
+    p = CompressedPlaintext(
+        data=data, ring_dimension=256, compression_layout="contiguous", **state
+    )
+    q = CompressedPlaintext(
+        data=data + 1,
+        implicit_data=torch.tensor([3, 5], dtype=torch.int64, device=device),
+        ring_dimension=256,
+        compression_layout="strided_sparse",
+        **state,
+    )
+
+    def source(x, p, q):
+        return engine.sum_plaintext_product_groups(
+            (x, x), ((p, q), (q, p)), implementation="auto", term_chunk_size=1
+        )
+
+    compiled = fc.compile(source)
+    actual = compiled(x, p, q)
+    expected = source(x, p, q)
+    assert torch.equal(actual.data, expected.data)
+    assert ValueSignature.from_value(actual) == ValueSignature.from_value(
+        expected
+    )
+    program = compiled.specializations[0].source.program
+    operations = [
+        op
+        for op in program.single_block().ops
+        if isinstance(op, rns.MontgomeryWeightedSumsOp)
+    ]
+    assert len(operations) == 1
+    assert operations[0].attributes[
+        EXECUTION_IMPLEMENTATION_ATTRIBUTE
+    ].data == engine.plaintext_product_implementation(
+        device, compressed=True, implementation="auto"
+    )
+    Program.parse(str(program)).verify_structure()
+    q.implicit_data.add_(2)
+    assert torch.equal(compiled(x, p, q).data, source(x, p, q).data)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+def test_aggregate_rotation_sum_preserves_decoded_values_and_live_keys(device):
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    from fhelium.backend import OperationBackend
+
+    standard = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    config = CkksConfig(
+        logN=8,
+        q_depth_groups=standard.q_depth_groups,
+        p_moduli=standard.p_moduli,
+        default_scale=standard.default_scale,
+        enforce_security_budget=False,
+    )
+    engine = Engine(config, rng_seed=137, allow_automatic_key_generation=False)
+    secret = engine.create_secret_key(device=device)
+    public = engine.create_public_key(secret, device=device)
+    keys = [
+        engine.create_rotation_key(step, secret, device=device)
+        for step in (1, -3)
+    ]
+    message = torch.linspace(
+        -0.02, 0.03, config.num_slots, dtype=torch.float64, device=device
+    )
+    encrypted = engine.encrypt_message(message, public, device=device)
+    identity = engine.prepare_plaintext_for_multiplication(
+        engine.encode(
+            torch.ones_like(message),
+            scale=float(config.q_depth_groups[0][0]),
+            device=device,
+        )
+    )
+    high = engine.ntt_domain_to_coefficient_domain(
+        engine.multiply_plaintext(
+            engine.coefficient_domain_to_ntt_domain(encrypted), identity
+        )
+    )
+
+    def source(x, key1, key2):
+        return engine.rescale_to_next_depth(
+            engine.add(
+                engine.add(
+                    engine.rotate_with_key(x, key1),
+                    engine.rotate_with_key(x, key2),
+                ),
+                x,
+            )
+        )
+
+    backend = OperationBackend()
+    pipeline = fc.default_lower_and_fuse_pipeline(
+        backend,
+        resources=engine._dispatcher_for(device).device_resources,
+    ).before("rotation-hoisting", fc.AggregateRotationSumsPass())
+    compiled = fc.compile(source, backend=backend, pipeline=pipeline)
+
+    def aggregate(x, key1, key2):
+        return engine.sum_rotations(
+            ((x, key1), (x, key2), (x, None)), rescale=True
+        )
+
+    direct = fc.compile(aggregate, backend=backend)
+    expected = message + torch.roll(message, 1) + torch.roll(message, -3)
+    for sign in (1, -1):
+        value = high if sign == 1 else engine.negate(high)
+        result = compiled(value, *keys)
+        independent = source(value, *keys)
+        eager = aggregate(value, *keys)
+        captured = direct(value, *keys)
+        torch.testing.assert_close(result.data, eager.data, rtol=0, atol=0)
+        torch.testing.assert_close(captured.data, eager.data, rtol=0, atol=0)
+        streamed = list(
+            engine.iter_rotations_with_keys(
+                value, [None, *keys], output_domain="ntt"
+            )
+        )
+        hoisted = engine.rotate_many_with_keys(value, keys, output_domain="ntt")
+        for actual, reference in zip(streamed[1:], hoisted, strict=True):
+            torch.testing.assert_close(
+                actual.data, reference.data, rtol=0, atol=0
+            )
+        assert (result.depth, result.scale, result.prime_ids) == (
+            independent.depth,
+            independent.scale,
+            independent.prime_ids,
+        )
+        torch.testing.assert_close(
+            engine.decrypt_message(result, secret).real,
+            expected * sign,
+            rtol=0,
+            atol=1e-5,
+        )
+        replacement = engine.create_rotation_key(1, secret, device=device)
+        keys[0].data.copy_(replacement.data)
+
+    positive = high.clone()
+    negative = engine.negate(positive)
+    expected_sum = engine.sum_rotations(((positive, None), (negative, None)))
+    buffer = positive.clone()
+
+    def reused_buffer():
+        yield buffer, None
+        buffer.data.copy_(negative.data)
+        yield buffer, None
+
+    torch.testing.assert_close(
+        engine.sum_rotations(reused_buffer()).data,
+        expected_sum.data,
+        rtol=0,
+        atol=0,
+    )
+
+    def identities(x):
+        return tuple(engine.iter_rotations_with_keys(x, (None, None)))
+
+    for outputs in (identities(positive), fc.compile(identities)(positive)):
+        pointers = [
+            positive.data.untyped_storage().data_ptr(),
+            *(value.data.untyped_storage().data_ptr() for value in outputs),
+        ]
+        assert len(set(pointers)) == 3
+
+    def identity_sum(x):
+        return engine.sum_rotations(((x, None), (x, None)))
+
+    logical = fc.default_lower_and_fuse_pipeline(
+        backend, resources=engine.rns_context(device)
+    ).before("select-execution-lowerings", fc.LowerCkksToRnsNttPass())
+
+    def rotations_only(x, key1, key2):
+        return engine.sum_rotations(((x, key1), (x, key2)), rescale=True)
+
+    for value in (positive, engine.coefficient_domain_to_ntt_domain(positive)):
+        for function in (aggregate, rotations_only):
+            actual = fc.compile(function, backend=backend, pipeline=logical)(
+                value, *keys
+            )
+            expected_value = function(value, *keys)
+            torch.testing.assert_close(
+                actual.data, expected_value.data, rtol=0, atol=0
+            )
+            assert (actual.depth, actual.scale, actual.prime_ids) == (
+                expected_value.depth,
+                expected_value.scale,
+                expected_value.prime_ids,
+            )
+
+    observed = fc.compile(identity_sum, backend=backend, pipeline=logical)(
+        positive
+    )
+    torch.testing.assert_close(
+        observed.data, identity_sum(positive).data, rtol=0, atol=0
+    )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+def test_modulus_raise_uses_live_encapsulation_keys(device):
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    config = CkksConfig(
+        logN=8,
+        q_depth_groups=(
+            (254279681, 253493249),
+            (253100033, 249561089),
+            (205651969, 204865537),
+        ),
+        p_moduli=(257949697, 258605057),
+        default_scale=2.0**40,
+        galois_generator=5,
+        enforce_security_budget=False,
+    )
+    engine = Engine(config, rng_seed=331)
+    secret = engine.create_secret_key(hamming_weight=128, device=device)
+    middle = engine.create_secret_key(hamming_weight=32, device=device)
+    auxiliary = dict(
+        low_p_moduli=(268042241,),
+        return_prime=256376833,
+        return_p_moduli=(265420801, 268042241),
+    )
+    low, back = engine.create_encapsulation_keys(secret, middle, **auxiliary)
+    public = engine.create_public_key(secret)
+    message = torch.linspace(
+        -0.01, 0.02, config.num_slots, dtype=torch.float64, device=device
+    )
+    value = engine.encrypt_message(
+        message, public, depth=config.max_depth, device=device
+    )
+
+    def source(x, first, second):
+        return engine.modulus_raise(x), engine.encapsulated_modulus_raise(
+            x, first, second, **auxiliary
+        )
+
+    compiled = fc.compile(source)
+    original = value.data.clone()
+    for changed in (False, True):
+        if changed:
+            fresh_low, fresh_back = engine.create_encapsulation_keys(
+                secret, middle, **auxiliary
+            )
+            low.data.copy_(fresh_low.data)
+            back.data.copy_(fresh_back.data)
+        actual, expected = compiled(value, low, back), source(value, low, back)
+        for a, e in zip(actual, expected, strict=True):
+            moduli = torch.tensor(
+                config.q_moduli, dtype=torch.int64, device=device
+            ).view(-1, 1)
+            torch.testing.assert_close(
+                a.data.to(torch.int64) % moduli,
+                e.data.to(torch.int64) % moduli,
+                rtol=0,
+                atol=0,
+            )
+            assert (a.depth, a.scale, a.prime_ids) == (
+                0,
+                value.scale,
+                tuple(range(config.num_q_primes)),
+            )
+        torch.testing.assert_close(value.data, original, rtol=0, atol=0)
+    assert len(compiled.specializations) == 1
+
+    def centered(x, first, second):
+        return engine.modulus_raise(x)
+
+    def encapsulated(x, first, second):
+        return engine.encapsulated_modulus_raise(x, first, second, **auxiliary)
+
+    invalid = engine.coefficient_domain_to_ntt_domain(value)
+    for function in (centered, encapsulated):
+        for execute in (function, fc.compile(function)):
+            with pytest.raises(
+                (ValueError, VerifyException), match="coefficient"
+            ):
+                execute(invalid, low, back)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+def test_callable_objects_inline_methods_and_bind_only_used_materials(device):
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+
+    from collections.abc import Mapping
+
+    class WrappedKeys(Mapping):
+        def __init__(self, weight, unused):
+            self.table = {1: weight, 2: unused}
+
+        def __getitem__(self, key):
+            return self.table[key % 8]
+
+        def get(self, key, default=None):
+            return self[key] * 2
+
+        def __iter__(self):
+            return iter(self.table)
+
+        def __len__(self):
+            return len(self.table)
+
+    class Affine:
+        def __init__(self):
+            self.weight = torch.arange(8, dtype=torch.float64, device=device)
+            self.unused = torch.ones(3, device=device)
+            self.weights = WrappedKeys(self.weight, self.unused)
+            self.offset = 2
+            self._capture = False
+
+        @property
+        def doubled(self):
+            return self.weights.get(9)
+
+        def transform(self, x):
+            assert type(self) is Affine
+            return x * self.doubled + self.offset + (1 if self._capture else 2)
+
+        def __call__(self, x):
+            return self.transform(torch.roll(x, 1))
+
+    source = Affine()
+    x = torch.ones(8, dtype=torch.float64, device=device)
+    compiled = fc.compile(source)
+    torch.testing.assert_close(compiled(x), source(x), rtol=0, atol=0)
+    bindings = compiled.specializations[
+        0
+    ].compilation.material_bindings.values()
+    assert all(t is not source.unused for t in bindings)
+    source.weight.add_(1)
+    torch.testing.assert_close(compiled(x), source(x), rtol=0, atol=0)
+
+    @fc.compile
+    def outer(x):
+        return source(x) + compiled(x)
+
+    torch.testing.assert_close(outer(x), source(x) * 2, rtol=0, atol=0)
+    torch.testing.assert_close(
+        fc.compile(source.transform)(x), source.transform(x), rtol=0, atol=0
+    )
+
+
+def test_capture_rejects_mutation_of_bound_object():
+    class Stateful:
+        count = 0
+
+        @property
+        def offset(self):
+            self.count += 1
+            return 1
+
+        def __call__(self, x):
+            return x + self.offset
+
+    source = Stateful()
+    with pytest.raises(fc.CaptureError, match="mutate bound object"):
+        fc.compile(source)(torch.ones(1))
+    assert source.count == 0
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+def test_callable_value_replacement_preserves_derived_metadata(device):
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    from dataclasses import replace
+    from fhelium.values import Ciphertext, CompressedPlaintext
+
+    value = Ciphertext(
+        torch.ones((2, 1, 8), dtype=torch.int64, device=device),
+        depth=0,
+        scale=1.0,
+        prime_ids=(0,),
+    )
+    plaintext = CompressedPlaintext(
+        torch.ones((1, 2), dtype=torch.int64, device=device),
+        ring_dimension=8,
+        compression_layout="strided_sparse",
+        depth=0,
+        scale=1.0,
+        polynomial_domain="coefficient",
+        modulus_basis="Q",
+        residue_representation="standard",
+        prime_ids=(0,),
+        implicit_data=torch.ones(1, dtype=torch.int64, device=device),
+    )
+
+    def source(x, p):
+        result = x.with_data(torch.cat((x.data, x.data[:1]), dim=0)[..., :4])
+        updated = replace(p, implicit_data=p.implicit_data + 1)
+        return (
+            result,
+            result.data * result.component_count * result.ring_dimension,
+            updated,
+        )
+
+    expected = source(value, plaintext)
+    actual = fc.compile(source)(value, plaintext)
+    assert actual[0].component_count == expected[0].component_count == 3
+    assert actual[0].ring_dimension == expected[0].ring_dimension == 4
+    torch.testing.assert_close(actual[0].data, expected[0].data, rtol=0, atol=0)
+    torch.testing.assert_close(actual[1], expected[1], rtol=0, atol=0)
+    torch.testing.assert_close(
+        actual[2].implicit_data, expected[2].implicit_data, rtol=0, atol=0
+    )
+    assert actual[2].data.data_ptr() == plaintext.data.data_ptr()
+
+
+def test_repeated_returned_arithmetic_has_independent_tensor_storage():
+    def source(value):
+        return value * value, value * value
+
+    value = torch.tensor([2.0, 3.0], dtype=torch.float64)
+    first, second = fc.compile(source)(value)
+
+    torch.testing.assert_close(first, value * value, rtol=0, atol=0)
+    torch.testing.assert_close(second, first, rtol=0, atol=0)
+    assert (
+        first.untyped_storage().data_ptr()
+        != second.untyped_storage().data_ptr()
+    )
+    first.add_(1)
+    torch.testing.assert_close(second, value * value, rtol=0, atol=0)

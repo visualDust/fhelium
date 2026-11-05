@@ -9,6 +9,7 @@ from pathlib import Path
 import torch
 
 from ._abi import (
+    SUPPORTED_NATIVE_BACKENDS,
     compatibility_mismatches,
     manifest_native_backends,
     manifest_path,
@@ -179,27 +180,40 @@ def require_native() -> None:
         raise NativeExtensionError(_diagnostic(_NATIVE_STATUS))
 
 
-def native_backend_available(backend: str) -> bool:
-    """Return whether the loaded extension implements ``backend``."""
+def _runtime_backend(backend: str) -> str:
+    if backend not in SUPPORTED_NATIVE_BACKENDS:
+        raise ValueError("backend must be 'cpu', 'cuda', or 'hip'")
+    # PyTorch uses the CUDA device type and dispatch key on ROCm as well.
+    if backend == "cuda" and torch.version.hip:
+        return "hip"
+    return backend
 
-    if backend not in {"cpu", "cuda"}:
-        raise ValueError("backend must be 'cpu' or 'cuda'")
+
+def native_backend_available(backend: str) -> bool:
+    """Return availability for a native backend or PyTorch device type.
+
+    On ROCm, the PyTorch device type ``cuda`` resolves to the HIP backend.
+    """
+
+    backend = _runtime_backend(backend)
     return _NATIVE_STATUS.available and backend in _NATIVE_STATUS.backends
 
 
 def require_native_backend(backend: str) -> None:
-    """Raise unless the loaded extension implements ``backend``."""
+    """Raise unless the loaded extension implements the requested backend.
+
+    On ROCm, the PyTorch device type ``cuda`` resolves to the HIP backend.
+    """
 
     require_native()
-    if backend not in {"cpu", "cuda"}:
-        raise ValueError("backend must be 'cpu' or 'cuda'")
+    backend = _runtime_backend(backend)
     if backend not in _NATIVE_STATUS.backends:
         enabled = ", ".join(_NATIVE_STATUS.backends)
         raise NativeExtensionError(
             f"FHElium was built for native backends [{enabled}], but this "
             f"operation requires {backend}. Rebuild with "
             f"-DFHELIUM_NATIVE_BACKENDS={backend.upper()} or "
-            "-DFHELIUM_NATIVE_BACKENDS=CPU+CUDA."
+            "-DFHELIUM_NATIVE_BACKENDS=AUTO."
         )
 
 

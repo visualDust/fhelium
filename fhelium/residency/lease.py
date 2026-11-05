@@ -280,7 +280,7 @@ class ResidencyHold:
         return self._location
 
     def release(self) -> None:
-        """Release exactly this retention protection idempotently."""
+        """Release this hold; repeated calls leave it released."""
 
         with self._state_lock:
             if not self._active:

@@ -1,4 +1,4 @@
-"""Lower role-explicit logical operations to explicit CKKS primitives."""
+"""Lower logical operations with known operand roles to CKKS primitives."""
 
 from __future__ import annotations
 

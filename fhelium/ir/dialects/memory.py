@@ -1,9 +1,6 @@
 """Rank-local device and memory-transfer operations.
 
-Placement changes are represented by real operations rather than attributes on
-unrelated arithmetic.  A transfer consumes one value and one launch-bound
-device resource and returns the same IR value type.  Concrete movement,
-allocation, and same-device alias choices remain Backend responsibilities.
+A transfer consumes one value and a launch-bound destination device, returning the same IR value type at the requested placement. Its Backend implementation determines allocation and same-device storage sharing.
 """
 
 from __future__ import annotations

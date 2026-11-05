@@ -98,7 +98,7 @@ Use `drop(handle, location)` to remove one legal materialization while retaining
 
 ## 5. Keep execution buffers separate
 
-A mutable fixed-address execution buffer and a manager-owned immutable logical value have different ownership and lifetime rules. CUDA Graph and execution-buffer bridging is deferred; no Residency control level assigns a managed handle to such a buffer or transfers graph ownership. Select Residency for logical-value placement, and treat fixed-address execution resources under their own documented requirements.
+A mutable fixed-address execution buffer and a manager-owned immutable logical value have different ownership and lifetime rules. Reusable buffers and CUDA Graph resources retain their own storage ownership and completion lifetimes. Select Residency for logical-value placement, and treat fixed-address execution resources under their own documented requirements.
 
 ## References
 

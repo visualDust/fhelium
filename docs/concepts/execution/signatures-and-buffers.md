@@ -12,7 +12,7 @@ Repeated execution copies new values into retained storage. A device-independent
 - depth, scale, prime IDs, polynomial domain, modulus basis, and residue representation;
 - key specialization such as a rotation step.
 
-Device is deliberately excluded. A CPU value and a CUDA value can share a value signature while the target buffer owns the residency decision. An external ciphertext/key relation is also excluded when no concrete value field stores it; the application must validate that relation separately. CKKS parameter provenance is likewise excluded.
+Signatures compare device-independent value metadata and Tensor topology, so compatible CPU and CUDA sources can feed the same buffer. The buffer records target placement. Applications separately validate CKKS parameter provenance and ciphertext/key relations that are absent from the value fields.
 
 ```mermaid
 flowchart LR

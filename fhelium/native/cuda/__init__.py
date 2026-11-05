@@ -1,4 +1,4 @@
-"""CUDA device and peer-topology inspection."""
+"""GPU device and peer-topology inspection through CUDA or HIP."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ CudaDeviceInventory = dict[int, CudaDeviceProperties]
 
 
 class CudaSystemInfo(TypedDict):
-    """CUDA device inventory and native peer-topology result."""
+    """GPU device inventory and native peer-topology result."""
 
     devices: CudaDeviceInventory
     p2p: dict[str, Any]
@@ -25,16 +25,16 @@ def _extension() -> Any:
         return importlib.import_module("fhelium.native.cuda.cuda_info")
     except ImportError as error:
         raise ImportError(
-            "FHElium CUDA inspection is unavailable because cuda_info is "
-            "missing from this CUDA-enabled build"
+            "FHElium GPU inspection is unavailable because cuda_info is "
+            "missing from this GPU-enabled build"
         ) from error
 
 
 def get_cuda_info(test_p2p_bandwidth: bool = True) -> CudaSystemInfo:
-    """Return CUDA device and peer-topology information.
+    """Return GPU device and peer-topology information.
 
     Args:
-        test_p2p_bandwidth: Measure peer-to-peer bandwidth when multiple CUDA
+        test_p2p_bandwidth: Measure peer-to-peer bandwidth when multiple GPU
             devices are visible. The measurement allocates and copies test
             buffers.
     """
@@ -46,7 +46,7 @@ def get_cuda_info(test_p2p_bandwidth: bool = True) -> CudaSystemInfo:
 
 
 def get_cuda_device_properties() -> CudaDeviceInventory:
-    """Return CUDA device properties without peer-bandwidth measurements."""
+    """Return GPU device properties without peer-bandwidth measurements."""
 
     return cast(CudaDeviceInventory, _extension().get_cuda_device_properties())
 

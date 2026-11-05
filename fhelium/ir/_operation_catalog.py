@@ -293,12 +293,16 @@ def unsupported_attributes(
                 "half_primes",
                 "centered_lift",
                 "min_modulus",
+                "joint_drop_count",
+                "joint_drop_is_prefix",
+                "joint_drop_prime_ids",
             }
         )
     if operation.name in {
         "fhelium_rns.hybrid_modup_digit",
         "fhelium_rns.moddown_qp_to_q",
         "fhelium_rns.moddown_ntt_qp_to_q",
+        "fhelium_rns.moddown_add_rescale",
         "fhelium_rns.key_switch_digit_product",
         "fhelium_rns.rescale_drop_leading_primes",
     }:

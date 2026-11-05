@@ -1,6 +1,6 @@
 # State transitions and orthogonality
 
-FHElium state-transition APIs change named CKKS value-state axes. They preserve every axis outside the documented transition, except where the ciphertext representation invariant deliberately couples polynomial domain and residue representation.
+FHElium state-transition APIs change named CKKS value-state axes. They preserve every axis outside the documented transition, except where the ciphertext representation invariant couples polynomial domain and residue representation.
 
 This page defines the primitive transition graph, required source states, and the relationship between primitive transitions and operation-oriented plaintext preparation.
 
@@ -57,7 +57,7 @@ Decryption produces finite binary64 `ApproximateCoefficients` for decoding. Full
 
 ## Ciphertext state coupling
 
-Public ciphertexts deliberately support two coupled arithmetic states:
+Public ciphertexts support two coupled arithmetic states:
 
 ```text
 (coefficient, standard)
@@ -96,7 +96,7 @@ The shared method names identify the polynomial-domain axis being changed. The i
 | `ntt_domain_to_coefficient_domain` | `(ntt, montgomery)` ciphertext | `(coefficient, standard)` ciphertext | Components, depth, scale, basis, `prime_ids` |
 | `montgomery_residues_to_standard_residues` | RNS `(coefficient, montgomery)` plaintext | RNS `(coefficient, standard)` plaintext | Representation, domain, depth, scale, basis, `prime_ids` |
 
-The accepted-source column states the caller contract. Value construction rejects invalid state combinations, but transition methods and Backend implementations do not repeat CKKS source-metadata validation and do not reject a valid object merely because it already declares the target state. Compile may retain unknown state until analysis or lowering; state-flow analysis can report conflicts between inferred and represented state. A caller that conditionally transforms heterogeneous states must inspect the relevant state field and choose the transition deliberately.
+The accepted-source column states the caller contract. Value construction rejects invalid state combinations, but transition methods and Backend implementations do not repeat CKKS source-metadata validation and do not reject a valid object merely because it already declares the target state. Compile may retain unknown state until analysis or lowering; state-flow analysis can report conflicts between inferred and represented state. A caller that conditionally transforms heterogeneous states must inspect the relevant state field and choose a transition whose source state matches.
 
 Functional forms allocate independent output storage. An underscore-suffixed form, where provided, mutates the source object and returns that same object:
 
@@ -151,7 +151,7 @@ Evaluator state management also includes depth, scale, component count, key rela
 | Key dependency and output arithmetic state | `rotate_with_key`, `rotate_many_with_keys` | Apply each rotation-key relation and select `(coefficient, standard)` or `(ntt, montgomery)` output while preserving depth, scale, Q rows, and CT2 shape |
 | Placement | `value.to(device)` | Move storage while preserving mathematical state |
 
-Ciphertext Q-to-QP digit extension and QP-to-Q ModDown occur inside key-switch or bootstrapping arithmetic; there is no generic public ciphertext ModUp method. Plaintext RNS materialization and preparation may explicitly select Q or QP as their target basis.
+Ciphertext Q-to-QP digit extension and QP-to-Q ModDown occur inside key-switch or bootstrapping arithmetic; there is no generic public ciphertext ModUp method. Plaintext RNS materialization and preparation can select Q or QP as their target basis.
 
 ## CRT reconstruction requires its own contract
 

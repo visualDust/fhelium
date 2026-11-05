@@ -52,7 +52,7 @@ Automatic Residency adds an inspectable policy layer above the manager:
 - `ResidencyDecision` records selected reclaim evidence, a concrete plan, dry-run explanation, policy identity, and expected manager state version.
 - `ResidencyPlan` is ordered low-level command intermediate representation; it contains no policy.
 - `ResidencyController` derives and admits decisions but owns no concrete value. The `ResidencyManager` remains the sole placement, accounting, and lifetime authority.
-- `ResidencyController.use` is the combined convenience context. This example deliberately uses `decide` followed by `scope` so the decision is visible before admission.
+- `ResidencyController.use` is the combined convenience context. The example calls `decide` before `scope` to inspect the plan before admission.
 
 The request states only the final working set and headroom:
 

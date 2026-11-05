@@ -273,7 +273,7 @@ def benchmark_recommend_ntt(
 
 @cli.group(name="cuda")
 def cuda_group():
-    """Inspect CUDA devices and peer topology."""
+    """Inspect PyTorch GPU devices using the CUDA or HIP runtime."""
 
 
 @cuda_group.command(name="info")
@@ -287,7 +287,7 @@ def cuda_group():
     "--json", "as_json", is_flag=True, help="Emit machine-readable JSON."
 )
 def cuda_info(device_id: int | None, as_json: bool) -> None:
-    """Show a concise CUDA inventory and optional device details."""
+    """Show a GPU inventory and optional device details."""
 
     import json
 

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 from xdsl.ir import Operation
 
-from fhelium.backend.implementation import OperationInvocation
+from fhelium.backend.implementation import FusionMatcher, OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.ir.dialects import ckks, fusion, rns
 
@@ -105,6 +105,7 @@ class PointwisePlan:
             *(f"out{i}" for i in range(len(materialized))),
             "rns_parameters",
             "PSTRIDE: tl.constexpr",
+            "PROW_STRIDE: tl.constexpr",
             "RADIX: tl.constexpr",
             "BLOCK: tl.constexpr",
         ]
@@ -115,11 +116,11 @@ class PointwisePlan:
             f"    index = offset % {n}",
             f"    row = (offset // {n}) % {rows}",
             f"    batch = offset // {rows * n}",
-            "    q = tl.load(rns_parameters + row, mask=mask, other=2).to(tl.int64) // 2",
-            "    klo = tl.load(rns_parameters + 3 * PSTRIDE + row, mask=mask, other=0).to(tl.uint64)",
-            "    khi = tl.load(rns_parameters + 4 * PSTRIDE + row, mask=mask, other=0).to(tl.uint64)",
+            "    q = tl.load(rns_parameters + row * PROW_STRIDE, mask=mask, other=2).to(tl.int64) // 2",
+            "    klo = tl.load(rns_parameters + 3 * PSTRIDE + row * PROW_STRIDE, mask=mask, other=0).to(tl.uint64)",
+            "    khi = tl.load(rns_parameters + 4 * PSTRIDE + row * PROW_STRIDE, mask=mask, other=0).to(tl.uint64)",
             "    k = klo | (khi << (RADIX // 2))",
-            "    r2 = tl.load(rns_parameters + 5 * PSTRIDE + row, mask=mask, other=0).to(tl.int64)",
+            "    r2 = tl.load(rns_parameters + 5 * PSTRIDE + row * PROW_STRIDE, mask=mask, other=0).to(tl.int64)",
         ]
         emitter = Emitter(graph.layouts)
         stores: list[str] = []
@@ -163,6 +164,7 @@ class PointwisePlan:
                     *storage.values(),
                     parameters,
                     parameters.stride(0),
+                    parameters.stride(1),
                     radix,
                     256,
                     stream=torch.cuda.current_stream(
@@ -227,6 +229,7 @@ def execution_parameters(
 class PreparedFusion:
     graph: ExpressionGraph
     name: str = "triton-rns-fused"
+    max_ntt_endpoints: int | None = None
     operation_types: tuple[type[Operation], ...] = (fusion.FusedOp,)
     supports_in_place: bool = False
     _last_match: Any = field(default=None, repr=False)
@@ -239,7 +242,7 @@ class PreparedFusion:
         return ()
 
     def _prepare(self, all_inputs: tuple[torch.Tensor, ...]):
-        from ._ntt import CompactNttExecution
+        from ._ntt import NttExecution
 
         data_indices, table_indices = self.graph.input_indices
         tables = tuple(all_inputs[index] for index in table_indices)
@@ -275,7 +278,13 @@ class PreparedFusion:
         )
         graph = self.graph.bind(layouts)
         if graph.anchors:
-            plan = CompactNttExecution.build(graph, inputs, tables)
+            limit = self.max_ntt_endpoints
+            if limit is None and torch.version.hip:
+                # Bound generated IR growth in the HIP coalescing compiler pass.
+                limit = 8
+            plan = NttExecution.build(
+                graph, inputs, tables, max_endpoints=limit
+            )
 
             def run(values):
                 return plan.execute(
@@ -371,33 +380,38 @@ class TritonFusionImplementation:
 
     Component extraction and packing become expression selection and output
     indexing. Arithmetic chains retain intermediates in registers and preserve
-    every external result and identity-view alias. ``include_ntt`` admits compact
-    radix-2 transform anchors; implementation names do not determine support.
+    every external result and identity-view alias. ``include_ntt`` admits transform
+    dependencies; their execution plans compose generated endpoints, native stage
+    ranges or complete transforms according to the selected algorithm.
     Match checks consume known Program facts, while missing layout/resource facts
     are checked when binding execution. Device compilation is lazy.
+
+    ``max_ntt_endpoints`` bounds transform endpoints per generated kernel while
+    preserving their stage order. ``None`` selects eight endpoints on HIP to
+    limit compiler IR growth and leaves CUDA endpoint merging unbounded.
     """
 
     name: str = "triton-rns-fused"
     include_ntt: bool = False
+    max_ntt_endpoints: int | None = None
     operation_types: tuple[type[Operation], ...] = (fusion.FusedOp,)
     supports_in_place: bool = False
 
+    def __post_init__(self):
+        if self.max_ntt_endpoints is not None and self.max_ntt_endpoints <= 0:
+            raise ValueError("max_ntt_endpoints must be positive")
+
     def select_ntt_schedule(self, **facts):
-        """Offer compact schedules when this region implementation admits NTT."""
+        """Select an NTT schedule independently of endpoint decomposition."""
         from fhelium.backend.ntt._selection import (
             select_policy,
             table_count,
             table_layout,
         )
 
-        if not self.include_ntt or facts.get("algorithm") not in (
+        if not self.include_ntt or facts.get("device_type") not in (
             None,
-            "radix2_compact",
-        ):
-            return None
-        if (
-            facts.get("device_type") not in (None, "cuda")
-            or facts.get("radix") is not None
+            "cuda",
         ):
             return None
         if not any(
@@ -407,14 +421,12 @@ class TritonFusionImplementation:
                 "algorithm",
                 "tables",
                 "group_width",
+                "radix",
                 "device_type",
             )
         ):
             return None
-        try:
-            policy = select_policy(**{**facts, "algorithm": "radix2_compact"})
-        except ValueError:
-            return None
+        policy = select_policy(**facts)
         if policy is None:
             return None
         return {
@@ -423,11 +435,23 @@ class TritonFusionImplementation:
             "table_count": table_count(policy),
         }
 
+    def new_fusion_matcher(self) -> FusionMatcher:
+        """Create candidate analysis scoped to a read-only scheduling window."""
+        from ._matching import RegionMatcher
+
+        return RegionMatcher(include_ntt=self.include_ntt)
+
     def match_fusion(self, operations: Sequence[Operation]) -> int | None:
         """Match Program facts against this implementation's RNS/NTT support."""
         from ._matching import match_region
 
-        return match_region(operations, include_ntt=self.include_ntt)
+        count = match_region(operations, include_ntt=self.include_ntt)
+        if count and self.include_ntt:
+            from ._ntt import _fusion_qualified
+
+            if not _fusion_qualified(operations, self.max_ntt_endpoints):
+                return None
+        return count
 
     def resource_requirements(
         self, invocation: OperationInvocation
@@ -439,20 +463,27 @@ class TritonFusionImplementation:
             raise TypeError(
                 "Triton fusion preparation requires a fusion region"
             )
+        from ._matching import match_region
+
         if (
-            self.match_fusion(
+            match_region(
                 tuple(
                     op
                     for op in operation.body.block.ops
                     if not isinstance(op, fusion.YieldOp)
-                )
+                ),
+                include_ntt=self.include_ntt,
             )
             is None
         ):
             raise ValueError(
                 "The selected fusion implementation does not support this region"
             )
-        prepared = PreparedFusion(ExpressionGraph(operation), name=self.name)
+        prepared = PreparedFusion(
+            ExpressionGraph(operation),
+            name=self.name,
+            max_ntt_endpoints=self.max_ntt_endpoints,
+        )
         prepared.prepare_layout(operation)
         return prepared
 

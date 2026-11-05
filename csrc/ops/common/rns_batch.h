@@ -3,6 +3,9 @@
 #include <ATen/MemoryOverlap.h>
 #include <torch/torch.h>
 
+#include <algorithm>
+#include <array>
+
 // Public dense RNS operands use [..., limb, coefficient] layout. Native
 // implementations flatten only the homogeneous batch prefix into a
 // metadata-only [batch, limb, coefficient] view. Tensor::view rejects layouts
@@ -22,6 +25,47 @@ inline torch::Tensor view_rns_batch_3d(const torch::Tensor& tensor,
         tensor.size(axis) > 0, name, " batch dimensions must be nonzero");
   }
   return tensor.view({-1, tensor.size(-2), tensor.size(-1)});
+}
+
+// Validate caller-owned RNS output storage and collapse its batch prefix.
+inline torch::Tensor view_rns_output_3d(
+    const torch::Tensor& out,
+    const torch::Tensor& reference,
+    const int64_t limb_count,
+    at::TensorList read_only,
+    const char* operation) {
+  TORCH_CHECK(out.device() == reference.device(), operation,
+              " requires out on the operand device");
+  TORCH_CHECK(out.scalar_type() == reference.scalar_type(), operation,
+              " requires out with the operand dtype");
+  TORCH_CHECK(out.dim() == reference.dim(), operation,
+              " output rank must match the operand");
+  for (int64_t axis = 0; axis < out.dim(); ++axis) {
+    const int64_t expected =
+        axis == out.dim() - 2 ? limb_count : reference.size(axis);
+    TORCH_CHECK(out.size(axis) == expected, operation,
+                " output shape mismatch at axis ", axis);
+  }
+  auto rows = view_rns_batch_3d(out, "out");
+  // Sorted strides prove disjoint writes for dense and padded row layouts,
+  // including sliced limb intervals whose overlap status is otherwise unknown.
+  std::array<int64_t, 3> axes{0, 1, 2};
+  std::sort(axes.begin(), axes.end(), [&](int64_t a, int64_t b) {
+    return rows.stride(a) < rows.stride(b);
+  });
+  int64_t span = 1;
+  for (const int64_t axis : axes) {
+    if (rows.size(axis) <= 1) continue;
+    TORCH_CHECK(rows.stride(axis) >= span, operation,
+                " requires out with non-overlapping strides");
+    span += (rows.size(axis) - 1) * rows.stride(axis);
+  }
+  for (const auto& input : read_only) {
+    TORCH_CHECK(!out.is_alias_of(input) ||
+                    at::get_overlap_status(out, input) == at::MemOverlapStatus::No,
+                operation, " requires out disjoint from inputs and tables");
+  }
+  return rows;
 }
 
 inline torch::Tensor view_coefficient_batch_2d(const torch::Tensor& tensor,

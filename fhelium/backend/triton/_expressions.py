@@ -113,7 +113,7 @@ def component_axis(value_type: object) -> bool:
 
 @dataclass
 class ExpressionGraph:
-    """Bind a region's SSA DAG to input shapes without specializing data values."""
+    """Represent a region's SSA dependencies and input layouts for code generation."""
 
     operation: fusion.FusedOp
 

@@ -37,6 +37,8 @@ SSA values become local variables. Calls use preselected implementation methods 
 
 `host_source` exposes the generated control flow, and `manifest` identifies resolved operations and resources. The bound Python namespace retains the live objects used by those calls.
 
+Linking validates statically bound indexed NTT schedules, including tables consumed inside whole CKKS operations and periodic plaintext preparation. The check follows material references, storage-preserving casts, and fusion inputs. Schedules supplied as runtime inputs or computed values must be prepared by their producer before execution. Their index values and layout remain fixed while the prepared computation is used; violating this precondition is undefined behavior. Twiddle, arithmetic-parameter, and key Tensor contents remain live numerical inputs.
+
 ## How are public inputs and outputs adapted?
 
 `ProgramExecutable.run(*inputs)` checks the Program arity and adapts declared public values to Tensor payloads. The prepared host function then performs numerical execution. Output adapters rebuild declared public CKKS values from represented result state.
@@ -51,7 +53,7 @@ For flat blocks, the host emitter computes last uses and releases local referenc
 
 PyTorch determines when released storage becomes reusable. Runtime-owned [execution buffers and CUDA Graphs](execution-buffers-and-cuda-graphs.md) provide stable addresses and replay lifetimes when those properties are required.
 
-A material reference binds a live Tensor object. Compatible in-place content updates are visible to the executable; replacing a dictionary entry requires relinking. Non-Tensor handles are similarly retained as the linked live objects.
+A material reference binds a live Tensor object. Compatible in-place numerical content updates are visible to the executable; replacing a dictionary entry requires relinking. Indexed NTT schedules follow the structural lifetime requirement described above. Non-Tensor handles are similarly retained as the linked live objects.
 
 ## How does a compiled callable reuse this work?
 
@@ -70,3 +72,5 @@ Host preparation can create Triton functions before their GPU binaries have comp
 Prepare and execute the intended startup workload before steady-state timing or CUDA Graph capture. Report cold preparation separately from warmed execution. Host source generation, Backend kernel generation, and CUDA Graph capture are distinct mechanisms with different products.
 
 `EmitEagerPythonPass` exports public Eager calls; `EmitBackendPythonPass` exports Backend-oriented Python. Backend export and linked execution share host control-flow emission. [Generated kernels and fusion](compiled-execution-and-kernels.md) describes device code, while [Compilation persistence](compilation-persistence.md) describes portable Program and data storage.
+
+Backend-exported Python consumes caller-prepared materials. When supplying custom indexed NTT tables, call `ntt_ops.validate_indexed_schedule(even_indices, odd_indices, N)` during material preparation, before invoking the generated function. The generated function reads the supplied tensors without repeating schedule validation.

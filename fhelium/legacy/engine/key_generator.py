@@ -194,11 +194,7 @@ class CkksKeyGenerator:
         self.rns_runtime.forward_to_montgomery_(error, include_p=include_p)
 
         if uniform_component is None:
-            repeats = (
-                self.config.num_p_primes
-                if include_p
-                else 0
-            )
+            repeats = self.config.num_p_primes if include_p else 0
             uniform_component_data = self._rng.randint(
                 [self.rns_runtime.moduli_for_basis(depth, include_p=include_p)],
                 repeats=repeats,
@@ -307,6 +303,7 @@ class CkksKeyGenerator:
         return KeySwitchKey(
             data=key_data,
             prime_ids=tuple(range(key_data.size(2))),
+            digit_prime_ids=tuple(spec.prime_ids for spec in digit_specs),
             polynomial_domain="ntt",
             modulus_basis="QP",
             residue_representation="montgomery",
@@ -341,6 +338,7 @@ class CkksKeyGenerator:
         return RelinearizationKey(
             data=key_switch_key.data,
             prime_ids=key_switch_key.prime_ids,
+            digit_prime_ids=key_switch_key.digit_prime_ids,
             polynomial_domain=key_switch_key.polynomial_domain,
             modulus_basis=key_switch_key.modulus_basis,
             residue_representation=key_switch_key.residue_representation,
@@ -396,6 +394,7 @@ class CkksKeyGenerator:
         return RotationKey(
             data=key_switch_key.data,
             prime_ids=key_switch_key.prime_ids,
+            digit_prime_ids=key_switch_key.digit_prime_ids,
             polynomial_domain=key_switch_key.polynomial_domain,
             modulus_basis=key_switch_key.modulus_basis,
             residue_representation=key_switch_key.residue_representation,
@@ -435,6 +434,7 @@ class CkksKeyGenerator:
         return ConjugationKey(
             data=key_switch_key.data,
             prime_ids=key_switch_key.prime_ids,
+            digit_prime_ids=key_switch_key.digit_prime_ids,
             polynomial_domain=key_switch_key.polynomial_domain,
             modulus_basis=key_switch_key.modulus_basis,
             residue_representation=key_switch_key.residue_representation,

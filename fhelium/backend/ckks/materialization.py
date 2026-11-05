@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import cast, TYPE_CHECKING
 
 import torch
 
@@ -29,8 +29,11 @@ from .tables import KeySwitchTables
 from ..rns.tables import (
     RescaleTables,
     rescale_inverse_matrix,
-    moddown_inverse_tables,
 )
+
+
+if TYPE_CHECKING:
+    from .tables import RotationSumTables
 
 
 class CkksDeviceResources:
@@ -72,6 +75,11 @@ class CkksDeviceResources:
         self._key_generation: KeyGenerationResource | None = None
         self._rescale: RescaleTables | None = None
         self._key_switch: KeySwitchTables | None = None
+        self._rotation_sums: dict[tuple[object, ...], RotationSumTables] = {}
+        self._modulus_raise: dict[
+            tuple[object, ...],
+            tuple[dict[str, torch.Tensor], dict[str, object]],
+        ] = {}
         self._decrypt_reconstruction: DecryptReconstructionTables | None = None
 
     @property
@@ -193,7 +201,16 @@ class CkksDeviceResources:
         return post, _embedding._skewer(self.config.N, str(self.device))
 
     def key_switch_operands(
-        self, depth: int
+        self,
+        depth: int,
+        *,
+        moddown_rounding: str = "nearest",
+        modup_method: str = "exact",
+        rescale: bool = False,
+        rescale_rounding: str = "nearest",
+        output_domain: str = "coefficient",
+        key_prime_ids: tuple[int, ...] | None = None,
+        digit_prime_ids: tuple[tuple[int, ...], ...] | None = None,
     ) -> tuple[dict[str, torch.Tensor], dict[str, object]]:
         """Prepare Tensor views and digit ranges for a hybrid key switch."""
         tables = self._key_switch
@@ -201,11 +218,115 @@ class CkksDeviceResources:
             tables = KeySwitchTables(
                 self.rns_context,
                 self.ntt_context,
-                moddown_inverse_tables(self.rns_context),
+                (),
                 self.config.galois_generator,
             )
             self._key_switch = tables
-        return tables.tensor_operands(depth)
+        return tables.tensor_operands(
+            depth,
+            moddown_rounding=moddown_rounding,
+            modup_method=modup_method,
+            rescale=rescale,
+            rescale_rounding=rescale_rounding,
+            output_domain=output_domain,
+            key_prime_ids=key_prime_ids,
+            digit_prime_ids=digit_prime_ids,
+        )
+
+    def rotation_sum_tables(
+        self,
+        depth: int,
+        *,
+        rescale: bool = False,
+        rounding: str = "nearest",
+        modup_method: str = "exact",
+        key_prime_ids: tuple[int, ...] | None = None,
+        digit_prime_ids: tuple[tuple[int, ...], ...] | None = None,
+    ) -> RotationSumTables:
+        """Prepare and retain deterministic rotation-sum quotient tables."""
+        from .tables import prepare_rotation_sum_tables
+
+        token = (
+            depth,
+            rescale,
+            rounding,
+            modup_method,
+            key_prime_ids,
+            digit_prime_ids,
+        )
+        if token not in self._rotation_sums:
+            self.key_switch_operands(
+                depth,
+                moddown_rounding=rounding,
+                modup_method=modup_method,
+                key_prime_ids=key_prime_ids,
+                digit_prime_ids=digit_prime_ids,
+            )
+            assert self._key_switch is not None
+            self._rotation_sums[token] = prepare_rotation_sum_tables(
+                self._key_switch,
+                depth,
+                rescale=rescale,
+                rounding=rounding,
+                modup_method=modup_method,
+                key_prime_ids=key_prime_ids,
+                digit_prime_ids=digit_prime_ids,
+            )
+        return self._rotation_sums[token]
+
+    def modulus_raise_operands(
+        self, source_depth: int, target_depth: int
+    ) -> tuple[dict[str, torch.Tensor], dict[str, object]]:
+        """Prepare centered-extension operands on this configuration's Q chain."""
+        from ..rns.tables import centered_basis_extension_tables
+
+        token = ("centered", source_depth, target_depth)
+        if token not in self._modulus_raise:
+            self._modulus_raise[token] = (
+                centered_basis_extension_tables(
+                    self.rns_context,
+                    self.rns_context,
+                    self.rns_layout.prime_ids(source_depth),
+                    self.rns_layout.prime_ids(target_depth),
+                ),
+                {},
+            )
+        return self._modulus_raise[token]
+
+    def encapsulated_modulus_raise_operands(
+        self,
+        source_depth: int,
+        target_depth: int,
+        low_p_moduli: tuple[int, ...],
+        return_prime: int,
+        return_p_moduli: tuple[int, ...],
+        *,
+        rounding: str = "nearest",
+    ) -> tuple[dict[str, torch.Tensor], dict[str, object]]:
+        """Prepare low-switch, centered extension and return-switch operands."""
+        from .tables import prepare_encapsulated_raise_operands
+
+        token = (
+            "encapsulated",
+            source_depth,
+            target_depth,
+            low_p_moduli,
+            return_prime,
+            return_p_moduli,
+            rounding,
+        )
+        if token not in self._modulus_raise:
+            self._modulus_raise[token] = prepare_encapsulated_raise_operands(
+                self.rns_context,
+                self.ntt_context,
+                source_depth=source_depth,
+                target_depth=target_depth,
+                low_p_moduli=low_p_moduli,
+                return_prime=return_prime,
+                return_p_moduli=return_p_moduli,
+                rounding=rounding,
+            )
+        return self._modulus_raise[token]
 
     def rescale_operands(
         self,

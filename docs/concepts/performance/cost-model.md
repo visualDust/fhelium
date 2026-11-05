@@ -107,7 +107,7 @@ W_{digit}=B\,L_{QP}\,N\,w.
 \qquad w=4\text{ for int32},\quad w=8\text{ for int64}.
 $$
 
-The full active set is larger because transforms read and write data while keys, accumulators, temporaries, and outputs are live. Once that set exceeds effective cache capacity, a larger batch can replace cache reuse with DRAM traffic and become slower than an explicit loop. Later CKKS depths use fewer Q rows, so the crossover may reverse without changing `N` or `B`.
+The full active set is larger because transforms read and write data while keys, accumulators, temporaries, and outputs are live. Once that set exceeds effective cache capacity, a larger batch can replace cache reuse with DRAM traffic and become slower than a per-message loop. Later CKKS depths use fewer Q rows, so the crossover may reverse without changing `N` or `B`.
 
 Two cache regimes are useful when interpreting the crossover:
 
@@ -140,7 +140,7 @@ graph LR
 
 This is why B1 compatibility, operator speedup, workload speedup, and peak memory are separate measurements. The application selects batching or looping from those measurements while FHElium preserves either value layout.
 
-CUDA Graph and homogeneous batching also overlap as launch-amortization mechanisms. Batching reduces the number of launches by operating on a larger message tensor; graph replay reduces host submission gaps while preserving an explicit loop's smaller per-message working set. A batching win under eager execution can therefore become a loop win when both paths are captured. The valid comparison is batch graph versus loop graph, with graph capture and retained memory reported separately from replay latency.
+CUDA Graph and homogeneous batching also overlap as launch-amortization mechanisms. Batching reduces the number of launches by operating on a larger message tensor; graph replay reduces host submission gaps while preserving a loop's smaller per-message working set. A batching win under eager execution can therefore become a loop win when both paths are captured. The valid comparison is batch graph versus loop graph, with graph capture and retained memory reported separately from replay latency.
 
 ## Compilation and compact materials change different costs
 

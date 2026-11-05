@@ -55,7 +55,7 @@ class RnsParameterStore:
     Depth $\ell$ selects the contiguous interval beginning at Q prime id
     ``depth``; a Q basis ends before P and a QP basis includes the fixed P
     suffix. Views preserve this order and do not allocate or mutate the
-    source tables. The store contains no device fanout or communication policy.
+    source tables.
     """
 
     def __init__(

@@ -1,9 +1,6 @@
 """Declarative residency working-set requirements.
 
-Requests describe which manager-owned logical values must be resident at which
-local locations and how much named accounting headroom the operation requires.
-They contain no placement path, eviction choice, stream, or concrete tensor.
-"""
+Requests describe which manager-owned logical values must be resident at which local locations and how much named accounting headroom the operation requires. Controllers use these requirements to choose placement transitions."""
 
 from __future__ import annotations
 
@@ -24,11 +21,9 @@ def _require_nonempty_string(value: object, *, field_name: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class ResidencyRequirement:
-    """Require one managed logical value at one local location.
+    """Require a managed logical value at a local location after admission.
 
-    The requirement states a post-admission condition. It deliberately does
-    not select a source materialization, transfer path, eviction victim, or
-    execution stream; those choices belong to a controller decision.
+    A controller resolves this condition into placement and eviction actions using current manager state.
     """
 
     handle: ResidencyHandle[Any]

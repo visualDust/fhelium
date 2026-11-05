@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Compare one homogeneous CKKS batch with an explicit per-message loop.
+"""Compare one homogeneous CKKS batch with a per-message loop.
 
 The evaluator computes a packed ``y = A @ x`` with the cyclic-diagonal
 method.  FHElium preserves every leading message dimension as a homogeneous

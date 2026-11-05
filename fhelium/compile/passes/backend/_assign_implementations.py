@@ -31,10 +31,7 @@ from .._operation_transforms import program_operations_and_known_region_owners
 class AssignImplementationsPass:
     """Attach requested implementation names to selected operation classes.
 
-    ``selections`` maps exact textual operation names to implementation names.
-    Unselected operations and unknown mixed-level IR remain unchanged. The
-    attribute is a backend build constraint; this pass neither discovers
-    implementations nor asserts executable coverage.
+    ``selections`` maps registered textual operation names to implementation names. Matching uses full-name equality. Unselected operations remain unchanged. The resulting attributes constrain subsequent Backend resolution, which checks implementation availability.
     """
 
     selections: Mapping[str, str] = field(default_factory=dict)
@@ -64,7 +61,7 @@ class AssignImplementationsPass:
         )
 
     def run(self, compilation: "Compilation") -> PassResult:
-        """Annotate exact operation-name matches and report every assignment."""
+        """Annotate matching operation names and report each assignment."""
         program = compilation.program
         workspace = compilation.workspace
 

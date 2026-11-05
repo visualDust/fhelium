@@ -7,7 +7,7 @@ Residue number system (RNS) rows hold those per-prime polynomials.  Montgomery
 representation stores a residue $x_i$ as
 $x_iR_i\bmod q_i$ for radix $R_i$.
 
-The four operations distinguish the complete source and destination residue
+The transform operations distinguish the complete source and destination residue
 representations needed by ciphertext and plaintext transitions. The parameter operand carries the RNS arithmetic parameters. Additional
 Tensor operands carry transform tables after their layout is selected. An
 operation can leave its algorithm and execution implementation unassigned;
@@ -168,6 +168,40 @@ class NttMontgomeryToCoefficientMontgomeryOp(_NttOp):
         )
 
 
+@irdl_op_definition
+class AutomorphismOp(IRDLOperation):
+    r"""Gather NTT evaluations through supplied Galois permutation indices.
+
+    For bit-reversed evaluation coordinates, ``indices[j]`` selects the
+    evaluation of the input polynomial at the root obtained by raising the
+    destination root to the Galois exponent. The gather preserves components,
+    prime rows, batch axes, scale, and Montgomery residues. The index Tensor
+    is a live operand; the result owns storage independent of the input.
+    """
+
+    name = "fhelium_ntt.automorphism"
+    value = operand_def(RnsBundleType)
+    indices = operand_def()
+    result = result_def(RnsBundleType)
+    traits = traits_def(Pure())
+
+    def __init__(self, value, indices, result_type):
+        super().__init__(operands=[value, indices], result_types=[result_type])
+
+    def dependencies(self) -> OperationDependencies:
+        return operand_relations(
+            self,
+            {
+                0: {
+                    'coefficient': 'reindexed',
+                    'limb': 'element',
+                    'component': 'element',
+                    'batch': 'element',
+                }
+            },
+        )
+
+
 _NTT_OPERATION_TYPES = (
     CoefficientStandardToNttMontgomeryOp,
     CoefficientMontgomeryToNttMontgomeryOp,
@@ -189,7 +223,7 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = tuple(
         ),
     )
     for operation_type in _NTT_OPERATION_TYPES
-)
+) + (registered_operation_spec(AutomorphismOp, "ntt"),)
 """Semantic specifications owned by the NTT dialect."""
 
 
@@ -197,6 +231,7 @@ FHEliumNtt = Dialect(
     "fhelium_ntt",
     [
         *_NTT_OPERATION_TYPES,
+        AutomorphismOp,
     ],
     [],
 )
@@ -205,6 +240,7 @@ FHEliumNtt = Dialect(
 
 __all__ = [
     "FHEliumNtt",
+    "AutomorphismOp",
     "CoefficientMontgomeryToNttMontgomeryOp",
     "CoefficientStandardToNttMontgomeryOp",
     "NttMontgomeryToCoefficientMontgomeryOp",

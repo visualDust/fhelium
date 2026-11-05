@@ -7,16 +7,15 @@ import torch
 from fhelium.config import CkksConfig
 from fhelium.backend.rns.format import RnsExecutionFormat
 from fhelium.legacy.engine.ntt.plans.twiddles import build_compact_twiddles
+from fhelium.backend.ntt.plans.twiddles import encode_compact_shoup32
 
 
 class CompactRadix2NttPlan:
-    """Compact forward and inverse standard-residue twiddle rows.
+    """Construct bit-reversed compact roots in the selected table encoding.
 
-    Compact CUDA kernels compute butterfly indices in-kernel and consume one
-    integral ``[prime, coefficient]`` twiddle table per transform direction.
-    Prime rows follow ``ckks_config.moduli`` exactly; final extent is $N$ and
-    both tables use ``ckks_config.torch_dtype`` on ``device``. Construction is
-    functional and the forward and inverse tables do not alias.
+    Montgomery-policy plans provide standard ``[prime,N]`` roots for later
+    resource preparation. Shoup32 plans provide ready ``[prime,N,2]`` root and
+    quotient pairs. Rows follow the configuration's prime order.
     """
 
     def __init__(
@@ -24,6 +23,7 @@ class CompactRadix2NttPlan:
         ckks_config: CkksConfig,
         *,
         device: str | int | torch.device | None = None,
+        twiddle_encoding: str = "montgomery",
     ) -> None:
         self.cfg = ckks_config
         self.device = (
@@ -35,6 +35,16 @@ class CompactRadix2NttPlan:
             RnsExecutionFormat.select(self.cfg.moduli).dtype,
             device=self.device,
         )
+
+        if twiddle_encoding == "shoup32":
+            self.forward_twiddles = encode_compact_shoup32(
+                self.forward_twiddles, self.cfg.moduli
+            )
+            self.inverse_twiddles = encode_compact_shoup32(
+                self.inverse_twiddles, self.cfg.moduli
+            )
+        elif twiddle_encoding != "montgomery":
+            raise ValueError("Unsupported compact twiddle encoding")
 
     def __str__(self) -> str:
         return (

@@ -49,6 +49,6 @@ If a pass derives a constant Tensor, assign it once under a Program material sym
 
 ## 4. Validate the transformation's meaning
 
-First compare the transformed algebra with a clear-message reference using the same packing and cyclic-rotation convention. Then execute the CKKS result and measure its error against that reference. Check component count, depth, actual scale, prime rows, and representation at relevant transitions. Compare ciphertext residues only when both paths intentionally execute the same deterministic numerical schedule.
+First compare the transformed algebra with a clear-message reference using the same packing and cyclic-rotation convention. Then execute the CKKS result and measure its error against that reference. Check component count, depth, actual scale, prime rows, and representation at relevant transitions. Compare ciphertext residues only when both paths execute the same deterministic numerical schedule.
 
 Retain before/after Programs and pass reports for [graph inspection](visualize-mixed-level-ir.md). The observable outcome is the intended operation change with a validated result. See [Compilation and passes](../developer/compilation-and-passes.md) and [operation declarations and selection](../developer/operation-registration-and-selection.md) for implementation contracts.

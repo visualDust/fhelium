@@ -108,12 +108,12 @@ onBeforeUnmount(() => {
 <template>
   <figure class="vega-lite-figure">
     <div
-      ref="chart"
       class="vega-lite-chart"
       role="img"
       :aria-label="label"
       :aria-busy="status === 'loading'"
     >
+      <div ref="chart" class="vega-lite-view" />
       <span v-if="status === 'waiting' || status === 'loading'">Loading chart…</span>
       <span v-else-if="status === 'error'">Chart unavailable.</span>
     </div>

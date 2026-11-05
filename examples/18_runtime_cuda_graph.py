@@ -12,6 +12,7 @@ buffer. Encryption and decryption remain outside capture.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from functools import partial
 
 import torch
@@ -25,7 +26,7 @@ from common import (
 
 from fhelium import Ciphertext, Plaintext, RotationKey
 from fhelium.eager import Engine
-from fhelium.runtime import CudaGraphProgram
+from fhelium.runtime import CudaGraphPool, CudaGraphProgram
 
 
 def matrix_and_vector(
@@ -106,6 +107,49 @@ def matrix_vector(
     )
 
 
+def demonstrate_shared_pool(
+    schedule: Callable[[Ciphertext], Ciphertext],
+    *,
+    engine: Engine,
+    prototype: Ciphertext,
+    vector: torch.Tensor,
+    expected: torch.Tensor,
+    warmup: int,
+) -> None:
+    """Replay two actual-scale specializations with shared temporary storage."""
+
+    prototypes = (
+        prototype,
+        engine.encrypt_message(
+            periodic_slots(vector, engine.num_slots),
+            scale=2 * prototype.scale,
+        ),
+    )
+    with CudaGraphPool(prototype.device) as pool:
+        programs = [
+            CudaGraphProgram.capture(
+                schedule, example_inputs=(value,), warmup=warmup, pool=pool
+            )
+            for value in prototypes
+        ]
+        second = programs[1].replay(prototypes[1], synchronize=True)
+        retained = second.data.clone()
+        first = programs[0].replay(prototypes[0], synchronize=True)
+        torch.testing.assert_close(second.data, retained, rtol=0, atol=0)
+        rows = []
+        for source, result in zip(prototypes, (first, second), strict=True):
+            actual = engine.decrypt_message(result, is_real=True).cpu()[
+                : expected.numel()
+            ]
+            error = error_stats(actual, expected)
+            rows.append([f"{source.scale:.6e}", f"{error['max_abs']:.3e}"])
+        print(
+            "\nShared-pool specializations, replayed in reverse capture order:"
+        )
+        print_table(["input scale", "max abs error"], rows)
+        print("Both programs retain their own output storage.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_engine_args(
@@ -117,6 +161,11 @@ def main() -> None:
     parser.add_argument("--capture-warmup", type=int, default=3)
     parser.add_argument("--benchmark-warmup", type=int, default=10)
     parser.add_argument("--runs", type=int, default=100)
+    parser.add_argument(
+        "--shared-pool",
+        action="store_true",
+        help="also capture two actual-scale specializations sharing scratch",
+    )
     args = parser.parse_args()
 
     engine = make_engine(args)
@@ -128,6 +177,8 @@ def main() -> None:
         )
     if args.capture_warmup < 0 or args.benchmark_warmup < 0 or args.runs <= 0:
         parser.error("warmup counts must be non-negative and --runs positive")
+    if args.shared_pool and args.capture_warmup == 0:
+        parser.error("--shared-pool requires at least one capture warmup")
 
     matrix, prototype_vector = matrix_and_vector(args.size, seed=500)
     diagonals, rotation_keys = prepare_constants(engine, matrix)
@@ -209,6 +260,15 @@ def main() -> None:
         "survive the next replay."
     )
     program.close()
+    if args.shared_pool:
+        demonstrate_shared_pool(
+            schedule,
+            engine=engine,
+            prototype=prototype,
+            vector=prototype_vector,
+            expected=matrix @ prototype_vector,
+            warmup=args.capture_warmup,
+        )
 
 
 if __name__ == "__main__":

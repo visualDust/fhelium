@@ -41,12 +41,18 @@ montgomery_mul(const scalar_t a,
   const scalar_t betal = beta & lb_mask;
   const scalar_t betah = beta >> half_nbits;
 
-  scalar_t upper = gammal * neg_inv_modulus_hi;
-  upper = upper + (gammah + betal) * neg_inv_modulus_lo;
-  upper = upper << half_nbits;
-  scalar_t s = upper + gammal * neg_inv_modulus_lo;
-  s = upper + gammal * neg_inv_modulus_lo;
-  s = s & fb_mask;
+  // Only the low radix bits of the correction are retained. Use unsigned
+  // arithmetic for the intentional word wrap before masking.
+  using unsigned_t = std::make_unsigned_t<scalar_t>;
+  unsigned_t upper = static_cast<unsigned_t>(gammal) *
+                     static_cast<unsigned_t>(neg_inv_modulus_hi);
+  upper += static_cast<unsigned_t>(gammah + betal) *
+           static_cast<unsigned_t>(neg_inv_modulus_lo);
+  upper <<= half_nbits;
+  const scalar_t s = static_cast<scalar_t>(
+      (upper + static_cast<unsigned_t>(gammal) *
+                   static_cast<unsigned_t>(neg_inv_modulus_lo)) &
+      static_cast<unsigned_t>(fb_mask));
 
   // t = x + sq
   // u = t/R
@@ -135,10 +141,13 @@ reduce_lazy_residue(const scalar_t x, const scalar_t twice_modulus) {
 template <typename scalar_t>
 __device__ __forceinline__ scalar_t add_lazy_residues(
     const scalar_t a, const scalar_t b, const scalar_t twice_modulus) {
-  // Add.
-  const scalar_t aplusb = a + b;
-  // Reduce the sum to the lazy interval [0, 2q).
-  return (aplusb < twice_modulus) ? aplusb : aplusb - twice_modulus;
+  // The lazy sum can reach 4q - 2, beyond signed int32 for 30-bit primes.
+  // Its unsigned word still fits; reduce to [0, 2q) before casting back.
+  using unsigned_t = std::make_unsigned_t<scalar_t>;
+  const unsigned_t sum =
+      static_cast<unsigned_t>(a) + static_cast<unsigned_t>(b);
+  const unsigned_t modulus = static_cast<unsigned_t>(twice_modulus);
+  return static_cast<scalar_t>(sum < modulus ? sum : sum - modulus);
 }
 
 template <typename scalar_t>
@@ -171,9 +180,16 @@ montgomery_reduce(const scalar_t a,
   // s = (a * k) mod R, with k = -q^{-1} mod R
   const scalar_t xl = a & lb_mask;
   const scalar_t xh = a >> half_nbits;
-  const scalar_t xkb = xh * neg_inv_modulus_lo + xl * neg_inv_modulus_hi;
-  scalar_t s = (xkb << half_nbits) + xl * neg_inv_modulus_lo;
-  s = s & fb_mask;
+  using unsigned_t = std::make_unsigned_t<scalar_t>;
+  const unsigned_t xkb =
+      static_cast<unsigned_t>(xh) *
+          static_cast<unsigned_t>(neg_inv_modulus_lo) +
+      static_cast<unsigned_t>(xl) *
+          static_cast<unsigned_t>(neg_inv_modulus_hi);
+  const scalar_t s = static_cast<scalar_t>(
+      ((xkb << half_nbits) + static_cast<unsigned_t>(xl) *
+                                 static_cast<unsigned_t>(neg_inv_modulus_lo)) &
+      static_cast<unsigned_t>(fb_mask));
 
   // t = a + s * q, then u = t / R
   // Note that x gets erased in t/R operation if x < R.

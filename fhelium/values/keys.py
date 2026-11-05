@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, MutableMapping
+from collections.abc import Iterable, Iterator, MutableMapping
 from copy import copy
 from dataclasses import dataclass, field
 
-from typing import Self
+from typing import Self, cast
 
 import torch
 
@@ -32,9 +32,12 @@ def _validate_key_state(
     polynomial_domain: PolynomialDomain,
     modulus_basis: ModulusBasis,
     residue_representation: ResidueRepresentation,
+    require_increasing: bool = True,
 ) -> tuple[int, ...]:
     validate_integral_tensor(data, value_name=what)
-    prime_ids = validate_prime_ids(prime_ids, value_name=what)
+    prime_ids = validate_prime_ids(
+        prime_ids, value_name=what, require_increasing=require_increasing
+    )
     if data.ndim != expected_ndim:
         raise ValueError(
             f"{what} data must have {expected_ndim} dimensions, "
@@ -212,7 +215,13 @@ class KeySwitchKey(TensorResident):
     ``[key_digit, key_component=2, limb, coefficient_or_ntt_index]`` tensor.
     ``key_digit`` is stable key-storage identity, not the local active
     ``digit_index`` used at a later depth. Limb row $i$ is modulo
-    ``prime_ids[i]``. Generated keys use the complete depth-zero QP basis,
+    ``prime_ids[i]``. ``digit_prime_ids[d]`` is the Q support encrypted by stored
+    plane d. Storage lists the supported Q rows first, followed by the selected
+    auxiliary rows; global prime IDs need not increase across that Q/P join.
+    On row i its phase is $P s_{src} + e_d$ when i belongs to
+    that support, and $e_d$ otherwise. Consuming at lower Q intersects each
+    stored support with active Q and retains the original plane index.
+    Generated keys use the selected source-depth QP basis,
     NTT domain, Montgomery form, the engine integral dtype, and one engine
     device. Direct construction and digit/component access retain/share
     storage; :meth:`clone` allocates independent storage.
@@ -220,6 +229,7 @@ class KeySwitchKey(TensorResident):
 
     data: torch.Tensor
     prime_ids: tuple[int, ...]
+    digit_prime_ids: tuple[tuple[int, ...], ...]
     polynomial_domain: PolynomialDomain = "ntt"
     modulus_basis: ModulusBasis = "QP"
     residue_representation: ResidueRepresentation = "montgomery"
@@ -234,11 +244,37 @@ class KeySwitchKey(TensorResident):
             polynomial_domain=self.polynomial_domain,
             modulus_basis=self.modulus_basis,
             residue_representation=self.residue_representation,
+            require_increasing=False,
         )
         if self.data.size(1) != 2:
             raise ValueError(
                 f"{self.__class__.__name__} key-component axis must have size 2, "
                 f"got {self.data.size(1)}"
+            )
+
+        self.digit_prime_ids = tuple(
+            tuple(rows) for rows in self.digit_prime_ids
+        )
+        flattened = validate_prime_ids(
+            (i for rows in self.digit_prime_ids for i in rows),
+            value_name="Key digit supports",
+        )
+        if len(self.digit_prime_ids) != self.data.size(0) or any(
+            not rows for rows in self.digit_prime_ids
+        ):
+            raise ValueError(
+                "Key digit supports must describe every stored plane"
+            )
+        if flattened != self.prime_ids[: len(flattened)]:
+            raise ValueError(
+                "Key digit supports must form the stored Q prefix before auxiliary P rows"
+            )
+        if any(
+            rows != tuple(range(rows[0], rows[-1] + 1))
+            for rows in self.digit_prime_ids
+        ):
+            raise ValueError(
+                "Each key digit support must be a contiguous prime interval"
             )
 
     @property
@@ -424,151 +460,341 @@ class EvaluationKeyRequirements:
             )
 
 
-@dataclass
+_EvaluationKey = RotationKey | RelinearizationKey | ConjugationKey
+
+
 class EvaluationKeySet:
-    """Validated inventory of evaluator-only CKKS key capabilities.
+    """Application-owned references to evaluation keys with different layouts.
 
-    The inventory contains rotation, relinearization, and conjugation keys. It
-    deliberately excludes :class:`PublicKey` and :class:`SecretKey`: encryption,
-    decryption, and key generation are separate capabilities from
-    public evaluation. The set is not a :class:`TensorResident` and does not
-    move or serialize its members as one large value, so residency policies may
-    continue to manage individual keys and rotation windows independently.
+    Entries are ordinary rotation, relinearization and conjugation key values.
+    Adding an existing object retains one reference; distinct objects remain
+    distinct even when they share storage or represented metadata. The inventory
+    never generates, transfers or copies keys. Callers keep every entry paired
+    with its intended secret relation and modulus parameters; prime identifiers
+    and structural selection do not establish those cryptographic identities.
 
-    Construction and :meth:`validate` reject mixed structural key states. Key
-    tensors remain ordinary primitive values and may still be passed directly
-    to low-level engine operations.
+    Selection uses active Q/P rows, ring dimension, dtype and device supplied
+    by the consumer. With all facts known, rotation groups prefer fewer
+    primitive rotations, then fewer active-digit applications. Single-role
+    selection prefers fewer active digits. Both then prefer smaller stored
+    payloads and insertion order. Missing facts permit a unique candidate only. A selected RotationKeySet is
+    a step-to-key mapping, while this inventory may retain several candidates
+    for the same step. Selection returns references without changing entries.
     """
 
-    rotations: RotationKeySet = field(default_factory=RotationKeySet)
-    relinearization: RelinearizationKey | None = None
-    conjugation: ConjugationKey | None = None
+    def __init__(self, keys: Iterable[_EvaluationKey] = ()) -> None:
+        self._entries: list[_EvaluationKey] = []
+        self.update(keys)
 
-    def __post_init__(self) -> None:
-        self._validate_member_types()
-        self.validate()
+    def __iter__(self) -> Iterator[_EvaluationKey]:
+        return iter(self._entries)
 
-    def _validate_member_types(self) -> None:
-        """Reject capability-role substitutions before structural checks."""
+    def __len__(self) -> int:
+        return len(self._entries)
 
-        if not isinstance(self.rotations, RotationKeySet):
-            raise TypeError(
-                "EvaluationKeySet rotations must be a RotationKeySet"
-            )
-        if self.relinearization is not None and not isinstance(
-            self.relinearization, RelinearizationKey
+    def add(self, key: _EvaluationKey) -> EvaluationKeySet:
+        """Retain one reference to a supported evaluation-key object."""
+        if not isinstance(
+            key, (RotationKey, RelinearizationKey, ConjugationKey)
         ):
             raise TypeError(
-                "EvaluationKeySet relinearization must be a "
-                "RelinearizationKey or None"
+                "EvaluationKeySet accepts rotation, relinearization and conjugation keys"
             )
-        if self.conjugation is not None and not isinstance(
-            self.conjugation, ConjugationKey
-        ):
-            raise TypeError(
-                "EvaluationKeySet conjugation must be a ConjugationKey or None"
-            )
+        if all(existing is not key for existing in self._entries):
+            self._entries.append(key)
+        return self
 
-    def _keys(self) -> tuple[KeySwitchKey, ...]:
-        optional = tuple(
-            key
-            for key in (self.relinearization, self.conjugation)
-            if key is not None
+    def update(self, keys: Iterable[_EvaluationKey]) -> EvaluationKeySet:
+        """Add supplied objects without replacing or moving existing keys."""
+        for key in keys:
+            self.add(key)
+        return self
+
+    def remove(self, key: _EvaluationKey) -> None:
+        """Remove this object reference, raising KeyError when it is absent."""
+        for index, existing in enumerate(self._entries):
+            if existing is key:
+                del self._entries[index]
+                return
+        raise KeyError(
+            "Evaluation-key object is not retained in this inventory"
         )
-        return (*self.rotations.table.values(), *optional)
+
+    def clear(self) -> None:
+        """Drop inventory references while preserving references held by consumers."""
+        self._entries.clear()
+
+    @property
+    def rotation_keys(self) -> tuple[RotationKey, ...]:
+        return tuple(
+            key for key in self._entries if isinstance(key, RotationKey)
+        )
+
+    @property
+    def relinearization_keys(self) -> tuple[RelinearizationKey, ...]:
+        return tuple(
+            key for key in self._entries if isinstance(key, RelinearizationKey)
+        )
+
+    @property
+    def conjugation_keys(self) -> tuple[ConjugationKey, ...]:
+        return tuple(
+            key for key in self._entries if isinstance(key, ConjugationKey)
+        )
 
     @staticmethod
-    def _structural_identity(key: KeySwitchKey) -> tuple[object, ...]:
+    def _layout(key: KeySwitchKey) -> tuple[object, ...]:
         return (
             key.prime_ids,
-            key.polynomial_domain,
-            key.modulus_basis,
-            key.residue_representation,
+            key.digit_prime_ids,
             key.data.size(-1),
-            key.digit_count,
             key.data.dtype,
-            key.data.device,
+            key.device,
+            key.modulus_basis,
+            key.polynomial_domain,
+            key.residue_representation,
         )
 
-    def validate(self) -> EvaluationKeySet:
-        """Validate all current members and return this inventory.
-
-        ``RotationKeySet`` is intentionally mutable for application-owned key
-        planning, so consumers call this method again before use. The
-        check re-establishes capability-role types, rotation-step mapping, and
-        one shared prime/domain/basis/residue/ring/digit/dtype/device
-        structure.
-        """
-
-        self._validate_member_types()
-        for step, key in self.rotations.table.items():
-            if not isinstance(key, RotationKey):
-                raise TypeError(
-                    "EvaluationKeySet rotation values must be RotationKey "
-                    f"objects, got {type(key).__name__}"
-                )
-            if type(step) is not int or step != key.rotation_step:
-                raise ValueError(
-                    "EvaluationKeySet rotation mapping does not match its key: "
-                    f"mapping={step!r}, key={key.rotation_step!r}"
-                )
-        keys = self._keys()
-        if not keys:
-            return self
-        expected = self._structural_identity(keys[0])
-        for key in keys[1:]:
-            actual = self._structural_identity(key)
-            if actual != expected:
-                raise ValueError(
-                    "EvaluationKeySet cannot mix incompatible key states: "
-                    f"expected={expected}, actual={actual}"
-                )
-        return self
-
-    def require(
-        self, requirements: EvaluationKeyRequirements
-    ) -> EvaluationKeySet:
-        """Validate and require every evaluator capability in ``requirements``.
-
-        Required rotations are normalized with the inventory's ring
-        dimension when at least one rotation key is present. The method checks
-        capability presence only; a consuming engine must separately preflight
-        device and native key compatibility. It returns this mutable
-        inventory for fluent validation.
-
-        Raises:
-            TypeError: If ``requirements`` or a current capability role has an
-                invalid type.
-            ValueError: If members are structurally inconsistent or a required
-                rotation/relinearization/conjugation capability is absent.
-        """
-
-        if not isinstance(requirements, EvaluationKeyRequirements):
-            raise TypeError("requirements must be an EvaluationKeyRequirements")
-        self.validate()
-        if requirements.rotation_steps:
-            if self.rotations:
-                prototype = next(iter(self.rotations.values()))
-                required_steps = {
-                    RotationKey.normalize_step(
-                        step, ring_dimension=prototype.data.size(-1)
-                    )
-                    for step in requirements.rotation_steps
-                }
-            else:
-                required_steps = set(requirements.rotation_steps)
-            missing = sorted(required_steps - set(self.rotations))
-            if missing:
-                raise ValueError(
-                    f"EvaluationKeySet is missing rotation steps: {missing}"
-                )
-        if (
-            requirements.requires_relinearization
-            and self.relinearization is None
-        ):
-            raise ValueError(
-                "EvaluationKeySet is missing a relinearization key"
+    def _matching(
+        self,
+        key_type: type,
+        *,
+        q_prime_ids: tuple[int, ...] | None,
+        p_prime_ids: tuple[int, ...] | None,
+        ring_dimension: int | None,
+        dtype: torch.dtype | None,
+        device: torch.device | str | None,
+        key_prime_ids: tuple[int, ...] | None,
+        digit_prime_ids: tuple[tuple[int, ...], ...] | None,
+    ) -> Iterator[_EvaluationKey]:
+        selected_device = None if device is None else torch.device(device)
+        for key in self._entries:
+            if not isinstance(key, key_type):
+                continue
+            if (
+                key.modulus_basis,
+                key.polynomial_domain,
+                key.residue_representation,
+            ) != ("QP", "ntt", "montgomery"):
+                continue
+            if (
+                ring_dimension is not None
+                and key.data.size(-1) != ring_dimension
+            ):
+                continue
+            if dtype is not None and key.data.dtype != dtype:
+                continue
+            if selected_device is not None and key.device != selected_device:
+                continue
+            if key_prime_ids is not None and key.prime_ids != key_prime_ids:
+                continue
+            if (
+                digit_prime_ids is not None
+                and key.digit_prime_ids != digit_prime_ids
+            ):
+                continue
+            represented_q = tuple(
+                i for rows in key.digit_prime_ids for i in rows
             )
-        if requirements.requires_conjugation and self.conjugation is None:
-            raise ValueError("EvaluationKeySet is missing a conjugation key")
-        return self
+            key_p = key.prime_ids[len(represented_q) :]
+            if p_prime_ids is not None and key_p != p_prime_ids:
+                continue
+            if q_prime_ids is not None:
+                if (
+                    not q_prime_ids
+                    or tuple(i for i in represented_q if i in q_prime_ids)
+                    != q_prime_ids
+                ):
+                    continue
+                start = key.prime_ids.index(q_prime_ids[0])
+                active_qp = (*q_prime_ids, *key_p)
+                if key.prime_ids[start : start + len(active_qp)] != active_qp:
+                    continue
+            yield key
+
+    @staticmethod
+    def _rank(
+        key: KeySwitchKey, q_prime_ids: tuple[int, ...]
+    ) -> tuple[int, int]:
+        active_digits = sum(
+            any(i in q_prime_ids for i in rows) for rows in key.digit_prime_ids
+        )
+        return active_digits, key.nbytes
+
+    def select_rotations(
+        self,
+        steps: Iterable[int],
+        *,
+        allow_composed: bool = False,
+        q_prime_ids: tuple[int, ...] | None = None,
+        p_prime_ids: tuple[int, ...] | None = None,
+        ring_dimension: int | None = None,
+        dtype: torch.dtype | None = None,
+        device: torch.device | str | None = None,
+        key_prime_ids: tuple[int, ...] | None = None,
+        digit_prime_ids: tuple[tuple[int, ...], ...] | None = None,
+    ) -> RotationKeySet | None:
+        """Select a complete shared-layout rotation group, or leave it unresolved.
+
+        With ``allow_composed``, each requested step uses a direct key when
+        available in that layout group, otherwise its signed-power-of-two path.
+        The returned mapping contains the primitive keys for those paths.
+        Group comparison counts each path invocation, including repeated use
+        of the same primitive key; payload size counts each selected key once.
+        Existing key operands may constrain ``key_prime_ids`` and
+        ``digit_prime_ids``. Zero steps require no key. Active Q intersections
+        retain stored plane identities; selection never repartitions key data.
+        Omitted p_prime_ids leaves auxiliary rows unconstrained; each candidate
+        supplies its own known P. Unknown source geometry remains unresolved.
+        """
+        from fhelium.utils.rotation import (
+            decompose_signed_power_of_two_rotation,
+        )
+
+        requested = tuple(steps)
+        if ring_dimension is not None:
+            requested = tuple(
+                RotationKey.normalize_step(step, ring_dimension=ring_dimension)
+                for step in requested
+            )
+        if not any(requested):
+            return RotationKeySet()
+        groups: dict[tuple[object, ...], dict[int, list[RotationKey]]] = {}
+        for key in self._matching(
+            RotationKey,
+            q_prime_ids=q_prime_ids,
+            p_prime_ids=p_prime_ids,
+            ring_dimension=ring_dimension,
+            dtype=dtype,
+            device=device,
+            key_prime_ids=key_prime_ids,
+            digit_prime_ids=digit_prime_ids,
+        ):
+            key = cast(RotationKey, key)
+            group = groups.setdefault(self._layout(key), {})
+            group.setdefault(key.rotation_step, []).append(key)
+        complete: list[tuple[RotationKeySet, bool, tuple[int, int, int]]] = []
+        for group in groups.values():
+            prototype = next(iter(group.values()))[0]
+            required = tuple(
+                RotationKey.normalize_step(
+                    step, ring_dimension=prototype.data.size(-1)
+                )
+                for step in requested
+            )
+            primitive_steps = []
+            for step in required:
+                if not step:
+                    continue
+                if step in group:
+                    primitive_steps.append(step)
+                elif allow_composed:
+                    primitive_steps.extend(
+                        decompose_signed_power_of_two_rotation(
+                            step, prototype.data.size(-1) // 2
+                        )
+                    )
+                else:
+                    primitive_steps.append(step)
+            invocations = tuple(primitive_steps)
+            primitive_steps = tuple(dict.fromkeys(invocations))
+            if not all(step in group for step in primitive_steps):
+                continue
+            complete.append(
+                (
+                    RotationKeySet(
+                        {step: group[step][0] for step in primitive_steps}
+                    ),
+                    all(len(group[step]) == 1 for step in primitive_steps),
+                    (
+                        len(invocations),
+                        sum(
+                            self._rank(group[step][0], q_prime_ids or ())[0]
+                            for step in invocations
+                        ),
+                        sum(group[step][0].nbytes for step in primitive_steps),
+                    ),
+                )
+            )
+        known = all(
+            value is not None
+            for value in (
+                q_prime_ids,
+                ring_dimension,
+                dtype,
+                device,
+            )
+        )
+        if not complete or (
+            not known and (len(complete) != 1 or not complete[0][1])
+        ):
+            return None
+        if not known:
+            return complete[0][0]
+        return min(complete, key=lambda choice: choice[2])[0]
+
+    def _select_one(self, key_type: type, **facts) -> _EvaluationKey | None:
+        candidates = tuple(self._matching(key_type, **facts))
+        if not candidates:
+            return None
+        if any(
+            facts[name] is None
+            for name in (
+                "q_prime_ids",
+                "ring_dimension",
+                "dtype",
+                "device",
+            )
+        ):
+            return candidates[0] if len(candidates) == 1 else None
+        return min(
+            candidates, key=lambda key: self._rank(key, facts["q_prime_ids"])
+        )
+
+    def select_relinearization(
+        self,
+        *,
+        q_prime_ids: tuple[int, ...] | None = None,
+        p_prime_ids: tuple[int, ...] | None = None,
+        ring_dimension: int | None = None,
+        dtype: torch.dtype | None = None,
+        device: torch.device | str | None = None,
+        key_prime_ids: tuple[int, ...] | None = None,
+        digit_prime_ids: tuple[tuple[int, ...], ...] | None = None,
+    ) -> RelinearizationKey | None:
+        """Select relinearization material, with an optional auxiliary-row constraint."""
+        key = self._select_one(
+            RelinearizationKey,
+            q_prime_ids=q_prime_ids,
+            p_prime_ids=p_prime_ids,
+            ring_dimension=ring_dimension,
+            dtype=dtype,
+            device=device,
+            key_prime_ids=key_prime_ids,
+            digit_prime_ids=digit_prime_ids,
+        )
+        return key if isinstance(key, RelinearizationKey) else None
+
+    def select_conjugation(
+        self,
+        *,
+        q_prime_ids: tuple[int, ...] | None = None,
+        p_prime_ids: tuple[int, ...] | None = None,
+        ring_dimension: int | None = None,
+        dtype: torch.dtype | None = None,
+        device: torch.device | str | None = None,
+        key_prime_ids: tuple[int, ...] | None = None,
+        digit_prime_ids: tuple[tuple[int, ...], ...] | None = None,
+    ) -> ConjugationKey | None:
+        """Select conjugation material, with an optional auxiliary-row constraint."""
+        key = self._select_one(
+            ConjugationKey,
+            q_prime_ids=q_prime_ids,
+            p_prime_ids=p_prime_ids,
+            ring_dimension=ring_dimension,
+            dtype=dtype,
+            device=device,
+            key_prime_ids=key_prime_ids,
+            digit_prime_ids=digit_prime_ids,
+        )
+        return key if isinstance(key, ConjugationKey) else None

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Compare exact Q chains with different maximum public depths.
+"""Compare Q prime-group chains with different maximum public depths.
 
 Run:
     python examples/03_eager_modulus_chain.py \

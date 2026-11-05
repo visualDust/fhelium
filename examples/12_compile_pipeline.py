@@ -59,8 +59,7 @@ def main() -> None:
         workspace=workspace,
     )
 
-    # This workload selects one concrete composition from the built-in pass
-    # catalog. FHElium does not impose this sequence as a global default.
+    # Compose the built-in passes required by this workload.
     pipeline = fh_compile.Pipeline(
         (
             fh_compile.EliminateDeadValuesPass(),

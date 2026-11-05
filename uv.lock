@@ -152,7 +152,7 @@ wheels = [
 
 [[package]]
 name = "fhelium"
-version = "0.30.0"
+version = "0.40.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -195,7 +195,7 @@ requires-dist = [
     { name = "rich", specifier = ">=15.0.0" },
     { name = "safetensors", specifier = ">=0.8.0" },
     { name = "textual", specifier = ">=8.2.8" },
-    { name = "torch", specifier = ">=2.10,<2.14" },
+    { name = "torch", specifier = ">=2.10,<2.15" },
     { name = "triton-csprng", specifier = ">=0.1.4,<0.2" },
     { name = "triton-windows", marker = "sys_platform == 'win32'", specifier = "==3.7.1.post27" },
     { name = "xdsl", specifier = ">=0.68,<0.69" },

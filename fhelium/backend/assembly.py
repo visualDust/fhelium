@@ -21,21 +21,26 @@ from .ckks.arithmetic import (
     NativeCiphertextMultiplyImplementation,
     NativeCompressedPlaintextImplementation,
 )
+from .ckks.modulus_raise import NativeModulusRaiseImplementation
 from .ckks.key_switch import (
     NativeKeySwitchImplementation,
     NativeRelinearizeImplementation,
 )
 from .ckks.rotation.operations import (
     NativeRotateImplementation,
+    NativeRotationSumImplementation,
     NativeHoistedRotateManyImplementation,
     NativeGroupedRotationWeightedSumImplementation,
 )
+from .rns.basis_extension import NativeCenteredBasisExtensionImplementation
+from .rns.crt import NativeCrtBasisExtensionImplementation
 from .rns.modup import NativeHybridModUpImplementation
 from .rns.moddown import NativeModDownImplementation
 from .rns.key_product import NativeKeySwitchDigitProductImplementation
 from .rns.automorphism import NativeCoefficientAutomorphismImplementation
 from .rns.rescale import NativeRescaleImplementation
 from .ntt.operations import NativeNttImplementation
+from .ntt.automorphism import NativeNttAutomorphismImplementation
 from .rns.operations import (
     NativeBatchSumImplementation,
     NativeMontgomeryAccumulateImplementation,
@@ -66,12 +71,16 @@ def create_builtin_operation_registry(
         )
     )
     generated = ()
+    weighted = ()
     if find_spec("triton") is not None:
         from .triton import (
             TritonFusionImplementation,
             TritonTensorFusionImplementation,
         )
 
+        from .triton._weighted_sum import TritonWeightedSumImplementation
+
+        weighted = (TritonWeightedSumImplementation(),)
         generated = (
             TritonTensorFusionImplementation(),
             TritonFusionImplementation(),
@@ -90,18 +99,24 @@ def create_builtin_operation_registry(
             NativePlaintextArithmeticImplementation(),
             NativeMontgomeryMultiplyImplementation(),
             NativeMontgomeryWeightedSumImplementation(),
+            *weighted,
             NativeRnsStructureImplementation(),
+            NativeCenteredBasisExtensionImplementation(),
+            NativeCrtBasisExtensionImplementation(),
             NativeHybridModUpImplementation(),
             NativeKeySwitchDigitProductImplementation(),
             NativeMontgomeryAccumulateImplementation(),
             NativeModDownImplementation(),
             NativeCoefficientAutomorphismImplementation(),
             ntt_implementation,
+            NativeNttAutomorphismImplementation(),
             NativeRescaleImplementation(),
             NativeCiphertextMultiplyImplementation(),
             NativeRelinearizeImplementation(),
+            NativeModulusRaiseImplementation(),
             NativeKeySwitchImplementation(),
             NativeRotateImplementation(),
+            NativeRotationSumImplementation(),
             NativeCompressedPlaintextImplementation(),
             NativeHoistedRotateManyImplementation(),
             NativeGroupedRotationWeightedSumImplementation(),

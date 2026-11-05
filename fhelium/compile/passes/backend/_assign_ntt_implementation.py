@@ -22,7 +22,9 @@ from ..._pipeline import DecisionRecord, PassResult, PassStats
 from .._operation_transforms import program_operations
 
 _NTT_TYPES = tuple(
-    cast(type[Operation], spec.operation_type) for spec in ntt.OPERATION_SPECS
+    cast(type[Operation], spec.operation_type)
+    for spec in ntt.OPERATION_SPECS
+    if issubclass(cast(type[Operation], spec.operation_type), ntt._NttOp)
 )
 _TRANSFORM_TYPES = (*_NTT_TYPES, ckks.ToNttOp, ckks.FromNttOp)
 _COMPOUND_TYPES = (
