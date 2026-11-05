@@ -873,14 +873,7 @@ class CkksEngine:
     ) -> Ciphertext | Plaintext:
         r"""Return an RNS value after its negacyclic forward NTT.
 
-        For every limb prime $q_i$, this preserves the polynomial ring element
-        while changing the final tensor axis from coefficients to NTT
-        evaluations. Plaintext axes are composable: input must already be
-        coefficient-domain Montgomery RNS, and the transition is
-        ``(coefficient, montgomery)`` to ``(ntt, montgomery)``. Ciphertext
-        states are deliberately coupled: the transition is
-        ``(coefficient, standard)`` to ``(ntt, montgomery)`` and includes
-        standard-to-Montgomery conversion.
+        For every limb prime $q_i$, this preserves the polynomial ring element while changing the final tensor axis from coefficients to NTT evaluations. Plaintext axes are composable: input must already be coefficient-domain Montgomery RNS, and the transition is ``(coefficient, montgomery)`` to ``(ntt, montgomery)``. Ciphertext states are coupled: the transition is ``(coefficient, standard)`` to ``(ntt, montgomery)`` and includes standard-to-Montgomery conversion.
 
         Layout ``[*batch, limb, N]`` for plaintext or
         ``[component, *batch, limb, N]`` for ciphertext, engine integral

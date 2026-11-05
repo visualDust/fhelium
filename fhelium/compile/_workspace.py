@@ -7,11 +7,9 @@ from typing import Any
 
 
 class CompileWorkspace(dict[object, object]):
-    """Store arbitrary entries shared across one Compile request.
+    """Store shared entries for one compilation request.
 
-    Keys and values have no framework-defined schema. Code that uses an entry
-    defines its format. Capture and every pass in the selected pipeline receive
-    the same workspace.
+    Each consumer defines the format of its entries. Capture and every pass in the selected pipeline receive the same workspace.
     """
 
     def __init__(

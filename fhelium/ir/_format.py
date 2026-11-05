@@ -124,7 +124,7 @@ def format_program(
     generic: bool = False,
     include_locations: bool = False,
 ) -> str:
-    """Format a Program for reading rather than parsing or persistence.
+    """Render a Program with structured attributes for human inspection.
 
     JSON payloads stored in machine-oriented string attributes are rendered as
     nested attribute dictionaries and arrays. ``summary`` also omits duplicated

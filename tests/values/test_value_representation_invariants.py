@@ -455,15 +455,13 @@ def test_exact_key_consumers_reject_malformed_or_wrong_concrete_states(
         engine.set_secret_key(wrong_dtype)
 
     relinearization = engine.create_relinearization_key(secret)
-    malformed_digits = replace(
-        relinearization, data=relinearization.data[:-1].clone()
-    )
-    with pytest.raises(ValueError, match="digit count"):
-        engine.set_relinearization_key(malformed_digits)
+    with pytest.raises(ValueError, match="stored plane"):
+        replace(relinearization, data=relinearization.data[:-1].clone())
 
     generic_key = fh.KeySwitchKey(
         data=relinearization.data.clone(),
         prime_ids=relinearization.prime_ids,
+        digit_prime_ids=relinearization.digit_prime_ids,
     )
     with pytest.raises(TypeError, match="RelinearizationKey"):
         engine.set_relinearization_key(generic_key)  # type: ignore[arg-type]

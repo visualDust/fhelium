@@ -6,7 +6,21 @@ one Engine. Preconfigured constructors live in
 :mod:`fhelium.experimental.bootstrap.presets`.
 """
 
+from fhelium.experimental.bootstrap.polynomial.blocked import (
+    BlockedChebyshevEvaluator,
+    ChebyshevBlockPlan,
+)
 from fhelium.experimental.bootstrap.full_slot import FullSlotBootstrap
+from fhelium.experimental.bootstrap.structural import (
+    CenteredModRaise,
+    EncapsulatedModRaise,
+    ScaledModRaise,
+    ModulusRaising,
+)
+from fhelium.experimental.bootstrap._core import (
+    PreparedBootstrapCore,
+    PreparedBootstrap,
+)
 from fhelium.experimental.bootstrap.arithmetic import BootstrapArithmetic
 from fhelium.experimental.bootstrap.linear import (
     DiagonalBSGSEvaluator,
@@ -16,9 +30,9 @@ from fhelium.experimental.bootstrap.linear import (
 )
 from fhelium.experimental.bootstrap.reduction import (
     CosineDoubleAngleReduction,
-    ExponentialSquaringReduction,
 )
 from fhelium.experimental.bootstrap.polynomial import (
+    EvenChebyshevEvaluator,
     BalancedPowerEvaluator,
     BinaryDecompositionChebyshevEvaluator,
     ChebyshevInterpolator,
@@ -27,7 +41,18 @@ from fhelium.experimental.bootstrap.polynomial import (
     PolynomialApproximation,
 )
 
+from fhelium.experimental.bootstrap.presets.cosine import cosine_bootstrap
+
+
 __all__ = [
+    "cosine_bootstrap",
+    "CenteredModRaise",
+    "EncapsulatedModRaise",
+    "ScaledModRaise",
+    "ModulusRaising",
+    "EvenChebyshevEvaluator",
+    'BlockedChebyshevEvaluator',
+    'ChebyshevBlockPlan',
     'BalancedPowerEvaluator',
     'BootstrapArithmetic',
     'BinaryDecompositionChebyshevEvaluator',
@@ -36,8 +61,9 @@ __all__ = [
     'DiagonalBSGSEvaluator',
     'DiagonalLinearTransform',
     'DirectDiagonalEvaluator',
-    'ExponentialSquaringReduction',
     'FullSlotBootstrap',
+    'PreparedBootstrapCore',
+    'PreparedBootstrap',
     'HornerPowerEvaluator',
     'PatersonStockmeyerPowerEvaluator',
     'PolynomialApproximation',

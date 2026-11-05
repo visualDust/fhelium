@@ -242,19 +242,48 @@ def test_captured_input_can_declare_executable_representation() -> None:
     assert state["residue_representation"] == StringAttr("montgomery")
 
 
-def test_ntt_relinearization_lowering_keeps_real_ntt_dataflow() -> None:
+@pytest.mark.parametrize("rounding", [None, "floor", "nearest"])
+@pytest.mark.parametrize("domain", ["coefficient", "ntt"])
+def test_relinearization_lowering_preserves_moddown_rounding(rounding, domain):
     source_type = _ciphertext_type("ntt", "montgomery", components=3)
-    result_type = _ciphertext_type("ntt", "montgomery", components=2)
+    result_type = _ciphertext_type(
+        domain, "montgomery" if domain == "ntt" else "standard", components=2
+    )
+    qids = ArrayAttr(IntegerAttr(i, 64) for i in range(len(_config().q_moduli)))
+    source_type = source_type.with_state(prime_ids=qids)
+    result_type = result_type.with_state(prime_ids=qids)
     block = Block(arg_types=(source_type,))
     key = ir.dialects.core.MaterialRefOp(
-        ir.dialects.ckks.EvaluationKeyType(), symbol="relinearization-key"
+        ir.dialects.ckks.EvaluationKeyType().with_state(
+            prime_ids=ArrayAttr(
+                IntegerAttr(i, 64) for i in range(len(_config().moduli))
+            ),
+            digit_prime_ids=ArrayAttr(ArrayAttr((qid,)) for qid in qids),
+        ),
+        symbol="relinearization-key",
     )
+    inferred = ir.dialects.ckks.RelinearizeOp(
+        block.args[0],
+        key.value,
+        attributes={"output_domain": StringAttr(domain)},
+    )
+    assert inferred.result.type.state.data["polynomial_domain"] == StringAttr(
+        domain
+    )
+    assert inferred.result.type.state.data[
+        "residue_representation"
+    ] == StringAttr("montgomery" if domain == "ntt" else "standard")
+    inferred.erase()
     relinearize = ir.dialects.ckks.RelinearizeOp(
-        block.args[0], key.value, result_type, output_domain="ntt"
+        block.args[0], key.value, result_type, output_domain=domain
     )
+    if rounding is None:
+        relinearize.attributes.pop("moddown_rounding", None)
+    else:
+        relinearize.attributes["moddown_rounding"] = StringAttr(rounding)
     block.add_ops((key, relinearize, ReturnOp(relinearize.result)))
     program = ir.Program.from_function(block, (result_type,))
-
+    program = ir.Program.parse(program.to_text())
     fh_compile.LowerCkksToRnsNttPass().run(
         _compile.Compilation(
             program, _compile.CompileWorkspace({CkksConfig: _config()})
@@ -263,11 +292,23 @@ def test_ntt_relinearization_lowering_keeps_real_ntt_dataflow() -> None:
     fh_compile.ValidateExecutionRepresentationsPass().run(
         _compile.Compilation(program, _compile.CompileWorkspace({}))
     )
-
-    assert any(
-        isinstance(operation, ir.dialects.rns.ModDownNttQpToQOp)
-        for operation in program.single_block().ops
+    cls = (
+        ir.dialects.rns.ModDownNttQpToQOp
+        if domain == "ntt"
+        else ir.dialects.rns.ModDownQpToQOp
     )
+    moddown = next(
+        op for op in program.single_block().ops if isinstance(op, cls)
+    )
+    if rounding is None:
+        moddown.attributes.pop("rounding", None)
+        program = ir.Program.parse(program.to_text())
+        moddown = next(
+            op for op in program.single_block().ops if isinstance(op, cls)
+        )
+    assert moddown.rounding.data == (rounding or "nearest")
+    names = [name.data for name in moddown.attributes["parameter_names"]]
+    assert ("moddown_half" in names) == (rounding != "floor")
 
 
 @pytest.mark.parametrize(
@@ -397,3 +438,84 @@ def test_decrypt_input_domain_is_registered_and_checked_by_execution_gate() -> (
         fh_compile.ValidateExecutionRepresentationsPass().run(
             _compile.Compilation(program, _compile.CompileWorkspace({}))
         )
+
+
+def test_rotation_hoisting_preserves_distinct_rounding_groups():
+    """Rotations sharing an input retain each group's requested quotient rule."""
+    ckks = ir.dialects.ckks
+    value_type = _ciphertext_type("coefficient", "standard")
+    key_types = [
+        ckks.EvaluationKeyType().with_state(
+            rotation_step=IntegerAttr(step, 64),
+            prime_ids=ArrayAttr(IntegerAttr(i, 64) for i in range(6)),
+            digit_prime_ids=ArrayAttr(
+                ArrayAttr((IntegerAttr(i, 64),)) for i in range(5)
+            ),
+        )
+        for step in (1, 2)
+    ]
+    block = Block(arg_types=(value_type, *key_types))
+    rotations = [
+        ckks.RotateOp(block.args[0], key, moddown_rounding=rounding)
+        for rounding in ("floor", "nearest")
+        for key in block.args[1:]
+    ]
+    block.add_ops((*rotations, ReturnOp(*(op.result for op in rotations))))
+    program = ir.Program.from_function(block, (value_type,) * 4)
+    fh_compile.RotationHoistingPass().run(
+        _compile.Compilation(program, _compile.CompileWorkspace({}))
+    )
+    groups = [op for op in program.walk() if isinstance(op, ckks.RotateManyOp)]
+    assert sorted(
+        (op.moddown_rounding.data, len(op.outputs)) for op in groups
+    ) == [
+        ("floor", 2),
+        ("nearest", 2),
+    ]
+
+
+@pytest.mark.parametrize("rescale", [False, True])
+def test_rotation_sum_assigns_complete_depth_group_and_key_requirements(
+    rescale,
+):
+    source = _config()
+    config = CkksConfig(
+        logN=source.logN,
+        q_depth_groups=(source.q_moduli[:2], *source.q_depth_groups[2:]),
+        p_moduli=source.p_moduli,
+        default_scale=source.default_scale,
+        enforce_security_budget=False,
+    )
+    ciphertext = _ciphertext_type("coefficient", "standard").with_state(
+        prime_ids=ArrayAttr(
+            IntegerAttr(i, 64) for i in range(config.num_q_primes)
+        )
+    )
+    key = ir.dialects.ckks.EvaluationKeyType()
+    block = Block(arg_types=(ciphertext, ciphertext, key, key))
+    result_type = ir.dialects.ckks.CiphertextType().with_state(
+        components=IntegerAttr(2, 64),
+        basis=StringAttr("Q"),
+        polynomial_domain=StringAttr("coefficient"),
+        residue_representation=StringAttr("standard"),
+    )
+    operation = ir.dialects.ckks.RotationSumOp(
+        block.args[:2], block.args[2:], (1, -3), result_type, rescale=rescale
+    )
+    block.add_ops((operation, ReturnOp(operation.result)))
+    program = ir.Program.from_function(block, (result_type,))
+    compilation = _compile.Compilation(
+        program, _compile.CompileWorkspace({CkksConfig: config})
+    )
+    fh_compile.AssignCkksDepthsPass().run(compilation)
+    fh_compile.AssignCkksScalesPass().run(compilation)
+    state = operation.result.type.state.data
+    assert state["depth"] == IntegerAttr(int(rescale), 64)
+    assert state["scale"] == FloatAttr(
+        4.0 / config.rescale_divisor(0) if rescale else 4.0, Float64Type()
+    )
+    assert tuple(i.value.data for i in state["prime_ids"]) == tuple(
+        range(2 if rescale else 0, config.num_q_primes)
+    )
+    requirements = ir.analyze_evaluation_key_requirements(program)
+    assert requirements.rotation_steps == frozenset((1, -3))

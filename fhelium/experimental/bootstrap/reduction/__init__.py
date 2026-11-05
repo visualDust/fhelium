@@ -3,8 +3,5 @@
 from fhelium.experimental.bootstrap.reduction.cosine import (
     CosineDoubleAngleReduction,
 )
-from fhelium.experimental.bootstrap.reduction.exponential import (
-    ExponentialSquaringReduction,
-)
 
-__all__ = ['CosineDoubleAngleReduction', 'ExponentialSquaringReduction']
+__all__ = ['CosineDoubleAngleReduction']

@@ -27,12 +27,9 @@ if TYPE_CHECKING:
 
 
 class Program:
-    """Own one structurally valid, mixed-level xDSL module.
+    """Own a structurally valid mixed-level xDSL module and its material annotations.
 
-    The module may contain registered FHElium operations, unknown extension
-    dialects, partial state, and operations from several abstraction levels.
-    Numerical analysis, transformation, backend coverage, and execution are
-    responsibilities of consumers rather than this representation object.
+    The module may combine registered FHElium operations, extension dialects, and partially represented value state. Consumers inspect, transform, link, or execute this shared representation.
     """
 
     def __init__(self, module: ModuleOp) -> None:
@@ -68,7 +65,7 @@ class Program:
     def set_material_description(
         self, symbol: str, description: Mapping[str, object]
     ) -> None:
-        """Set an annotation without checking binding identity or correctness."""
+        """Set descriptive metadata for a material symbol."""
         descriptions = self.material_descriptions
         descriptions[symbol] = dict(description)
         self.module.attributes["fhelium.material_descriptions"] = (

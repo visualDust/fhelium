@@ -69,7 +69,16 @@ engine.set_relinearization_key(relinearization_key)
 engine.set_rotation_key(rotation_key)
 ```
 
-Creation returns a value; installation adds that value to the Engine's inventory. Key placement remains separate. A stored rotation step describes specialization, not the participant or secret that produced the key. Cryptographic correspondence remains the application's responsibility.
+Creation returns a value; installation retains it for the corresponding primitive Engine operation. Composed consumers can share an application-owned inventory instead:
+
+```python
+from fhelium.values import EvaluationKeySet
+
+pool = EvaluationKeySet([rotation_key, relinearization_key])
+pool.add(engine.create_conjugation_key(secret_key))
+```
+
+`add` and `update` retain references with object-identity deduplication. Multiple layouts or device copies for the same rotation step can coexist until a consumer selects a compatible group. Prepared consumers retain their selected references, so removing a member or clearing the inventory does not change their bindings. Placement and the correspondence between ciphertexts, keys and secret relations remain application responsibilities.
 
 ::: details Source
 <<< @/../examples/02_eager_key_materials.py

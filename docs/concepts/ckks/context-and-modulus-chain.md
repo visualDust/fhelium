@@ -1,12 +1,12 @@
 # Configuration and modulus chain
 
-`CkksConfig` fixes the mathematical CKKS parameter set used by an execution context: the polynomial ring, default scale, ordered ciphertext-modulus groups, special modulus, Galois generator, error distribution, and security-budget selection. It contains exact prime values rather than device or machine-word policy.
+`CkksConfig` fixes the mathematical CKKS parameter set used by an execution context: the polynomial ring, default scale, ordered ciphertext-modulus groups, special modulus, Galois generator, error distribution, and security-budget selection. The Q groups and P modulus are stored as prime values.
 
 ## Ownership
 
 | Object | Responsibility |
 | --- | --- |
-| `Preset` | Select a reviewed, named parameter baseline and resolve it to exact primes |
+| `Preset` | Select a reviewed, named parameter baseline and resolve it to prime values |
 | `CkksConfig` | Store the placement-independent CKKS and security parameters |
 | `fhelium.eager.Engine` | Select an RNS execution format and lazily create device-local arithmetic, random, and key resources |
 
@@ -172,9 +172,9 @@ A default scale near $2^{50}$ does not require one approximately 50-bit Q prime 
 
 Encoding first produces signed `int64` integer coefficients. The `integer_coefficients_to_rns` transition reduces those coefficients modulo each active prime and materializes the Engine's RNS dtype. Ciphertexts and live keys then retain that dtype.
 
-The Engine selects the narrowest supported execution format for the exact QP prime set. `rns_dtype=` is an expert override and is validated against every configured modulus. Montgomery radix, lazy-reduction bounds, and native table layout belong to the device-local `RnsContext`, not `CkksConfig`. This keeps one Ciphertext, Engine, operation set, and Backend model across supported execution formats.
+The Engine selects the narrowest supported execution format for the configured QP prime set. `rns_dtype=` is an expert override and is validated against every configured modulus. Montgomery radix, lazy-reduction bounds, and native table layout belong to the device-local `RnsContext`, not `CkksConfig`. This keeps one Ciphertext, Engine, operation set, and Backend model across supported execution formats.
 
-## Exact configuration and serialization
+## Parameter identity and serialization
 
 A resolved configuration contains:
 
@@ -189,7 +189,7 @@ security_bits
 enforce_security_budget
 ```
 
-`CkksConfig.dumps()` serializes these values and the FHElium package version. `CkksConfig.parse()` reconstructs that exact parameter set. Runtime placement, process groups, caches, NTT implementation choice, and RNS dtype do not enter configuration identity.
+`CkksConfig.dumps()` serializes these values and the FHElium package version. `CkksConfig.parse()` reconstructs the serialized parameter values. Runtime placement, process groups, caches, NTT implementation choice, and RNS dtype do not enter configuration identity.
 
 ## Cost and security consequences
 
@@ -201,7 +201,7 @@ $$
 
 bytes of Tensor payload, where $W$ is the number of bytes per residue element. Multiply this quantity by the product of batch extents for a homogeneous batch. Evaluation keys add key digit, component, and QP axes and commonly dominate memory. More Q rows provide additional modulus capacity but increase transforms, key products, and storage.
 
-The built-in security assessment applies to the exact complete QP product. A parameter plan must also validate numerical precision, message range, error growth, and native arithmetic bounds for its workload.
+The built-in security assessment applies to the product of all configured Q and P primes. A parameter plan must also validate numerical precision, message range, error growth, and native arithmetic bounds for its workload.
 
 ## Related concepts
 

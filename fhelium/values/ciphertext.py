@@ -50,9 +50,7 @@ class Ciphertext(TensorResident):
     storage, while limb slices and batch selections are views. Methods ending
     in ``_`` mutate this object and are visible through aliases.
 
-    Distribution and communication are deliberately not encoded in this
-    value: an SPMD program decides what each rank stores and which collectives
-    it executes.
+    In an SPMD program, each rank stores its local ciphertext values and uses collectives to exchange or combine them.
     """
 
     data: torch.Tensor
@@ -222,7 +220,7 @@ class Ciphertext(TensorResident):
     def with_data(self, data: torch.Tensor) -> Ciphertext:
         """Construct the same semantic layout around replacement storage.
 
-        The payload is not cloned; the result aliases ``data`` exactly.
+        The result shares the supplied ``data`` Tensor.
         """
 
         return Ciphertext(
@@ -295,10 +293,7 @@ class Ciphertext(TensorResident):
     ) -> Ciphertext:
         """Allocate and copy compatible values into one new batch dimension.
 
-        Stacking separately allocated values cannot be zero-copy. This named
-        constructor makes that cost visible rather than hiding a
-        :func:`torch.stack` inside an engine operation. The new logical batch
-        axis is inserted before any batch axes already owned by each value.
+        Stacking allocates a new Tensor. The new logical batch axis precedes any batch axes already owned by each value.
 
         The caller must ensure every value has the same effective key lineage,
         applying a key switch first when necessary.

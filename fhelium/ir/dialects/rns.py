@@ -7,10 +7,7 @@ during that procedure.  Montgomery representation stores residue
 $x_i$ as $x_iR_i\bmod q_i$; number-theoretic-transform (NTT) form
 stores the negacyclic transform of each polynomial row.
 
-Each operation defines one complete transformation of an RNS bundle. The
-operations contain no CPU, CUDA, Triton, kernel, radix, or fusion selection.
-Their parameter and table operands carry numerical Tensors supplied by Eager
-or bound to a Program before execution.
+Each operation defines a transformation of an RNS bundle and its representation state. Parameter and table operands carry numerical Tensors supplied by Eager or bound to a Program before execution.
 """
 
 from __future__ import annotations
@@ -19,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from xdsl.dialects.builtin import (
+    ArrayAttr,
     Float64Type,
     FloatAttr,
     IntegerAttr,
@@ -27,11 +25,13 @@ from xdsl.dialects.builtin import (
 from xdsl.ir import Attribute, Dialect, Operation, SSAValue
 from xdsl.irdl import (
     IRDLOperation,
+    AttrSizedOperandSegments,
     attr_def,
     irdl_attr_definition,
     irdl_op_definition,
     operand_def,
     opt_attr_def,
+    opt_operand_def,
     result_def,
     traits_def,
     var_operand_def,
@@ -259,9 +259,7 @@ class SumStandardBatchOp(IRDLOperation):
             operands=[value, parameters],
             result_types=[result_type],
             attributes={
-                "dim": (
-                    IntegerAttr(dim, 64) if isinstance(dim, int) else dim
-                )
+                "dim": (IntegerAttr(dim, 64) if isinstance(dim, int) else dim)
             },
         )
 
@@ -361,6 +359,45 @@ class MultiplyPlaintextOp(_CiphertextPlaintextOp):
         )
 
 
+def _weighted_layout_attributes(layouts, chunk_size):
+    attributes = {}
+    if layouts:
+        attributes["plaintext_layouts"] = ArrayAttr(
+            StringAttr(x) for x in layouts
+        )
+    if chunk_size is not None:
+        attributes["term_chunk_size"] = IntegerAttr(chunk_size, 64)
+    return attributes
+
+
+def _verify_weighted_layouts(operation, terms, groups):
+    if terms <= 0 or groups <= 0:
+        raise VerifyException(
+            "Weighted sums require positive term and group counts"
+        )
+    layouts = operation.plaintext_layouts
+    names = tuple(x.data for x in layouts) if layouts is not None else ()
+    if names and (
+        len(names) != terms * groups
+        or any(
+            name not in {"dense", "cyclic", "contiguous", "strided_sparse"}
+            for name in names
+        )
+    ):
+        raise VerifyException(
+            "Weighted-sum layouts must describe every plaintext"
+        )
+    if len(operation.terms) != terms * (groups + 1) + names.count(
+        "strided_sparse"
+    ):
+        raise VerifyException(
+            "Weighted-sum operands must include each sparse implicit row"
+        )
+    chunk = operation.term_chunk_size
+    if chunk is not None and chunk.value.data <= 0:
+        raise VerifyException("Weighted-sum term chunk size must be positive")
+
+
 @irdl_op_definition
 class MontgomeryWeightedSumOp(IRDLOperation):
     r"""Sum ciphertext/plaintext products in NTT/Montgomery representation.
@@ -369,44 +406,64 @@ class MontgomeryWeightedSumOp(IRDLOperation):
     each component, batch element, active-prime row, and NTT index computes
 
     $$
-    y=\sum_{t=0}^{T-1}c_tp_t\pmod {q_i}.
+    y=\sum_{t=0}^{T-1}c_t\widetilde p_t R_i^{-1}\pmod {q_i}.
     $$
+
+    Here $c_t$ and $\widetilde p_t$ are stored Montgomery residues;
+    $\widetilde p_t$ denotes the logical expansion of its plaintext layout.
+    The operands are ciphertexts, plaintexts, one implicit row Tensor per
+    strided-sparse plaintext in plaintext order, then RNS parameters.
+    ``plaintext_layouts`` selects dense, cyclic, contiguous or strided-sparse
+    indexing; omitting it means dense. Sparse rows have shape ``[*batch, limb]``.
+    ``term_chunk_size`` optionally bounds generated expressions.
 
     Every term uses the same component and batch shape, depth, prime rows,
     ciphertext scale, and plaintext scale.  ``term_count`` separates the two
     equal operand ranges.  The result keeps the ciphertext shape, depth, and
     NTT/Montgomery representation; its CKKS scale is the product of the common
-    ciphertext and plaintext scales.  The operation chooses no grouping,
-    platform, kernel, or execution schedule.
+    ciphertext and plaintext scales.
     """
 
     name = "fhelium_rns.montgomery_weighted_sum"
-    parameters = operand_def()
     terms = var_operand_def(RnsBundleType)
+    parameters = operand_def()
     result = result_def(RnsBundleType)
     term_count = attr_def(IntegerAttr)
+    plaintext_layouts = opt_attr_def(ArrayAttr[StringAttr])
+    term_chunk_size = opt_attr_def(IntegerAttr)
     traits = traits_def(Pure())
 
     def dependencies(self) -> OperationDependencies:
-        """Describe each term's NTT positions and its output component mapping."""
+        """Map dense/compact plaintext coordinates and shared ciphertext components."""
         count = int(self.term_count.value.data)
-        return OperationDependencies(
-            tuple(
+        layouts = (
+            tuple(x.data for x in self.plaintext_layouts)
+            if self.plaintext_layouts is not None
+            else ()
+        )
+        relations = []
+        for index in range(len(self.operands) - 1):
+            plaintext = index - count
+            compact = (
+                plaintext >= 0
+                and bool(layouts)
+                and (plaintext >= len(layouts) or layouts[plaintext] != "dense")
+            )
+            relations.append(
                 ValueDependency(
                     0,
                     index,
                     {
-                        "coefficient": "element",
+                        "coefficient": "reindexed" if compact else "element",
                         "limb": "element",
                         "component": "element"
-                        if index <= count
+                        if index < count
                         else "reindexed",
                         "batch": "reindexed",
                     },
                 )
-                for index in range(1, len(self.operands))
             )
-        )
+        return OperationDependencies(tuple(relations))
 
     def __init__(
         self,
@@ -414,70 +471,96 @@ class MontgomeryWeightedSumOp(IRDLOperation):
         ciphertexts: tuple[SSAValue | Operation, ...],
         plaintexts: tuple[SSAValue | Operation, ...],
         result_type: Attribute,
+        *,
+        plaintext_layouts: Sequence[str] = (),
+        implicit_plaintexts: tuple[SSAValue | Operation, ...] = (),
+        term_chunk_size: int | None = None,
     ) -> None:
         super().__init__(
-            operands=(parameters, (*ciphertexts, *plaintexts)),
+            operands=(
+                (*ciphertexts, *plaintexts, *implicit_plaintexts),
+                parameters,
+            ),
             result_types=[result_type],
-            attributes={"term_count": IntegerAttr(len(ciphertexts), 64)},
+            attributes={
+                "term_count": IntegerAttr(len(ciphertexts), 64),
+                **_weighted_layout_attributes(
+                    plaintext_layouts, term_chunk_size
+                ),
+            },
         )
 
     def verify_(self) -> None:
-        count = int(self.term_count.value.data)
-        if count <= 0 or len(self.terms) != 2 * count:
-            raise VerifyException(
-                "RNS Montgomery weighted sum requires equally sized, "
-                "non-empty ciphertext and plaintext operand ranges"
-            )
+        _verify_weighted_layouts(self, int(self.term_count.value.data), 1)
 
 
 @irdl_op_definition
 class MontgomeryWeightedSumsOp(IRDLOperation):
-    r"""Apply a dense plaintext matrix to shared ciphertext terms.
+    r"""Apply a represented plaintext matrix to shared ciphertext terms.
 
     For $T$ ciphertext bundles $c_t$ and $G T$ plaintext bundles $p_{g,t}$,
     the operation returns $G$ independent bundles
 
     $$
-    y_g=\sum_{t=0}^{T-1}c_t p_{g,t}\pmod {q_i}.
+    y_g=\sum_{t=0}^{T-1}c_t\widetilde p_{g,t}R_i^{-1}\pmod {q_i}.
     $$
 
-    Operands after ``parameters`` contain the $T$ ciphertexts followed by the
+    The inputs and output are stored Montgomery residues, and
+    $\widetilde p_{g,t}$ is the logically expanded plaintext. Each sparse
+    plaintext contributes one implicit row Tensor of shape ``[*batch, limb]``
+    after the plaintext matrix and before parameters, in group-major order.
+    ``plaintext_layouts`` describes the matrix entries; omission means dense.
+    ``term_chunk_size`` optionally bounds generated expressions.
+
+    Operands before ``parameters`` contain the $T$ ciphertexts followed by the
     group-major plaintext matrix. Every ciphertext has one NTT/Montgomery
     component, batch, depth, and prime-row layout; every plaintext has the
     matching row and batch layout and one common scale. The results keep the
     ciphertext state and have scale $\Delta_c\Delta_p$. ``term_count`` and
-    ``group_count`` describe the supplied matrix; the operation does not
-    choose its groups, platform, kernel, or execution schedule.
+    ``group_count`` describe the supplied matrix.
     """
 
     name = "fhelium_rns.montgomery_weighted_sums"
-    parameters = operand_def()
     terms = var_operand_def(RnsBundleType)
+    parameters = operand_def()
     result = result_def(RnsBundleType)
     term_count = attr_def(IntegerAttr)
+    plaintext_layouts = opt_attr_def(ArrayAttr[StringAttr])
+    term_chunk_size = opt_attr_def(IntegerAttr)
     group_count = attr_def(IntegerAttr)
     traits = traits_def(Pure())
 
     def dependencies(self) -> OperationDependencies:
-        """Describe each term's NTT positions and its output component mapping."""
+        """Map dense/compact plaintext coordinates and shared ciphertext components."""
         count = int(self.term_count.value.data)
-        return OperationDependencies(
-            tuple(
+        layouts = (
+            tuple(x.data for x in self.plaintext_layouts)
+            if self.plaintext_layouts is not None
+            else ()
+        )
+        relations = []
+        for index in range(len(self.operands) - 1):
+            plaintext = index - count
+            compact = (
+                plaintext >= 0
+                and bool(layouts)
+                and (plaintext >= len(layouts) or layouts[plaintext] != "dense")
+            )
+            relations.append(
                 ValueDependency(
                     0,
                     index,
                     {
-                        "coefficient": "element",
+                        "coefficient": "reindexed" if compact else "element",
                         "limb": "element",
                         "component": "element"
-                        if index <= count
+                        if index < count
                         else "reindexed",
                         "batch": "reindexed",
                     },
                 )
-                for index in range(1, len(self.operands))
             )
-        )
+        return OperationDependencies(tuple(relations))
 
     def __init__(
         self,
@@ -487,28 +570,31 @@ class MontgomeryWeightedSumsOp(IRDLOperation):
         result_type: Attribute,
         *,
         group_count: int,
+        plaintext_layouts: Sequence[str] = (),
+        implicit_plaintexts: tuple[SSAValue | Operation, ...] = (),
+        term_chunk_size: int | None = None,
     ) -> None:
         super().__init__(
-            operands=(parameters, (*ciphertexts, *plaintexts)),
+            operands=(
+                (*ciphertexts, *plaintexts, *implicit_plaintexts),
+                parameters,
+            ),
             result_types=[result_type],
             attributes={
                 "term_count": IntegerAttr(len(ciphertexts), 64),
                 "group_count": IntegerAttr(group_count, 64),
+                **_weighted_layout_attributes(
+                    plaintext_layouts, term_chunk_size
+                ),
             },
         )
 
     def verify_(self) -> None:
-        term_count = int(self.term_count.value.data)
-        group_count = int(self.group_count.value.data)
-        if term_count <= 0 or group_count <= 0:
-            raise VerifyException(
-                "RNS weighted sums require positive term and group counts"
-            )
-        if len(self.terms) != term_count * (group_count + 1):
-            raise VerifyException(
-                "RNS weighted-sums operands must contain term_count "
-                "ciphertexts followed by group_count * term_count plaintexts"
-            )
+        _verify_weighted_layouts(
+            self,
+            int(self.term_count.value.data),
+            int(self.group_count.value.data),
+        )
 
 
 @irdl_op_definition
@@ -993,7 +1079,10 @@ class ModDownQpToQOp(IRDLOperation):
     $d=x\bmod p_d$, every surviving row becomes
     $(x_i-d)p_d^{-1}\bmod q_i$ or
     $(x_i-d)p_d^{-1}\bmod p_i$.  Repeating this residue-algebra division removes
-    all P rows and returns active-Q residues.  This is the ModDown stage of hybrid
+    all P rows and returns active-Q residues. Nearest adds $H=(P-1)/2$
+    before division; floor adds zero. The quotient is
+    $\lfloor(x+H)/P\rfloor$ or $\lfloor x/P\rfloor$ respectively.
+    This is the ModDown stage of hybrid
     key switching; key construction supplies the factor P, so CKKS message scale
     and depth do not change."""
 
@@ -1001,6 +1090,7 @@ class ModDownQpToQOp(IRDLOperation):
     value = operand_def(RnsBundleType)
     parameters = var_operand_def()
     result = result_def(RnsBundleType)
+    rounding = opt_attr_def(StringAttr, default_value=StringAttr("nearest"))
     traits = traits_def(Pure())
 
     def dependencies(self) -> OperationDependencies:
@@ -1023,13 +1113,100 @@ class ModDownQpToQOp(IRDLOperation):
         parameters: Sequence[SSAValue | Operation],
         result_type: Attribute,
         *,
+        rounding: str | StringAttr = "nearest",
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
+        attrs = dict(attributes or {})
+        attrs.setdefault(
+            "rounding",
+            StringAttr(rounding) if isinstance(rounding, str) else rounding,
+        )
         super().__init__(
             operands=[value, parameters],
             result_types=[result_type],
-            attributes=attributes,
+            attributes=attrs,
         )
+
+    def verify_(self) -> None:
+        if self.rounding.data not in {"floor", "nearest"}:
+            raise VerifyException(
+                "ModDown rounding must be 'floor' or 'nearest'"
+            )
+
+
+@irdl_op_definition
+class ModDownAddRescaleOp(IRDLOperation):
+    r"""Divide-round $v+Pa$ by auxiliary P and one complete Q group D.
+
+    For $H_P=0$ or $(P-1)/2$ and $H_D=0$ or $(D-1)/2$, compute $\lfloor(v+Pa+H_P+PH_D)/(PD)\rfloor$ modulo the surviving Q primes. Inputs v and a are NTT/Montgomery; v contains the accumulator alone, and a supplies the corresponding prefix of component polynomials in Q. Actual ordered rows and both rounding offsets are supplied by numerical Tensor operands. The result contains only Q minus D in the requested polynomial domain and residue representation.
+    """
+
+    name = "fhelium_rns.moddown_add_rescale"
+    value = operand_def(RnsBundleType)
+    base = operand_def(RnsBundleType)
+    parameters = var_operand_def()
+    result = result_def(RnsBundleType)
+    output_domain = attr_def(
+        StringAttr, default_value=StringAttr("coefficient")
+    )
+    moddown_rounding = opt_attr_def(
+        StringAttr, default_value=StringAttr("nearest")
+    )
+    rescale_rounding = opt_attr_def(
+        StringAttr, default_value=StringAttr("nearest")
+    )
+    traits = traits_def(Pure())
+
+    def __init__(
+        self,
+        value: SSAValue | Operation,
+        base: SSAValue | Operation,
+        parameters: Sequence[SSAValue | Operation],
+        result_type: Attribute,
+        *,
+        output_domain: Literal["coefficient", "ntt"] = "coefficient",
+        moddown_rounding: str = "nearest",
+        rescale_rounding: str = "nearest",
+        attributes: Mapping[str, Attribute] | None = None,
+    ):
+        super().__init__(
+            operands=[value, base, parameters],
+            result_types=[result_type],
+            attributes={
+                **(attributes or {}),
+                "output_domain": StringAttr(output_domain),
+                "moddown_rounding": StringAttr(moddown_rounding),
+                "rescale_rounding": StringAttr(rescale_rounding),
+            },
+        )
+
+    def dependencies(self) -> OperationDependencies:
+        """Read matching components and batches, with coefficient/prime mixing."""
+        return operand_relations(
+            self,
+            {
+                index: {
+                    "component": "element",
+                    "limb": "mixing",
+                    "batch": "element",
+                    "coefficient": "mixing",
+                }
+                for index in (0, 1)
+            },
+        )
+
+    def verify_(self) -> None:
+        if self.output_domain.data not in {"coefficient", "ntt"}:
+            raise VerifyException(
+                "Joint quotient output_domain must be coefficient or ntt"
+            )
+        if self.moddown_rounding.data not in {
+            "nearest",
+            "floor",
+        } or self.rescale_rounding.data not in {"nearest", "floor"}:
+            raise VerifyException(
+                "Joint quotient rounding must be nearest or floor"
+            )
 
 
 @irdl_op_definition
@@ -1037,36 +1214,48 @@ class ModDownNttQpToQOp(IRDLOperation):
     r"""Remove P from two QP accumulators and retain NTT/Montgomery Q rows.
 
     The input has shape ``[2, *batch, |Q|+|P|, N]``; the result has shape
-    ``[2, *batch, |Q|, N]``. The NTT-plan operand supplies the transforms
-    for the same RNS context as the parameters and key-switch plan.
+    ``[2, *batch, |Q|, N]``. Parameter and transform-table operands supply
+    numerical data for the same active RNS bases.
 
-    Let $r\in[0,P)$ be the coefficient representative reconstructed from
+    Let $r$ be the coefficient remainder, in $[0,P)$ for floor or
+    $[-(P-1)/2,(P-1)/2]$ for nearest, reconstructed from
     $\operatorname{INTT}_P(\widehat{x}_P)$. The result is
     $\widehat{x}_Q P^{-1}+\operatorname{NTT}_Q(-rP^{-1})\bmod q_i$.
     This equals coefficient-domain ModDown followed by forward NTT, without
     inverting the Q rows. Output drops P, preserves active Q rows and N,
     and remains in Montgomery representation. It does not rescale CKKS values.
+    An optional coefficient/standard Q polynomial ``coefficient_c0`` adds
+    $\operatorname{NTT}_Q(c_0)$ to component zero by adding $c_0$ to its
+    coefficient correction before the forward transform.
     """
 
     name = "fhelium_rns.moddown_ntt_qp_to_q"
     value = operand_def(RnsBundleType)
+    coefficient_c0 = opt_operand_def(RnsBundleType)
     parameters = var_operand_def()
+    irdl_options = (AttrSizedOperandSegments(as_property=True),)
     result = result_def(RnsBundleType)
+    rounding = opt_attr_def(StringAttr, default_value=StringAttr("nearest"))
     traits = traits_def(Pure())
 
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
-        return operand_relations(
-            self,
-            {
-                0: {
-                    'coefficient': 'mixing',
-                    'limb': 'mixing',
-                    'component': 'element',
-                    'batch': 'element',
-                }
-            },
-        )
+        relations: dict[int, dict[str, DependencyKind]] = {
+            0: {
+                'coefficient': 'mixing',
+                'limb': 'mixing',
+                'component': 'element',
+                'batch': 'element',
+            }
+        }
+        if self.coefficient_c0 is not None:
+            relations[1] = {
+                'coefficient': 'mixing',
+                'limb': 'element',
+                'component': 'reindexed',
+                'batch': 'element',
+            }
+        return operand_relations(self, relations)
 
     def __init__(
         self,
@@ -1074,13 +1263,26 @@ class ModDownNttQpToQOp(IRDLOperation):
         parameters: Sequence[SSAValue | Operation],
         result_type: Attribute,
         *,
+        coefficient_c0: SSAValue | Operation | None = None,
+        rounding: str | StringAttr = "nearest",
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
-        super().__init__(
-            operands=[value, parameters],
-            result_types=[result_type],
-            attributes=attributes,
+        attrs = dict(attributes or {})
+        attrs.setdefault(
+            "rounding",
+            StringAttr(rounding) if isinstance(rounding, str) else rounding,
         )
+        super().__init__(
+            operands=[value, coefficient_c0, parameters],
+            result_types=[result_type],
+            attributes=attrs,
+        )
+
+    def verify_(self) -> None:
+        if self.rounding.data not in {"floor", "nearest"}:
+            raise VerifyException(
+                "ModDown rounding must be 'floor' or 'nearest'"
+            )
 
 
 @irdl_op_definition
@@ -1307,7 +1509,172 @@ class ReinterpretScaleOp(IRDLOperation):
         )
 
 
+@irdl_op_definition
+class CrtBasisExtendOp(IRDLOperation):
+    r"""Evaluate a supplied CRT lift matrix in target Montgomery form.
+
+    Source a_i is coefficient/standard. For D=product(q_i), D_i=D/q_i,
+    and u_i=D_i^{-1} mod q_i, raw lift chooses sum(a_i D_i u_i).
+    A nonempty source-normalizer operand first applies a_i*u_i mod q_i,
+    and its matrix chooses sum((a_i*u_i mod q_i) D_i). Neither lift
+    promises the least nonnegative representative modulo D.
+
+    Numerical operands are source parameters, target parameters, the matrix,
+    target reciprocals, source normalizers and source reciprocals. The matrix
+    contains one target Montgomery factor; output is canonical Montgomery
+    [*batch, target row, coefficient] with fresh storage. Empty normalizers
+    and reciprocals select the raw matrix. All source and table operands are
+    live and read-only. Ordered prime rows and their parameter data belong
+    to the supplied operands, not to an implicit key-switch configuration.
+    """
+
+    name = "fhelium_rns.crt_basis_extend"
+    value = operand_def(RnsBundleType)
+    parameters = var_operand_def()
+    result = result_def(RnsBundleType)
+    traits = traits_def(Pure())
+
+    def __init__(self, value, parameters, result_type):
+        super().__init__(
+            operands=(value, parameters), result_types=(result_type,)
+        )
+
+    def verify_(self) -> None:
+        if len(self.parameters) != 6:
+            raise VerifyException(
+                "CRT lift requires six numerical Tensor operands"
+            )
+
+    def dependencies(self) -> OperationDependencies:
+        return operand_dependencies(
+            self,
+            (0,),
+            {
+                "coefficient": "element",
+                "limb": "mixing",
+                "component": "element",
+                "batch": "element",
+            },
+        )
+
+
+@irdl_op_definition
+class CenteredBasisExtendOp(IRDLOperation):
+    r"""Extend each centered CRT coefficient to supplied target prime rows.
+
+    Numerical operands specify ordered source/target bases, Garner factors,
+    midpoint digits and source-product correction. Standard residues and all
+    leading component/batch axes are preserved. Output owns new storage.
+    """
+
+    name = "fhelium_rns.centered_basis_extend"
+    value = operand_def(RnsBundleType)
+    parameters = var_operand_def()
+    result = result_def(RnsBundleType)
+    traits = traits_def(Pure())
+
+    def __init__(self, value, parameters, result_type, *, attributes=None):
+        super().__init__(
+            operands=(value, parameters),
+            result_types=(result_type,),
+            attributes=attributes or {},
+        )
+
+
+@irdl_op_definition
+class SliceRowsOp(IRDLOperation):
+    r"""Return a contiguous interval of prime-row positions as a view.
+
+    Result row i aliases source row start+i; coefficients, representations,
+    component and batch axes are unchanged. The result type names those rows.
+    """
+
+    name = "fhelium_rns.slice_rows"
+    value = operand_def(RnsBundleType)
+    result = result_def(RnsBundleType)
+    start = attr_def(IntegerAttr)
+    count = attr_def(IntegerAttr)
+    traits = traits_def(Pure())
+
+    def __init__(self, value, result_type, *, start, count):
+        super().__init__(
+            operands=(value,),
+            result_types=(result_type,),
+            attributes={
+                "start": IntegerAttr(start, 64),
+                "count": IntegerAttr(count, 64),
+            },
+        )
+
+
+@irdl_op_definition
+class ScaleAndPadRowsOp(IRDLOperation):
+    r"""Multiply rows by supplied Montgomery scalars and append zero rows.
+
+    For input x_i and multiplier m_i R, the retained rows are x_i m_i
+    in the input representation. Additional rows contain zero.
+    """
+
+    name = "fhelium_rns.scale_and_pad_rows"
+    value = operand_def(RnsBundleType)
+    row_scales = operand_def()
+    parameters = operand_def()
+    result = result_def(RnsBundleType)
+    pad_rows = attr_def(IntegerAttr)
+    traits = traits_def(Pure())
+
+    def __init__(self, value, row_scales, parameters, result_type, *, pad_rows):
+        super().__init__(
+            operands=[value, row_scales, parameters],
+            result_types=[result_type],
+            attributes={"pad_rows": IntegerAttr(pad_rows, 64)},
+        )
+
+
+@irdl_op_definition
+class RoundedTrailingQuotientOp(IRDLOperation):
+    r"""Reorder coefficient rows and divide by their trailing-prime product D.
+
+    Supplied row order, inverse and half-offset tensors define the quotient
+    floor((x+h)/D), with h=0 or (D-1)/2. Output contains the surviving rows;
+    its caller-assigned scale accounts for any combined CKKS rescaling.
+    """
+
+    name = "fhelium_rns.rounded_trailing_quotient"
+    value = operand_def(RnsBundleType)
+    parameters = var_operand_def()
+    result = result_def(RnsBundleType)
+    drop_count = attr_def(IntegerAttr)
+    rounding = attr_def(StringAttr)
+    traits = traits_def(Pure())
+
+    def __init__(
+        self,
+        value,
+        parameters,
+        result_type,
+        *,
+        drop_count,
+        rounding,
+        attributes=None,
+    ):
+        super().__init__(
+            operands=[value, parameters],
+            result_types=[result_type],
+            attributes={
+                **(attributes or {}),
+                "drop_count": IntegerAttr(drop_count, 64),
+                "rounding": StringAttr(rounding),
+            },
+        )
+
+
 _RNS_OPERATION_TYPES = (
+    CrtBasisExtendOp,
+    CenteredBasisExtendOp,
+    SliceRowsOp,
+    ScaleAndPadRowsOp,
+    RoundedTrailingQuotientOp,
     AddStandardOp,
     SubtractStandardOp,
     NegateStandardOp,
@@ -1326,6 +1693,7 @@ _RNS_OPERATION_TYPES = (
     AddMontgomeryLazyOp,
     ModDownQpToQOp,
     ModDownNttQpToQOp,
+    ModDownAddRescaleOp,
     CoefficientAutomorphismOp,
     StandardToMontgomeryOp,
     MontgomeryToStandardOp,
@@ -1334,10 +1702,21 @@ _RNS_OPERATION_TYPES = (
 )
 
 _RNS_ATTRIBUTES: dict[type[Operation], tuple[str, ...]] = {
+    ScaleAndPadRowsOp: ("pad_rows",),
+    RoundedTrailingQuotientOp: ("drop_count", "rounding"),
     AddPlaintextOp: ("polynomial_domain",),
     SumStandardBatchOp: ("dim",),
-    MontgomeryWeightedSumOp: ("term_count",),
-    MontgomeryWeightedSumsOp: ("term_count", "group_count"),
+    MontgomeryWeightedSumOp: (
+        "term_count",
+        "plaintext_layouts",
+        "term_chunk_size",
+    ),
+    MontgomeryWeightedSumsOp: (
+        "term_count",
+        "group_count",
+        "plaintext_layouts",
+        "term_chunk_size",
+    ),
     RescaleDropLeadingPrimesOp: (
         "drop_count",
         "rounding",
@@ -1347,6 +1726,21 @@ _RNS_ATTRIBUTES: dict[type[Operation], tuple[str, ...]] = {
     ExtractComponentOp: ("component",),
     HybridModUpDigitOp: ("digit_index",),
     KeySwitchDigitProductOp: ("key_digit_index", "key_role"),
+    ModDownQpToQOp: ("rounding",),
+    ModDownNttQpToQOp: ("rounding",),
+    ModDownAddRescaleOp: (
+        "output_domain",
+        "moddown_rounding",
+        "rescale_rounding",
+        "joint_drop_count",
+        "joint_drop_is_prefix",
+        "joint_drop_prime_ids",
+        "ckks_config",
+        "ntt_algorithm",
+        "ntt_group_width",
+        "ntt_radix",
+        "ntt_table_layout",
+    ),
     CoefficientAutomorphismOp: ("galois_element",),
     RestrictDepthOp: ("target_depth",),
     ReinterpretScaleOp: ("scale",),
@@ -1381,6 +1775,11 @@ FHEliumRns = Dialect(
 
 
 __all__ = [
+    "CrtBasisExtendOp",
+    "CenteredBasisExtendOp",
+    "SliceRowsOp",
+    "ScaleAndPadRowsOp",
+    "RoundedTrailingQuotientOp",
     "AddStandardOp",
     "AddPlaintextOp",
     "SumStandardBatchOp",
@@ -1392,6 +1791,7 @@ __all__ = [
     "KeySwitchDigitProductOp",
     "ModDownQpToQOp",
     "ModDownNttQpToQOp",
+    "ModDownAddRescaleOp",
     "MontgomeryToStandardOp",
     "MontgomeryMultiplyOp",
     "MontgomeryWeightedSumOp",

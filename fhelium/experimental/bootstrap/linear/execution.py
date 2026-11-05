@@ -2,82 +2,69 @@ r"""Apply compiled diagonal transforms with caller-owned keys and caches."""
 
 from __future__ import annotations
 
-from collections.abc import MutableMapping
-from typing import Any
+from collections.abc import Mapping, MutableMapping
+from typing import Any, Literal
 
 import numpy as np
 import torch
 
 from fhelium.eager import Engine
 from fhelium.experimental.bootstrap.arithmetic import BootstrapArithmetic
-from fhelium.values import Ciphertext, Plaintext, RotationKey, RotationKeySet
+from fhelium.values import (
+    Ciphertext,
+    CompressedPlaintext,
+    Plaintext,
+    RotationKey,
+    EvaluationKeySet,
+)
 from fhelium.experimental.bootstrap.linear.transform import (
     DiagonalLinearTransform,
 )
-from fhelium.experimental.bootstrap.structural import ModRaisedCiphertext
-from fhelium.utils.rotation import decompose_signed_power_of_two_rotation
 
 
-def _rotate_with_key_inventory(
+def _rotate_bound_path(
     engine: Engine,
-    decomposition_cache: MutableMapping[int, tuple[int, ...]],
     ciphertext: Ciphertext,
     step: int,
     *,
-    rotation_keys: RotationKeySet,
+    rotation_paths: Mapping[int, tuple[RotationKey, ...]],
+    modup_method: Literal["exact", "crt", "normalized_crt"] = "exact",
 ) -> Ciphertext:
-    r"""Compute $\operatorname{Rot}_r(c)$ with direct or composed keys.
+    r"""Apply the selected primitive sequence for $\operatorname{Rot}_r(c)$.
 
-    The function first normalizes `step` as signed slot rotation $r$ and uses a direct key when the
-    inventory contains one. Otherwise it caches a signed power-of-two
-    decomposition and applies those keyed rotations in sequence. The cache
-    contains only integer steps; it never retains ciphertexts or key tensors.
-
-    The input must be a two-component coefficient-domain, standard-RNS
-    ciphertext on the engine device. Rotation and its key switches preserve
-    data shape, depth, actual scale, Q basis, `prime_ids`, component count,
-    polynomial domain, and residue representation. The returned ciphertext has
-    new storage; a zero step clones rather than aliases the input.
+    Every switch preserves the Q basis, actual scale and depth. The prepared
+    path can use different stored key layouts for its independent switches.
+    A zero rotation returns an owning clone.
     """
-
     normalized = RotationKey.normalize_step(
         step, ring_dimension=engine.config.N
     )
     if normalized == 0:
         return ciphertext.clone()
-    direct_key = rotation_keys.get(normalized)
-    if direct_key is not None:
-        return engine.rotate_with_key(ciphertext, direct_key)
-    decomposition = decomposition_cache.get(normalized)
-    if decomposition is None:
-        decomposition = tuple(
-            decompose_signed_power_of_two_rotation(normalized, engine.num_slots)
-        )
-        decomposition_cache[normalized] = decomposition
     result = ciphertext
-    for substep in decomposition:
-        key = rotation_keys.get(substep)
-        if key is None:
-            raise KeyError(
-                f'Cannot compose rotation {normalized}; missing key {substep}'
-            )
-        result = engine.rotate_with_key(result, key)
+    for key in rotation_paths[normalized]:
+        result = engine.rotate_with_key(result, key, modup_method=modup_method)
     return result
 
 
 def _encode_diagonal(
     engine: Engine,
-    cache: MutableMapping[tuple[torch.device, int, int, int, int, float], Plaintext],
+    cache: MutableMapping[
+        tuple[torch.device, int, int, int, int, float],
+        Plaintext | CompressedPlaintext,
+    ],
     *,
     device: torch.device,
     retain: bool,
+    compress: bool = True,
+    prepare_materials: bool = True,
     transform: DiagonalLinearTransform,
     offset: int,
     giant: int,
     depth: int,
     scale: float,
     diagonal: np.ndarray,
-) -> Plaintext:
+) -> Plaintext | CompressedPlaintext:
     r"""Encode $\operatorname{Rot}_{-g}(d_k)$ for plaintext multiplication.
 
     `diagonal` has CPU axes `[slot]`. After rolling by `-giant`, encoding and
@@ -85,13 +72,21 @@ def _encode_diagonal(
     engine integral dtype/device, NTT domain, Montgomery residues, Q basis,
     `prime_ids` for `depth`, and the supplied actual ``scale``. The cached plaintext
     may be returned by identity; callers must treat it as immutable. The input
-    NumPy array is not mutated.
+    NumPy array is not mutated. Automatic compression preserves the first
+    encoded sample and chooses the minimum contiguous repeated-block extent.
+    Prepared execution reads the existing cache without encoding or probing.
     """
 
     cache_key = (device, id(transform), offset, giant, depth, scale)
-    plaintext = cache.get(cache_key)
+    plaintext = cache.get(cache_key) if prepare_materials else cache[cache_key]
     if plaintext is not None:
         return plaintext
+    if compress and device.type == "cuda":
+        with torch.cuda.device(device):
+            if torch.cuda.is_current_stream_capturing():
+                raise RuntimeError(
+                    "Prepare Bootstrap core materials before CUDA Graph capture"
+                )
     plaintext = engine.prepare_plaintext_for_multiplication(
         engine.encode(
             torch.as_tensor(
@@ -105,6 +100,12 @@ def _encode_diagonal(
         ),
         modulus_basis='Q',
     )
+    if compress:
+        compact = CompressedPlaintext._from_plaintext_if_representable(
+            plaintext, unique_count=None, compression_layout="contiguous"
+        )
+        if compact is not None:
+            plaintext = compact
     if retain:
         cache[cache_key] = plaintext
     return plaintext
@@ -116,10 +117,17 @@ def _apply_linear_transform(
     evaluator,
     ciphertext: Ciphertext,
     *,
-    rotation_keys: RotationKeySet,
-    diagonal_cache: MutableMapping[tuple[torch.device, int, int, int, int, float], Plaintext],
-    rotation_cache: MutableMapping[int, tuple[int, ...]],
+    evaluation_keys: EvaluationKeySet | None,
+    key_bindings: MutableMapping[
+        tuple[int, int, int], dict[int, tuple[RotationKey, ...]]
+    ],
+    diagonal_cache: MutableMapping[
+        tuple[torch.device, int, int, int, int, float],
+        Plaintext | CompressedPlaintext,
+    ],
     retain_diagonals: bool,
+    compress_diagonals: bool = True,
+    prepare_materials: bool = True,
 ) -> Ciphertext:
     r"""Evaluate ordered maps $L_{m-1}\circ\cdots\circ L_0$.
 
@@ -135,66 +143,60 @@ def _apply_linear_transform(
         raise ValueError('linear transform has the wrong slot count')
 
     def rotate_with_keys(value: Ciphertext, step: int) -> Ciphertext:
-        """Use this invocation's key inventory and decomposition cache."""
-
-        return _rotate_with_key_inventory(
+        """Execute the primitive references selected for this stage."""
+        return _rotate_bound_path(
             engine,
-            rotation_cache,
             value,
             step,
-            rotation_keys=rotation_keys,
+            rotation_paths=stage_paths,
+            modup_method=getattr(evaluator, "modup_method", None)
+            or arithmetic.modup_method,
         )
 
-    def encode_cached_diagonal(**kwargs) -> Plaintext:
+    def encode_cached_diagonal(**kwargs) -> Plaintext | CompressedPlaintext:
         """Encode through this invocation's optional diagonal cache."""
 
         return _encode_diagonal(
             engine,
             diagonal_cache,
-            device=ciphertext.device,
+            device=device,
             retain=retain_diagonals,
+            compress=compress_diagonals,
+            prepare_materials=prepare_materials,
             scale=arithmetic.plaintext_scale(result.scale, result.depth),
             **kwargs,
         )
 
+    device = ciphertext.device
     result = ciphertext
+    del ciphertext
+    from .._keys import _select_rotation_paths, _stage_rotation_uses
+
     for transform in stages:
+        binding = (id(evaluator), id(transform), result.depth)
+        if prepare_materials:
+            assert evaluation_keys is not None
+            stage_paths: dict[int, tuple[RotationKey, ...]] = {}
+            for depth, offsets, kind in _stage_rotation_uses(
+                evaluator, transform, result.depth
+            ):
+                selected = _select_rotation_paths(
+                    engine, evaluation_keys, depth, offsets, kind, result.device
+                )
+                if selected is None:
+                    raise ValueError(
+                        f"Missing compatible rotation paths for stage {transform.name!r} at depth {depth}: {offsets}"
+                    )
+                stage_paths.update(selected)
+            key_bindings[binding] = stage_paths
+        else:
+            stage_paths = key_bindings[binding]
         result = evaluator.evaluate(
             arithmetic,
             result,
             transform,
-            rotation_keys=rotation_keys,
+            rotation_paths=stage_paths,
             rotate=rotate_with_keys,
             encode_diagonal=encode_cached_diagonal,
         )
     return result
-
-
-def _apply_modraised_linear(
-    arithmetic: BootstrapArithmetic,
-    raised: ModRaisedCiphertext,
-    stages: tuple[Any, ...],
-    evaluator,
-    *,
-    rotation_keys: RotationKeySet,
-    **cache_options,
-) -> Ciphertext:
-    """Apply the first linear transform after validating ModRaise provenance.
-
-    The wrapped ciphertext is centered-raised Q RNS at the target public depth;
-    its data axes and stage recurrence are those of :func:`_apply_linear_transform`.
-    The private source-basis metadata authorizes this first transform but is
-    deliberately discarded from the ordinary ciphertext result.
-    """
-
-    engine = arithmetic.engine
-    if raised.ciphertext.depth >= raised.source_depth:
-        raise ValueError('linear transform requires centered ModRaise history')
-    return _apply_linear_transform(
-        arithmetic,
-        stages,
-        evaluator,
-        raised.ciphertext,
-        rotation_keys=rotation_keys,
-        **cache_options,
-    )

@@ -28,7 +28,9 @@ class CompactRadix2Policy:
     ``grouped_radix2_stage_count`` counts radix-2 stages fused into a global
     kernel. The ``smem8`` backend-name suffix records the current native
     production implementation, whose shared-memory tile and fusion depth are
-    compiled CUDA resources rather than Python policy parameters.
+    compiled CUDA resources rather than Python policy parameters. Shoup32 tables
+    pair each standard root with its 32-bit quotient word and require CUDA int32
+    residues with primes below 2^30.
     """
 
     name: str
@@ -37,7 +39,12 @@ class CompactRadix2Policy:
     grouped_radix2_stage_count: Literal[2, 3, 4]
     """Number of radix-2 stages fused by each global-memory kernel."""
 
+    twiddle_encoding: Literal["montgomery", "shoup32"] = "montgomery"
+    """Numerical layout of each compact root table, independent of grouping."""
+
     def __post_init__(self) -> None:
+        if self.twiddle_encoding not in ("montgomery", "shoup32"):
+            raise ValueError("twiddle_encoding must be montgomery or shoup32")
         if self.grouped_radix2_stage_count not in (2, 3, 4):
             raise ValueError("grouped_radix2_stage_count must be 2, 3, or 4")
 
@@ -50,7 +57,7 @@ class CompactRadix2Policy:
 
 @dataclass(frozen=True)
 class CompactFixedRadixPolicy:
-    r"""Strict execution in which every digit has exactly one radix.
+    r"""A fixed-radix NTT schedule using the same radix for every digit.
 
     Let $N=2^L$ and $\mathtt{radix}=2^b$. A compatible transform has $D=L/b$
     fixed-radix digits and is rejected when $L$ is not divisible by $b$.
@@ -98,6 +105,21 @@ _POLICY_SEQUENCE: Final[tuple[NttBackendPolicy, ...]] = (
         name="radix2_compact_group16_smem8",
         grouped_radix2_stage_count=4,
     ),
+    CompactRadix2Policy(
+        name="radix2_compact_group4_shoup32_smem8",
+        grouped_radix2_stage_count=2,
+        twiddle_encoding="shoup32",
+    ),
+    CompactRadix2Policy(
+        name="radix2_compact_group8_shoup32_smem8",
+        grouped_radix2_stage_count=3,
+        twiddle_encoding="shoup32",
+    ),
+    CompactRadix2Policy(
+        name="radix2_compact_group16_shoup32_smem8",
+        grouped_radix2_stage_count=4,
+        twiddle_encoding="shoup32",
+    ),
     CompactFixedRadixPolicy(
         name="radix4_compact",
         radix=4,
@@ -116,11 +138,9 @@ NTT_BACKEND_POLICIES: Final = MappingProxyType(
     {policy.name: policy for policy in _POLICY_SEQUENCE}
 )
 SUPPORTED_NTT_BACKENDS: Final = tuple(NTT_BACKEND_POLICIES)
-# One versioned, process-independent fallback is used for every supported
-# logN and CUDA device. Selection never consults hardware, runs a benchmark,
-# or dispatches through a per-logN table; execution owners may select another
-# named policy when constructing their NTT resources.
-DEFAULT_NTT_BACKEND: Final[str] = "radix2_compact_group8_smem8"
+# This fallback applies across supported ring dimensions and CUDA devices.
+# Execution owners can select another named policy when constructing NTT resources.
+DEFAULT_NTT_BACKEND: Final[str] = "radix2_compact_group16_smem8"
 # The indexed radix-2 policy is the CPU production backend as well as the
 # cross-device validation baseline. Compact/grouped policies remain CUDA.
 DEFAULT_CPU_NTT_BACKEND: Final[str] = "radix2_indexed"
@@ -129,8 +149,7 @@ DEFAULT_CPU_NTT_BACKEND: Final[str] = "radix2_indexed"
 def resolve_ntt_backend_policy(name: str) -> NttBackendPolicy:
     """Return the policy named by configuration.
 
-    Names are deliberately not case-normalized and no compatibility aliases
-    are accepted.
+    Names must match a registered backend name, including case.
     """
 
     try:

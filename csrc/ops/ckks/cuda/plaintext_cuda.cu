@@ -2,7 +2,7 @@
 #include <torch/torch.h>
 
 #include "../../common/cuda/kernel_support.cuh"
-#include "../../common/cuda/montgomery.cuh"
+#include "../../common/montgomery.hpp"
 #include "../../common/cuda/repetition.cuh"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"

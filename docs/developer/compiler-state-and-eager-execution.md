@@ -35,7 +35,7 @@ Engine method in eager/_engine.py
   → public value construction or in-place replacement
 ```
 
-`OperationInvocation` carries an operation class, operand/result counts, and attributes needed by the implementation. It has no SSA region. `_EagerOperationDispatcher` caches invocations and resolved direct calls using operation metadata. Its `_prepare_call` resolves non-Tensor requirements from device services; numerical parameters, transform tables, and key payloads are passed as Tensor operands.
+`OperationInvocation` carries an operation class, operand/result counts, and attributes needed by the implementation. `_EagerOperationDispatcher` caches invocations and resolved direct calls using operation metadata. Its `_prepare_call` resolves non-Tensor requirements from device services; numerical parameters, transform tables, and key payloads are passed as Tensor operands.
 
 The chosen operation class identifies the computation being executed. A whole CKKS implementation can compose native RNS/NTT arithmetic internally. Lower-level operations can also be dispatched directly. Registry lookup selects an implementation of the requested operation.
 

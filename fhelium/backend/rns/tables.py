@@ -13,6 +13,91 @@ import torch
 from .context import RnsContext
 
 
+def centered_basis_extension_tables(
+    source: RnsContext,
+    target: RnsContext,
+    source_prime_ids: tuple[int, ...],
+    target_prime_ids: tuple[int, ...],
+) -> dict[str, torch.Tensor]:
+    r"""Prepare Garner and centered-extension operands for two residue bases.
+
+    Source and destination use the same word format and device. For source
+    product Q, subtraction of Q mod p recenters the upper CRT half in each
+    target row p. All row parameters and half digits are ordinary tensors;
+    execution does not retain either preparation context.
+    """
+    if source.dtype != target.dtype or source.device != target.device:
+        raise ValueError("Basis-extension contexts must share dtype and device")
+    source_moduli = tuple(source.config.moduli[i] for i in source_prime_ids)
+    target_moduli = tuple(target.config.moduli[i] for i in target_prime_ids)
+    width = len(source_moduli)
+    if not width or not target_moduli:
+        raise ValueError("Basis extension requires nonempty bases")
+    dtype, device = source.dtype, source.device
+    radix = source.montgomery_parameters.R
+    normalizers, propagation, extension = [], [], []
+    prefix = 1
+    for row, modulus in enumerate(source_moduli[:-1]):
+        prefix *= modulus
+        normalizers.append(
+            pow(prefix, -1, source_moduli[row + 1])
+            * radix
+            % source_moduli[row + 1]
+        )
+        propagation.append(
+            [
+                prefix * radix % q if column >= row + 2 else 0
+                for column, q in enumerate(source_moduli)
+            ]
+        )
+        extension.append(
+            [
+                prefix * target.montgomery_parameters.montgomery_r2[i] % q
+                for i, q in zip(target_prime_ids, target_moduli, strict=True)
+            ]
+        )
+    product = prod(source_moduli)
+    remainder = product // 2
+    half_digits = []
+    for modulus in source_moduli:
+        remainder, digit = divmod(remainder, modulus)
+        half_digits.append(digit)
+    source_index = torch.tensor(
+        source_prime_ids, dtype=torch.int64, device=device
+    )
+    target_index = torch.tensor(
+        target_prime_ids, dtype=torch.int64, device=device
+    )
+    source_parameters = source.rns_parameter_tensor.index_select(
+        1, source_index
+    )
+    lo, hi, neg_lo, neg_hi = source_parameters[1:5].unbind(0)
+    return {
+        "source_parameters": source_parameters,
+        "target_parameters": target.rns_parameter_tensor.index_select(
+            1, target_index
+        ),
+        "source_lo": lo,
+        "source_hi": hi,
+        "source_neg_lo": neg_lo,
+        "source_neg_hi": neg_hi,
+        "normalizers": torch.tensor(normalizers, dtype=dtype, device=device),
+        "propagation": torch.tensor(
+            propagation, dtype=dtype, device=device
+        ).reshape(width - 1, width),
+        "extension": torch.tensor(
+            extension, dtype=dtype, device=device
+        ).reshape(width - 1, len(target_moduli)),
+        "half_digits": torch.tensor(half_digits, dtype=dtype, device=device),
+        "source_product": torch.tensor(
+            [product % q for q in target_moduli], dtype=dtype, device=device
+        ),
+        "target_moduli": torch.tensor(
+            target_moduli, dtype=dtype, device=device
+        ),
+    }
+
+
 def rescale_inverse_matrix(rns_context: RnsContext) -> torch.Tensor:
     montgomery = rns_context.montgomery_parameters
     rows = []
@@ -35,30 +120,46 @@ def rescale_inverse_matrix(rns_context: RnsContext) -> torch.Tensor:
     )
 
 
+def trailing_quotient_inverses(
+    moduli: tuple[int, ...],
+    drop_count: int,
+    radix: int,
+    *,
+    dtype: torch.dtype,
+    device: torch.device,
+) -> torch.Tensor:
+    r"""Build $p_j^{-1}R\bmod q_i$ for successive trailing-row removal.
+
+    Row j removes the j-th prime from the end. Only columns before that
+    prime participate; unused columns are zero.
+    """
+    rows = torch.zeros(
+        (drop_count, len(moduli) - 1), dtype=dtype, device=device
+    )
+    for j, prime in enumerate(reversed(moduli[-drop_count:])):
+        values = [pow(prime, -1, q) * radix % q for q in moduli[: -j - 1]]
+        rows[j, : len(values)] = torch.tensor(
+            values, dtype=dtype, device=device
+        )
+    return rows
+
+
 def moddown_inverse_tables(
     rns_context: RnsContext,
 ) -> tuple[torch.Tensor, ...]:
     config = rns_context.config
     montgomery = rns_context.montgomery_parameters
-    p_moduli = montgomery.moduli[-config.num_p_primes :][::-1]
-    inverse_rows = [
-        [
-            (pow(dropped, -1, modulus) * montgomery.R) % modulus
-            for modulus in montgomery.moduli[: -drop_step - 1]
-        ]
-        for drop_step, dropped in enumerate(p_moduli)
-    ]
     depth0_prime_ids = rns_context.rns_layout.prime_ids(0, include_p=True)
+    base = trailing_quotient_inverses(
+        tuple(montgomery.moduli[i] for i in depth0_prime_ids),
+        config.num_p_primes,
+        montgomery.R,
+        dtype=rns_context.dtype,
+        device=rns_context.device,
+    )
     base_rows = [
-        torch.tensor(
-            [
-                inverse_rows[drop_step][prime_id]
-                for prime_id in depth0_prime_ids[: -drop_step - 1]
-            ],
-            dtype=rns_context.dtype,
-            device=rns_context.device,
-        )
-        for drop_step in range(config.num_p_primes)
+        base[j, : len(depth0_prime_ids) - j - 1]
+        for j in range(config.num_p_primes)
     ]
     tables = []
     for depth in range(config.max_depth + 1):
@@ -208,3 +309,98 @@ class RescaleTables:
             )
             facts["ntt_backend"] = ntt_context.ntt_backend_name
         return tensors, facts
+
+
+MODDOWN_RESCALE_TABLE_NAMES = (
+    "joint_remaining_parameters",
+    "joint_dropped_parameters",
+    "joint_ordered_parameters",
+    "joint_p_times_base",
+    "joint_inverses",
+    "joint_product_inverse",
+    "joint_dropped_offset",
+    "joint_remaining_offset",
+    "joint_drop_positions",
+    "joint_remaining_positions",
+)
+
+
+def moddown_rescale_tables(
+    context: RnsContext,
+    q_prime_ids: tuple[int, ...],
+    p_prime_ids: tuple[int, ...],
+    drop_prime_ids: tuple[int, ...],
+    *,
+    moddown_rounding: str = "nearest",
+    rescale_rounding: str = "nearest",
+) -> dict[str, torch.Tensor]:
+    r"""Prepare the exact quotient of $v+Pa+H_P+PH_D$ by $PD$.
+
+    Q and P identify actual ordered input rows; D identifies the complete group consumed by rescaling. The remaining Q rows retain their input order. All returned values are ordinary numerical Tensors on this RNS context's device.
+    """
+    if moddown_rounding not in {"nearest", "floor"} or rescale_rounding not in {
+        "nearest",
+        "floor",
+    }:
+        raise ValueError("quotient rounding must be nearest or floor")
+    q, p, d = tuple(q_prime_ids), tuple(p_prime_ids), tuple(drop_prime_ids)
+    if not d or len(set(d)) != len(d) or not set(d) <= set(q):
+        raise ValueError(
+            "The rescale group must be a nonempty subset of Q rows"
+        )
+    remaining = tuple(i for i in q if i not in d)
+    if not remaining:
+        raise ValueError("Rescaling must retain Q rows")
+    dropped, ordered = (*d, *p), (*remaining, *d, *p)
+    moduli, radix = context.config.moduli, context.montgomery_parameters.R
+    P, D = prod(moduli[i] for i in p), prod(moduli[i] for i in d)
+    H = ((P - 1) // 2 if moddown_rounding == "nearest" else 0) + P * (
+        (D - 1) // 2 if rescale_rounding == "nearest" else 0
+    )
+
+    def tensor(values, dtype=None):
+        return torch.tensor(
+            values,
+            dtype=context.dtype if dtype is None else dtype,
+            device=context.device,
+        )
+
+    def broadcast(values):
+        return tensor(values).view(-1, 1).expand(-1, context.config.N)
+
+    return {
+        "joint_remaining_parameters": context.rns_parameters_for_prime_ids(
+            remaining
+        ),
+        "joint_dropped_parameters": context.rns_parameters_for_prime_ids(
+            dropped
+        ),
+        "joint_ordered_parameters": context.rns_parameters_for_prime_ids(
+            ordered
+        ),
+        "joint_p_times_base": tensor(tuple(P * radix % moduli[i] for i in q)),
+        "joint_inverses": trailing_quotient_inverses(
+            tuple(moduli[i] for i in ordered),
+            len(dropped),
+            radix,
+            dtype=context.dtype,
+            device=context.device,
+        ),
+        "joint_product_inverse": tensor(
+            tuple(
+                pow(P * D, -1, moduli[i]) * radix % moduli[i] for i in remaining
+            )
+        ),
+        "joint_dropped_offset": broadcast(
+            tuple(H % moduli[i] for i in dropped)
+        ),
+        "joint_remaining_offset": broadcast(
+            tuple(H % moduli[i] for i in remaining)
+        ),
+        "joint_drop_positions": tensor(
+            tuple(q.index(i) for i in d), torch.long
+        ),
+        "joint_remaining_positions": tensor(
+            tuple(q.index(i) for i in remaining), torch.long
+        ),
+    }

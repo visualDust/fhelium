@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "../../common/cuda/kernel_support.cuh"
-#include "../../common/cuda/montgomery.cuh"
+#include "../../common/montgomery.hpp"
 #include "../../common/cuda/repetition.cuh"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
@@ -234,7 +234,8 @@ void launch_montgomery_weighted_sums(
     const std::vector<torch::Tensor>& ciphertexts,
     const std::vector<torch::Tensor>& plaintexts,
     const torch::Tensor params,
-    int64_t group_count) {
+    int64_t group_count,
+    int64_t component_count) {
   const auto ciphertext = view_rns_batch_3d(ciphertexts[0], "ciphertext");
   const auto plaintext = view_rns_batch_3d(plaintexts[0], "plaintext");
   const int term_count = ciphertexts.size();
@@ -258,7 +259,7 @@ void launch_montgomery_weighted_sums(
           pointers,                                                         \
           FHELIUM_CUDA_ACCESSOR32(params, scalar_t, 2),                      \
           ciphertext.size(0),                                               \
-          ciphertexts[0].size(0),                                           \
+          component_count,                                                  \
           ciphertext.size(1),                                               \
           ciphertext.size(2),                                               \
           ciphertext.stride(0),                                             \
@@ -590,7 +591,8 @@ torch::Tensor rns_montgomery_weighted_sums_cuda(
     AT_DISPATCH_INTEGRAL_TYPES(
         reference.scalar_type(), "rns_montgomery_weighted_sums_cuda", [&] {
           launch_montgomery_weighted_sums<scalar_t>(
-              out, ciphertext_rows, plaintext_rows, rns_params, group_count);
+              out, ciphertext_rows, plaintext_rows, rns_params, group_count,
+              ciphertexts[0].size(0));
         });
     return out;
   }

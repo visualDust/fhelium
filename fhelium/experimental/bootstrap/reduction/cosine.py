@@ -2,14 +2,21 @@ r"""Cosine-seed periodic reduction with double-angle reconstruction."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
-from fhelium.values import Ciphertext, ConjugationKey, RelinearizationKey
+from fhelium.values import (
+    EvaluationKeySet,
+    Ciphertext,
+    ConjugationKey,
+    RelinearizationKey,
+)
 from fhelium.experimental.bootstrap.arithmetic import BootstrapArithmetic
 from fhelium.experimental.bootstrap.polynomial import PolynomialApproximation
 
@@ -22,8 +29,9 @@ class CosineDoubleAngleReduction:
     r"""Reduce one real branch with a cosine seed and double-angle chain.
 
     `input_bound` is the positive integer $B$ bounding the raw coordinate
-    $r$. The fitted polynomial always consumes the normalized coordinate
-    $x=r/B\in[-1,1]$. With $R=$ `double_angle_iterations`, the seed is
+    $r$. Reduction uses normalized coordinate $x=r/B\in[-1,1]$;
+    ``seed_shift`` places its seed polynomial at a shifted coordinate.
+    With $R=$ `double_angle_iterations`, the unshifted seed is
 
     $$
     z_0(x)\mathrel{\approx}
@@ -38,6 +46,9 @@ class CosineDoubleAngleReduction:
     $$
 
     Thus $z_R\mathrel{\approx}\rho_B(x)=\sin(\pi Bx)/\pi$.
+    ``seed_shift=c`` evaluates the seed at z=x+c and subtracts the same shift
+    in its fitted phase. The periodic map is unchanged. For c=-1/(2B), the
+    fitted seed is even; its odd Chebyshev coefficients are zero.
     Approximation and homomorphic evaluation are separate components.
 
     `reference(values)` always takes normalized $x$ coordinates and applies no
@@ -74,6 +85,7 @@ class CosineDoubleAngleReduction:
     fuse_input_normalization: bool = False
     retain_ntt: bool = False
     maximum_plaintext_error: float = 1e-3
+    seed_shift: float = 0.0
 
     def __post_init__(self) -> None:
         if self.input_bound <= 0:
@@ -96,11 +108,11 @@ class CosineDoubleAngleReduction:
         r"""Fit the low-frequency seed in normalized coordinate $x$.
 
         For $R=$ `double_angle_iterations`, the returned Chebyshev or power
-        series approximates
+        series in z=x+seed_shift approximates
 
         $$
         \pi^{-1/2^R}
-        \cos\left(\frac{\pi Bx}{2^R}-\frac{\pi}{2^{R+1}}\right)
+        \cos\left(\frac{\pi B(z-c)}{2^R}-\frac{\pi}{2^{R+1}}\right)
         \quad\text{on }[-1,1].
         $$
 
@@ -111,12 +123,23 @@ class CosineDoubleAngleReduction:
         phase_scale = 2**self.double_angle_iterations
         amplitude = math.pi ** (-1.0 / phase_scale)
         frequency = math.pi * self.input_bound / phase_scale
-        phase_shift = -math.pi / (2.0 * phase_scale)
-        return self.approximator.approximate(
+        phase_shift = (
+            -math.pi / (2.0 * phase_scale) - frequency * self.seed_shift
+        )
+        polynomial = self.approximator.approximate(
             lambda value: amplitude * np.cos(frequency * value + phase_shift),
             domain=(-1.0, 1.0),
             name='periodic_cosine_seed',
         )
+        if phase_shift == 0.0:
+            polynomial = replace(
+                polynomial,
+                coefficients=tuple(
+                    value if index % 2 == 0 else 0.0
+                    for index, value in enumerate(polynomial.coefficients)
+                ),
+            )
+        return polynomial
 
     @cached_property
     def approximation_error(self) -> float:
@@ -134,13 +157,13 @@ class CosineDoubleAngleReduction:
 
     @property
     def fused_input_divisor(self) -> float:
-        r"""Return $B$ for fused $x=r/B$, or $1$ for explicit division."""
+        r"""Return $B$ when normalization is fused into the input transform, or $1$ when evaluation divides by $B$."""
 
         return float(self.input_bound) if self.fuse_input_normalization else 1.0
 
     @property
     def required_depths(self) -> int:
-        """Count explicit division, polynomial depth, and recurrence depth."""
+        """Count normalization, polynomial-evaluation, and recurrence depths."""
 
         return (
             int(not self.fuse_input_normalization)
@@ -148,12 +171,44 @@ class CosineDoubleAngleReduction:
             + self.double_angle_iterations
         )
 
+    def relinearization_depths(
+        self, *, input_depth: int = 0
+    ) -> tuple[int, ...] | None:
+        """Compose normalization, polynomial products and double-angle products."""
+        declare = getattr(self.evaluator, "relinearization_depths", None)
+        if not callable(declare):
+            return None
+        polynomial_start = input_depth + int(not self.fuse_input_normalization)
+        depths = cast(
+            tuple[int, ...] | None,
+            declare(self.polynomial, input_depth=polynomial_start),
+        )
+        if depths is None:
+            return None
+        recurrence_start = polynomial_start + self.evaluator.required_depths(
+            self.polynomial
+        )
+        return tuple(
+            sorted(
+                set(depths)
+                | set(
+                    range(
+                        recurrence_start,
+                        recurrence_start + self.double_angle_iterations,
+                    )
+                )
+            )
+        )
+
     def evaluate(
         self,
         arithmetic: BootstrapArithmetic,
         ciphertext: Ciphertext,
         *,
-        relinearization_key: RelinearizationKey | None,
+        relinearization_key: RelinearizationKey
+        | EvaluationKeySet
+        | Mapping[int, RelinearizationKey]
+        | None,
         conjugation_key: ConjugationKey | None = None,
     ) -> Ciphertext:
         r"""Evaluate $\rho_B$ homomorphically under the class coordinate convention.
@@ -183,6 +238,8 @@ class CosineDoubleAngleReduction:
                 reduced,
                 1.0 / self.input_bound,
             )
+        if self.seed_shift:
+            reduced = ops.add_scalar(reduced, self.seed_shift)
         reduced = self.evaluator.evaluate(
             arithmetic,
             reduced,
@@ -213,7 +270,9 @@ class CosineDoubleAngleReduction:
         $\rho_B(x)=\sin(\pi Bx)/\pi$ and CKKS rounding is not modeled.
         """
 
-        reduced = self.polynomial.evaluate_plaintext(np.asarray(values))
+        reduced = self.polynomial.evaluate_plaintext(
+            np.asarray(values) + self.seed_shift
+        )
         for iteration in range(1, self.double_angle_iterations + 1):
             reduced = 2.0 * reduced * reduced - math.pi ** (
                 -1.0 / (2 ** (self.double_angle_iterations - iteration))

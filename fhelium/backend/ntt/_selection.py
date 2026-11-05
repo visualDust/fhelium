@@ -25,6 +25,11 @@ def algorithm_name(policy: NttBackendPolicy) -> str:
 
 def table_layout(policy: NttBackendPolicy) -> str:
     """Identify interchangeable native table operands, without comparing data."""
+    if (
+        isinstance(policy, CompactRadix2Policy)
+        and policy.twiddle_encoding == "shoup32"
+    ):
+        return "radix2_compact_shoup32"
     if isinstance(policy, CompactFixedRadixPolicy):
         return f"fixed_radix{policy.radix}"
     return algorithm_name(policy)

@@ -225,9 +225,7 @@ class CkksRescaler:
         """Validate one divide-round-drop step and collect native metadata.
 
         The returned object contains only depth- and modulus-dependent values.
-        Ciphertext component views are intentionally obtained by the copy or
-        in-place caller so mutation is visible at the call site. Its inverse
-        vector is ``[remaining_limb]`` and parameter table is
+        The allocating or in-place caller supplies ciphertext component views. The returned inverse vector is ``[remaining_limb]`` and parameter table is
         ``[parameter, remaining_limb]`` in engine integral dtype/device,
         aligned with ``ct.prime_ids[1:]``. It aliases engine-owned tables.
         """

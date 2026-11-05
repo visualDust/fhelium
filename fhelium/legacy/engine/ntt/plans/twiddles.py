@@ -57,8 +57,7 @@ def build_compact_twiddles(
 
     For row ``i`` with primitive $2N$-th root $\psi_i$, column ``k`` stores
     $\psi_i^{\operatorname{br}(k)}\bmod q_i$ for forward execution and its
-    inverse for inverse execution. Rows follow the input ``moduli`` order
-    exactly. Outputs use ``dtype`` on ``device`` in standard representation;
+    inverse for inverse execution. Rows follow the input ``moduli`` order. Outputs use ``dtype`` on ``device`` in standard representation;
     callers convert the tables to Montgomery form before CUDA NTT.
     """
 
@@ -165,7 +164,7 @@ def build_power_of_two_radix_twiddles(
     shape ``[prime, radix]`` and contain powers of the fixed
     primitive radix root used by the digit-local butterfly.
 
-    Rows map exactly to the input ``moduli`` order. Every returned tensor uses
+    Rows follow the input ``moduli`` order. Every returned tensor uses
     integral ``dtype`` on ``device`` and standard residues; the runtime later
     converts all four tables to Montgomery representation in place.
     """

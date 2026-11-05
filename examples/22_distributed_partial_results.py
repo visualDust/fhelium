@@ -131,7 +131,7 @@ def main() -> None:
             secret_key = None
             root_source = None
 
-        # One logical encrypted input is intentionally replicated because every
+        # One logical encrypted input is replicated because every
         # rank evaluates a different subset of its rotations.
         source = dist.broadcast_ciphertext(root_source, src=0)
         local_rotation_steps = list(

@@ -39,7 +39,7 @@ If multiple keys could satisfy a description, bind the intended key under the Pr
 
 ## 4. Resolve operation and implementation requirements
 
-Inventory `backend.registry.implementations` and match both operation class and requested implementation name. A partial lowering can deliberately leave mixed-level operations, but each executed operation needs supported execution or a further lowering. An assignment that selects a whole operation must survive later transformations; use the lowering pass's `preserve` control rather than erasing the assignment accidentally.
+Inventory `backend.registry.implementations` and match both operation class and requested implementation name. A partial lowering can leave mixed-level operations, but each executed operation needs supported execution or a further lowering. An assignment that selects a whole operation must survive later transformations; use the lowering pass's `preserve` control rather than erasing the assignment accidentally.
 
 `backend.diagnostics(operation)` returns a tuple of diagnostic strings for implementation or named-resource resolution failures on the selected operation; an empty tuple means those checks succeeded. For device-specific failure, verify the installed native backend and the placement of every numerical operand and key; selecting a Backend does not transfer them.
 

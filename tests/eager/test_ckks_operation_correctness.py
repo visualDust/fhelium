@@ -1,8 +1,6 @@
 """End-to-end correctness criteria for the public CKKS operation surface.
 
-These tests intentionally compare decrypted results with cleartext references.
-Shape-only and state-only assertions are useful, but they cannot detect a
-native RNS/NTT kernel that returns a structurally valid wrong answer.
+These tests compare decrypted results with cleartext references. Shape-only and state-only assertions are useful, but they cannot detect a native RNS/NTT kernel that returns a structurally valid wrong answer.
 
 The suite is the correctness baseline for refactoring the local execution ABI.
 It covers the CPU and CUDA device defaults here; backend-family equivalence

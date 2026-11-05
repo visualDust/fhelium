@@ -40,9 +40,7 @@ def _assert_hoisted_rotation_lifecycle(device: str) -> None:
 
     for _ in range(2):
         actual = engine.rotate_many_with_keys(
-            source,
-            keys,
-            use_hoisting=True,
+            source, keys, use_hoisting=True, moddown_rounding="floor"
         )
         expected = reference.rotate_many_with_keys(
             source,
@@ -59,7 +57,7 @@ def _assert_hoisted_rotation_lifecycle(device: str) -> None:
             )
         )
         ntt_results = engine.rotate_many_with_keys(
-            source, keys, output_domain="ntt"
+            source, keys, output_domain="ntt", moddown_rounding="floor"
         )
         for ntt_value, coefficient_value in zip(
             ntt_results, expected, strict=True
@@ -71,10 +69,15 @@ def _assert_hoisted_rotation_lifecycle(device: str) -> None:
                 coefficient_value.data,
             )
         independent_ntt = engine.rotate_many_with_keys(
-            source, keys, use_hoisting=False, output_domain="ntt"
+            source,
+            keys,
+            use_hoisting=False,
+            output_domain="ntt",
+            moddown_rounding="floor",
         )
         independent_coefficient = [
-            engine.rotate_with_key(source, key) for key in keys
+            engine.rotate_with_key(source, key, moddown_rounding="floor")
+            for key in keys
         ]
         for ntt_value, coefficient_value in zip(
             independent_ntt, independent_coefficient, strict=True
@@ -86,9 +89,7 @@ def _assert_hoisted_rotation_lifecycle(device: str) -> None:
 
     keys[0].data[0, 0, 0, 0].add_(1)
     actual_after_mutation = engine.rotate_many_with_keys(
-        source,
-        keys,
-        use_hoisting=True,
+        source, keys, use_hoisting=True, moddown_rounding="floor"
     )
     expected_after_mutation = reference.rotate_many_with_keys(
         source,

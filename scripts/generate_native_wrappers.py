@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """Generate typed Python facades for FHElium custom Torch operators.
 
-The generated files are intentionally committed: they make dynamically registered
-``torch.ops`` operators visible to IDEs, type checkers, and autocomplete.
+The generated files expose dynamically registered ``torch.ops`` operators to IDEs, type checkers, and autocomplete.
 
-Invoke this file directly from the repository root. It intentionally lives
-outside ``fhelium.native.wrapper`` so wrapper generation never imports the
-runtime package that it is responsible for generating.
+Invoke this file directly from the repository root to discover operator schemas without importing the wrapper package being generated.
 
 Design goals:
 - discover real schemas from the PyTorch dispatcher after loading local .so files;
@@ -125,6 +122,14 @@ FAKE_TENSOR_SHAPE_RULES = {
     "fhelium_rns_ops::sum_standard_batch": FakeTensorShapeRule(
         like_arg="source",
         shape_expression="(*source.shape[:dim], *source.shape[dim + 1:])",
+    ),
+    "fhelium_rns_ops::crt_basis_extend": FakeTensorShapeRule(
+        like_arg="source_residues",
+        shape_expression="(*source_residues.shape[:-2], matrix.shape[1], source_residues.shape[-1])",
+    ),
+    "fhelium_rns_ops::mixed_radix_modup_tiled": FakeTensorShapeRule(
+        like_arg="source_residues",
+        shape_expression="(*source_residues.shape[:-2], parameters.size(1), source_residues.size(-1))",
     ),
     "fhelium_rns_ops::mixed_radix_basis_extend_to_montgomery": FakeTensorShapeRule(
         like_arg="mixed_radix_components",

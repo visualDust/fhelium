@@ -22,10 +22,9 @@ from ..._pipeline import PassResult, PassStats
 
 @dataclass(frozen=True)
 class ResolveTensorPlaceholdersPass:
-    """Supply available Tensors while leaving missing references unresolved.
+    """Bind Program Tensor references from a symbol-to-Tensor table.
 
-    The pass performs no allocation, generation or callback. Callers can run it
-    with a partial table; linking checks references that are still required.
+    A partial table resolves the symbols it contains and leaves other references unchanged. Linking checks the references still required for execution.
     """
 
     name: str = "resolve-tensor-placeholders"

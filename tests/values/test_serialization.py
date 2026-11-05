@@ -82,6 +82,7 @@ def _rotation_key(device: str = "cpu") -> RotationKey:
             device=device,
         ).reshape(2, 2, 3, 8),
         prime_ids=(0, 1, 2),
+        digit_prime_ids=((0,), (1,)),
         rotation_step=1,
     )
 

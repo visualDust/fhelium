@@ -18,14 +18,12 @@ from fhelium.legacy.engine.ntt.plans.twiddles import (
 class CompactPowerOfTwoRadixNttPlan:
     """Radix-specific outer twists and fixed cyclic-root powers.
 
-    A radix-``R`` digit evaluates one twisted cyclic ``R``-point NTT. Radix-4,
-    radix-8, and radix-16 use dedicated butterflies. Every digit has the
-    configured policy radix, and incompatible ring dimensions are rejected.
-    This does not alias grouped radix-2 execution.
+    A radix-``R`` digit evaluates one twisted cyclic ``R``-point NTT. Radix-4, radix-8, and radix-16 use dedicated butterflies. Every digit has the configured policy radix, and incompatible ring dimensions are rejected.
+
 
     Outer tables have integral shape ``[prime, N - 1]`` and root-power tables
     have shape ``[prime, radix]`` on ``device`` in standard representation.
-    Prime rows follow ``ckks_config.moduli`` exactly; the four tables are
+    Prime rows follow ``ckks_config.moduli`` order; the four tables are
     separately allocated and do not alias.
     """
 

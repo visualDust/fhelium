@@ -107,45 +107,130 @@ def test_cpu_standard_rns_dispatch_rejects_invalid_operands() -> None:
 
 
 @pytest.mark.parametrize(
+    "device", ["cpu", pytest.param("cuda:0", marks=pytest.mark.gpu)]
+)
+@pytest.mark.parametrize(
     ("dtype", "modulus_values"),
     [
         (torch.int32, (268369921, 134176769)),
+        (torch.int32, (469762049, 998244353)),
         (torch.int64, (1152921504606748673, 576460752303423649)),
     ],
 )
-def test_cpu_standard_rns_dispatch_preserves_lazy_boundaries(
+def test_standard_rns_dispatch_preserves_lazy_boundaries(
     dtype: torch.dtype,
     modulus_values: tuple[int, ...],
+    device: str,
 ) -> None:
-    moduli = torch.tensor(modulus_values, dtype=dtype)
-    parameters = torch.zeros((8, len(modulus_values)), dtype=dtype)
+    moduli = torch.tensor(modulus_values, dtype=dtype, device=device)
+    parameters = torch.zeros(
+        (8, len(modulus_values)), dtype=dtype, device=device
+    )
     parameters[0] = 2 * moduli
-    lhs = torch.stack(
-        [
-            torch.tensor((0, modulus - 1, modulus, 2 * modulus - 1))
-            for modulus in modulus_values
-        ]
-    ).to(dtype=dtype)[None]
-    rhs = torch.stack(
-        [
-            torch.tensor((2 * modulus - 1, modulus, modulus - 1, 1))
-            for modulus in modulus_values
-        ]
-    ).to(dtype=dtype)[None]
-    row_moduli = moduli.view(1, -1, 1)
+    lhs = torch.tensor(
+        [(0, q - 1, q, 2 * q - 1, 2 * q - 1) for q in modulus_values],
+        dtype=dtype,
+        device=device,
+    )[None]
+    rhs = torch.tensor(
+        [(2 * q - 1, q, q - 1, 1, 2 * q - 1) for q in modulus_values],
+        dtype=dtype,
+        device=device,
+    )[None]
+    row_moduli = moduli.to(torch.int64).view(1, -1, 1)
+    # Widen the reference before adding legal 30-bit lazy representatives.
+    sum_ = lhs.to(torch.int64) + rhs.to(torch.int64)
+    difference = lhs.to(torch.int64) - rhs.to(torch.int64)
+    for operation, value, modulus in (
+        (rns_ops.add_standard, sum_, row_moduli),
+        (rns_ops.sub_standard, difference, row_moduli),
+        (rns_ops.add_lazy, sum_, 2 * row_moduli),
+        (rns_ops.sub_lazy, difference, 2 * row_moduli),
+    ):
+        torch.testing.assert_close(
+            operation(lhs, rhs, parameters),
+            torch.remainder(value, modulus).to(dtype),
+            rtol=0,
+            atol=0,
+        )
 
-    torch.testing.assert_close(
-        rns_ops.add_standard(lhs, rhs, parameters),
-        torch.remainder(lhs + rhs, row_moduli),
-        rtol=0,
-        atol=0,
+
+@pytest.mark.parametrize(
+    "device", ["cpu", pytest.param("cuda:0", marks=pytest.mark.gpu)]
+)
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
+def test_mixed_radix_digits_preserve_large_prime_residues(
+    dtype: torch.dtype,
+    device: str,
+) -> None:
+    import math
+    import random
+
+    primes = (1073692673, 1073668097, 1073651713, 1073643521)
+    modulus = math.prod(primes)
+    generator = random.Random(942)
+    integers = [0, 1, modulus - 1, modulus // 2]
+    integers += [generator.randrange(modulus) for _ in range(252)]
+    radix_bits = 32 if dtype == torch.int32 else 62
+    radix = 1 << radix_bits
+    half_bits = radix_bits // 2
+    mask = (1 << half_bits) - 1
+    products = [math.prod(primes[: i + 1]) for i in range(len(primes) - 1)]
+    normalizers = torch.tensor(
+        [
+            pow(product, -1, primes[i + 1]) * radix % primes[i + 1]
+            for i, product in enumerate(products)
+        ],
+        dtype=dtype,
+        device=device,
     )
-    torch.testing.assert_close(
-        rns_ops.sub_standard(lhs, rhs, parameters),
-        torch.remainder(lhs - rhs, row_moduli),
-        rtol=0,
-        atol=0,
+    propagation = torch.tensor(
+        [
+            [
+                product * radix % q if target > i + 1 else 0
+                for target, q in enumerate(primes)
+            ]
+            for i, product in enumerate(products)
+        ],
+        dtype=dtype,
+        device=device,
     )
+    inverses = [-pow(q, -1, radix) % radix for q in primes]
+    reduction = [
+        torch.tensor(row, dtype=dtype, device=device)
+        for row in (
+            [q & mask for q in primes],
+            [q >> half_bits for q in primes],
+            [inv & mask for inv in inverses],
+            [inv >> half_bits for inv in inverses],
+        )
+    ]
+    source = torch.tensor(
+        [
+            [
+                value % q + (q if i % 2 else 0)
+                for i, value in enumerate(integers)
+            ]
+            for q in primes
+        ],
+        dtype=dtype,
+        device=device,
+    )[None]
+    expected = torch.tensor(
+        [
+            [value // math.prod(primes[:i]) % q for value in integers]
+            for i, q in enumerate(primes)
+        ],
+        dtype=dtype,
+        device=device,
+    )[None]
+    actual = rns_ops.mixed_radix_decompose(
+        source,
+        normalizers,
+        propagation,
+        *reduction,
+    )
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("batch_shape", [(), (2,), (2, 3)])
@@ -239,6 +324,7 @@ def test_keyswitch_moddown_does_not_mutate_public_p_residues() -> None:
         p_residues,
         engine.moddown_p_drop_inverses_montgomery_by_depth[depth],
         active_parameters,
+        rounding="floor",
     )
 
     assert result.shape == q_residues.shape
@@ -250,6 +336,7 @@ def test_keyswitch_moddown_does_not_mutate_public_p_residues() -> None:
             p_residues.cpu(),
             engine.moddown_p_drop_inverses_montgomery_by_depth[depth],
             active_parameters,
+            rounding="floor",
         )
     with pytest.raises(RuntimeError, match="same integral dtype"):
         ckks_ops.keyswitch_moddown_qp_to_q(
@@ -259,6 +346,7 @@ def test_keyswitch_moddown_does_not_mutate_public_p_residues() -> None:
                 torch.int32
             ),
             active_parameters,
+            rounding="floor",
         )
 
     qp_residues = torch.cat((q_residues, p_residues))
@@ -455,3 +543,195 @@ def test_native_compressed_arithmetic_rejects_invalid_storage_and_dtype() -> (
             compressed.to(torch.int32),
             parameters,
         )
+
+
+@pytest.mark.parametrize(
+    "device", ["cpu", pytest.param("cuda:0", marks=pytest.mark.gpu)]
+)
+@pytest.mark.parametrize("dtype", [torch.int32, torch.int64])
+def test_mixed_radix_output_buffers_and_table_extents(
+    device: str,
+    dtype: torch.dtype,
+) -> None:
+    """Garner/extension preserve strided output storage and reject unsafe tables."""
+    import math
+
+    from fhelium.backend.rns.context import RnsContext
+    from fhelium.backend.rns.tables import centered_basis_extension_tables
+    from fhelium.config import CkksConfig
+
+    config = CkksConfig.parse(Preset.slots32768_scale25_depth24_int32)
+    context = RnsContext(config, dtype=dtype, device=device)
+    target_ids = (0, 17, 18)
+    for width in (1, 4, 17):
+        ids = tuple(range(width))
+        tables = centered_basis_extension_tables(
+            context, context, ids, target_ids
+        )
+        moduli = tuple(config.moduli[i] for i in ids)
+        product = math.prod(moduli)
+        integers = [0, 1, product // 2, product - 1, *range(28)]
+        source = (
+            torch.tensor(
+                [[value % q for value in integers] for q in moduli],
+                dtype=dtype,
+                device=device,
+            )
+            .unsqueeze(0)
+            .repeat(2, 1, 1)
+        )
+        original = source.clone()
+        arguments = (
+            source,
+            tables['normalizers'],
+            tables['propagation'],
+            tables['source_lo'],
+            tables['source_hi'],
+            tables['source_neg_lo'],
+            tables['source_neg_hi'],
+        )
+        digits = torch.empty(
+            (2, width, 64),
+            dtype=dtype,
+            device=device,
+        )[..., ::2]
+        storage = digits.untyped_storage().data_ptr()
+        rns_ops.mixed_radix_decompose_out_(*arguments, digits)
+        expected = (
+            torch.tensor(
+                [
+                    [value // math.prod(moduli[:i]) % q for value in integers]
+                    for i, q in enumerate(moduli)
+                ],
+                dtype=dtype,
+                device=device,
+            )
+            .unsqueeze(0)
+            .repeat(2, 1, 1)
+        )
+        torch.testing.assert_close(digits, expected, rtol=0, atol=0)
+        torch.testing.assert_close(
+            digits,
+            rns_ops.mixed_radix_decompose(*arguments),
+            rtol=0,
+            atol=0,
+        )
+        assert digits.untyped_storage().data_ptr() == storage
+        assert digits.stride(-1) == 2
+
+        extended = torch.empty(
+            (2, len(target_ids), 64),
+            dtype=dtype,
+            device=device,
+        )[..., ::2]
+        parameters = tables['target_parameters']
+        extension_arguments = (
+            digits,
+            tables['extension'],
+            parameters,
+            len(target_ids),
+        )
+        storage = extended.untyped_storage().data_ptr()
+        rns_ops.mixed_radix_basis_extend_to_montgomery_out_(
+            *extension_arguments,
+            extended,
+        )
+        torch.testing.assert_close(
+            extended,
+            rns_ops.mixed_radix_basis_extend_to_montgomery(
+                *extension_arguments
+            ),
+            rtol=0,
+            atol=0,
+        )
+        assert extended.untyped_storage().data_ptr() == storage
+
+        from fhelium.backend.rns.modup import modup_digit
+
+        bindings = {
+            "qp_parameters": parameters,
+            "digit0_normalizers": tables["normalizers"],
+            "digit0_propagation": tables["propagation"],
+            "digit0_extension": tables["extension"],
+            **{
+                f"digit0_reduction{i}": value
+                for i, value in enumerate(arguments[3:])
+            },
+        }
+        span = (0, width, 0)
+        reference = extended.clone()
+        torch.testing.assert_close(
+            modup_digit(source, bindings, 0, span), reference, rtol=0, atol=0
+        )
+        output = torch.empty_like(extended)
+        assert modup_digit(source, bindings, 0, span, out=output) is output
+        torch.testing.assert_close(output, reference, rtol=0, atol=0)
+        if width > 1:
+            modup_digit(source, bindings, 0, span, out=extended, scratch=digits)
+            torch.testing.assert_close(digits, expected, rtol=0, atol=0)
+            torch.testing.assert_close(extended, reference, rtol=0, atol=0)
+        if source.is_cuda and not torch.version.hip:
+            decomposition = list(arguments[1:]) if width > 1 else []
+            rns_ops.mixed_radix_modup_tiled_out_(
+                source, decomposition, tables["extension"], parameters, extended
+            )
+            torch.testing.assert_close(extended, reference, rtol=0, atol=0)
+            assert extended.untyped_storage().data_ptr() == storage
+            if width == 4:
+                with pytest.raises(RuntimeError, match="disjoint"):
+                    rns_ops.mixed_radix_modup_tiled_out_(
+                        source,
+                        decomposition,
+                        tables["extension"],
+                        parameters,
+                        source[:, : len(target_ids), :],
+                    )
+        rns_ops.from_montgomery_(extended, parameters)
+        rns_ops.reduce_to_standard_(extended, parameters)
+        oracle = (
+            torch.tensor(
+                [
+                    [value % config.moduli[i] for value in integers]
+                    for i in target_ids
+                ],
+                dtype=dtype,
+                device=device,
+            )
+            .unsqueeze(0)
+            .repeat(2, 1, 1)
+        )
+        torch.testing.assert_close(extended, oracle, rtol=0, atol=0)
+        torch.testing.assert_close(source, original, rtol=0, atol=0)
+
+        if width == 4:
+            for index in range(3, 7):
+                invalid = list(arguments)
+                invalid[index] = invalid[index][:0]
+                with pytest.raises(RuntimeError):
+                    rns_ops.mixed_radix_decompose(*invalid)
+                with pytest.raises(RuntimeError):
+                    rns_ops.mixed_radix_decompose_out_(*invalid, digits)
+            with pytest.raises(RuntimeError):
+                rns_ops.mixed_radix_decompose_out_(*arguments, source)
+            overlapping = torch.empty(
+                (1, width, 32),
+                dtype=dtype,
+                device=device,
+            ).expand(2, width, 32)
+            with pytest.raises(RuntimeError):
+                rns_ops.mixed_radix_decompose_out_(*arguments, overlapping)
+            for operation, extra in (
+                (rns_ops.mixed_radix_basis_extend_to_montgomery, ()),
+                (
+                    rns_ops.mixed_radix_basis_extend_to_montgomery_out_,
+                    (extended,),
+                ),
+            ):
+                with pytest.raises(RuntimeError):
+                    operation(
+                        digits,
+                        tables['extension'],
+                        parameters[:7],
+                        len(target_ids),
+                        *extra,
+                    )

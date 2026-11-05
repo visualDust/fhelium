@@ -1,4 +1,4 @@
-"""Classify effects using registered operation semantics, not trait hints."""
+"""Classify operation effects from registered semantics."""
 
 from __future__ import annotations
 

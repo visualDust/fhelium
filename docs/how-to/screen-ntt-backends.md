@@ -132,7 +132,7 @@ At least two compatible names are required. The command omits `radix2_indexed` b
 
 ## Understand why performance changes
 
-The two tests intentionally answer different questions. To analyze launch count, memory coalescing, shared-memory fusion, register pressure, occupancy, RNS row count, and key-switch composition, continue with [Analyze and choose an NTT backend](choose-ntt-backend.md). For a final production choice, also follow [Benchmark methodology](/benchmarks/methodology).
+The NTT-only and complete-CKKS tests measure different execution scopes. To analyze launch count, memory coalescing, shared-memory fusion, register pressure, occupancy, RNS row count, and key-switch composition, continue with [Analyze and choose an NTT backend](choose-ntt-backend.md). For a final production choice, also follow [Benchmark methodology](/benchmarks/methodology).
 
 ## Verify the outcome
 

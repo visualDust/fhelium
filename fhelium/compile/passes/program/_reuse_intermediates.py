@@ -1,4 +1,4 @@
-"""Reuse internal deterministic transforms and simplify reference plumbing."""
+"""Reuse internal deterministic computations and simplify reference plumbing."""
 
 from __future__ import annotations
 
@@ -20,9 +20,17 @@ from fhelium.ir.dialects import ckks, core, ntt, rns
 from ..._pipeline import DecisionRecord, PassResult, PassStats
 from ._purity import known_pure, known_region_blocks
 
-# These operations are deterministic mathematical transforms. Reuse is restricted
-# to internal results, so independently returned arrays retain distinct storage.
-_TRANSFORMS = (
+_VIEWS = (
+    UnrealizedConversionCastOp,
+    rns.ExtractComponentOp,
+    rns.RestrictDepthOp,
+    rns.ReinterpretScaleOp,
+    ckks.ModSwitchOp,
+    ckks.ReinterpretScaleOp,
+)
+# Compiled mathematical calls use in_place=False. These readers return fresh
+# arrays; views are followed separately and unknown consumers end the proof.
+_FRESH_CONSUMERS = (
     ckks.ToNttOp,
     ckks.FromNttOp,
     ckks.ToMontgomeryResiduesOp,
@@ -33,25 +41,14 @@ _TRANSFORMS = (
     ntt.NttMontgomeryToCoefficientMontgomeryOp,
     rns.StandardToMontgomeryOp,
     rns.MontgomeryToStandardOp,
-)
-_VIEWS = (
-    UnrealizedConversionCastOp,
-    rns.ExtractComponentOp,
-    rns.RestrictDepthOp,
-    rns.ReinterpretScaleOp,
-    ckks.ModSwitchOp,
-    ckks.ReinterpretScaleOp,
-)
-# These built-in mathematical consumers produce fresh arrays rather than
-# returning a view of an operand. Unknown consumers end the alias proof.
-_FRESH_CONSUMERS = (
-    *_TRANSFORMS,
     ckks.AddOp,
     ckks.SubtractOp,
     ckks.NegateOp,
     ckks.MultiplyOp,
     ckks.AddPlaintextOp,
     ckks.MultiplyPlaintextOp,
+    ckks.AddCompressedPlaintextOp,
+    ckks.MultiplyCompressedPlaintextOp,
     ckks.RelinearizeOp,
     ckks.RotateOp,
     ckks.RotateManyOp,
@@ -78,18 +75,18 @@ def _internal(
     visited.add(value)
     for use in tuple(value.uses):
         consumer = use.operation
-        if consumer.parent_block() is not block:
+        if (
+            consumer.parent_block() is not block
+            or EXECUTION_IMPLEMENTATION_ATTRIBUTE in consumer.attributes
+            or not known_pure(consumer)
+        ):
             return False
-        if type(consumer) in _VIEWS and known_pure(consumer):
+        if type(consumer) in _VIEWS:
             if not all(
                 _internal(result, block, visited) for result in consumer.results
             ):
                 return False
-        elif (
-            type(consumer) not in _FRESH_CONSUMERS
-            or not known_pure(consumer)
-            or EXECUTION_IMPLEMENTATION_ATTRIBUTE in consumer.attributes
-        ):
+        elif type(consumer) not in _FRESH_CONSUMERS:
             return False
     return True
 
@@ -100,18 +97,17 @@ def _expression_key(operation: Operation) -> tuple[object, ...]:
         tuple(operation.operands),
         tuple(result.type for result in operation.results),
         tuple(sorted(operation.attributes.items())),
+        tuple(sorted(operation.properties.items())),
     )
 
 
 @dataclass(frozen=True)
 class ReuseIntermediatesPass:
-    """Remove duplicate references/casts and share internal transform results.
+    """Share internal pure computations while preserving observable output storage.
 
-    Transform reuse requires the same SSA operands, result types, and attributes.
-    A mutation, random draw, unknown operation, or region ends a local reuse run.
-    Directly returned results, views that escape, and unknown consumers prevent
-    reuse so this pass does not merge independently observable output storage.
-    It does not cancel approximate arithmetic or move rounding across sums.
+    Reuse requires the same concrete operation, ordered SSA operands, result types, attributes and properties. Numerical materials are ordinary operands and must therefore match by SSA identity. A mutation, random draw, unknown operation, region or implementation assignment ends a local reuse run.
+
+    Shared results must reach only fresh out-of-place readers, possibly through views. Direct returns, escaping views and unknown or assigned consumers prevent sharing. This preserves independently observable result storage without changing arithmetic order, rounding or value-state transitions.
     """
 
     name: str = "reuse-intermediates"
@@ -120,7 +116,7 @@ class ReuseIntermediatesPass:
         program = compilation.program
         workspace = compilation.workspace
         del workspace
-        references = casts = transforms = 0
+        references = casts = computations = 0
         decisions: list[DecisionRecord] = []
 
         def replace(operation: Operation, values: tuple[SSAValue, ...]) -> None:
@@ -129,11 +125,14 @@ class ReuseIntermediatesPass:
             Rewriter.erase_op(operation)
 
         def visit(block: Block) -> None:
-            nonlocal references, casts, transforms
+            nonlocal references, casts, computations
             refs: dict[tuple[object, ...], Operation] = {}
             expressions: dict[tuple[object, ...], Operation] = {}
             cast_values: dict[tuple[object, ...], SSAValue] = {}
             for operation in tuple(block.ops):
+                if EXECUTION_IMPLEMENTATION_ATTRIBUTE in operation.attributes:
+                    expressions.clear()
+                    continue
                 for child in known_region_blocks(operation):
                     visit(child)
                 if type(operation) in (core.ResourceRefOp, core.MaterialRefOp):
@@ -157,6 +156,8 @@ class ReuseIntermediatesPass:
                         == len(source.owner.outputs)
                         == 1
                         and known_pure(source.owner)
+                        and EXECUTION_IMPLEMENTATION_ATTRIBUTE
+                        not in source.owner.attributes
                     ):
                         source = source.owner.inputs[0]
                     operation.operands[0] = source
@@ -169,6 +170,7 @@ class ReuseIntermediatesPass:
                             source,
                             result.type,
                             tuple(sorted(operation.attributes.items())),
+                            tuple(sorted(operation.properties.items())),
                         )
                         previous = cast_values.get(key)
                         if previous is None:
@@ -180,12 +182,6 @@ class ReuseIntermediatesPass:
                 if not known_pure(operation) or operation.regions:
                     expressions.clear()
                     continue
-                if (
-                    type(operation) not in _TRANSFORMS
-                    or EXECUTION_IMPLEMENTATION_ATTRIBUTE
-                    in operation.attributes
-                ):
-                    continue
                 if not all(
                     _internal(result, block) for result in operation.results
                 ):
@@ -196,13 +192,13 @@ class ReuseIntermediatesPass:
                     expressions[key] = operation
                 else:
                     replace(operation, tuple(previous.results))
-                    transforms += 1
+                    computations += 1
                     decisions.append(
                         DecisionRecord(
                             operation.name,
-                            selected="reuse-prior-transform",
+                            selected="reuse-prior-expression",
                             details=(
-                                "same SSA input and represented transform state; results remain internal",
+                                "same SSA operands, types, attributes and properties; all results remain internal",
                             ),
                         )
                     )
@@ -210,7 +206,7 @@ class ReuseIntermediatesPass:
         for function in program.functions:
             for block in function.body.blocks:
                 visit(block)
-        total = references + casts + transforms
+        total = references + casts + computations
         if not total:
             return PassResult.unchanged(program)
         return PassResult(
@@ -218,7 +214,7 @@ class ReuseIntermediatesPass:
             PassStats(matched=total, transformed=total, removed=total),
             (
                 f"deduplicated references={references}, removed casts={casts}, "
-                f"reused transform operations={transforms}",
+                f"reused pure computations={computations}",
             ),
             tuple(decisions),
         )

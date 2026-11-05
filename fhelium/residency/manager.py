@@ -769,9 +769,7 @@ class ResidencyManager:
             force: Synchronize configured CUDA devices and clear active
                 protections. This can invalidate public lifetime objects.
 
-        ``force=True`` synchronizes configured CUDA devices and clears even
-        leaked active protections. It is an explicit unsafe escape hatch for
-        tests and process shutdown, not normal request cleanup.
+        ``force=True`` synchronizes configured CUDA devices and clears even leaked active protections. Use it only for tests or process shutdown: outstanding borrowers lose their protection.
 
         Raises:
             ResidencyInUseError: If active or pending lifetimes remain without

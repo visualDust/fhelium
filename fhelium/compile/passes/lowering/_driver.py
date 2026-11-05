@@ -22,10 +22,18 @@ from .._operation_transforms import program_operations
 from ._arithmetic import ARITHMETIC_LOWERINGS
 from ._core import CkksLoweringRegistry
 from ._keyswitch import KEY_SWITCH_LOWERINGS
+from ._rotation_sum import ROTATION_SUM_LOWERINGS
+from ._modulus_raise import MODULUS_RAISE_LOWERINGS
 from ._representation import REPRESENTATION_LOWERINGS
 
 DEFAULT_CKKS_LOWERINGS = CkksLoweringRegistry(
-    (*ARITHMETIC_LOWERINGS, *REPRESENTATION_LOWERINGS, *KEY_SWITCH_LOWERINGS)
+    (
+        *ARITHMETIC_LOWERINGS,
+        *REPRESENTATION_LOWERINGS,
+        *KEY_SWITCH_LOWERINGS,
+        *ROTATION_SUM_LOWERINGS,
+        *MODULUS_RAISE_LOWERINGS,
+    )
 )
 
 

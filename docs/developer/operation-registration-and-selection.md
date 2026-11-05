@@ -61,7 +61,7 @@ Optional interfaces add narrowly defined preparation:
 - `FusionImplementation.match_fusion(operations)` reports support for candidate regions.
 - `RegionOperationImplementation.execute_regions(...)` executes an operation with prepared Tensor-region callables.
 
-Numerical algorithms live beside their implementations. `backend/assembly.py` assembles contributions; it contains no arithmetic execution loops. Table construction belongs to the corresponding RNS, NTT, or CKKS numerical owner.
+Numerical algorithms live beside their implementations. `backend/assembly.py` constructs the registry from their contributions. Table construction belongs to the corresponding RNS, NTT, or CKKS numerical owner.
 
 ## How does registry resolution work?
 

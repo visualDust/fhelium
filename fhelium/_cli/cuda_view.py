@@ -1,4 +1,4 @@
-"""CUDA device inventory and peer-topology rendering for the CLI."""
+"""GPU device inventory and peer-topology rendering for the CLI."""
 
 from __future__ import annotations
 
@@ -33,8 +33,8 @@ def _device_summary_table(devices: dict[int, dict[str, Any]]) -> Table:
     table = Table(expand=True, show_lines=False)
     table.add_column("GPU", style="bold cyan", justify="right", no_wrap=True)
     table.add_column("Name", overflow="ellipsis", no_wrap=True, ratio=1)
-    table.add_column("CC", justify="center")
-    table.add_column("SMs", justify="right")
+    table.add_column("Architecture", justify="center")
+    table.add_column("Units", justify="right")
     table.add_column("Memory", justify="right")
     for device_id, props in devices.items():
         table.add_row(
@@ -60,13 +60,13 @@ def _device_detail(device_id: int, props: dict[str, Any]) -> Panel:
     compute = _property_table(
         "Compute",
         (
-            ("Compute capability", props.get("computeCapability", "?")),
+            ("Architecture", props.get("computeCapability", "?")),
             ("Multiprocessors", props.get("multiProcessorCount", "?")),
             ("Core clock", _mhz(props.get("clockRate", 0))),
-            ("Warp size", props.get("warpSize", "?")),
+            ("Warp / wave size", props.get("warpSize", "?")),
             ("Threads / block", props.get("maxThreadsPerBlock", "?")),
             (
-                "Threads / SM",
+                "Threads / unit",
                 props.get("maxThreadsPerMultiProcessor", "?"),
             ),
             ("Async engines", props.get("asyncEngineCount", "?")),
@@ -82,7 +82,7 @@ def _device_detail(device_id: int, props: dict[str, Any]) -> Panel:
                 _bytes(props.get("sharedMemPerBlock", 0)),
             ),
             (
-                "Shared / SM",
+                "Shared / unit",
                 _bytes(props.get("sharedMemPerMultiprocessor", 0)),
             ),
             ("Bus width", f"{props.get('memoryBusWidth', '?')} bit"),
@@ -124,9 +124,9 @@ def render_device_info(
     )
     console.print(
         Panel(
-            f"[bold]{len(devices)} CUDA device(s)[/bold]  ·  "
+            f"[bold]{len(devices)} GPU device(s)[/bold]  ·  "
             f"aggregate memory {_bytes(total_memory)}",
-            title="FHElium CUDA inventory",
+            title="FHElium GPU inventory",
             border_style="cyan",
         )
     )
@@ -218,10 +218,10 @@ def render_topology(
     possible = count * max(0, count - 1)
     console.print(
         Panel(
-            f"[bold]{count} CUDA device(s)[/bold]  ·  "
+            f"[bold]{count} GPU device(s)[/bold]  ·  "
             f"P2P links {directed_links}/{possible}  ·  "
             f"bandwidth {'measured' if bandwidth_requested else 'not requested'}",
-            title="FHElium CUDA topology",
+            title="FHElium GPU topology",
             border_style="magenta",
         )
     )

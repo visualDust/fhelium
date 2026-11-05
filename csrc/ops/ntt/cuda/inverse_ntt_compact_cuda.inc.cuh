@@ -11,26 +11,13 @@ void launch_inverse_ntt_montgomery_compact_grouped_smem_cuda(
     const torch::Tensor rns_params,
     const int grouped_stage_count,
     const int smem_stage_count) {
-  const auto params_acc = FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2);
-  auto device_id = a.device().index();
+  const auto device_id = a.device().index();
   cudaSetDevice(device_id);
-  auto stream = at::cuda::getCurrentCUDAStream(device_id);
-
-  const int C = static_cast<int>(a.size(1));
-  const auto N = a.size(2);
-  dim3 normalization_grid(C, N / kCudaBlockSize, a.size(0));
-
-  launch_inverse_ntt_compact_grouped_smem_cuda<scalar_t>(a,
-                                                         inverse_twiddles,
-                                                         rns_params,
-                                                         grouped_stage_count,
-                                                         smem_stage_count,
-                                                         C,
-                                                         stream);
-
-  auto a_acc = FHELIUM_CUDA_ACCESSOR32(a, scalar_t, 3);
-  inverse_ntt_normalize_montgomery_kernel<scalar_t>
-      <<<normalization_grid, kCudaBlockSize, 0, stream>>>(a_acc, params_acc);
+  const auto stream = at::cuda::getCurrentCUDAStream(device_id);
+  launch_inverse_ntt_compact_grouped_smem_cuda<
+      scalar_t, CompactInverseOutput::Montgomery>(
+          a, inverse_twiddles, rns_params, grouped_stage_count,
+          smem_stage_count, static_cast<int>(a.size(1)), stream);
 }
 
 template <typename scalar_t>
@@ -40,26 +27,13 @@ void launch_inverse_ntt_to_standard_lazy_compact_grouped_smem_cuda(
     const torch::Tensor rns_params,
     const int grouped_stage_count,
     const int smem_stage_count) {
-  const auto params_acc = FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2);
-  auto device_id = a.device().index();
+  const auto device_id = a.device().index();
   cudaSetDevice(device_id);
-  auto stream = at::cuda::getCurrentCUDAStream(device_id);
-
-  const int C = static_cast<int>(a.size(1));
-  const auto N = a.size(2);
-  dim3 normalization_grid(C, N / kCudaBlockSize, a.size(0));
-
-  launch_inverse_ntt_compact_grouped_smem_cuda<scalar_t>(a,
-                                                         inverse_twiddles,
-                                                         rns_params,
-                                                         grouped_stage_count,
-                                                         smem_stage_count,
-                                                         C,
-                                                         stream);
-
-  auto a_acc = FHELIUM_CUDA_ACCESSOR32(a, scalar_t, 3);
-  inverse_ntt_normalize_to_standard_lazy_kernel<scalar_t>
-      <<<normalization_grid, kCudaBlockSize, 0, stream>>>(a_acc, params_acc);
+  const auto stream = at::cuda::getCurrentCUDAStream(device_id);
+  launch_inverse_ntt_compact_grouped_smem_cuda<
+      scalar_t, CompactInverseOutput::StandardLazy>(
+          a, inverse_twiddles, rns_params, grouped_stage_count,
+          smem_stage_count, static_cast<int>(a.size(1)), stream);
 }
 
 template <typename scalar_t>
@@ -69,26 +43,13 @@ void launch_inverse_ntt_to_standard_compact_grouped_smem_cuda(
     const torch::Tensor rns_params,
     const int grouped_stage_count,
     const int smem_stage_count) {
-  const auto params_acc = FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2);
-  auto device_id = a.device().index();
+  const auto device_id = a.device().index();
   cudaSetDevice(device_id);
-  auto stream = at::cuda::getCurrentCUDAStream(device_id);
-
-  const int C = static_cast<int>(a.size(1));
-  const auto N = a.size(2);
-  dim3 normalization_grid(C, N / kCudaBlockSize, a.size(0));
-
-  launch_inverse_ntt_compact_grouped_smem_cuda<scalar_t>(a,
-                                                         inverse_twiddles,
-                                                         rns_params,
-                                                         grouped_stage_count,
-                                                         smem_stage_count,
-                                                         C,
-                                                         stream);
-
-  auto a_acc = FHELIUM_CUDA_ACCESSOR32(a, scalar_t, 3);
-  inverse_ntt_normalize_to_standard_kernel<scalar_t>
-      <<<normalization_grid, kCudaBlockSize, 0, stream>>>(a_acc, params_acc);
+  const auto stream = at::cuda::getCurrentCUDAStream(device_id);
+  launch_inverse_ntt_compact_grouped_smem_cuda<
+      scalar_t, CompactInverseOutput::Standard>(
+          a, inverse_twiddles, rns_params, grouped_stage_count,
+          smem_stage_count, static_cast<int>(a.size(1)), stream);
 }
 
 template <typename scalar_t>
@@ -98,26 +59,13 @@ void launch_inverse_ntt_to_centered_compact_grouped_smem_cuda(
     const torch::Tensor rns_params,
     const int grouped_stage_count,
     const int smem_stage_count) {
-  const auto params_acc = FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2);
-  auto device_id = a.device().index();
+  const auto device_id = a.device().index();
   cudaSetDevice(device_id);
-  auto stream = at::cuda::getCurrentCUDAStream(device_id);
-
-  const int C = static_cast<int>(a.size(1));
-  const auto N = a.size(2);
-  dim3 normalization_grid(C, N / kCudaBlockSize, a.size(0));
-
-  launch_inverse_ntt_compact_grouped_smem_cuda<scalar_t>(a,
-                                                         inverse_twiddles,
-                                                         rns_params,
-                                                         grouped_stage_count,
-                                                         smem_stage_count,
-                                                         C,
-                                                         stream);
-
-  auto a_acc = FHELIUM_CUDA_ACCESSOR32(a, scalar_t, 3);
-  inverse_ntt_normalize_to_centered_kernel<scalar_t>
-      <<<normalization_grid, kCudaBlockSize, 0, stream>>>(a_acc, params_acc);
+  const auto stream = at::cuda::getCurrentCUDAStream(device_id);
+  launch_inverse_ntt_compact_grouped_smem_cuda<
+      scalar_t, CompactInverseOutput::Centered>(
+          a, inverse_twiddles, rns_params, grouped_stage_count,
+          smem_stage_count, static_cast<int>(a.size(1)), stream);
 }
 
 #define DEFINE_COMPACT_INVERSE_ENTRY(ENTRY_NAME, LAUNCH_NAME)               \

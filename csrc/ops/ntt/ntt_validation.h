@@ -13,7 +13,7 @@ inline void validate_no_residue_overlap(const torch::Tensor& residues,
                                         const torch::Tensor& read_only,
                                         const char* read_only_name) {
   // RestrictPtrTraits requires independent storage. Rejecting any storage
-  // alias is intentionally stricter than proving element-range overlap and
+  // alias is stricter than checking element-range overlap and
   // remains reliable for non-contiguous active parameter views.
   TORCH_CHECK(!residues.is_alias_of(read_only),
               "NTT residues must not overlap ",
@@ -101,10 +101,19 @@ inline void validate_indexed_tables(const torch::Tensor& residues,
 inline void validate_compact_tables(const torch::Tensor& residues,
                                     const torch::Tensor& twiddles,
                                     const torch::Tensor& rns_params,
-                                    const int64_t grouped_stage_count) {
+                                    const int64_t grouped_stage_count,
+                                    const bool shoup32_supported = false) {
   validate_residues_and_parameters(residues, twiddles, rns_params);
-  TORCH_CHECK(twiddles.dim() == 2 && twiddles.size(1) == residues.size(-1),
-              "Compact twiddles must have shape [prime, coefficient]");
+  const bool montgomery = twiddles.dim() == 2;
+  const bool shoup32 = shoup32_supported && twiddles.dim() == 3 &&
+                       twiddles.size(2) == 2 &&
+                       residues.scalar_type() == at::kInt;
+  TORCH_CHECK((montgomery || shoup32) &&
+                  twiddles.size(1) == residues.size(-1),
+              "Compact twiddles require [prime, N] Montgomery residues or, "
+              "on supported CUDA int32 kernels, [prime, N, 2] Shoup32 pairs");
+  // The int32 arithmetic ABI requires q < 2^30 and residues in [0, 2q).
+  // Shoup pairs hold w in [0,q) and the uint32 word floor(w*2^32/q).
   TORCH_CHECK(grouped_stage_count >= 2 && grouped_stage_count <= 4,
               "grouped_stage_count must be 2, 3, or 4");
 }

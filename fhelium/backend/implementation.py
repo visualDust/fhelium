@@ -1,9 +1,6 @@
-"""Index operation implementations contributed by backend components.
+"""Register and resolve operation implementations contributed by Backend components.
 
-Implementation classes declare their operation classes and stable name where
-the implementation is defined. This registry stores those declarations,
-rejects duplicate identities, and resolves caller selections without importing
-or discovering implementation modules implicitly.
+Implementation classes declare the operations they support and a stable name. The registry stores supplied implementation objects, rejects duplicate identities, and resolves operation-class and name selections.
 """
 
 from __future__ import annotations
@@ -44,7 +41,7 @@ def _attribute_value(attribute: object) -> object:
 
 @dataclass(frozen=True)
 class OperationInvocation:
-    """Describe a backend operation call without an SSA graph."""
+    """Describe an operation class, operand/result counts, attributes, and represented value metadata."""
 
     operation_type: type[Operation]
     operand_count: int
@@ -223,15 +220,36 @@ class OperationImplementation(Protocol):
 RegionCallable = Callable[[tuple[torch.Tensor, ...]], tuple[torch.Tensor, ...]]
 
 
+class FusionMatcher(Protocol):
+    """Maintain candidate facts while a scheduler reads an unchanged SSA graph."""
+
+    def probe(self, operation: Operation) -> int | None:
+        """Match an extension without committing it to the current region."""
+        ...
+
+    def append(self, operation: Operation) -> None:
+        """Commit a selected extension, even if this implementation rejects it."""
+        ...
+
+    def reset(self) -> None:
+        """Discard region facts before considering a new region."""
+        ...
+
+
 class FusionImplementation(OperationImplementation, Protocol):
-    """Describe region support supplied by one joint-execution implementation."""
+    """Describe region support supplied by one joint-execution implementation.
+
+    Implementations may provide ``new_fusion_matcher() -> FusionMatcher`` to
+    analyze successive candidates incrementally during one scheduling window.
+    Other implementations use ``match_fusion`` for each complete candidate.
+    """
 
     def match_fusion(self, operations: Sequence[Operation]) -> int | None:
-        """Return supported computational-op count, zero for plumbing, or None.
+        """Return a computational-op count for an eligible fusion candidate.
 
-        The count identifies which operations contribute to a fusion candidate.
-        Unknown facts remain unresolved until
-        execution binding. Known unsupported operations or facts return None.
+        Zero denotes plumbing; None denotes an unsupported or ineligible
+        candidate. Unknown facts may remain unresolved until execution binding.
+        The count records computational operations.
         """
         ...
 
@@ -288,11 +306,9 @@ def requested_implementation(
 
 
 class ImplementationRegistry[ImplementationT: OperationImplementation]:
-    """Store named implementations by operation class and identity.
+    """Store implementations by supported operation class and stable name.
 
-    The registry has no module-discovery or import-time mutation behavior.
-    Backend components construct implementation objects beside their kernels,
-    and an assembly function passes those objects to this registry.
+    Backend assembly supplies the implementation objects and their declarations. Resolution selects among those registered candidates.
     """
 
     def __init__(
@@ -499,6 +515,7 @@ class OperationImplementationRegistry:
 
 __all__ = [
     "FusionImplementation",
+    "FusionMatcher",
     "ImplementationRegistry",
     "OperationImplementation",
     "OperationImplementationRegistry",

@@ -25,7 +25,7 @@ class ArgumentSignature:
 
     Tensor contents and storage addresses are excluded. Immutable Python scalar
     values are included because capture may use them to construct the Program.
-    The initial matcher conservatively requires equality of all recorded fields.
+    Reuse requires equality of all recorded fields.
     """
 
     name: str
@@ -101,6 +101,7 @@ def describe_argument(name: str, value: object) -> ArgumentSignature:
     if isinstance(value, KeySwitchKey):
         properties = _tensor_properties(value.data) + (
             ("prime_ids", value.prime_ids),
+            ("digit_prime_ids", value.digit_prime_ids),
             ("polynomial_domain", value.polynomial_domain),
             ("basis", value.modulus_basis),
             ("residue_representation", value.residue_representation),

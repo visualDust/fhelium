@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Explicit late-relinearization and NTT-reuse workflows."""
+"""Reuse NTT representations and defer relinearization across products."""
 
 from __future__ import annotations
 

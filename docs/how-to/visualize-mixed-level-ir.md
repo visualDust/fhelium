@@ -78,7 +78,7 @@ svg_output = visualized.workspace[fh_compile.SvgGraphOutput]
 
 Arguments, constants, operations, and outputs remain visually distinct. Equal operation color keys receive equal colors. Preserved `torch.call` operations also include call kind and target in their default color key.
 
-Rendering requires the Python `pydot` package and the system Graphviz `dot` executable. It needs no prepared callable, engine, key, material binding, or backend.
+Rendering requires the Python `pydot` package and the system Graphviz `dot` executable. The pass renders the Program structure and represented metadata directly.
 
 Omit `output_path` to create a unique file under the operating system's temporary directory:
 

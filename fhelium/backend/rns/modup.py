@@ -19,12 +19,62 @@ def modup_digit(
     tensors: Mapping[str, torch.Tensor],
     digit_index: int,
     span: tuple[int, int, int],
+    *,
+    out: torch.Tensor | None = None,
+    scratch: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Extend one represented coefficient digit using supplied arithmetic tables."""
+    r"""Extend one coefficient digit to QP Montgomery residues.
+
+    Garner decomposition represents the selected source residues as mixed-radix
+    digits; basis extension evaluates those digits modulo each target prime and
+    multiplies by its Montgomery radix. ``out`` receives the QP result when
+    supplied. ``scratch`` receives the decomposition and has the source batch
+    and coefficient dimensions with at least ``stop - start`` rows. Neither
+    buffer may overlap the read operands or the other buffer. Without these
+    buffers, the corresponding native operations allocate their outputs.
+
+    Multi-prime CUDA digits use a shared-memory coefficient tile when its
+    decomposition, extension, and parameter data fit 48 KiB and the caller supplies no decomposition scratch. Single-prime digits, CPU/HIP, larger tiles, and caller-supplied scratch use the separate native operations. Both routes
+    read the supplied numerical tables and preserve the same lazy residues.
+    """
     start, stop, _ = span
     mixed = source[..., start:stop, :]
+    parameters = tensors["qp_parameters"]
+    width, destinations = stop - start, parameters.size(1)
+    columns = 128 if source.dtype == torch.int32 else 64
+    tile_bytes = (
+        width * columns
+        + width
+        + width * width
+        + 4 * width
+        + (width + 8) * destinations
+    ) * source.element_size()
+    if (
+        source.is_cuda
+        and not torch.version.hip
+        and width > 1
+        and scratch is None
+        and tile_bytes <= 48 * 1024
+    ):
+        tables = [
+            tensors[f"digit{digit_index}_normalizers"],
+            tensors[f"digit{digit_index}_propagation"],
+            *(
+                tensors[f"digit{digit_index}_reduction{part}"]
+                for part in range(4)
+            ),
+        ]
+        extension = tensors[f"digit{digit_index}_extension"]
+        if out is None:
+            return rns_ops.mixed_radix_modup_tiled(
+                mixed, tables, extension, parameters
+            )
+        rns_ops.mixed_radix_modup_tiled_out_(
+            mixed, tables, extension, parameters, out
+        )
+        return out
     if stop - start > 1:
-        mixed = rns_ops.mixed_radix_decompose(
+        arguments = (
             mixed,
             tensors[f"digit{digit_index}_normalizers"],
             tensors[f"digit{digit_index}_propagation"],
@@ -33,13 +83,25 @@ def modup_digit(
                 for part in range(4)
             ),
         )
-    parameters = tensors["qp_parameters"]
-    return rns_ops.mixed_radix_basis_extend_to_montgomery(
+        if scratch is None:
+            mixed = rns_ops.mixed_radix_decompose(*arguments)
+        else:
+            mixed = scratch[..., : stop - start, :]
+            rns_ops.mixed_radix_decompose_out_(*arguments, out=mixed)
+    extension_arguments = (
         mixed,
         tensors[f"digit{digit_index}_extension"],
         parameters,
         parameters.size(1),
     )
+    if out is None:
+        return rns_ops.mixed_radix_basis_extend_to_montgomery(
+            *extension_arguments
+        )
+    rns_ops.mixed_radix_basis_extend_to_montgomery_out_(
+        *extension_arguments, out
+    )
+    return out
 
 
 @dataclass(frozen=True)

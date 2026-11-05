@@ -44,6 +44,13 @@ def test_rescale_and_whole_key_switch_resolve_their_actual_coordinates():
     )
     assert operation_dependencies(switch).kind(0, 0, "limb") == "mixing"
     assert operation_dependencies(switch).kind(0, 0, "coefficient") == "mixing"
+    correction = rns.ModDownNttQpToQOp(
+        block.args[0], (), value_type, coefficient_c0=block.args[0]
+    )
+    dependencies = operation_dependencies(correction)
+    assert dependencies.kind(0, 1, "coefficient") == "mixing"
+    assert dependencies.kind(0, 1, "limb") == "element"
+    assert dependencies.kind(0, 1, "component") == "reindexed"
 
 
 def test_region_dependencies_follow_branches_and_retain_unknown_reads():
@@ -102,3 +109,62 @@ def test_ntt_and_compact_inputs_have_distinct_position_relations():
     assert dependencies.kind(0, 0, "coefficient") == "element"
     assert dependencies.kind(0, 1, "coefficient") == "reindexed"
     assert dependencies.kind(0, 2, "coefficient") == "unknown"
+
+
+def test_incremental_fusion_rejected_probe_keeps_selected_facts():
+    from fhelium.backend.triton._matching import RegionMatcher
+
+    typ = rns.RnsBundleType(
+        {
+            "shape": ArrayAttr(IntegerAttr(n, 64) for n in (2, 256)),
+            "device": StringAttr("cuda:0"),
+            "dtype": StringAttr("int64"),
+        }
+    )
+    block = Block(
+        arg_types=(typ, rns.RnsParametersType(), rns.RnsParametersType())
+    )
+    x, parameters, other_parameters = block.args
+    first = rns.AddStandardOp(x, x, parameters, typ)
+    rejected = rns.AddStandardOp(x, x, other_parameters, typ)
+    accepted = rns.AddStandardOp(first, first, parameters, typ)
+    block.add_ops((first, rejected, accepted))
+    matcher = RegionMatcher(include_ntt=False)
+    matcher.append(first)
+    assert matcher.probe(rejected) is None
+    assert matcher.probe(accepted) == 2
+    assert matcher.probe(accepted) == 2
+    matcher.append(accepted)
+    matcher.reset()
+    assert matcher.probe(rejected) == 1
+
+
+def test_incremental_ntt_fusion_tracks_outputs_consumed_inside_region():
+    from xdsl.dialects.func import ReturnOp
+    from fhelium.backend.triton._matching import RegionMatcher
+
+    def typ(shape):
+        return rns.RnsBundleType(
+            {
+                "shape": ArrayAttr(IntegerAttr(n, 64) for n in shape),
+                "device": StringAttr("cuda:0"),
+                "dtype": StringAttr("int64"),
+            }
+        )
+
+    large, small = typ((8, 2, 256)), typ((2, 256))
+    block = Block(arg_types=(large, small, rns.RnsParametersType()))
+    x, y, parameters = block.args
+    plaintext = rns.AddStandardOp(y, y, parameters, small)
+    transformed = ntt.CoefficientStandardToNttMontgomeryOp(x, parameters, large)
+    multiplied = rns.MultiplyPlaintextOp(
+        transformed, plaintext, parameters, large
+    )
+    block.add_ops((plaintext, transformed, multiplied, ReturnOp(multiplied)))
+    matcher = RegionMatcher(include_ntt=True)
+    matcher.append(plaintext)
+    # A broadcast intermediate cannot escape alongside the larger NTT batch.
+    assert matcher.probe(transformed) is None
+    matcher.append(transformed)
+    # It ceases to constrain output layout once its sole consumer joins.
+    assert matcher.probe(multiplied) == 3

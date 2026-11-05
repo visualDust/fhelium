@@ -35,17 +35,17 @@ This example constrains compact radix-2 transforms. The other native algorithm f
 
 When a selected transform requires additional tables, the pass introduces ordinary material references. Supply these separately through `Compilation.material_bindings`, optionally using `prepare_material_bindings` with an existing resource provider. Supplied table operands are not discarded or regenerated. Compact radix-2 group sizes share a table layout, so selecting a different group can retain the same table Tensors. Other layouts are not silently substituted.
 
-Capture retains the table layout chosen by an Eager data provider. An Engine's implicit default does not force that exact group size in Compile; an explicitly supplied `ntt_backend` remains a constraint. Context transforms and registered native operations use the same prepared numerical calls. The Context owns table provision, while execution consumes the supplied Tensor operands.
+Capture retains the table layout chosen by an Eager data provider. Compile may select grouping when the Engine used its default; a caller-supplied `ntt_backend` constrains the schedule. Context transforms and registered native operations use the same prepared numerical calls. The Context owns table provision, while execution consumes the supplied Tensor operands.
 
 ## Fusion representation
 
 A fusion region retains the operations it combines and exposes its external operands and results. Its body records the represented computation for implementation matching and code generation.
 
-`FuseOperationsPass` groups supported arithmetic and transforms subject to SSA dependencies, compatible resources/layouts, and effects. Representation casts that only change IR types do not require a device kernel. Externally used intermediate results must remain results of the fused region, so fusion does not discard fan-out.
+`FuseOperationsPass` recognizes arithmetic and transform dataflow subject to SSA dependencies, compatible resources/layouts, and effects. Backend execution plans determine which recognized computations can share generated kernels; implementation names and table encodings do not define the mathematical pattern. Representation casts that only change IR types do not require a device kernel. Externally used intermediate results must remain results of the fused region, so fusion does not discard fan-out.
 
 A fused region must not assume that distinct input values have distinct storage. For pure out-of-place arithmetic, aliasing inputs is valid. Mutation, transfers, unsupported operations, and incompatible resource requirements constrain grouping.
 
-The pass receives caller-selected implementations. Each supplies its operation and layout matching rules through the Backend fusion interface; the pass owns SSA region construction and preserves explicit implementation assignments. It incrementally groups consecutive compatible operations and uses caller order to choose among matching implementations. The match count records the number of computational operations. Binding supplies missing layout facts.
+The pass receives caller-selected implementations. Each supplies its operation and layout matching rules through the Backend fusion interface; the pass owns SSA region construction and preserves caller implementation assignments. It schedules registered pure operations by their SSA dependencies, allowing independent work around a supported region, and uses caller order to choose among matching implementations. Effects, opaque operations and recorded implementation assignments retain their order. The match count records the number of computational operations. Before constructing a region or selecting a partially fused lowering, the pass checks the implementation’s complete candidate qualification. A complete native transform surrounded only by separate singleton expressions supplies no generated combination. Binding supplies missing layout facts.
 
 Triton source templates and launch arithmetic remain in Backend. Native operations outside the selected groups remain ordinary Backend calls. The generated implementation owns its component expression representation.
 
@@ -61,7 +61,7 @@ Compile's Python source emitters export a Program stage as Eager calls or direct
 
 `TritonTensorFusionImplementation`, named `triton-tensor-fused`, separately implements ordinary float32/float64 elementwise expressions and last-axis rolls. Automatic selection requires known CUDA layouts. Input strides, broadcasting and separate escaping outputs are preserved. Floating-point contraction is disabled; autograd inputs retain ordinary Torch execution.
 
-All use the existing Backend implementation registry. Importing or registering them does not globally change native selection. Explicit implementation assignments remain authoritative.
+The Backend registry stores these implementations as selection candidates. Caller implementation assignments constrain resolution.
 
 ### Component expressions and modular arithmetic
 
@@ -85,17 +85,19 @@ The int32 implementation uses $R=2^{32}$ and $q<2^{30}$; int64 uses $R=2^{62}$ a
 
 Key-switch digit products use the same multiplication expressions with a live evaluation-key pair. Key data arrives as Tensor operands; generated-code caches contain layout and expression information, not key contents.
 
-### Compact radix-2 execution
+### NTT endpoint execution
 
-A transform is an anchor in the expression graph. Its input stage evaluates producer expressions at the butterfly's input indices. Its output stage evaluates consumers using the transformed values and any side inputs. Compact radix-2 middle stages remain native synchronized kernels. A region can contain successive transforms, with storage materialized where a transform dependency requires it.
+A transform is an anchor in the expression graph. Its selected algorithm provides the numerical table layout and synchronized stage intervals. Generated endpoints support compact radix-2 with Montgomery or Shoup root tables, and fixed radix-4/8/16 schedules. Shoup pairs supply a standard root and its unsigned quotient word; their multiplication preserves the Montgomery polynomial payload. Both encodings use live numerical operands and their actual axis strides. Fixed-radix endpoints read the supplied outer-twiddle and root-power tables and retain the selected digit permutation and cyclic butterfly equations. Tiled intervals contain complete digits; a radix-8 tiled interval contains six binary stages, while radix-4 and radix-16 use eight.
 
-Forward standard-input conversion is performed during input loading. Inverse output normalization and standard-residue conversion occur in the final stage in the same mathematical order as the native transform. The selected NTT schedule must use a compact radix-2 policy. Indexed and fixed-radix plans are not silently converted to that policy.
+The Backend schedules stage dependencies, advancing independent branches before materializing their ready terminal endpoints. A dependent input endpoint can consume several ready producer endpoints in one kernel when their coefficient partitions match. The same scheduling rule handles linear chains and multi-branch joins. The completed coefficients feed the intervening expressions directly. Other consumers and exported intermediate results retain their required storage; incompatible partitions retain a kernel transition and materialized data. Native middle stages provide synchronization across thread blocks.
 
-The compact implementation prepares a direct Python execution function with fixed native calls, generated endpoint calls and temporary lifetimes. Results and scratch arrays are allocated for each execution.
+An indexed schedule retains its supplied butterfly pairings through the existing complete native transform. Its execution plan can combine pointwise expressions before and after that call; the native call owns all transform stages and residue transitions. Automatic fusion requires a generated combination in those surrounding expressions. A manually supplied region can retain a complete native transform without claiming fusion inside it.
+
+Forward standard-input conversion remains part of input loading. Inverse normalization and standard-residue conversion precede consumers of that output. Each exported result is written when its transform dependencies are ready, and temporary storage is released after its last scheduled use. Execution consumes the current input and table Tensors through a prepared Python function.
 
 Generated kernels obtain a compiled-kernel launcher on their first use. Warm execution supplies current Tensor pointers and the current stream to that launcher rather than repeating Triton's generic argument specialization. Pointer-alignment specialization is disabled for these generated signatures, allowing valid offset views to retain the same prepared layout. Launch hooks remain active, and changed debug or instrumentation settings trigger preparation under those settings.
 
-Basis extension, rescale/ModDown rounding, communication, and unsupported operations delimit regions. This generator does not rewrite those algorithms or move their rounding steps. Existing native key-switch and rescale fused paths remain independently selectable implementations.
+Basis extension and rounded rescale/ModDown execute through their selected implementations. Their changed basis and numerical states constrain dependent endpoint grouping. Communication and other effects preserve execution order. Native whole-operation key-switch and rescale paths remain selectable.
 
 ## Reuse and intermediate lifetimes
 
@@ -112,3 +114,26 @@ Backend operation preparation consumes a region once to construct its execution 
 For integer fusion, compare the specified residue representatives as well as agreement modulo each prime. Whole and lowered algorithms can legitimately choose different lazy representatives when their contracts permit it. Check component indexing, broadcast and offset views, externally used intermediates, and rounding transitions using the owning numerical contract. Measure cold preparation, warmed execution, and launch counts separately to evaluate the effect of a lowering.
 
 [Execution buffers and CUDA Graphs](execution-buffers-and-cuda-graphs.md) describes stable-address capture of native and generated kernels together. The [Compile tutorial](../tutorial/compile-jit.md) provides a runnable callable example, and [manual Program execution](../how-to/build-program-pipeline.md) uses the same Pipeline and Backend mechanisms directly.
+
+## Generated NTT kernel size
+
+`TritonFusionImplementation.max_ntt_endpoints` limits how many transform endpoints share one generated kernel. The scheduler retains the selected NTT algorithm, stage order, and numerical tables; cross-kernel dependencies use intermediate Tensor storage. The default (`None`) selects a limit of eight on HIP to bound compiler IR growth and leaves CUDA endpoint merging unbounded. A positive integer overrides this choice. This is a compilation-size policy, not a hardware capacity bound or an assertion of optimal performance.
+
+## Key-switch ModDown rounding
+
+Key switching removes the auxiliary-prime product $P$ from a QP accumulator. For each coefficient, `nearest` computes $\lfloor(x+(P-1)/2)/P\rfloor\bmod Q$ and `floor` computes $\lfloor x/P\rfloor\bmod Q$. Nearest is the default. Both preserve the ciphertext's active Q rows, depth, and actual scale.
+
+Eager key switching, rotation, conjugation, relinearization, and grouped rotations accept `moddown_rounding="nearest"` or `"floor"`. The corresponding CKKS operations carry `moddown_rounding`; lowering transfers it to the `rounding` attribute of `fhelium_rns.moddown_qp_to_q` or `fhelium_rns.moddown_ntt_qp_to_q`. An omitted attribute selects nearest. Rotation hoisting preserves the selected rule. Rescale has its own independent `rounding` argument.
+
+```python
+rotated = engine.rotate_with_key(ciphertext, rotation_key)
+floor_rotated = engine.rotate_with_key(
+    ciphertext, rotation_key, moddown_rounding="floor"
+)
+```
+
+Preparation supplies `moddown_half`, a standard-residue Tensor containing $H\bmod q_i$ and $H\bmod p_j$ for $H=(P-1)/2$. These are residues of half the full P product. The Tensor follows the ordinary material binding path and remains available for execution and capture. Floor requires no half-product Tensor.
+
+CPU, CUDA, and HIP dispatch to separate compile-time floor and nearest specializations of the shared ModDown implementation. Nearest adds the supplied offset while loading Q and P residues, eliminating separate shifted-input arrays. In the NTT route, the coefficient correction applies the same offset to its zero-Q input before the forward transform; this preserves equivalence with coefficient-domain ModDown followed by NTT.
+
+Select `floor` when reproducing earlier floor-based results. The handwritten legacy evaluator retains its floor reference semantics.

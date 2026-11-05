@@ -9,7 +9,7 @@ import torch
 from fhelium import Preset
 from fhelium.eager import Engine
 from fhelium.errors import CudaGraphInputError, ExecutionError
-from fhelium.runtime import CudaGraphProgram, pin_value_tree
+from fhelium.runtime import CudaGraphPool, CudaGraphProgram, pin_value_tree
 
 
 def _message(seed: int, size: int = 32) -> torch.Tensor:
@@ -40,8 +40,10 @@ def engine() -> Iterator[Engine]:
 
 
 @pytest.mark.gpu
+@pytest.mark.parametrize("shared", [False, True])
 def test_cuda_graph_replays_dynamic_exact_values_at_fixed_addresses(
     engine: Engine,
+    shared: bool,
 ) -> None:
     prototype_messages = (_message(1), _message(2))
     prototype = {
@@ -55,10 +57,12 @@ def test_cuda_graph_replays_dynamic_exact_values_at_fixed_addresses(
         left, right = inputs["operands"]
         return engine.add(left, right)
 
+    pool = CudaGraphPool("cuda:0") if shared else None
     program = CudaGraphProgram.capture(
         add_pair,
         example_inputs=(prototype,),
         warmup=2,
+        pool=pool,
     )
     output_pointer = program.output.data.data_ptr()
 
@@ -124,6 +128,8 @@ def test_cuda_graph_replays_dynamic_exact_values_at_fixed_addresses(
     program.close()
     with pytest.raises(ExecutionError, match="closed"):
         program.replay(second_inputs)
+    if pool is not None:
+        pool.close()
 
 
 @pytest.mark.gpu
@@ -170,3 +176,77 @@ def test_cuda_graph_orders_pinned_transfer_before_prepared_replay(
     with pytest.raises(CudaGraphInputError, match="latest CopyHandle"):
         program.replay_prepared(copy_handle=copied)
     program.close()
+
+
+@pytest.mark.gpu
+def test_shared_pool_preserves_outputs_across_programs_and_streams():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is not available")
+    device = torch.device("cuda:0")
+    x = (
+        torch.arange(64 * 64, device=device, dtype=torch.float64).reshape(
+            64, 64
+        )
+        / 4096
+    )
+    x.requires_grad_(True)
+    weight = torch.eye(64, device=device, dtype=torch.float64)
+
+    def project(source, matrix):
+        temporary = source @ matrix
+        return {
+            "result": temporary.square(),
+            "view": source[:, ::2],
+            "optional": None,
+        }
+
+    def reduce(source):
+        return (source.sin() + source.cos()).sum(dim=1)
+
+    with CudaGraphPool(device) as pool:
+        first = CudaGraphProgram.capture(
+            project, example_inputs=(x, weight), warmup=1, pool=pool
+        )
+        second = CudaGraphProgram.capture(
+            reduce, example_inputs=(x,), warmup=1, pool=pool
+        )
+        for leaf in (
+            first.output["result"],
+            first.output["view"],
+            second.output,
+        ):
+            assert not leaf.requires_grad
+            assert leaf.grad_fn is None
+        stream_a = torch.cuda.Stream(device=device)
+        stream_b = torch.cuda.Stream(device=device)
+        producer = torch.cuda.current_stream(device)
+        changed = weight * 2
+        stream_a.wait_stream(producer)
+        stream_b.wait_stream(producer)
+        # Replay in a different order, using two streams and changing weights.
+        with torch.cuda.stream(stream_b):
+            reduced = second.replay(x)
+        with torch.cuda.stream(stream_a):
+            projected = first.replay(x, changed)
+            owned = first.replay(x, weight, copy_output=True)
+        torch.cuda.synchronize(device)
+        torch.testing.assert_close(reduced, reduce(x))
+        torch.testing.assert_close(owned["result"], x.square())
+        torch.testing.assert_close(owned["view"], x[:, ::2])
+        assert owned["optional"] is None
+        assert not owned["result"].requires_grad
+        assert owned["result"].grad_fn is None
+        retained_reduction = reduced.clone()
+        retained_projection = projected["result"].clone()
+        second.replay(x * 3, synchronize=True)
+        torch.testing.assert_close(projected["result"], retained_projection)
+        first.replay(x, changed, synchronize=True)
+        torch.testing.assert_close(owned["result"], x.square())
+        torch.testing.assert_close(second.output, reduce(x * 3))
+        assert not torch.equal(second.output, retained_reduction)
+        first.close()
+        torch.testing.assert_close(
+            second.replay(x, synchronize=True), reduce(x)
+        )
+    with pytest.raises(ExecutionError, match="closed"):
+        second.replay(x)

@@ -51,6 +51,8 @@ _PRESERVING_TYPES = (
     ckks.SwitchKeyOp,
     ckks.ConjugateOp,
     ckks.ModSwitchOp,
+    ckks.ModulusRaiseOp,
+    ckks.EncapsulatedModulusRaiseOp,
     ckks.AddScalarOp,
     ckks.MultiplyIntegerScalarOp,
 )
@@ -113,9 +115,7 @@ def _represented_depth(value: SSAValue, *, operation: str) -> int:
 class AssignCkksScalesPass:
     """Propagate actual scales through an already scheduled CKKS Program.
 
-    The pass never inserts arithmetic or metadata reinterpretation operations.
-    Add/sub joins require exact binary64 scale equality. Rescale divides by the
-    actual Q prime selected by its input depth.
+    The pass updates represented scale metadata while preserving the arithmetic operations. Add/sub joins require equal binary64 scales. Rescale divides the input scale by ``config.rescale_divisor(depth)``, the product of the dropped Q group.
     """
 
     entry_scale: float | None = None
@@ -306,6 +306,21 @@ class AssignCkksScalesPass:
                     operation.ciphertext,
                     operation=operation.name,
                 ) * require(operation.plaintext, operation=operation.name)
+            elif isinstance(operation, ckks.RotationSumOp):
+                source_scales = {
+                    require(value, operation=operation.name)
+                    for value in operation.values
+                }
+                if len(source_scales) != 1:
+                    raise ValueError(
+                        f"{operation.name} requires equal source scales"
+                    )
+                scale = source_scales.pop()
+                if operation.rescale.value.data:
+                    depth = _represented_depth(
+                        operation.values[0], operation=operation.name
+                    )
+                    scale /= float(config.rescale_divisor(depth))
             elif isinstance(operation, ckks.GroupedRotationWeightedSumOp):
                 ciphertext_scale = require(
                     operation.value, operation=operation.name
@@ -358,7 +373,10 @@ class AssignCkksScalesPass:
                     operation.scalar_scale.value.data,
                     label="scalar_scale",
                 )
-            elif isinstance(operation, ckks.RescaleOp):
+            elif isinstance(operation, ckks.RescaleOp) or (
+                isinstance(operation, ckks.RelinearizeOp)
+                and operation.rescale.value.data
+            ):
                 source = operation.value
                 source_scale = require(source, operation=operation.name)
                 depth = _represented_depth(source, operation=operation.name)

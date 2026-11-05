@@ -79,7 +79,7 @@ def _remap(index: str, output: tuple[int, ...], source: tuple[int, ...]) -> str:
 
 @dataclass(frozen=True)
 class TritonTensorFusionImplementation:
-    """Fuse supported ordinary Tensor expressions without introducing CKKS.
+    """Fuse supported Tensor expressions into a generated kernel.
 
     Automatic matching requires known CUDA layouts. Unknown placement remains
     unassigned; CPU execution and unsupported operations retain ordinary Torch

@@ -101,7 +101,7 @@ Let:
 | Protocol-3 share | Coefficient/standard active-Q tensor `[*B, L_ℓ, N]` |
 | Protocol-4 share | Tuple of two coefficient/standard active-Q tensors, each `[*B, L_ℓ, N]` |
 
-`sample_common_uniform(..., count=None)` returns an unbatched `[limb, N]` tensor. Every explicit positive `count`, including `count=1`, retains the leading count axis.
+`sample_common_uniform(..., count=None)` returns an unbatched `[limb, N]` tensor. Every supplied positive `count`, including `count=1`, retains the leading count axis.
 
 FHElium validates the structural state needed by these operations, but runtime values do not record CKKS parameter provenance or a multiparty epoch. The application must establish parameter compatibility and collective lineage before invoking the protocol functions.
 

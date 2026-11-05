@@ -65,7 +65,7 @@ void forward_ntt_montgomery_compact_grouped_smem_(
     const torch::Tensor rns_params,
     const int64_t grouped_stage_count) {
   fhelium::ntt::validate_compact_tables(
-      montgomery_residues, forward_twiddles, rns_params, grouped_stage_count);
+      montgomery_residues, forward_twiddles, rns_params, grouped_stage_count, true);
   forward_ntt_montgomery_compact_grouped_smem_inplace_cuda(
       montgomery_residues,
       forward_twiddles,
@@ -80,7 +80,7 @@ void forward_ntt_to_montgomery_compact_grouped_smem_(
     const torch::Tensor rns_params,
     const int64_t grouped_stage_count) {
   fhelium::ntt::validate_compact_tables(
-      standard_residues, forward_twiddles, rns_params, grouped_stage_count);
+      standard_residues, forward_twiddles, rns_params, grouped_stage_count, true);
   forward_ntt_to_montgomery_compact_grouped_smem_inplace_cuda(
       standard_residues,
       forward_twiddles,
@@ -95,7 +95,7 @@ torch::Tensor forward_ntt_to_montgomery_compact_grouped_smem(
     const torch::Tensor rns_params,
     const int64_t grouped_stage_count) {
   fhelium::ntt::validate_compact_tables(
-      standard_residues, forward_twiddles, rns_params, grouped_stage_count);
+      standard_residues, forward_twiddles, rns_params, grouped_stage_count, true);
   return forward_ntt_to_montgomery_compact_grouped_smem_cuda(
       standard_residues,
       forward_twiddles,
@@ -123,7 +123,7 @@ void forward_ntt_montgomery_compact_keyswitch_accumulate_(
   fhelium::ntt::validate_compact_tables(coefficient_digit_qp,
                                         forward_twiddles,
                                         rns_params,
-                                        grouped_stage_count);
+                                        grouped_stage_count, true);
   forward_ntt_montgomery_compact_keyswitch_accumulate_inplace_cuda(
       coefficient_digit_qp,
       forward_twiddles,
@@ -142,7 +142,7 @@ void forward_ntt_montgomery_compact_grouped_smem_diagnostic_(
     const int64_t grouped_stage_count,
     const int64_t shared_memory_log_n) {
   fhelium::ntt::validate_compact_tables(
-      montgomery_residues, forward_twiddles, rns_params, grouped_stage_count);
+      montgomery_residues, forward_twiddles, rns_params, grouped_stage_count, true);
   fhelium::ntt::validate_shared_memory_log_n(shared_memory_log_n);
   forward_ntt_montgomery_compact_grouped_smem_inplace_cuda(montgomery_residues,
                                                            forward_twiddles,

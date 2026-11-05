@@ -1,8 +1,6 @@
 """Triton code generation for component-aware modular arithmetic and transforms.
 
-Implementations are selected through Backend registries. Importing this package
-neither imports Triton nor changes native defaults. Generated arithmetic uses
-integer Montgomery reduction and preserves the native lazy residue ranges.
+Backend registries select the generated implementations. Modular arithmetic uses integer Montgomery reduction and preserves native lazy residue ranges.
 """
 
 from ._pointwise import TritonFusionImplementation, TritonRnsImplementation

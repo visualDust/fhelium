@@ -47,7 +47,7 @@ stateDiagram-v2
     CLOSED --> [*]
 ```
 
-The labels are application control state. A CKKS parameter profile, roster, or local share change begins another epoch. The detailed envelope, retry, duplicate, abort, and independent-process rules are intentionally left to [Use multiparty CKKS](../how-to/use-multiparty-ckks.md).
+The labels are application control state. A CKKS parameter profile, roster, or local share change begins another epoch. [Use multiparty CKKS](../how-to/use-multiparty-ckks.md) defines envelope, retry, duplicate, abort, and independent-process handling.
 
 ## 1. Create two local shares
 

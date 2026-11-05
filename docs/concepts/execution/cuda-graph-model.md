@@ -112,6 +112,14 @@ Calling the raw underlying CUDA graph's replay method bypasses FHElium's:
 
 The wrapper combines these input, event, and ownership transitions around each raw replay.
 
+## Shared temporary storage
+
+`CudaGraphPool` coordinates temporary storage shared by sequential program instances on one device. Each program retains fixed input and output buffers outside the shared pool. A replay copies its result into its own output storage before completing, so a different program can reuse the scratch addresses without changing that result. Each output leaf has independent cloned storage without autograd history; input/output and output/output aliases are not preserved. The callable executes in the caller's grad mode, and input signatures retain their `requires_grad` state. Pool membership does not extend a program's lifetime.
+
+Persistent numerical resources are prepared outside capture. Intermediates allocated during capture remain temporary unless they belong to the returned output tree, which is copied into fixed retained storage. The pool orders scratch use with CUDA events across caller-selected replay streams. Programs may replay in a different order from capture. One host caller controls a pool; concurrent workers use separate pools. Closing the pool synchronizes its submitted work and closes its member programs. External consumers of borrowed outputs complete before their owner is closed.
+
+Each distinct schedule still has its own graph description and fixed buffers. A schedule shared across weights or requests can instead use one program with changing Tensor payloads. Sharing temporary storage reduces the sum of private working sets toward the largest sequential working set, while numerical resources and retained outputs keep their own lifetimes.
+
 ## Capture region
 
 ```mermaid

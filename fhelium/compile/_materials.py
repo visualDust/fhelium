@@ -70,7 +70,7 @@ def material_symbol(operation, prefix: str) -> str:
 def rns_parameter_identity(
     config: CkksConfig | None, prime_ids, physical: Mapping[str, Attribute]
 ) -> tuple[object, ...] | None:
-    """Identify a compiler-requested default RNS table, not a caller binding."""
+    """Identify a default RNS-table request for declaration reuse."""
     if (
         config is None
         or not prime_ids
@@ -92,6 +92,30 @@ def rns_parameter_identity(
     )
 
 
+def parameter_request_identity(
+    description: Mapping[str, object], physical: Mapping[str, Attribute]
+) -> tuple[object, ...] | None:
+    """Share newly requested deterministic key-switch tables with known placement."""
+    import json
+
+    if description.get("kind") not in {
+        "ntt_table",
+        "key_switch_table",
+        "rotation_sum_table",
+        "joint_quotient_table",
+    } or any(
+        physical.get(name) in (None, StringAttr("unknown"))
+        for name in ("dtype", "device")
+    ):
+        return None
+    return (
+        "default-numerical-table",
+        json.dumps(description, sort_keys=True),
+        physical["dtype"],
+        physical["device"],
+    )
+
+
 def declare_material(
     compilation: Compilation,
     operation: Operation,
@@ -101,13 +125,9 @@ def declare_material(
     *,
     identity: tuple[object, ...] | None = None,
 ) -> tuple[tuple[core.MaterialRefOp, ...], SSAValue]:
-    """Declare one material input, sharing only an explicit default request.
+    """Declare a Tensor material input and reuse matching default requests.
 
-    The request-local construction cache never scans caller descriptions or
-    compares Tensor contents. Existing caller symbols stay independent. Shared
-    declarations reuse a dominating reference, or the same symbol in another
-    block. The resulting Program records the sharing through ordinary SSA and
-    material symbols; no execution-time request registry is needed.
+    The request-local cache shares declarations with the same default-request identity. Caller symbols remain independent. A shared declaration reuses a dominating reference, or the same symbol in another block; the Program records this sharing through SSA operands and material symbols.
     """
     entries = cast(
         tuple[
@@ -150,7 +170,7 @@ def declare_material(
 def parameter_description(
     config: CkksConfig, kind: str, **fields: object
 ) -> dict[str, object]:
-    """Describe the mathematical source of a numerical table, not its owner."""
+    """Describe the parameters from which a numerical table is constructed."""
     return {
         "kind": kind,
         "ring_dimension": config.N,
@@ -172,6 +192,8 @@ def key_description(
         "modulus_basis": key.modulus_basis,
         "residue_representation": key.residue_representation,
     }
+    if isinstance(key, KeySwitchKey):
+        result["digit_prime_ids"] = [list(rows) for rows in key.digit_prime_ids]
     step = getattr(key, "rotation_step", None)
     if step is not None:
         result["rotation_step"] = step
@@ -208,13 +230,9 @@ def prepare_material_bindings(
     | Iterable[CkksDeviceResources | RnsContext | NttContext] = (),
     keys: Mapping[object, object] | Iterable[object] | EvaluationKeySet = (),
 ) -> tuple[str, ...]:
-    """Fill only missing bindings from supplied data providers and keys.
+    """Fill missing Tensor bindings from supplied data providers and keys.
 
-    Descriptions guide this optional selection step. Named key entries matching
-    a symbol or its label are direct assignments, without metadata checks.
-    Semantic selection accepts one distinct candidate and leaves absent or
-    ambiguous candidates unresolved. Existing bindings are never inspected or
-    overwritten. The returned symbols remain unbound. No keys are generated.
+    Key entries named by a symbol or its label are direct assignments and bypass metadata selection. Otherwise, descriptions select a single candidate using CKKS operand rows, placement, and compatible execution groups. Absent, ambiguous, or conflicting matches remain unresolved. Existing bindings are preserved. The returned symbols identify entries still requiring data; key generation is a separate provisioning operation.
     """
     from fhelium.backend.ckks.materialization import CkksDeviceResources
     from fhelium.backend.ntt.context import NttContext
@@ -225,11 +243,14 @@ def prepare_material_bindings(
         if isinstance(resources, (CkksDeviceResources, RnsContext, NttContext))
         else tuple(cast(Iterable[object], resources))
     )
-    if isinstance(keys, EvaluationKeySet):
-        keys = keys._keys()
+    inventory = keys if isinstance(keys, EvaluationKeySet) else None
     named_keys = dict(keys) if isinstance(keys, Mapping) else {}
     key_values = (
-        tuple(named_keys.values()) if isinstance(keys, Mapping) else tuple(keys)
+        ()
+        if inventory is not None
+        else tuple(named_keys.values())
+        if isinstance(keys, Mapping)
+        else tuple(cast(Iterable[object], keys))
     )
     descriptions = compilation.program.material_descriptions
     cache: dict[tuple[object, ...], object] = {}
@@ -251,6 +272,7 @@ def prepare_material_bindings(
         )
         if selected is not None:
             compilation.material_bindings[symbol] = _key_tensor(selected)
+            _represent_key_layout(compilation, symbol, selected)
             continue
         kind = description.get("kind")
         if not isinstance(kind, str):
@@ -267,6 +289,7 @@ def prepare_material_bindings(
         ):
             selection.setdefault("device", device_hint.data)
         candidates: dict[int, torch.Tensor] = {}
+        candidate_keys: dict[int, KeySwitchKey] = {}
         if kind in {
             "SecretKey",
             "PublicKey",
@@ -275,7 +298,15 @@ def prepare_material_bindings(
             "RelinearizationKey",
             "ConjugationKey",
         }:
-            for key in key_values:
+            selected_values = key_values
+            if inventory is not None:
+                selected_key = _inventory_key_for_symbol(
+                    compilation, symbol, description, inventory
+                )
+                selected_values = (
+                    () if selected_key is None else (selected_key,)
+                )
+            for key in selected_values:
                 if not isinstance(key, (SecretKey, PublicKey, KeySwitchKey)):
                     continue
                 if selection.get("device") not in (None, str(key.device)):
@@ -287,18 +318,279 @@ def prepare_material_bindings(
                     if name in description
                 ):
                     candidates[id(key.data)] = key.data
+                    if isinstance(key, KeySwitchKey):
+                        candidate_keys[id(key.data)] = key
         else:
             for provider in providers:
                 tensor = _provider_tensor(provider, selection, cache)
                 if tensor is not None:
                     candidates[id(tensor)] = tensor
         if len(candidates) == 1:
-            compilation.material_bindings[symbol] = next(
-                iter(candidates.values())
+            tensor = next(iter(candidates.values()))
+            compilation.material_bindings[symbol] = tensor
+            _represent_key_layout(
+                compilation, symbol, candidate_keys.get(id(tensor))
             )
         else:
             missing.append(symbol)
     return tuple(missing)
+
+
+def _inventory_key_for_symbol(
+    compilation: Compilation,
+    symbol: str,
+    description: Mapping[str, object],
+    inventory: EvaluationKeySet,
+) -> KeySwitchKey | None:
+    """Select references covering the actual rows of all CKKS key consumers."""
+    import json
+    from xdsl.dialects.builtin import ArrayAttr, IntegerAttr
+    from fhelium.ir.dialects import ckks
+
+    kind = description.get("kind")
+    if kind not in {"RotationKey", "RelinearizationKey", "ConjugationKey"}:
+        return None
+    requested_step = description.get("rotation_step")
+    if kind == "RotationKey" and type(requested_step) is not int:
+        return None
+
+    def integer_tuple(attribute):
+        return (
+            tuple(int(item.value.data) for item in attribute)
+            if isinstance(attribute, ArrayAttr)
+            else None
+        )
+
+    def rotation_step(key):
+        step = getattr(getattr(key.type, "state", None), "data", {}).get(
+            "rotation_step"
+        )
+        if isinstance(step, IntegerAttr):
+            return int(step.value.data)
+        owner = key.owner
+        if isinstance(owner, core.MaterialRefOp) and owner.symbol is not None:
+            step = compilation.program.material_descriptions.get(
+                owner.symbol.data, {}
+            ).get("rotation_step")
+            return step if type(step) is int else None
+        return None
+
+    source_facts = []
+    group_keys = []
+    required_steps = []
+    for reference in compilation.program.walk():
+        if (
+            not isinstance(reference, core.MaterialRefOp)
+            or reference.symbol is None
+            or reference.symbol.data != symbol
+        ):
+            continue
+        for use in reference.value.uses:
+            consumer = use.operation
+            if (
+                isinstance(
+                    consumer,
+                    (
+                        ckks.RotateOp,
+                        ckks.RelinearizeOp,
+                        ckks.ConjugateOp,
+                        ckks.SwitchKeyOp,
+                    ),
+                )
+                and use.index == 1
+            ):
+                sources, operands = (consumer.value,), (consumer.key,)
+                steps = (
+                    (rotation_step(consumer.key),)
+                    if kind == "RotationKey"
+                    else ()
+                )
+            elif (
+                kind == "RotationKey"
+                and isinstance(
+                    consumer,
+                    (ckks.RotateManyOp, ckks.GroupedRotationWeightedSumOp),
+                )
+                and 1 <= use.index < 1 + len(consumer.keys)
+            ):
+                operands = tuple(consumer.keys)
+                sources = (consumer.value,) * len(operands)
+                steps = tuple(rotation_step(key) for key in operands)
+            elif (
+                kind == "RotationKey"
+                and isinstance(consumer, ckks.RotationSumOp)
+                and len(consumer.values)
+                <= use.index
+                < len(consumer.values) + len(consumer.keys)
+            ):
+                pairs = tuple(
+                    (value, int(step.value.data))
+                    for value, step in zip(
+                        consumer.values, consumer.rotation_steps, strict=True
+                    )
+                    if step.value.data
+                )
+                sources = tuple(value for value, _ in pairs)
+                steps = tuple(step for _, step in pairs)
+                operands = tuple(consumer.keys)
+            else:
+                return None
+            if any(step is None for step in steps):
+                return None
+            group_keys.extend(operands)
+            for operand, step in zip(operands, steps):
+                owner = operand.owner
+                fixed = not isinstance(owner, core.MaterialRefOp) or (
+                    owner.symbol is not None
+                    and owner.symbol.data in compilation.material_bindings
+                )
+                if fixed:
+                    state = getattr(
+                        getattr(operand.type, "state", None), "data", {}
+                    )
+                    if not isinstance(
+                        state.get("prime_ids"), ArrayAttr
+                    ) or not isinstance(
+                        state.get("digit_prime_ids"), ArrayAttr
+                    ):
+                        return None
+                else:
+                    required_steps.append(step)
+            config_attr = consumer.attributes.get("ckks_config")
+            config = (
+                CkksConfig.parse(json.loads(config_attr.data))
+                if isinstance(config_attr, StringAttr)
+                and config_attr.data != "unknown"
+                else compilation.workspace.get(CkksConfig)
+            )
+            config = config if isinstance(config, CkksConfig) else None
+            for source in sources:
+                if not isinstance(source.type, ckks.CiphertextType):
+                    return None
+                state = source.type.state.data
+                q_ids = integer_tuple(state.get("prime_ids"))
+                depth = state.get("depth")
+                if (
+                    q_ids is None
+                    and config is not None
+                    and isinstance(depth, IntegerAttr)
+                ):
+                    q_ids = tuple(
+                        range(
+                            config.q_row_start(int(depth.value.data)),
+                            config.num_q_primes,
+                        )
+                    )
+                ring = state.get("ring_dimension")
+                dtype = state.get("dtype")
+                device = state.get("device")
+                source_facts.append(
+                    {
+                        "q_prime_ids": q_ids,
+                        "p_prime_ids": None,
+                        "ring_dimension": int(ring.value.data)
+                        if isinstance(ring, IntegerAttr)
+                        else config.N
+                        if config is not None
+                        else None,
+                        "dtype": getattr(
+                            torch, dtype.data.removeprefix("torch.")
+                        )
+                        if isinstance(dtype, StringAttr)
+                        and dtype.data != "unknown"
+                        else None,
+                        "device": device.data
+                        if isinstance(device, StringAttr)
+                        and device.data != "unknown"
+                        else None,
+                    }
+                )
+    if not source_facts:
+        return None
+    facts = {}
+    known_facts = {}
+    for name in source_facts[0]:
+        values = [source[name] for source in source_facts]
+        known = [value for value in values if value is not None]
+        if name == "q_prime_ids":
+            known_facts[name] = (
+                tuple(sorted({i for rows in known for i in rows}))
+                if known
+                else None
+            )
+            facts[name] = (
+                known_facts[name] if len(known) == len(values) else None
+            )
+        else:
+            if known and any(value != known[0] for value in known[1:]):
+                return None
+            known_facts[name] = known[0] if known else None
+            facts[name] = known[0] if len(known) == len(values) else None
+    for name, field in (
+        ("key_prime_ids", "prime_ids"),
+        ("digit_prime_ids", "digit_prime_ids"),
+    ):
+        constraints = []
+        for key in group_keys:
+            value = getattr(getattr(key.type, "state", None), "data", {}).get(
+                field
+            )
+            if isinstance(value, ArrayAttr):
+                constraints.append(
+                    integer_tuple(value)
+                    if field == "prime_ids"
+                    else tuple(integer_tuple(rows) for rows in value)
+                )
+        if constraints:
+            if any(value != constraints[0] for value in constraints[1:]):
+                return None
+            facts[name] = constraints[0]
+    if any(
+        facts[name] is None for name in source_facts[0] if name != "p_prime_ids"
+    ):
+        inventory = EvaluationKeySet(
+            inventory._matching(
+                KeySwitchKey,
+                **known_facts,
+                key_prime_ids=facts.get("key_prime_ids"),
+                digit_prime_ids=facts.get("digit_prime_ids"),
+            )
+        )
+    if kind == "RotationKey":
+        selected = inventory.select_rotations(required_steps, **facts)
+        return (
+            None
+            if selected is None
+            else selected.get(cast(int, requested_step))
+        )
+    if kind == "RelinearizationKey":
+        return inventory.select_relinearization(**facts)
+    return inventory.select_conjugation(**facts)
+
+
+def _represent_key_layout(
+    compilation: Compilation, symbol: str, key: object
+) -> None:
+    """Assign supplied key value facts to its named Tensor placeholder."""
+    if not isinstance(key, KeySwitchKey):
+        return
+    from xdsl.rewriter import Rewriter
+    from fhelium.ir.dialects import ckks
+    from .frontend._eager_values import state_attributes
+
+    facts = state_attributes(key)
+    for operation in tuple(compilation.program.walk()):
+        if (
+            isinstance(operation, core.MaterialRefOp)
+            and operation.symbol is not None
+            and operation.symbol.data == symbol
+            and isinstance(operation.value.type, ckks.EvaluationKeyType)
+        ):
+            typ = operation.value.type
+            Rewriter.replace_value_with_new_type(
+                operation.value, typ.with_state({**typ.state.data, **facts})
+            )
+    compilation.program.set_material_description(symbol, key_description(key))
 
 
 def _key_tensor(value: object) -> torch.Tensor:
@@ -334,6 +626,9 @@ def _provider_tensor(
         "twice_modulus",
         "ntt_table",
         "key_switch_table",
+        "rotation_sum_table",
+        "centered_basis_extension_table",
+        "encapsulated_modulus_raise_table",
         "rescale_table",
         "encode_table",
         "periodic_plaintext_table",
@@ -457,21 +752,221 @@ def _provider_tensor(
         return ntt.tensor_operands(
             ids, inverse=description["direction"] == "inverse"
         )[int(cast(int, description["index"]))]
+    if kind == "joint_quotient_table":
+        from fhelium.backend.rns.tables import moddown_rescale_tables
+
+        q_ids = tuple(cast(Iterable[int], description["q_prime_ids"]))
+        p_ids = tuple(cast(Iterable[int], description["p_prime_ids"]))
+        drop_ids = tuple(cast(Iterable[int], description["drop_prime_ids"]))
+        rp, rd = (
+            str(description.get("moddown_rounding", "nearest")),
+            str(description.get("rescale_rounding", "nearest")),
+        )
+        token = (id(context), "joint_quotient", q_ids, p_ids, drop_ids, rp, rd)
+        if token not in cache:
+            cache[token] = moddown_rescale_tables(
+                context,
+                q_ids,
+                p_ids,
+                drop_ids,
+                moddown_rounding=rp,
+                rescale_rounding=rd,
+            )
+        return cast(dict[str, torch.Tensor], cache[token]).get(
+            str(description["name"])
+        )
     if "depth" not in description or "name" not in description:
         return None
     depth = int(cast(int, description["depth"]))
     name = cast(str, description["name"])
+    if kind == "centered_basis_extension_table":
+        from fhelium.backend.rns.tables import centered_basis_extension_tables
+
+        target_depth = description.get("target_depth")
+        if not isinstance(target_depth, int):
+            return None
+        token = (id(context), "centered_basis_extension", depth, target_depth)
+        if token not in cache:
+            cache[token] = centered_basis_extension_tables(
+                context,
+                context,
+                context.rns_layout.prime_ids(depth),
+                context.rns_layout.prime_ids(target_depth),
+            )
+        return cast(dict[str, torch.Tensor], cache[token]).get(name)
+    if kind == "encapsulated_modulus_raise_table":
+        from fhelium.backend.ckks.tables import (
+            prepare_encapsulated_raise_operands,
+        )
+
+        target_depth, guard = (
+            description.get("target_depth"),
+            description.get("return_prime"),
+        )
+        low_p, return_p = (
+            description.get("low_p_moduli"),
+            description.get("return_p_moduli"),
+        )
+        policy = description.get("ntt_backend")
+        if (
+            not isinstance(target_depth, int)
+            or not isinstance(guard, int)
+            or not isinstance(low_p, (list, tuple))
+            or not isinstance(return_p, (list, tuple))
+            or not isinstance(policy, str)
+        ):
+            return None
+        low_p, return_p = tuple(low_p), tuple(return_p)
+        rounding = str(description.get("rounding", "nearest"))
+        token = (
+            id(context),
+            "encapsulated_modulus_raise",
+            depth,
+            target_depth,
+            low_p,
+            guard,
+            return_p,
+            policy,
+            rounding,
+        )
+        if token not in cache:
+            if isinstance(provider, CkksDeviceResources):
+                selected_ntt = provider.ntt_context
+            elif isinstance(provider, NttContext):
+                selected_ntt = provider
+            else:
+                ntt_token = (id(context), "ntt", policy)
+                if ntt_token not in cache:
+                    cache[ntt_token] = NttContext(context, ntt_backend=policy)
+                selected_ntt = cast(NttContext, cache[ntt_token])
+            if selected_ntt.ntt_backend_name != policy:
+                return None
+            cache[token] = prepare_encapsulated_raise_operands(
+                context,
+                selected_ntt,
+                source_depth=depth,
+                target_depth=target_depth,
+                low_p_moduli=low_p,
+                return_prime=guard,
+                return_p_moduli=return_p,
+                rounding=rounding,
+            )[0]
+        return cast(dict[str, torch.Tensor], cache[token]).get(name)
+    if kind == "rotation_sum_table":
+        if name.startswith("sum_galois_"):
+            from fhelium.backend.ntt.automorphism import ntt_galois_indices
+            from fhelium.backend.ckks.rotation._galois import (
+                rotation_galois_element,
+            )
+
+            step = int(name.removeprefix("sum_galois_"))
+            return ntt_galois_indices(
+                config.N,
+                rotation_galois_element(
+                    config.N, step, config.galois_generator
+                ),
+                context.device,
+            )
+        from fhelium.backend.ckks.tables import (
+            prepare_rotation_sum_tables,
+        )
+
+        key_rows = (
+            tuple(cast(Iterable[int], description["key_prime_ids"]))
+            if "key_prime_ids" in description
+            else None
+        )
+        key_digits = (
+            tuple(
+                tuple(rows)
+                for rows in cast(
+                    Iterable[Iterable[int]], description["digit_prime_ids"]
+                )
+            )
+            if "digit_prime_ids" in description
+            else None
+        )
+        token = (
+            id(context),
+            "rotation_sum",
+            depth,
+            key_rows,
+            key_digits,
+            bool(description.get("rescale", False)),
+            description.get("rounding", "nearest"),
+            description.get("modup_method", "exact"),
+        )
+        if token not in cache:
+            base_token = (id(context), "key_switch_rns")
+            if base_token not in cache:
+                cache[base_token] = KeySwitchTables(
+                    context,
+                    None,
+                    moddown_inverse_tables(context),
+                    config.galois_generator,
+                )
+            base = cast(KeySwitchTables, cache[base_token])
+            cache[token] = prepare_rotation_sum_tables(
+                base,
+                depth,
+                rescale=bool(description.get("rescale", False)),
+                rounding=str(description.get("rounding", "nearest")),
+                modup_method=str(description.get("modup_method", "exact")),
+                key_prime_ids=key_rows,
+                digit_prime_ids=key_digits,
+            ).tensor_operands()
+        return cast(dict[str, torch.Tensor], cache[token]).get(name)
     if kind == "key_switch_table":
         token = (id(context), "key_switch_rns")
         if token not in cache:
             cache[token] = KeySwitchTables(
                 context,
                 None,
-                moddown_inverse_tables(context),
+                (),
                 config.galois_generator,
             )
+        if (
+            name in {"moddown_inverses", "p_inverse", "moddown_half"}
+            and "q_prime_ids" in description
+            and "p_prime_ids" in description
+        ):
+            return (
+                cast(KeySwitchTables, cache[token])
+                .moddown_tensor_operands(
+                    tuple(cast(Iterable[int], description["q_prime_ids"])),
+                    tuple(cast(Iterable[int], description["p_prime_ids"])),
+                    rounding="nearest" if name == "moddown_half" else "floor",
+                    depth=depth,
+                )
+                .get(name)
+            )
         tensors, facts = cast(KeySwitchTables, cache[token]).tensor_operands(
-            depth
+            depth,
+            moddown_rounding=str(
+                description.get(
+                    "moddown_rounding",
+                    "nearest" if name == "moddown_half" else "floor",
+                )
+            ),
+            modup_method=str(description.get("modup_method", "exact")),
+            rescale=bool(description.get("rescale", False)),
+            rescale_rounding=str(
+                description.get("rescale_rounding", "nearest")
+            ),
+            output_domain=str(description.get("output_domain", "coefficient")),
+            key_prime_ids=tuple(
+                cast(Iterable[int], description["key_prime_ids"])
+            )
+            if "key_prime_ids" in description
+            else None,
+            digit_prime_ids=tuple(
+                tuple(rows)
+                for rows in cast(
+                    Iterable[Iterable[int]], description["digit_prime_ids"]
+                )
+            )
+            if "digit_prime_ids" in description
+            else None,
         )
         if "digits" in description and description["digits"] != [
             list(span)

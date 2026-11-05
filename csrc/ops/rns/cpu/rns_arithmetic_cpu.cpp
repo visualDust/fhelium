@@ -5,6 +5,7 @@
 #include <torch/torch.h>
 
 #include <algorithm>
+#include <optional>
 #include <vector>
 
 #include "../../common/cpu/montgomery.h"
@@ -562,19 +563,26 @@ torch::Tensor lift_centered_cpu(const torch::Tensor coefficients,
 
 using fhelium::cpu::MontgomeryConstants;
 
-torch::Tensor mixed_radix_decompose_cpu(
+torch::Tensor mixed_radix_decompose_cpu_impl(
     const torch::Tensor source_residues,
     const torch::Tensor normalizers,
     const torch::Tensor propagation,
     const torch::Tensor modulus_lo,
     const torch::Tensor modulus_hi,
     const torch::Tensor neg_inv_modulus_lo,
-    const torch::Tensor neg_inv_modulus_hi) {
+    const torch::Tensor neg_inv_modulus_hi,
+    const std::optional<torch::Tensor>& output_buffer) {
   constexpr const char* operation = "mixed_radix_decompose";
   const auto source = view_rns_batch_3d(source_residues, "source_residues");
   TORCH_CHECK(source.device().is_cpu(), operation, " requires CPU tensors");
   check_rns_row_vector(
       normalizers, source.size(1) - 1, operation, "normalizers");
+  check_rns_row_vector(modulus_lo, source.size(1), operation, "modulus_lo");
+  check_rns_row_vector(modulus_hi, source.size(1), operation, "modulus_hi");
+  check_rns_row_vector(
+      neg_inv_modulus_lo, source.size(1), operation, "neg_inv_modulus_lo");
+  check_rns_row_vector(
+      neg_inv_modulus_hi, source.size(1), operation, "neg_inv_modulus_hi");
   TORCH_CHECK(propagation.dim() == 2 &&
                   propagation.size(0) == source.size(1) - 1 &&
                   propagation.size(1) == source.size(1),
@@ -588,8 +596,13 @@ torch::Tensor mixed_radix_decompose_cpu(
                             neg_inv_modulus_hi}) {
     check_cpu_peer(source_residues, table, operation, "table");
   }
-  auto out = torch::empty_like(source_residues);
-  auto output = view_rns_batch_3d(out, "out");
+  auto out = output_buffer ? *output_buffer : torch::empty_like(source_residues);
+  auto output = output_buffer
+      ? view_rns_output_3d(out, source_residues, source.size(1),
+                           {source_residues, normalizers, propagation,
+                            modulus_lo, modulus_hi, neg_inv_modulus_lo,
+                            neg_inv_modulus_hi}, operation)
+      : view_rns_batch_3d(out, "out");
   AT_DISPATCH_INTEGRAL_TYPES(source_residues.scalar_type(), operation, [&] {
     const scalar_t* values = source.data_ptr<scalar_t>();
     scalar_t* digits_out = output.data_ptr<scalar_t>();
@@ -669,19 +682,13 @@ torch::Tensor mixed_radix_decompose_cpu(
                   const auto target_constants = fhelium::cpu::load_constants(
                       lo, modulus_lo_stride, hi, modulus_hi_stride,
                       inv_lo, neg_inv_modulus_lo_stride, inv_hi, neg_inv_modulus_hi_stride, target);
-                  if (row_count <= 16) {
-                    digits[target] += fhelium::cpu::multiply(
-                        digit,
-                        prop[step * propagation_row_stride +
-                             target * propagation_limb_stride],
-                        target_constants);
-                    continue;
-                  }
                   const scalar_t term = fhelium::cpu::multiply_split(
                       digit,
                       prop[step * propagation_row_stride +
                            target * propagation_limb_stride],
                       target_constants);
+                  // Keep each partial sum below its target prime; an
+                  // unreduced digit-width sum can overflow the scalar word.
                   digits[target] = fhelium::cpu::reduce_operand_mod_q(
                       digits[target], target_constants);
                   digits[target] = fhelium::cpu::reduce_lazy_operand(
@@ -700,10 +707,12 @@ torch::Tensor mixed_radix_decompose_cpu(
   return out;
 }
 
-torch::Tensor mixed_radix_extend_cpu(const torch::Tensor components,
-                                     const torch::Tensor coefficients,
-                                     const torch::Tensor params,
-                                     int64_t destination_rows) {
+torch::Tensor mixed_radix_extend_cpu_impl(
+    const torch::Tensor components,
+    const torch::Tensor coefficients,
+    const torch::Tensor params,
+    int64_t destination_rows,
+    const std::optional<torch::Tensor>& output_buffer) {
   constexpr const char* operation = "mixed_radix_basis_extend_to_montgomery";
   TORCH_CHECK(destination_rows > 0, "destination_row_count must be positive");
   check_cpu_peer(components, coefficients, operation, "coefficients");
@@ -714,11 +723,21 @@ torch::Tensor mixed_radix_extend_cpu(const torch::Tensor components,
           (digits.size(1) == 1 || coefficients.size(1) == destination_rows),
       operation,
       " coefficient table shape mismatch");
-  auto shape = components.sizes().vec();
-  shape[shape.size() - 2] = destination_rows;
-  auto out = torch::empty(shape, components.options());
-  auto output = view_rns_batch_3d(out, "out");
+  torch::Tensor out;
+  if (output_buffer) {
+    out = *output_buffer;
+  } else {
+    auto shape = components.sizes().vec();
+    shape[shape.size() - 2] = destination_rows;
+    out = torch::empty(shape, components.options());
+  }
+  auto output = output_buffer
+      ? view_rns_output_3d(out, components, destination_rows,
+                           {components, coefficients, params}, operation)
+      : view_rns_batch_3d(out, "out");
   check_rns_parameter_rows(output, params, operation);
+  TORCH_CHECK(params.size(0) >= RNS_PARAMETER_COUNT, operation,
+              " requires at least ", RNS_PARAMETER_COUNT, " parameter rows");
   AT_DISPATCH_INTEGRAL_TYPES(components.scalar_type(), operation, [&] {
     const scalar_t* source = digits.data_ptr<scalar_t>();
     const scalar_t* table = coefficients.data_ptr<scalar_t>();
@@ -784,6 +803,52 @@ torch::Tensor mixed_radix_extend_cpu(const torch::Tensor components,
   return out;
 }
 
+torch::Tensor mixed_radix_decompose_cpu(
+    const torch::Tensor source_residues,
+    const torch::Tensor normalizers,
+    const torch::Tensor propagation,
+    const torch::Tensor modulus_lo,
+    const torch::Tensor modulus_hi,
+    const torch::Tensor neg_inv_modulus_lo,
+    const torch::Tensor neg_inv_modulus_hi) {
+  return mixed_radix_decompose_cpu_impl(
+      source_residues, normalizers, propagation, modulus_lo, modulus_hi,
+      neg_inv_modulus_lo, neg_inv_modulus_hi, std::nullopt);
+}
+
+void mixed_radix_decompose_out_cpu(
+    const torch::Tensor source_residues,
+    const torch::Tensor normalizers,
+    const torch::Tensor propagation,
+    const torch::Tensor modulus_lo,
+    const torch::Tensor modulus_hi,
+    const torch::Tensor neg_inv_modulus_lo,
+    const torch::Tensor neg_inv_modulus_hi,
+    torch::Tensor out) {
+  mixed_radix_decompose_cpu_impl(
+      source_residues, normalizers, propagation, modulus_lo, modulus_hi,
+      neg_inv_modulus_lo, neg_inv_modulus_hi, out);
+}
+
+torch::Tensor mixed_radix_extend_cpu(
+    const torch::Tensor components,
+    const torch::Tensor coefficients,
+    const torch::Tensor params,
+    int64_t destination_rows) {
+  return mixed_radix_extend_cpu_impl(
+      components, coefficients, params, destination_rows, std::nullopt);
+}
+
+void mixed_radix_extend_out_cpu(
+    const torch::Tensor components,
+    const torch::Tensor coefficients,
+    const torch::Tensor params,
+    int64_t destination_rows,
+    torch::Tensor out) {
+  mixed_radix_extend_cpu_impl(
+      components, coefficients, params, destination_rows, out);
+}
+
 }  // namespace
 
 TORCH_LIBRARY_IMPL(fhelium_rns_ops, CPU, m) {
@@ -838,5 +903,7 @@ TORCH_LIBRARY_IMPL(fhelium_rns_ops, CPU, m) {
       });
   m.impl("lift_centered_coefficients", &lift_centered_cpu);
   m.impl("mixed_radix_decompose", &mixed_radix_decompose_cpu);
+  m.impl("mixed_radix_decompose_out_", &mixed_radix_decompose_out_cpu);
   m.impl("mixed_radix_basis_extend_to_montgomery", &mixed_radix_extend_cpu);
+  m.impl("mixed_radix_basis_extend_to_montgomery_out_", &mixed_radix_extend_out_cpu);
 }

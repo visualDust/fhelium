@@ -1,7 +1,4 @@
-"""Small helper utilities shared by FHElium examples.
-
-The examples intentionally avoid heavy third-party table/CLI dependencies so they
-can be copied into notebooks or scripts easily.
+"""Formatting, argument parsing, and timing helpers shared by FHElium examples.
 """
 
 from __future__ import annotations

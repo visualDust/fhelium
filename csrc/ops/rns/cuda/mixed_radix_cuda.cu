@@ -1,10 +1,15 @@
 #include "mixed_radix_cuda.h"
+#include "modup_tiled.cuh"
+#include "crt_basis_extend.cuh"
 
+#include <ATen/native/CanUse32BitIndexMath.h>
+
+#include <optional>
 #include <utility>
 #include <vector>
 
 #include "../../common/cuda/kernel_support.cuh"
-#include "../../common/cuda/montgomery.cuh"
+#include "../../common/montgomery.hpp"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
 
@@ -52,8 +57,8 @@ __global__ void mixed_radix_decompose_kernel(
   const scalar_t first_residue = reduce_lazy_montgomery_operand(
       source[batch][0][coefficient], modulus_lo[0], modulus_hi[0]);
   for (int row = 0; row < row_count; ++row) {
-    if constexpr (local_workspace) digits(row) = first_residue;
-    else digits(row) = reduce_montgomery_operand(first_residue, modulus_lo[row], modulus_hi[row]);
+    digits(row) = reduce_montgomery_operand(
+        first_residue, modulus_lo[row], modulus_hi[row]);
   }
 
   for (int step = 0; step < row_count - 1; ++step) {
@@ -73,22 +78,21 @@ __global__ void mixed_radix_decompose_kernel(
                             twice_modulus);
     digits(row) = digit;
     for (int target = row + 1; target < row_count; ++target) {
-      if constexpr (local_workspace) {
-      digits(target) += montgomery_mul(digit,
-                                       propagation[step][target],
-                                       modulus_lo[target],
-                                       modulus_hi[target],
-                                       neg_inv_modulus_lo[target],
-                                       neg_inv_modulus_hi[target]);
-      } else {
-        const scalar_t product = reduce_lazy_montgomery_operand(
-            montgomery_mul_split(digit, propagation[step][target],
-                modulus_lo[target], modulus_hi[target],
-                neg_inv_modulus_lo[target], neg_inv_modulus_hi[target]),
-            modulus_lo[target], modulus_hi[target]);
-        digits(target) = reduce_lazy_montgomery_operand(
-            static_cast<scalar_t>(digits(target) + product), modulus_lo[target], modulus_hi[target]);
-      }
+      const scalar_t product = reduce_lazy_montgomery_operand(
+          montgomery_mul_split(digit,
+                               propagation[step][target],
+                               modulus_lo[target],
+                               modulus_hi[target],
+                               neg_inv_modulus_lo[target],
+                               neg_inv_modulus_hi[target]),
+          modulus_lo[target],
+          modulus_hi[target]);
+      // Both terms are standard residues, so the sum fits the signed word.
+      // Reduce every update rather than accumulating an entire digit width.
+      digits(target) = reduce_lazy_montgomery_operand(
+          static_cast<scalar_t>(digits(target) + product),
+          modulus_lo[target],
+          modulus_hi[target]);
     }
   }
   for (int row = 0; row < row_count; ++row) {
@@ -96,17 +100,28 @@ __global__ void mixed_radix_decompose_kernel(
   }
 }
 
-torch::Tensor mixed_radix_decompose_cuda(
+static torch::Tensor mixed_radix_decompose_cuda_impl(
     const torch::Tensor source_residues,
     const torch::Tensor mixed_radix_normalizers,
     const torch::Tensor mixed_radix_propagation_coefficients,
     const torch::Tensor modulus_lo,
     const torch::Tensor modulus_hi,
     const torch::Tensor neg_inv_modulus_lo,
-    const torch::Tensor neg_inv_modulus_hi) {
-  auto out = torch::empty_like(source_residues);
+    const torch::Tensor neg_inv_modulus_hi,
+    const std::optional<torch::Tensor>& output_buffer) {
+  auto out = output_buffer ? *output_buffer : torch::empty_like(source_residues);
   const auto source = view_rns_batch_3d(source_residues, "source_residues");
-  auto output = view_rns_batch_3d(out, "out");
+  auto output = output_buffer
+      ? view_rns_output_3d(out, source_residues, source.size(1),
+                           {source_residues, mixed_radix_normalizers,
+                            mixed_radix_propagation_coefficients, modulus_lo,
+                            modulus_hi, neg_inv_modulus_lo, neg_inv_modulus_hi},
+                           "mixed_radix_decompose")
+      : view_rns_batch_3d(out, "out");
+  if (output_buffer) {
+    TORCH_CHECK(at::native::canUse32BitIndexMath(output),
+                "mixed_radix_decompose output strides exceed 32-bit indexing");
+  }
   check_rns_row_vector(mixed_radix_normalizers,
                        source.size(1) - 1,
                        "mixed_radix_decompose",
@@ -211,23 +226,40 @@ __global__ void mixed_radix_basis_extend_to_montgomery_kernel(
   out[batch][destination_row][coefficient] = value;
 }
 
-torch::Tensor mixed_radix_basis_extend_to_montgomery_cuda(
+static torch::Tensor mixed_radix_basis_extend_to_montgomery_cuda_impl(
     const torch::Tensor mixed_radix_components,
     const torch::Tensor basis_extension_coefficients,
     const torch::Tensor rns_params,
-    const int64_t destination_row_count) {
+    const int64_t destination_row_count,
+    const std::optional<torch::Tensor>& output_buffer) {
   TORCH_CHECK(destination_row_count > 0,
               "destination_row_count must be positive");
-  auto sizes = mixed_radix_components.sizes().vec();
-  TORCH_CHECK(sizes.size() >= 2,
-              "mixed_radix_components requires [..., digit row, N] layout");
-  sizes[sizes.size() - 2] = destination_row_count;
-  auto out = torch::empty(sizes, mixed_radix_components.options());
   const auto digits =
       view_rns_batch_3d(mixed_radix_components, "mixed_radix_components");
-  auto output = view_rns_batch_3d(out, "out");
+  torch::Tensor out;
+  if (output_buffer) {
+    out = *output_buffer;
+  } else {
+    auto sizes = mixed_radix_components.sizes().vec();
+    sizes[sizes.size() - 2] = destination_row_count;
+    out = torch::empty(sizes, mixed_radix_components.options());
+  }
+  auto output = output_buffer
+      ? view_rns_output_3d(out, mixed_radix_components, destination_row_count,
+                           {mixed_radix_components,
+                            basis_extension_coefficients, rns_params},
+                           "mixed_radix_basis_extend_to_montgomery")
+      : view_rns_batch_3d(out, "out");
+  if (output_buffer) {
+    TORCH_CHECK(at::native::canUse32BitIndexMath(output),
+                "mixed_radix_basis_extend_to_montgomery output strides exceed "
+                "32-bit indexing");
+  }
   check_rns_parameter_rows(
       output, rns_params, "mixed_radix_basis_extend_to_montgomery");
+  TORCH_CHECK(rns_params.size(0) >= RNS_PARAMETER_COUNT,
+              "mixed_radix_basis_extend_to_montgomery requires at least ",
+              RNS_PARAMETER_COUNT, " parameter rows");
   TORCH_CHECK(basis_extension_coefficients.dim() == 2 &&
                   basis_extension_coefficients.size(0) == digits.size(1) - 1 &&
                   (digits.size(1) == 1 ||
@@ -263,4 +295,54 @@ torch::Tensor mixed_radix_basis_extend_to_montgomery_cuda(
                 FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2));
       });
   return out;
+}
+
+torch::Tensor mixed_radix_decompose_cuda(
+    const torch::Tensor source_residues,
+    const torch::Tensor mixed_radix_normalizers,
+    const torch::Tensor mixed_radix_propagation_coefficients,
+    const torch::Tensor modulus_lo,
+    const torch::Tensor modulus_hi,
+    const torch::Tensor neg_inv_modulus_lo,
+    const torch::Tensor neg_inv_modulus_hi) {
+  return mixed_radix_decompose_cuda_impl(
+      source_residues, mixed_radix_normalizers,
+      mixed_radix_propagation_coefficients, modulus_lo, modulus_hi,
+      neg_inv_modulus_lo, neg_inv_modulus_hi, std::nullopt);
+}
+
+void mixed_radix_decompose_out_cuda(
+    const torch::Tensor source_residues,
+    const torch::Tensor mixed_radix_normalizers,
+    const torch::Tensor mixed_radix_propagation_coefficients,
+    const torch::Tensor modulus_lo,
+    const torch::Tensor modulus_hi,
+    const torch::Tensor neg_inv_modulus_lo,
+    const torch::Tensor neg_inv_modulus_hi,
+    torch::Tensor out) {
+  mixed_radix_decompose_cuda_impl(
+      source_residues, mixed_radix_normalizers,
+      mixed_radix_propagation_coefficients, modulus_lo, modulus_hi,
+      neg_inv_modulus_lo, neg_inv_modulus_hi, out);
+}
+
+torch::Tensor mixed_radix_basis_extend_to_montgomery_cuda(
+    const torch::Tensor mixed_radix_components,
+    const torch::Tensor basis_extension_coefficients,
+    const torch::Tensor rns_params,
+    const int64_t destination_row_count) {
+  return mixed_radix_basis_extend_to_montgomery_cuda_impl(
+      mixed_radix_components, basis_extension_coefficients, rns_params,
+      destination_row_count, std::nullopt);
+}
+
+void mixed_radix_basis_extend_to_montgomery_out_cuda(
+    const torch::Tensor mixed_radix_components,
+    const torch::Tensor basis_extension_coefficients,
+    const torch::Tensor rns_params,
+    const int64_t destination_row_count,
+    torch::Tensor out) {
+  mixed_radix_basis_extend_to_montgomery_cuda_impl(
+      mixed_radix_components, basis_extension_coefficients, rns_params,
+      destination_row_count, out);
 }

@@ -349,25 +349,34 @@ def keyswitch_moddown_qp_to_q(
     p_residues: torch.Tensor,
     moddown_p_drop_inverses_montgomery: torch.Tensor,
     rns_params: torch.Tensor,
+    moddown_half: torch.Tensor | None = None,
+    rounding: str = "nearest",
 ) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_ckks_ops::keyswitch_moddown_qp_to_q``.
 
     Torch schema::
 
-        fhelium_ckks_ops::keyswitch_moddown_qp_to_q(Tensor q_residues, Tensor p_residues, Tensor moddown_p_drop_inverses_montgomery, Tensor rns_params) -> Tensor
+        fhelium_ckks_ops::keyswitch_moddown_qp_to_q(Tensor q_residues, Tensor p_residues, Tensor moddown_p_drop_inverses_montgomery, Tensor rns_params, Tensor? moddown_half=None, str rounding="nearest") -> Tensor
 
     Args:
         q_residues: torch.Tensor.
         p_residues: torch.Tensor.
         moddown_p_drop_inverses_montgomery: torch.Tensor.
         rns_params: torch.Tensor.
+        moddown_half: torch.Tensor | None.
+        rounding: str.
 
     Returns: torch.Tensor.
     """
     _require_native()
     return torch.ops.fhelium_ckks_ops.keyswitch_moddown_qp_to_q(
-        q_residues, p_residues, moddown_p_drop_inverses_montgomery, rns_params
+        q_residues,
+        p_residues,
+        moddown_p_drop_inverses_montgomery,
+        rns_params,
+        moddown_half,
+        rounding,
     )
 
 

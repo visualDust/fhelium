@@ -18,6 +18,7 @@ import {
   type InstallAxis,
 } from '../data/installResolver'
 import NavArrow from './NavArrow.vue'
+import InstallOptionIcon from './InstallOptionIcon.vue'
 
 const props = withDefaults(defineProps<{
   showBadges?: boolean
@@ -37,22 +38,22 @@ const groups = computed(() => [
   {
     axis: 'os' as const,
     label: 'Operating system',
-    options: optionsFor('os', selection.value).map(id => ({ id, label: osLabels[id as OsId] })),
-  },
-  {
-    axis: 'method' as const,
-    label: 'Package method',
-    options: optionsFor('method', selection.value).map(id => ({ id, label: methodLabels[id as MethodId] })),
-  },
-  {
-    axis: 'torch' as const,
-    label: 'Torch version',
-    options: optionsFor('torch', selection.value).map(id => ({ id, label: `PyTorch ${id}` })),
+    options: optionsFor('os', selection.value).map(id => ({ id, label: osLabels[id as OsId], icon: id.startsWith('linux') ? 'linux' : id.startsWith('windows') ? 'windows' : 'apple' })),
   },
   {
     axis: 'compute' as const,
     label: 'Compute platform',
-    options: optionsFor('compute', selection.value).map(id => ({ id, label: computeLabel(id as ComputeId) })),
+    options: optionsFor('compute', selection.value).map(id => ({ id, label: computeLabel(id as ComputeId), icon: id === 'cpu' ? 'cpu' : id === 'rocm' ? 'amd' : 'nvidia' })),
+  },
+  {
+    axis: 'torch' as const,
+    label: 'Torch version',
+    options: optionsFor('torch', selection.value).map(id => ({ id, label: id === 'installed-rocm' ? 'ROCm PyTorch' : `PyTorch ${id}`, icon: 'pytorch' })),
+  },
+  {
+    axis: 'method' as const,
+    label: 'Package method',
+    options: optionsFor('method', selection.value).map(id => ({ id, label: methodLabels[id as MethodId], icon: id === 'source-github' ? 'github' : id === 'source-local' ? 'build' : 'python' })),
   },
 ])
 
@@ -129,6 +130,7 @@ onBeforeUnmount(() => {
             :aria-pressed="selected(group.axis, option.id)"
             @click="selectOption(group.axis, option.id)"
           >
+            <InstallOptionIcon :name="option.icon" />
             {{ option.label }}
           </button>
         </div>
@@ -152,7 +154,13 @@ onBeforeUnmount(() => {
         <circle cx="10" cy="10" r="7.25" />
         <path d="M10 6.2v4.8M10 14h.01" />
       </svg>
-      <span>FHElium is under active development. APIs may change significantly between releases.</span>
+      <span>
+        FHElium is under active development. APIs may change significantly between releases.
+        <span v-if="selection.compute === 'rocm'" class="home-install-rocm-note">
+          AMD ROCm support is experimental. The development team currently lacks regular access to AMD GPUs. Run from the FHElium source directory with ROCm PyTorch and the HIP development toolkit installed.
+          <a :href="withBase('/tutorial/installation#amd-rocm-source-builds')">ROCm build requirements</a>
+        </span>
+      </span>
     </p>
     <span class="home-install-status" role="status" aria-live="polite">{{ copied ? 'Install commands copied to clipboard.' : '' }}</span>
   </div>

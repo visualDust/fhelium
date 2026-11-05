@@ -2,7 +2,7 @@
 
 **Example source:** [`examples/03_eager_modulus_chain.py`](https://github.com/VisualDust/fhelium/blob/main/examples/03_eager_modulus_chain.py)
 
-This example derives several exact Q chains from one preset and compares their maximum public depth, modulus size, active RNS rows, selected execution dtype, and ciphertext storage.
+This example derives several Q prime-group chains from one preset and compares their maximum public depth, modulus size, active RNS rows, selected execution dtype, and ciphertext storage.
 
 ## Run the example
 
@@ -28,7 +28,7 @@ config.q_depth_groups
 config.max_depth
 ```
 
-as exact values. If the groups are
+as prime values. If the groups are
 
 $$
 (G_0,G_1,\ldots,G_D),
@@ -36,7 +36,7 @@ $$
 
 then `max_depth == D`. Public values use depths from zero through $D$, and `G_D` is the ordinary terminal Q group.
 
-The example's `prefix_config` function constructs a shorter exact parameter set by retaining the requested public-group prefix and the same terminal Q group:
+The example's `prefix_config` function constructs a shorter parameter set by retaining the requested public-group prefix and the same terminal Q group:
 
 ```python
 CkksConfig(
@@ -68,7 +68,7 @@ A one-prime group and a two-prime group both consume one depth. They have differ
 - P contains special primes used temporarily by hybrid key switching.
 - QP appends all P rows to the active Q basis without changing depth.
 
-`config.total_modulus_bits` is the bit length of the exact complete QP product. When security-budget enforcement is enabled, it must not exceed `config.maximum_modulus_bits`.
+`config.total_modulus_bits` is the bit length of the complete QP product. When security-budget enforcement is enabled, it must not exceed `config.maximum_modulus_bits`.
 
 ## 4. Depth-zero values are largest
 
@@ -87,7 +87,7 @@ where $L_Q$ is the active Q-row count and $W$ is the residue element size. Evalu
 
 ## 5. Choose depth from the circuit
 
-Count the public rescale transitions on the intended execution path and reserve the required margin. Then validate precision, message range, security budget, key storage, and latency with the exact groups:
+Count the public rescale transitions on the intended execution path and reserve the required margin. Then validate precision, message range, security budget, key storage, and latency with the selected prime groups:
 
 - more public groups provide more transitions;
 - more prime rows increase early-depth ciphertext and prepared-plaintext size;

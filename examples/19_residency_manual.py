@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Execute a named FHE stage with explicit residency plans and CUDA leases.
+"""Execute a named FHE stage with placement plans and CUDA leases.
 
 The example adopts one replicated plaintext weight, one replicated rotation
 key, and one exclusive request ciphertext. It then performs host/CUDA

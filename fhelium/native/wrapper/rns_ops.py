@@ -119,6 +119,87 @@ def center_residues_(
     torch.ops.fhelium_rns_ops.center_residues_(standard_residues, rns_params)
 
 
+def crt_basis_extend(
+    source_residues: torch.Tensor,
+    source_parameters: torch.Tensor,
+    target_parameters: torch.Tensor,
+    matrix: torch.Tensor,
+    target_reciprocals: torch.Tensor,
+    source_normalizers: torch.Tensor | None = None,
+    source_reciprocals: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_rns_ops::crt_basis_extend``.
+
+    Torch schema::
+
+        fhelium_rns_ops::crt_basis_extend(Tensor source_residues, Tensor source_parameters, Tensor target_parameters, Tensor matrix, Tensor target_reciprocals, Tensor? source_normalizers=None, Tensor? source_reciprocals=None) -> Tensor
+
+    Args:
+        source_residues: torch.Tensor.
+        source_parameters: torch.Tensor.
+        target_parameters: torch.Tensor.
+        matrix: torch.Tensor.
+        target_reciprocals: torch.Tensor.
+        source_normalizers: torch.Tensor | None.
+        source_reciprocals: torch.Tensor | None.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.crt_basis_extend(
+        source_residues,
+        source_parameters,
+        target_parameters,
+        matrix,
+        target_reciprocals,
+        source_normalizers,
+        source_reciprocals,
+    )
+
+
+def crt_basis_extend_out_(
+    source_residues: torch.Tensor,
+    source_parameters: torch.Tensor,
+    target_parameters: torch.Tensor,
+    matrix: torch.Tensor,
+    target_reciprocals: torch.Tensor,
+    source_normalizers: torch.Tensor | None,
+    source_reciprocals: torch.Tensor | None,
+    output: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::crt_basis_extend_out_``.
+
+    Torch schema::
+
+        fhelium_rns_ops::crt_basis_extend_out_(Tensor source_residues, Tensor source_parameters, Tensor target_parameters, Tensor matrix, Tensor target_reciprocals, Tensor? source_normalizers, Tensor? source_reciprocals, Tensor(a!) output) -> ()
+
+    Args:
+        source_residues: torch.Tensor.
+        source_parameters: torch.Tensor.
+        target_parameters: torch.Tensor.
+        matrix: torch.Tensor.
+        target_reciprocals: torch.Tensor.
+        source_normalizers: torch.Tensor | None.
+        source_reciprocals: torch.Tensor | None.
+        output: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.crt_basis_extend_out_(
+        source_residues,
+        source_parameters,
+        target_parameters,
+        matrix,
+        target_reciprocals,
+        source_normalizers,
+        source_reciprocals,
+        output,
+    )
+
+
 def from_montgomery_(
     montgomery_residues: torch.Tensor, rns_params: torch.Tensor
 ) -> None:
@@ -191,6 +272,39 @@ def mixed_radix_basis_extend_to_montgomery(
     )
 
 
+def mixed_radix_basis_extend_to_montgomery_out_(
+    mixed_radix_components: torch.Tensor,
+    basis_extension_coefficients: torch.Tensor,
+    rns_params: torch.Tensor,
+    destination_row_count: int,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::mixed_radix_basis_extend_to_montgomery_out_``.
+
+    Torch schema::
+
+        fhelium_rns_ops::mixed_radix_basis_extend_to_montgomery_out_(Tensor mixed_radix_components, Tensor basis_extension_coefficients, Tensor rns_params, int destination_row_count, Tensor(a!) out) -> ()
+
+    Args:
+        mixed_radix_components: torch.Tensor.
+        basis_extension_coefficients: torch.Tensor.
+        rns_params: torch.Tensor.
+        destination_row_count: int.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.mixed_radix_basis_extend_to_montgomery_out_(
+        mixed_radix_components,
+        basis_extension_coefficients,
+        rns_params,
+        destination_row_count,
+        out,
+    )
+
+
 def mixed_radix_decompose(
     source_residues: torch.Tensor,
     mixed_radix_normalizers: torch.Tensor,
@@ -227,6 +341,104 @@ def mixed_radix_decompose(
         modulus_hi,
         neg_inv_modulus_lo,
         neg_inv_modulus_hi,
+    )
+
+
+def mixed_radix_decompose_out_(
+    source_residues: torch.Tensor,
+    mixed_radix_normalizers: torch.Tensor,
+    mixed_radix_propagation_coefficients: torch.Tensor,
+    modulus_lo: torch.Tensor,
+    modulus_hi: torch.Tensor,
+    neg_inv_modulus_lo: torch.Tensor,
+    neg_inv_modulus_hi: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::mixed_radix_decompose_out_``.
+
+    Torch schema::
+
+        fhelium_rns_ops::mixed_radix_decompose_out_(Tensor source_residues, Tensor mixed_radix_normalizers, Tensor mixed_radix_propagation_coefficients, Tensor modulus_lo, Tensor modulus_hi, Tensor neg_inv_modulus_lo, Tensor neg_inv_modulus_hi, Tensor(a!) out) -> ()
+
+    Args:
+        source_residues: torch.Tensor.
+        mixed_radix_normalizers: torch.Tensor.
+        mixed_radix_propagation_coefficients: torch.Tensor.
+        modulus_lo: torch.Tensor.
+        modulus_hi: torch.Tensor.
+        neg_inv_modulus_lo: torch.Tensor.
+        neg_inv_modulus_hi: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.mixed_radix_decompose_out_(
+        source_residues,
+        mixed_radix_normalizers,
+        mixed_radix_propagation_coefficients,
+        modulus_lo,
+        modulus_hi,
+        neg_inv_modulus_lo,
+        neg_inv_modulus_hi,
+        out,
+    )
+
+
+def mixed_radix_modup_tiled(
+    source_residues: torch.Tensor,
+    decomposition_tables: list[torch.Tensor],
+    extension: torch.Tensor,
+    parameters: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_rns_ops::mixed_radix_modup_tiled``.
+
+    Torch schema::
+
+        fhelium_rns_ops::mixed_radix_modup_tiled(Tensor source_residues, Tensor[] decomposition_tables, Tensor extension, Tensor parameters) -> Tensor
+
+    Args:
+        source_residues: torch.Tensor.
+        decomposition_tables: list[torch.Tensor].
+        extension: torch.Tensor.
+        parameters: torch.Tensor.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.mixed_radix_modup_tiled(
+        source_residues, decomposition_tables, extension, parameters
+    )
+
+
+def mixed_radix_modup_tiled_out_(
+    source_residues: torch.Tensor,
+    decomposition_tables: list[torch.Tensor],
+    extension: torch.Tensor,
+    parameters: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::mixed_radix_modup_tiled_out_``.
+
+    Torch schema::
+
+        fhelium_rns_ops::mixed_radix_modup_tiled_out_(Tensor source_residues, Tensor[] decomposition_tables, Tensor extension, Tensor parameters, Tensor(a!) out) -> ()
+
+    Args:
+        source_residues: torch.Tensor.
+        decomposition_tables: list[torch.Tensor].
+        extension: torch.Tensor.
+        parameters: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.mixed_radix_modup_tiled_out_(
+        source_residues, decomposition_tables, extension, parameters, out
     )
 
 

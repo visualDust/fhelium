@@ -34,9 +34,9 @@ A **slot** is one packed complex message position. Applications decide how vecto
 
 | Term | Definition |
 | --- | --- |
-| `Preset` | A reviewed named recipe that resolves to one exact `CkksConfig`. Its name records slot capacity, default-scale target, maximum public depth, and the default Engine residue dtype selected by its primes. |
-| `CkksConfig` | The immutable mathematical and security parameter set: ring, default scale, exact Q depth groups, exact P special primes, Galois generator, Gaussian error standard deviation, security category, and budget-enforcement policy. It contains no device or machine-word policy. |
-| `RnsExecutionFormat` | The device-local residue dtype and Montgomery radix selected from the exact prime set, optionally constrained by an expert Engine override. |
+| `Preset` | A reviewed named recipe that resolves to a `CkksConfig` containing prime values. Its name records slot capacity, default-scale target, maximum public depth, and the default Engine residue dtype selected by its primes. |
+| `CkksConfig` | The immutable CKKS parameter set: ring, default scale, ordered Q prime groups, P special primes, Galois generator, Gaussian error standard deviation, security category, and budget-enforcement policy. |
+| `RnsExecutionFormat` | The device-local residue dtype and Montgomery radix selected from the configured prime values, optionally constrained by an expert Engine override. |
 | `fhelium.eager.Engine` | The process-local eager evaluator. It selects an RNS execution format, lazily creates device resources, owns installed keys, and invokes registered implementations. |
 
 Runtime values and keys do not store a parameter-set identifier. The caller retains provenance and supplies mathematically compatible configurations, values, and keys.
@@ -508,7 +508,7 @@ Collective-decryption shares fuse into an output under the experimental module's
 | Residency request | Declarative handle/location postconditions and headroom requirements: what must be true. |
 | Residency policy | Pure deterministic ordering and configured fallback choices used to evaluate a request. |
 | Residency decision | Manager-issued, state-versioned plan plus policy evidence: why the selected actions are valid for the observed state. |
-| Residency plan | Immutable ordered low-level intermediate representation (IR) of explicit `ensure`, `move`, `drop`, and `discard` actions plus scoped memory reservations: how placement changes. |
+| Residency plan | Immutable ordered low-level intermediate representation (IR) of `ensure`, `move`, `drop`, and `discard` actions plus scoped memory reservations: how placement changes. |
 | Lease | Short-lived protection for active evaluator reads. It remains effective until all consumers, including asynchronous CUDA readers, complete. |
 | Hold | Longer-lived retention protection for an idle materialization; active evaluator access uses a lease. |
 

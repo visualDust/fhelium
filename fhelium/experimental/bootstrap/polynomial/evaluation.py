@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import math
 from typing import TYPE_CHECKING
 
-from fhelium.values import Ciphertext, RelinearizationKey
+from fhelium.values import EvaluationKeySet, Ciphertext, RelinearizationKey
 
 if TYPE_CHECKING:
     from fhelium.eager import Engine
@@ -65,7 +67,10 @@ def _validate_encrypted_evaluation(
     polynomial: PolynomialApproximation,
     *,
     required_depths: int,
-    relinearization_key: RelinearizationKey | None,
+    relinearization_key: RelinearizationKey
+    | EvaluationKeySet
+    | Mapping[int, RelinearizationKey]
+    | None,
     requires_relinearization: bool,
     evaluator_name: str,
 ) -> None:
@@ -97,8 +102,13 @@ def _validate_encrypted_evaluation(
     if requires_relinearization:
         if relinearization_key is None:
             raise ValueError(f'{evaluator_name} requires a relinearization key')
+        if isinstance(relinearization_key, (EvaluationKeySet, Mapping)):
+            # The aligned product determines the depth-specific key at consumption.
+            return
         if type(relinearization_key) is not RelinearizationKey:
-            raise TypeError("relinearization_key must be a RelinearizationKey")
+            raise TypeError(
+                "relinearization_key must be a primitive key, an inventory, or bound depth references"
+            )
         engine.validate_key_switch_key(relinearization_key)
         if relinearization_key.modulus_basis != 'QP':
             raise ValueError("relinearization_key requires QP basis")

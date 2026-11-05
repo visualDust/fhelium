@@ -456,6 +456,7 @@ def test_cpu_keyswitch_moddown_supports_more_than_eight_p_rows_and_strides() -> 
         p_residues,
         _transpose_layout(inverse),
         _transpose_layout(parameters),
+        rounding="floor",
     )
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
@@ -546,6 +547,7 @@ def test_cuda_multistep_moddown_matches_integer_reference(
             p_cuda,
             inverse_cuda,
             parameters_cuda,
+            rounding="floor",
         )
         actual = actual_cuda.cpu()
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
@@ -630,5 +632,98 @@ def test_cuda_moddown_accepts_unequal_dropped_prime_widths() -> None:
         p_residues.cuda(),
         inverse.cuda(),
         parameters.cuda(),
+        rounding="floor",
     ).cpu()
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("narrow", [False, True], ids=["int64", "int32"])
+@pytest.mark.parametrize(
+    "device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)]
+)
+def test_moddown_rounding_matches_integer_quotient(narrow, device):
+    """Both quotient rules preserve inputs and agree with integer arithmetic."""
+    from math import prod
+
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    engine = CkksEngine(
+        _small_config(p_count=2, max_depth=0, narrow=narrow),
+        device="cpu",
+        allow_sk_gen=False,
+    )
+    q_moduli = tuple(engine.config.q_moduli)
+    p_moduli = tuple(engine.config.p_moduli)
+    p_product = prod(p_moduli)
+    q_product = prod(q_moduli)
+    half = (p_product - 1) // 2
+    # Multiples of Q also exercise the zero-Q correction used by NTT ModDown.
+    integers = [
+        0,
+        1,
+        -1,
+        half,
+        half + 1,
+        -half - 1,
+        p_product - 1,
+        p_product + half + 1,
+        q_product,
+        3 * q_product,
+    ]
+    dtype = engine.rns_runtime.dtype
+    q = torch.tensor(
+        [[x % m for x in integers] for m in q_moduli],
+        dtype=dtype,
+        device=device,
+    ).unsqueeze(0)
+    p = torch.tensor(
+        [[x % m for x in integers] for m in p_moduli],
+        dtype=dtype,
+        device=device,
+    ).unsqueeze(0)
+    q, p = _gap_last_axis(q), _gap_last_axis(p)
+    inverse = engine.moddown_p_drop_inverses_montgomery_by_depth[0].to(device)
+    parameters = engine.rns_runtime.basis_parameters(
+        0, include_p=True
+    ).native_parameters.to(device)
+    offsets = torch.tensor(
+        [half % m for m in (*q_moduli, *p_moduli)], dtype=dtype, device=device
+    )
+    before = q.clone(), p.clone()
+    for rounding in ("floor", "nearest"):
+        shift = half if rounding == "nearest" else 0
+        expected = torch.tensor(
+            [
+                [((x + shift) // p_product) % m for x in integers]
+                for m in q_moduli
+            ],
+            dtype=dtype,
+            device=device,
+        ).unsqueeze(0)
+        actual = ckks_ops.keyswitch_moddown_qp_to_q(
+            q,
+            p,
+            inverse,
+            parameters,
+            offsets if rounding == "nearest" else None,
+            rounding=rounding,
+        )
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        if rounding == "nearest":
+            # The native default and legal lazy representatives have the same quotient.
+            q_lazy = (
+                q + torch.tensor(q_moduli, dtype=dtype, device=device)[:, None]
+            )
+            p_lazy = (
+                p + torch.tensor(p_moduli, dtype=dtype, device=device)[:, None]
+            )
+            default = ckks_ops.keyswitch_moddown_qp_to_q(
+                q_lazy,
+                p_lazy,
+                inverse,
+                parameters,
+                offsets,
+            )
+            torch.testing.assert_close(default, expected, rtol=0, atol=0)
+    torch.testing.assert_close(q, before[0], rtol=0, atol=0)
+    torch.testing.assert_close(p, before[1], rtol=0, atol=0)

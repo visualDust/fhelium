@@ -48,7 +48,7 @@ fh.save_value(
 )
 ```
 
-The core serialization API writes one versioned safetensors file. It preserves the value type and cryptographic metadata but deliberately owns no namespace, tenant, cache, or eviction policy.
+The core serialization API writes one versioned safetensors file. The file preserves the value type, payloads, and cryptographic metadata.
 
 Inspect without materializing tensors:
 

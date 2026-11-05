@@ -52,8 +52,7 @@ def main() -> None:
         workspace=workspace,
     )
 
-    # Emit Eager Python from a CKKS-depth Program. The emitter is a normal
-    # optional pass and does not prescribe the passes before or after it.
+    # Emit Eager Python after lowering the Program to CKKS operations.
     ckks_compilation = fh_compile.Pipeline(
         (
             fh_compile.EliminateDeadValuesPass(),

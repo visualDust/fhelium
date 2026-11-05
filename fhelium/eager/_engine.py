@@ -1,18 +1,14 @@
 """Execute eager CKKS operations through registered Backend implementations.
 
-`Engine` owns one CKKS configuration and lazily constructs arithmetic,
-random-stream, key-material, and executable resources for each device used by
-the caller. Ordinary evaluator methods dispatch from their Tensor operands;
-factory-like calls use CPU unless another device is selected.
-"""
+`Engine` owns one CKKS configuration and lazily constructs arithmetic, random-stream, key-material, and executable resources for each device used by the caller. Ordinary evaluator methods dispatch from their Tensor operands; source factories follow PyTorch's default device unless ``device`` is supplied."""
 
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from operator import index as integer_index
 from threading import RLock
-from typing import Literal, cast, overload
+from typing import Literal, TypedDict, cast, overload
 
 import torch
 from xdsl.ir import Operation
@@ -131,6 +127,11 @@ def _plaintext_result(
     )
 
 
+class _KeySwitchAttributes(TypedDict, total=False):
+    key_prime_ids: tuple[int, ...]
+    digit_prime_ids: tuple[tuple[int, ...], ...]
+
+
 class Engine:
     r"""Own eager CKKS configuration and per-device execution resources.
 
@@ -151,8 +152,7 @@ class Engine:
     Source factories use PyTorch's default device when the caller omits
     ``device``.
     Tensor-consuming operations dispatch from operand placement and do not move
-    operands implicitly. A boundary ``device=`` authorizes movement of that
-    boundary's public value. Key material is not copied between devices unless
+    operands implicitly. A ``device=`` argument on an input/output conversion selects the returned value's placement. Key material is not copied between devices unless
     the caller places it there or enables automatic key replication. Each used
     device owns its arithmetic tables, random stream, direct-dispatch entries, and key
     bindings.
@@ -250,7 +250,7 @@ class Engine:
             decompose_rotation_step(normalized, self.num_slots, installed)
         )
 
-    def _rns_context_for(
+    def rns_context(
         self,
         device: torch.device | str,
     ) -> RnsContext:
@@ -404,25 +404,106 @@ class Engine:
             in_place=in_place,
         )
 
+    def prepare_secret_key(
+        self,
+        coefficients: torch.Tensor,
+        *,
+        modulus_basis: Literal["Q", "QP"] = "QP",
+        device: torch.device | str | None = None,
+    ) -> SecretKey:
+        r"""Prepare NTT(s)R from caller-supplied integer coefficients [N].
+
+        Coefficients determine the secret polynomial; this factory performs
+        RNS lifting and NTT conversion without sampling. Placement follows the
+        input tensor unless ``device`` requests a copy. Input storage is preserved.
+        """
+        if device is not None:
+            coefficients = coefficients.to(device)
+        dispatcher = self._dispatcher_for(coefficients.device)
+        return self._key_generator.prepare_secret_key(
+            dispatcher.key_generation, coefficients, modulus_basis=modulus_basis
+        )
+
     def create_secret_key(
         self,
         *,
         modulus_basis: Literal["Q", "QP"] = "QP",
         device: torch.device | str | None = None,
+        hamming_weight: int | None = None,
     ) -> SecretKey:
-        r"""Sample the secret polynomial and materialize its RNS transforms.
+        r"""Sample a ternary secret and prepare its RNS transforms.
 
-        The key generator samples ternary coefficients $s_j\in\{-1,0,1\}$, reduces
-        them modulo every depth-zero Q row and optional P row, and stores
-        $\operatorname{NTT}(s)R$ in Montgomery form.  This factory delegates to
-        ``CkksKeyGenerator.create_secret_key``."""
-
+        Without a weight, coefficients are independent uniform {-1,0,1}.
+        With ``hamming_weight=h``, a uniform h-element support receives
+        independent uniform signs. The CSPRNG supplies both choices. Every
+        selected Q or QP row stores NTT(s)R in Montgomery form; the returned
+        key owns its storage. Distribution and modulus parameters are caller
+        choices and do not establish a security level by themselves.
+        """
         target = torch.get_default_device() if device is None else device
         dispatcher = self._dispatcher_for(target)
         with dispatcher.random_lock:
             return self._key_generator.create_secret_key(
                 dispatcher.key_generation,
                 modulus_basis=modulus_basis,
+                hamming_weight=hamming_weight,
+            )
+
+    def convert_secret_key(
+        self,
+        secret_key: SecretKey,
+        target_config: CkksConfig,
+        *,
+        dtype: torch.dtype | None = None,
+    ) -> SecretKey:
+        r"""Convert the centered secret polynomial to another modulus basis.
+
+        Source coefficients are interpreted modulo this Engine's source basis;
+        the result owns target-config QP NTT/Montgomery storage on the same
+        device. ``dtype`` selects the destination residue word format.
+        """
+        self._validator.validate_secret_key(secret_key)
+        resources = self._dispatcher_for(secret_key.device).key_generation
+        return self._key_generator.convert_secret_key(
+            resources,
+            resources.for_config(target_config, dtype=dtype),
+            secret_key,
+        )
+
+    def create_encapsulation_keys(
+        self,
+        source_secret_key: SecretKey,
+        intermediate_secret_key: SecretKey,
+        *,
+        low_p_moduli: tuple[int, ...],
+        return_prime: int,
+        return_p_moduli: tuple[int, ...],
+        source_depth: int | None = None,
+    ) -> tuple[KeySwitchKey, KeySwitchKey]:
+        r"""Create low s→t and guard-scaled t→s evaluation-key material.
+
+        Low hybrid digits encrypt P_low*E_j*s under t on the selected source Q
+        suffix and P_low. One return digit encrypts guard*P_return*t under s
+        on [guard, full Q, P_return]. Caller-supplied secrets share this Engine's
+        ring, word format and device. Secret distributions are not inferred.
+        Both key values own their tensors; no secret is retained by the result.
+        """
+        self._validator.validate_secret_key(source_secret_key)
+        self._validator.validate_secret_key(intermediate_secret_key)
+        if source_secret_key.device != intermediate_secret_key.device:
+            raise ValueError("Encapsulation secrets must share a device")
+        depth = self.max_depth if source_depth is None else source_depth
+        self.config.q_row_start(depth)
+        dispatcher = self._dispatcher_for(source_secret_key.device)
+        with dispatcher.random_lock:
+            return self._key_generator.create_encapsulation_keys(
+                dispatcher.key_generation,
+                source_secret_key,
+                intermediate_secret_key,
+                source_depth=depth,
+                low_p_moduli=tuple(low_p_moduli),
+                return_prime=return_prime,
+                return_p_moduli=tuple(return_p_moduli),
             )
 
     def create_public_key(
@@ -457,14 +538,21 @@ class Engine:
         destination_secret_key: SecretKey,
         *,
         uniform_component_by_key_digit: torch.Tensor | None = None,
+        digit_prime_ids: tuple[tuple[int, ...], ...] | None = None,
+        p_prime_ids: tuple[int, ...] | None = None,
+        source_multiplier: int = 1,
+        source_depth: int = 0,
         device: torch.device | str | None = None,
     ) -> KeySwitchKey:
         r"""Generate hybrid-RNS material from one secret relation to another.
 
         For source and destination secrets $s_{src}$ and $s_{dst}$, key digit
         $d$ satisfies
-        $k_{d,0}+k_{d,1}s_{dst}=P s_{src}+e_d$ on that digit's embedded source rows,
-        where $P$ is the product of special primes.  The generator returns
+        $k_{d,0}+k_{d,1}s_{dst}=P m s_{src}+e_d$ on that digit's embedded source rows,
+        where $P$ is the selected auxiliary-prime product and m is source_multiplier.
+        An optional ordered Q-row partition selects key digits; the consumer
+        must use that same partition. p_prime_ids selects auxiliary catalog rows
+        outside active Q; omission preserves the original P. The generator returns
         ``[digit, component=2, QP row, NTT index]`` data in NTT/Montgomery form."""
 
         self._validator.validate_secret_key(source_secret_key)
@@ -486,12 +574,19 @@ class Engine:
                 source,
                 destination,
                 uniform_component_by_key_digit=uniform_component_by_key_digit,
+                digit_prime_ids=digit_prime_ids,
+                p_prime_ids=p_prime_ids,
+                source_depth=source_depth,
+                source_multiplier=source_multiplier,
             )
 
     def create_relinearization_key(
         self,
         secret_key: SecretKey,
         *,
+        source_depth: int = 0,
+        digit_prime_ids: tuple[tuple[int, ...], ...] | None = None,
+        p_prime_ids: tuple[int, ...] | None = None,
         device: torch.device | str | None = None,
     ) -> RelinearizationKey:
         r"""Generate key-switch material from $s^2$ to $s$.
@@ -507,6 +602,9 @@ class Engine:
             return self._key_generator.create_relinearization_key(
                 dispatcher.key_generation,
                 selected,
+                source_depth=source_depth,
+                digit_prime_ids=digit_prime_ids,
+                p_prime_ids=p_prime_ids,
             )
 
     def create_rotation_key(
@@ -514,6 +612,9 @@ class Engine:
         rotation_step: int,
         secret_key: SecretKey,
         *,
+        source_depth: int = 0,
+        digit_prime_ids: tuple[tuple[int, ...], ...] | None = None,
+        p_prime_ids: tuple[int, ...] | None = None,
         device: torch.device | str | None = None,
     ) -> RotationKey:
         r"""Generate key-switch material from $\sigma_g(s)$ to $s$.
@@ -531,12 +632,18 @@ class Engine:
                 dispatcher.key_generation,
                 rotation_step,
                 secret_key=selected,
+                source_depth=source_depth,
+                digit_prime_ids=digit_prime_ids,
+                p_prime_ids=p_prime_ids,
             )
 
     def create_conjugation_key(
         self,
         secret_key: SecretKey,
         *,
+        source_depth: int = 0,
+        digit_prime_ids: tuple[tuple[int, ...], ...] | None = None,
+        p_prime_ids: tuple[int, ...] | None = None,
         device: torch.device | str | None = None,
     ) -> ConjugationKey:
         r"""Generate key-switch material from $\sigma_{2N-1}(s)$ to $s$.
@@ -552,6 +659,9 @@ class Engine:
             return self._key_generator.create_conjugation_key(
                 dispatcher.key_generation,
                 selected,
+                source_depth=source_depth,
+                digit_prime_ids=digit_prime_ids,
+                p_prime_ids=p_prime_ids,
             )
 
     @staticmethod
@@ -1468,6 +1578,29 @@ class Engine:
 
         self._validator.validate_key_switch_key(key)
 
+    def _key_switch_attributes(
+        self, value: Ciphertext, keys: Sequence[KeySwitchKey]
+    ) -> _KeySwitchAttributes:
+        """Check a shared execution group's layout and expose its mathematical rows."""
+        if not keys:
+            return {}
+        first = keys[0]
+        identity = (first.prime_ids, first.digit_prime_ids)
+        for key in keys:
+            self._validator.validate_key_switch_key(key)
+            if (key.prime_ids, key.digit_prime_ids) != identity:
+                raise ValueError(
+                    "A shared key-switch execution group requires matching key rows and digit supports"
+                )
+        if not set(value.prime_ids).issubset(first.prime_ids):
+            raise ValueError(
+                "Key-switch material does not cover the input Q rows"
+            )
+        return {
+            "key_prime_ids": first.prime_ids,
+            "digit_prime_ids": first.digit_prime_ids,
+        }
+
     def reconstruct_q_coefficients(
         self,
         residues: torch.Tensor,
@@ -2314,6 +2447,170 @@ class Engine:
             inplace=True,
         )
 
+    def modulus_raise(
+        self, value: Ciphertext, target_depth: int = 0
+    ) -> Ciphertext:
+        r"""Centered-extend each coefficient component into an earlier Q basis.
+
+        For source product q, each component uses its representative in
+        [-(q-1)/2,(q-1)/2] before reduction modulo the target primes. Output
+        remains CT2 coefficient/standard, with unchanged actual scale and batch
+        shape. Its decryption phase includes q times an integer polynomial.
+        Input storage is preserved and output owns new storage.
+        """
+        self._validator.validate_ciphertext(value)
+        value.assert_state(
+            polynomial_domain="coefficient",
+            residue_representation="standard",
+            modulus_basis="Q",
+            components=2,
+        )
+        if not 0 <= target_depth <= value.depth:
+            raise ValueError(
+                "Modulus raise target must precede or equal source depth"
+            )
+        dispatcher = self._dispatcher_for(value.device)
+        tensors, facts = dispatcher.device_resources.modulus_raise_operands(
+            value.depth, target_depth
+        )
+        data = cast(
+            torch.Tensor,
+            self._execute(
+                ckks.ModulusRaiseOp,
+                value.data,
+                *tensors.values(),
+                attributes={
+                    **facts,
+                    "target_depth": target_depth,
+                    "parameter_names": tuple(tensors),
+                },
+            ),
+        )
+        return _ciphertext_result(
+            value,
+            data,
+            depth=target_depth,
+            prime_ids=depth_prime_ids(self.config, target_depth, "Q"),
+        )
+
+    def encapsulated_modulus_raise(
+        self,
+        value: Ciphertext,
+        low_key: KeySwitchKey,
+        return_key: KeySwitchKey,
+        *,
+        low_p_moduli: tuple[int, ...],
+        return_prime: int,
+        return_p_moduli: tuple[int, ...],
+        target_depth: int = 0,
+        moddown_rounding: Literal["nearest", "floor"] = "nearest",
+    ) -> Ciphertext:
+        r"""Switch to an intermediate relation, center-raise and return to the source key.
+
+        Low digits encode P_low*E_j*s under t. The return digit encodes
+        D*t under s, D=guard*P_return, across [guard, full Q, P_return]. After
+        the low switch, centered components c_i feed (c0,0)+Round(c1*H/D).
+        Input/output use CT2 coefficient/standard Q, with unchanged actual
+        scale and batch shape. ``target_depth`` selects the output Q suffix.
+        Both key values are supplied operands; execution generates no keys.
+        """
+        self._validator.validate_ciphertext(value)
+        value.assert_state(
+            polynomial_domain="coefficient",
+            residue_representation="standard",
+            modulus_basis="Q",
+            components=2,
+        )
+        if not 0 <= target_depth <= value.depth:
+            raise ValueError(
+                "Modulus raise target must precede or equal source depth"
+            )
+        if moddown_rounding not in {"nearest", "floor"}:
+            raise ValueError("moddown_rounding must be nearest or floor")
+        low_p_moduli, return_p_moduli = (
+            tuple(low_p_moduli),
+            tuple(return_p_moduli),
+        )
+        low_key = cast(
+            KeySwitchKey,
+            self._key_on_device(
+                low_key,
+                value.device,
+                operation_name="encapsulated_modulus_raise",
+            ),
+        )
+        return_key = cast(
+            KeySwitchKey,
+            self._key_on_device(
+                return_key,
+                value.device,
+                operation_name="encapsulated_modulus_raise",
+            ),
+        )
+        dispatcher = self._dispatcher_for(value.device)
+        tensors, facts = (
+            dispatcher.device_resources.encapsulated_modulus_raise_operands(
+                value.depth,
+                target_depth,
+                low_p_moduli,
+                return_prime,
+                return_p_moduli,
+                rounding=moddown_rounding,
+            )
+        )
+        shapes = (
+            (
+                len(cast(tuple, facts["low_digits"])),
+                2,
+                value.limb_count + len(low_p_moduli),
+                self.ring_dimension,
+            ),
+            (
+                1,
+                2,
+                self.config.num_q_primes + 1 + len(return_p_moduli),
+                self.ring_dimension,
+            ),
+        )
+        for key, shape in zip((low_key, return_key), shapes, strict=True):
+            if key.data.shape != shape or key.data.dtype != value.data.dtype:
+                raise ValueError(
+                    "Encapsulation key shape or word format differs from the declared basis"
+                )
+            if (
+                key.polynomial_domain != "ntt"
+                or key.residue_representation != "montgomery"
+                or key.modulus_basis != "QP"
+            ):
+                raise ValueError(
+                    "Encapsulation keys must use QP NTT/Montgomery form"
+                )
+        data = cast(
+            torch.Tensor,
+            self._execute(
+                ckks.EncapsulatedModulusRaiseOp,
+                value.data,
+                low_key.data,
+                return_key.data,
+                *tensors.values(),
+                attributes={
+                    **facts,
+                    "parameter_names": tuple(tensors),
+                    "target_depth": target_depth,
+                    "low_p_moduli": low_p_moduli,
+                    "return_prime": return_prime,
+                    "return_p_moduli": return_p_moduli,
+                    "moddown_rounding": moddown_rounding,
+                },
+            ),
+        )
+        return _ciphertext_result(
+            value,
+            data,
+            depth=target_depth,
+            prime_ids=depth_prime_ids(self.config, target_depth, "Q"),
+        )
+
     def mod_switch_to_depth(
         self,
         value: Ciphertext,
@@ -2726,10 +3023,110 @@ class Engine:
 
         return self.multiply_plaintext(ciphertext, plaintext, inplace=True)
 
+    def plaintext_product_implementation(
+        self,
+        device: torch.device | str,
+        *,
+        compressed: bool,
+        implementation: str | None = None,
+    ) -> str:
+        """Resolve the requested weighted-sum implementation for one device.
+
+        ``None`` retains native dispatch. ``auto`` selects the registered
+        CUDA Triton implementation for compressed operands and native execution
+        otherwise. Named implementations are returned unchanged and checked by
+        ordinary Backend dispatch; an unsupported request is not substituted.
+        """
+        native = "native-montgomery-weighted-sum"
+        if implementation != "auto":
+            return native if implementation is None else implementation
+        target = torch.device(device)
+        generated = "triton-montgomery-weighted-sum"
+        if (
+            compressed
+            and target.type == "cuda"
+            and torch.version.hip is None
+            and generated
+            in self._dispatcher_for(target).backend.registry.available(
+                rns.MontgomeryWeightedSumsOp
+            )
+        ):
+            return generated
+        return native
+
+    def _sum_plaintext_product_rows(
+        self,
+        ciphertexts: Sequence[Ciphertext],
+        rows: Sequence[Sequence[Plaintext | CompressedPlaintext]],
+        *,
+        grouped: bool,
+        implementation: str | None,
+        term_chunk_size: int | None,
+    ) -> Ciphertext:
+        if (
+            not ciphertexts
+            or not rows
+            or any(len(row) != len(ciphertexts) for row in rows)
+        ):
+            raise ValueError(
+                "Weighted sums require nonempty matching ciphertext and plaintext rows"
+            )
+        if term_chunk_size is not None and term_chunk_size <= 0:
+            raise ValueError("term_chunk_size must be positive")
+        plaintexts = tuple(p for row in rows for p in row)
+        layouts = tuple(
+            p.compression_layout
+            if isinstance(p, CompressedPlaintext)
+            else "dense"
+            for p in plaintexts
+        )
+        if any(p.data is None for p in plaintexts):
+            raise ValueError("Weighted sums require represented RNS plaintexts")
+        sparse = tuple(
+            p
+            for p in plaintexts
+            if isinstance(p, CompressedPlaintext)
+            and p.compression_layout == "strided_sparse"
+        )
+        implicit = tuple(cast(torch.Tensor, p.implicit_data) for p in sparse)
+        attributes: dict[str, object] = {"term_count": len(ciphertexts)}
+        if grouped:
+            attributes["group_count"] = len(rows)
+        if any(layout != "dense" for layout in layouts):
+            attributes["plaintext_layouts"] = layouts
+        if term_chunk_size is not None:
+            attributes["term_chunk_size"] = term_chunk_size
+        first = ciphertexts[0]
+        selected = self.plaintext_product_implementation(
+            first.device,
+            compressed=any(layout != "dense" for layout in layouts),
+            implementation=implementation,
+        )
+        data = self._execute(
+            rns.MontgomeryWeightedSumsOp
+            if grouped
+            else rns.MontgomeryWeightedSumOp,
+            *(c.data for c in ciphertexts),
+            *(cast(torch.Tensor, p.data) for p in plaintexts),
+            *implicit,
+            attributes=attributes,
+            prime_ids=first.prime_ids,
+            bases=self._operand_bases(*ciphertexts, *plaintexts, *sparse),
+            implementation=selected,
+        )
+        return _ciphertext_result(
+            first,
+            cast(torch.Tensor, data),
+            scale=first.scale * plaintexts[0].scale,
+        )
+
     def sum_plaintext_products(
         self,
         ciphertexts: Sequence[Ciphertext],
         plaintexts: Sequence[Plaintext | CompressedPlaintext],
+        *,
+        implementation: str | None = None,
+        term_chunk_size: int | None = None,
     ) -> Ciphertext:
         r"""Compute a sum of prepared-plaintext products in one operation.
 
@@ -2745,50 +3142,27 @@ class Engine:
         result preserves the ciphertext state and has scale
         $\Delta_c\Delta_p$.  The registered RNS implementation may fuse the
         products and modular accumulation without materializing each product.
+        ``implementation=None`` retains native selection. ``"auto"`` resolves
+        by representation and device; a named implementation is required as
+        requested. ``term_chunk_size`` bounds the fused implementation's
+        consecutive term groups without crossing a rescale or key switch.
         """
 
-        if not ciphertexts or len(ciphertexts) != len(plaintexts):
-            raise ValueError(
-                "sum_plaintext_products requires equal non-empty sequences"
-            )
-        if any(isinstance(p, CompressedPlaintext) for p in plaintexts):
-            return self.sum_ciphertexts(
-                [
-                    self.multiply_plaintext(c, p)
-                    for c, p in zip(ciphertexts, plaintexts, strict=True)
-                ]
-            )
-        first_ciphertext = ciphertexts[0]
-        first_plaintext = plaintexts[0]
-        plaintext_data: list[torch.Tensor] = []
-        for plaintext in plaintexts:
-            if plaintext.data is None:
-                raise ValueError(
-                    "sum_plaintext_products requires RNS plaintext data"
-                )
-            plaintext_data.append(plaintext.data)
-        ciphertext_data = tuple(value.data for value in ciphertexts)
-        data = cast(
-            torch.Tensor,
-            self._execute(
-                rns.MontgomeryWeightedSumOp,
-                *ciphertext_data,
-                *plaintext_data,
-                attributes={"term_count": len(ciphertexts)},
-                prime_ids=first_ciphertext.prime_ids,
-                bases=self._operand_bases(*ciphertexts, *plaintexts),
-            ),
-        )
-        return _ciphertext_result(
-            first_ciphertext,
-            data,
-            scale=first_ciphertext.scale * first_plaintext.scale,
+        return self._sum_plaintext_product_rows(
+            ciphertexts,
+            (plaintexts,),
+            grouped=False,
+            implementation=implementation,
+            term_chunk_size=term_chunk_size,
         )
 
     def sum_plaintext_product_groups(
         self,
         ciphertexts: Sequence[Ciphertext],
         plaintext_groups: Sequence[Sequence[Plaintext | CompressedPlaintext]],
+        *,
+        implementation: str | None = None,
+        term_chunk_size: int | None = None,
     ) -> Ciphertext:
         r"""Apply several prepared-plaintext rows to shared ciphertext terms.
 
@@ -2810,56 +3184,12 @@ class Engine:
         without stacking the inputs or materializing individual products.
         """
 
-        if not ciphertexts or not plaintext_groups:
-            raise ValueError(
-                "sum_plaintext_product_groups requires non-empty terms and groups"
-            )
-        term_count = len(ciphertexts)
-        if any(len(group) != term_count for group in plaintext_groups):
-            raise ValueError(
-                "each plaintext group must contain one term per ciphertext"
-            )
-        if any(
-            isinstance(p, CompressedPlaintext)
-            for group in plaintext_groups
-            for p in group
-        ):
-            return Ciphertext.stack_batch(
-                [
-                    self.sum_plaintext_products(ciphertexts, group)
-                    for group in plaintext_groups
-                ]
-            )
-        first_ciphertext = ciphertexts[0]
-        first_plaintext = plaintext_groups[0][0]
-        plaintexts = tuple(
-            plaintext for group in plaintext_groups for plaintext in group
-        )
-        plaintext_data: list[torch.Tensor] = []
-        for plaintext in plaintexts:
-            if plaintext.data is None:
-                raise ValueError(
-                    "sum_plaintext_product_groups requires RNS plaintext data"
-                )
-            plaintext_data.append(plaintext.data)
-        data = cast(
-            torch.Tensor,
-            self._execute(
-                rns.MontgomeryWeightedSumsOp,
-                *(value.data for value in ciphertexts),
-                *plaintext_data,
-                attributes={
-                    "term_count": term_count,
-                    "group_count": len(plaintext_groups),
-                },
-                prime_ids=first_ciphertext.prime_ids,
-                bases=self._operand_bases(*ciphertexts, *plaintexts),
-            ),
-        )
-        return _ciphertext_result(
-            first_ciphertext,
-            data,
-            scale=first_ciphertext.scale * first_plaintext.scale,
+        return self._sum_plaintext_product_rows(
+            ciphertexts,
+            plaintext_groups,
+            grouped=True,
+            implementation=implementation,
+            term_chunk_size=term_chunk_size,
         )
 
     def sum_rotated_plaintext_product_groups(
@@ -2867,6 +3197,9 @@ class Engine:
         ciphertext: Ciphertext,
         rotation_keys: Sequence[RotationKey | None],
         plaintext_groups: Sequence[Sequence[Plaintext | CompressedPlaintext]],
+        *,
+        moddown_rounding: Literal["nearest", "floor"] = "nearest",
+        modup_method: Literal["exact", "crt", "normalized_crt"] = "exact",
     ) -> Ciphertext:
         r"""Apply prepared-plaintext rows to one direct rotation group.
 
@@ -2885,7 +3218,12 @@ class Engine:
         The caller supplies the group membership and key inventory; Backend
         execution may reuse digit preparation and ciphertext loads within
         these supplied groups.
-        """
+
+        ``moddown_rounding`` selects nearest (default) or floor division by
+        the auxiliary-prime product during key switching. ``modup_method`` selects
+        the exact digit representative, the raw CRT lift, or the source-normalized
+        CRT lift; the latter two preserve source residues but can change the
+        evaluation-key error because they choose another integer representative."""
 
         if not rotation_keys or not plaintext_groups:
             raise ValueError(
@@ -2907,7 +3245,11 @@ class Engine:
             keys = [key for key in rotation_keys if key is not None]
             rotated = iter(
                 self.rotate_many_with_keys(
-                    ciphertext, keys, output_domain="ntt"
+                    ciphertext,
+                    keys,
+                    output_domain="ntt",
+                    moddown_rounding=moddown_rounding,
+                    modup_method=modup_method,
                 )
             )
             terms = [
@@ -2929,8 +3271,6 @@ class Engine:
             for key in rotation_keys
             if key is not None
         ]
-        for key in selected_keys:
-            self._validator.validate_key_switch_key(key)
         plaintexts = tuple(
             plaintext for group in plaintext_groups for plaintext in group
         )
@@ -2953,6 +3293,9 @@ class Engine:
                 *(key.data for key in selected_keys),
                 *plaintext_data,
                 attributes={
+                    **self._key_switch_attributes(ciphertext, selected_keys),
+                    "moddown_rounding": moddown_rounding,
+                    "modup_method": modup_method,
                     "baby_steps": baby_steps,
                     "rotation_steps": tuple(
                         key.rotation_step for key in selected_keys
@@ -2977,18 +3320,24 @@ class Engine:
         value: Ciphertext,
         key: RelinearizationKey | None = None,
         *,
+        rescale: bool = False,
+        rescale_rounding: Literal["nearest", "floor"] = "nearest",
         output_domain: PolynomialDomain = "coefficient",
+        moddown_rounding: Literal["nearest", "floor"] = "nearest",
+        modup_method: Literal["exact", "crt", "normalized_crt"] = "exact",
     ) -> Ciphertext:
-        r"""Map a CT3 product phase back to two components.
+        r"""Relinearize CT3, optionally dividing by the next complete Q group.
 
-        The input is a three-component NTT/Montgomery product.  For phase
-        $c_0+c_1s+c_2s^2$, the relinearization key switches the $c_2s^2$ term into
-        corrections $(d_0,d_1)$.  ``ckks.RelinearizeOp`` dispatches to
-        ``native-relinearize-streaming`` and returns
-        $(c_0+d_0,c_1+d_1)$. ``output_domain="ntt"`` retains $c_0,c_1$
-        and the corrections in NTT/Montgomery form; the default returns
-        coefficient/standard Q rows. Depth and actual scale are unchanged."""
+        The input has three NTT-domain components in Montgomery representation.
 
+        The key is selected at the input depth. With its auxiliary product P, products-only key accumulator v and original components a=(c0,c1), the ordinary result is floor((v+Hp)/P)+a. If rescale=True, the shared quotient is floor((v+P*a+Hp+P*Hd)/(P*D)), where D is the complete next Q-group product. moddown_rounding and rescale_rounding independently select zero or half-product offsets. Rescaling returns CT2 at depth+1 with Q minus D and scale/D; otherwise those fields are preserved. output_domain selects coefficient/standard or NTT/Montgomery storage for the same equation.
+        """
+        if rescale_rounding not in {"nearest", "floor"}:
+            raise ValueError("rescale_rounding must be nearest or floor")
+        if rescale and value.depth >= self.max_depth:
+            raise MaximumDepthError(
+                depth=value.depth, maximum_depth=self.max_depth
+            )
         if output_domain not in ("coefficient", "ntt"):
             raise ValueError("output_domain must be 'coefficient' or 'ntt'")
         selected = key if key is not None else self.relinearization_key
@@ -3000,7 +3349,6 @@ class Engine:
                 operation_name="relinearize",
             ),
         )
-        self._validator.validate_key_switch_key(selected)
         data = cast(
             torch.Tensor,
             self._execute(
@@ -3008,13 +3356,29 @@ class Engine:
                 value.data,
                 selected.data,
                 bases=("Q",),
-                attributes={"output_domain": output_domain},
+                attributes={
+                    **self._key_switch_attributes(value, [selected]),
+                    "moddown_rounding": moddown_rounding,
+                    "modup_method": modup_method,
+                    "output_domain": output_domain,
+                    "rescale": rescale,
+                    "rescale_rounding": rescale_rounding,
+                },
                 implementation="native-relinearize-streaming",
             ),
+        )
+        drop_count = (
+            len(self.config.q_depth_groups[value.depth]) if rescale else 0
+        )
+        divisor = (
+            math.prod(self.config.q_depth_groups[value.depth]) if rescale else 1
         )
         return _ciphertext_result(
             value,
             data,
+            depth=value.depth + int(rescale),
+            prime_ids=value.prime_ids[drop_count:],
+            scale=value.scale / divisor,
             polynomial_domain=output_domain,
             residue_representation=output_residues(output_domain),
         )
@@ -3025,6 +3389,8 @@ class Engine:
         key: KeySwitchKey,
         *,
         output_domain: PolynomialDomain = "coefficient",
+        moddown_rounding: Literal["nearest", "floor"] = "nearest",
+        modup_method: Literal["exact", "crt", "normalized_crt"] = "exact",
     ) -> Ciphertext:
         r"""Switch a CT2 ciphertext from a source secret to a destination secret.
 
@@ -3035,7 +3401,13 @@ class Engine:
         through one streaming hybrid-RNS implementation, which shares its QP
         accumulator across decomposition digits. ``output_domain="ntt"``
         combines $c_0$ with its correction before the forward transform.
-        Depth, Q rows, actual scale, and CT2 shape are preserved."""
+        Depth, Q rows, actual scale, and CT2 shape are preserved.
+
+        ``moddown_rounding`` selects nearest (default) or floor division by
+        the auxiliary-prime product during key switching. ``modup_method`` selects
+        the exact digit representative, the raw CRT lift, or the source-normalized
+        CRT lift; the latter two preserve source residues but can change the
+        evaluation-key error because they choose another integer representative."""
 
         if output_domain not in ("coefficient", "ntt"):
             raise ValueError("output_domain must be 'coefficient' or 'ntt'")
@@ -3045,7 +3417,6 @@ class Engine:
                 key, value.device, operation_name="key switching"
             ),
         )
-        self._validator.validate_key_switch_key(selected)
         data = cast(
             torch.Tensor,
             self._execute(
@@ -3053,6 +3424,9 @@ class Engine:
                 value.data,
                 selected.data,
                 attributes={
+                    **self._key_switch_attributes(value, [selected]),
+                    "moddown_rounding": moddown_rounding,
+                    "modup_method": modup_method,
                     "output_domain": output_domain,
                 },
                 bases=("Q",),
@@ -3072,6 +3446,8 @@ class Engine:
         key: RotationKey,
         *,
         output_domain: PolynomialDomain = "coefficient",
+        moddown_rounding: Literal["nearest", "floor"] = "nearest",
+        modup_method: Literal["exact", "crt", "normalized_crt"] = "exact",
     ) -> Ciphertext:
         r"""Apply the slot displacement carried by a direct rotation key.
 
@@ -3083,11 +3459,23 @@ class Engine:
         active Q rows and actual scale are preserved. ``output_domain="ntt"``
         requests NTT/Montgomery output. For NTT input and output, the
         automorphism and unchanged component-zero contribution remain in NTT
-        form while only component one is inverted for key switching."""
+        form while only component one is inverted for key switching.
+
+        ``moddown_rounding`` selects nearest (default) or floor division by
+        the auxiliary-prime product during key switching. ``modup_method`` selects
+        the exact digit representative, the raw CRT lift, or the source-normalized
+        CRT lift; the latter two preserve source residues but can change the
+        evaluation-key error because they choose another integer representative."""
 
         if output_domain not in ("coefficient", "ntt"):
             raise ValueError("output_domain must be 'coefficient' or 'ntt'")
-        return self._rotate_with_key(value, key, output_domain=output_domain)
+        return self._rotate_with_key(
+            value,
+            key,
+            output_domain=output_domain,
+            moddown_rounding=moddown_rounding,
+            modup_method=modup_method,
+        )
 
     def _rotate_with_key(
         self,
@@ -3095,6 +3483,8 @@ class Engine:
         key: RotationKey,
         *,
         output_domain: PolynomialDomain = "coefficient",
+        moddown_rounding: Literal["nearest", "floor"] = "nearest",
+        modup_method: Literal["exact", "crt", "normalized_crt"] = "exact",
     ) -> Ciphertext:
         r"""Execute one ``ckks.RotateOp`` automorphism and key switch.
 
@@ -3110,7 +3500,6 @@ class Engine:
                 operation_name="rotate",
             ),
         )
-        self._validator.validate_key_switch_key(key)
         data = cast(
             torch.Tensor,
             self._execute(
@@ -3118,6 +3507,9 @@ class Engine:
                 value.data,
                 key.data,
                 attributes={
+                    **self._key_switch_attributes(value, [key]),
+                    "moddown_rounding": moddown_rounding,
+                    "modup_method": modup_method,
                     "rotation_step": key.rotation_step,
                     "input_domain": value.polynomial_domain,
                     "output_domain": output_domain,
@@ -3137,13 +3529,22 @@ class Engine:
         self,
         value: Ciphertext,
         rotation_step: int,
+        *,
+        moddown_rounding: Literal["nearest", "floor"] = "nearest",
+        modup_method: Literal["exact", "crt", "normalized_crt"] = "exact",
     ) -> Ciphertext:
         r"""Cyclically rotate CKKS slots by a signed displacement.
 
         The step is normalized modulo the slot count.  A zero step clones the input;
         an installed direct key issues one ``ckks.RotateOp`` and a decomposed key path
         issues successive rotations whose displacements sum modulo the slot count.
-        Each stage preserves CT2 shape, depth, Q rows, and actual scale."""
+        Each stage preserves CT2 shape, depth, Q rows, and actual scale.
+
+        ``moddown_rounding`` selects nearest (default) or floor division by
+        the auxiliary-prime product during key switching. ``modup_method`` selects
+        the exact digit representative, the raw CRT lift, or the source-normalized
+        CRT lift; the latter two preserve source residues but can change the
+        evaluation-key error because they choose another integer representative."""
 
         normalized = RotationKey.normalize_step(
             rotation_step,
@@ -3153,7 +3554,12 @@ class Engine:
             return _ciphertext_result(value, value.data.clone())
         result = value
         for key in self._rotation_key_path(normalized):
-            result = self._rotate_with_key(result, key)
+            result = self._rotate_with_key(
+                result,
+                key,
+                moddown_rounding=moddown_rounding,
+                modup_method=modup_method,
+            )
         return result
 
     def _rotation_key_path(
@@ -3180,6 +3586,8 @@ class Engine:
         rotation_steps: Sequence[int],
         *,
         use_hoisting: bool = True,
+        moddown_rounding: Literal["nearest", "floor"] = "nearest",
+        modup_method: Literal["exact", "crt", "normalized_crt"] = "exact",
     ) -> list[Ciphertext]:
         r"""Return the requested cyclic slot rotations in caller order.
 
@@ -3188,7 +3596,13 @@ class Engine:
         ``ckks.RotateManyOp`` dispatched to ``native-rotate-many-hoisted``; hoisting
         shares digit decomposition and Q-to-QP basis extension but does not regroup
         or alter outputs.  Multi-key paths remain successive ``ckks.RotateOp``
-        calls."""
+        calls.
+
+        ``moddown_rounding`` selects nearest (default) or floor division by
+        the auxiliary-prime product during key switching. ``modup_method`` selects
+        the exact digit representative, the raw CRT lift, or the source-normalized
+        CRT lift; the latter two preserve source residues but can change the
+        evaluation-key error because they choose another integer representative."""
 
         paths: list[tuple[RotationKey, ...]] = []
         for step in rotation_steps:
@@ -3204,9 +3618,22 @@ class Engine:
         ]
         direct_keys = [paths[index][0] for index in direct_indices]
         direct = (
-            self._hoisted_rotate_many(value, direct_keys)
+            self._hoisted_rotate_many(
+                value,
+                direct_keys,
+                moddown_rounding=moddown_rounding,
+                modup_method=modup_method,
+            )
             if use_hoisting
-            else [self.rotate_with_key(value, key) for key in direct_keys]
+            else [
+                self.rotate_with_key(
+                    value,
+                    key,
+                    moddown_rounding=moddown_rounding,
+                    modup_method=modup_method,
+                )
+                for key in direct_keys
+            ]
         )
         results: dict[int, Ciphertext] = dict(
             zip(direct_indices, direct, strict=True)
@@ -3216,9 +3643,69 @@ class Engine:
                 continue
             result = _ciphertext_result(value, value.data.clone())
             for key in path:
-                result = self.rotate_with_key(result, key)
+                result = self.rotate_with_key(
+                    result,
+                    key,
+                    moddown_rounding=moddown_rounding,
+                    modup_method=modup_method,
+                )
             results[index] = result
         return [results[index] for index in range(len(paths))]
+
+    def iter_rotations_with_keys(
+        self,
+        value: Ciphertext,
+        keys: Sequence[RotationKey | None],
+        *,
+        output_domain: PolynomialDomain = "coefficient",
+        moddown_rounding: Literal["nearest", "floor"] = "nearest",
+        modup_method: Literal["exact", "crt", "normalized_crt"] = "exact",
+    ) -> Iterator[Ciphertext]:
+        r"""Yield direct rotations while sharing the Q-to-QP digit decomposition.
+
+        None denotes the identity. Each result is CT2 over the input Q rows,
+        at the input depth and actual scale. Output representation follows
+        ``output_domain``. The iterator retains prepared digits, not prior
+        outputs; callers may consume and release each result before the next.
+        """
+        from ._rotation import iter_rotations_with_keys
+
+        return iter_rotations_with_keys(
+            self,
+            value,
+            keys,
+            output_domain=output_domain,
+            moddown_rounding=moddown_rounding,
+            modup_method=modup_method,
+        )
+
+    def sum_rotations(
+        self,
+        terms: Iterable[tuple[Ciphertext, RotationKey | None]],
+        *,
+        rescale: bool = False,
+        moddown_rounding: Literal["nearest", "floor"] = "nearest",
+        modup_method: Literal["exact", "crt", "normalized_crt"] = "exact",
+    ) -> Ciphertext:
+        r"""Sum rotated values with one rounded quotient of their QP key products.
+
+        Each pair supplies a CT2 and a direct rotation key; None contributes
+        the value without rotation. Inputs share Q rows, depth, scale, shape
+        and representation. Terms are consumed sequentially. For divisor
+        D=P, or D=P*M_d when rescaling, the result is floor((sum z_i+h)/D)
+        in coefficient/standard Q form, where h=(D-1)/2 for nearest rounding.
+        Rescaling advances one depth, drops the whole Q group and divides
+        actual scale by M_d. Independent per-rotation quotients round differently.
+        """
+        from ._rotation import sum_rotations
+
+        return sum_rotations(
+            self,
+            terms,
+            rescale=rescale,
+            moddown_rounding=moddown_rounding,
+            modup_method=modup_method,
+        )
 
     def rotate_many_with_keys(
         self,
@@ -3227,6 +3714,8 @@ class Engine:
         *,
         use_hoisting: bool = True,
         output_domain: PolynomialDomain = "coefficient",
+        moddown_rounding: Literal["nearest", "floor"] = "nearest",
+        modup_method: Literal["exact", "crt", "normalized_crt"] = "exact",
     ) -> list[Ciphertext]:
         r"""Apply each supplied rotation key and preserve its output order.
 
@@ -3237,16 +3726,32 @@ class Engine:
         NTT/Montgomery results, equivalent to transforming each coefficient
         result. The hoisted implementation retains Q evaluations during ModDown;
         independent rotations combine c0 with the coefficient correction before
-        its forward NTT."""
+        its forward NTT.
+
+        ``moddown_rounding`` selects nearest (default) or floor division by
+        the auxiliary-prime product during key switching. ``modup_method`` selects
+        the exact digit representative, the raw CRT lift, or the source-normalized
+        CRT lift; the latter two preserve source residues but can change the
+        evaluation-key error because they choose another integer representative."""
 
         if output_domain not in ("coefficient", "ntt"):
             raise ValueError("output_domain must be 'coefficient' or 'ntt'")
         if use_hoisting:
             return self._hoisted_rotate_many(
-                value, list(keys), output_domain=output_domain
+                value,
+                list(keys),
+                output_domain=output_domain,
+                moddown_rounding=moddown_rounding,
+                modup_method=modup_method,
             )
         return [
-            self.rotate_with_key(value, key, output_domain=output_domain)
+            self.rotate_with_key(
+                value,
+                key,
+                output_domain=output_domain,
+                moddown_rounding=moddown_rounding,
+                modup_method=modup_method,
+            )
             for key in keys
         ]
 
@@ -3256,6 +3761,8 @@ class Engine:
         entries: Sequence[RotationKey | None],
         *,
         output_domain: PolynomialDomain = "coefficient",
+        moddown_rounding: Literal["nearest", "floor"] = "nearest",
+        modup_method: Literal["exact", "crt", "normalized_crt"] = "exact",
     ) -> list[Ciphertext]:
         r"""Execute one caller-selected group through ``ckks.RotateManyOp``.
 
@@ -3288,13 +3795,14 @@ class Engine:
                 _ciphertext_result(identity, identity.data.clone())
                 for _ in entries
             ]
-        for key in nonzero:
-            self._validator.validate_key_switch_key(key)
         executed = self._execute(
             ckks.RotateManyOp,
             value.data,
             *(key.data for key in nonzero),
             attributes={
+                **self._key_switch_attributes(value, nonzero),
+                "moddown_rounding": moddown_rounding,
+                "modup_method": modup_method,
                 "output_domain": output_domain,
                 "rotation_steps": tuple(key.rotation_step for key in nonzero),
             },
@@ -3329,13 +3837,29 @@ class Engine:
         self,
         value: Ciphertext,
         rotation_step: int,
+        *,
+        moddown_rounding: Literal["nearest", "floor"] = "nearest",
+        modup_method: Literal["exact", "crt", "normalized_crt"] = "exact",
     ) -> Ciphertext:
         r"""Replace $value$ with its cyclic slot rotation and return it.
 
         The method uses ``rotate_by_step`` and therefore dispatches the required
-        ``ckks.RotateOp`` sequence while preserving depth, rows, and actual scale."""
+        ``ckks.RotateOp`` sequence while preserving depth, rows, and actual scale.
 
-        return value.replace_(self.rotate_by_step(value, rotation_step))
+        ``moddown_rounding`` selects nearest (default) or floor division by
+        the auxiliary-prime product during key switching. ``modup_method`` selects
+        the exact digit representative, the raw CRT lift, or the source-normalized
+        CRT lift; the latter two preserve source residues but can change the
+        evaluation-key error because they choose another integer representative."""
+
+        return value.replace_(
+            self.rotate_by_step(
+                value,
+                rotation_step,
+                moddown_rounding=moddown_rounding,
+                modup_method=modup_method,
+            )
+        )
 
     def conjugate(
         self,
@@ -3343,6 +3867,8 @@ class Engine:
         key: ConjugationKey | None = None,
         *,
         output_domain: PolynomialDomain = "coefficient",
+        moddown_rounding: Literal["nearest", "floor"] = "nearest",
+        modup_method: Literal["exact", "crt", "normalized_crt"] = "exact",
     ) -> Ciphertext:
         r"""Apply complex conjugation to every CKKS slot.
 
@@ -3352,7 +3878,13 @@ class Engine:
         streaming hybrid-RNS key-switch path to return from $\sigma_g(s)$ to
         $s$. ``output_domain`` selects coefficient/standard or
         NTT/Montgomery output. CT2 shape, depth, Q rows, and actual scale remain
-        unchanged."""
+        unchanged.
+
+        ``moddown_rounding`` selects nearest (default) or floor division by
+        the auxiliary-prime product during key switching. ``modup_method`` selects
+        the exact digit representative, the raw CRT lift, or the source-normalized
+        CRT lift; the latter two preserve source residues but can change the
+        evaluation-key error because they choose another integer representative."""
 
         if output_domain not in ("coefficient", "ntt"):
             raise ValueError("output_domain must be 'coefficient' or 'ntt'")
@@ -3365,7 +3897,6 @@ class Engine:
                 selected, value.device, operation_name="conjugate"
             ),
         )
-        self._validator.validate_key_switch_key(selected)
         data = cast(
             torch.Tensor,
             self._execute(
@@ -3373,7 +3904,12 @@ class Engine:
                 value.data,
                 selected.data,
                 bases=("Q",),
-                attributes={"output_domain": output_domain},
+                attributes={
+                    **self._key_switch_attributes(value, [selected]),
+                    "moddown_rounding": moddown_rounding,
+                    "modup_method": modup_method,
+                    "output_domain": output_domain,
+                },
                 implementation="native-key-switch-streaming",
             ),
         )

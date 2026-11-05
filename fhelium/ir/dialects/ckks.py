@@ -361,7 +361,11 @@ class RotateOp(IRDLOperation):
     that relation to $s$.  The result is a CT2 ciphertext
     with depth, actual scale, and active Q rows preserved. ``output_domain``
     selects coefficient/standard or NTT/Montgomery output; the NTT choice
-    equals a coefficient rotation followed by ``ToNttOp``."""
+    equals a coefficient rotation followed by ``ToNttOp``.
+
+    ``moddown_rounding`` selects $\lfloor(x+(P-1)/2)/P\rfloor$
+    (nearest, default) or $\lfloor x/P\rfloor$ for each key-switch
+    accumulator coefficient."""
 
     name = "fhelium_ckks.rotate"
     value = operand_def(CiphertextType)
@@ -372,6 +376,10 @@ class RotateOp(IRDLOperation):
         StringAttr, default_value=StringAttr("coefficient")
     )
     input_domain = attr_def(StringAttr, default_value=StringAttr("coefficient"))
+    moddown_rounding = opt_attr_def(
+        StringAttr, default_value=StringAttr("nearest")
+    )
+    modup_method = opt_attr_def(StringAttr, default_value=StringAttr("exact"))
     traits = traits_def(Pure())
 
     def dependencies(self) -> OperationDependencies:
@@ -400,10 +408,14 @@ class RotateOp(IRDLOperation):
         key: SSAValue | Operation,
         result_type: Attribute | None = None,
         *,
+        moddown_rounding: str = "nearest",
+        modup_method: str = "exact",
         parameters: Sequence[SSAValue | Operation] = (),
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         attrs = dict(attributes or {})
+        attrs.setdefault("moddown_rounding", StringAttr(moddown_rounding))
+        attrs.setdefault("modup_method", StringAttr(modup_method))
         if "input_domain" not in attrs:
             source_type = cast(CiphertextType, SSAValue.get(value).type)
             represented = source_type.state.data.get("polynomial_domain")
@@ -431,6 +443,16 @@ class RotateOp(IRDLOperation):
             attributes=attrs,
         )
 
+    def verify_(self) -> None:
+        if self.modup_method.data not in {"exact", "crt", "normalized_crt"}:
+            raise VerifyException(
+                "modup_method must be exact, crt, or normalized_crt"
+            )
+        if self.moddown_rounding.data not in {"floor", "nearest"}:
+            raise VerifyException(
+                "moddown_rounding must be 'floor' or 'nearest'"
+            )
+
 
 @irdl_op_definition
 class RotateManyOp(IRDLOperation):
@@ -444,7 +466,11 @@ class RotateManyOp(IRDLOperation):
     preserves the input depth, actual scale, and active Q rows.
     ``output_domain`` selects coefficient/standard (the default) or
     NTT/Montgomery output. The latter equals applying ``ToNttOp`` to each
-    coefficient result and permits ModDown to retain Q evaluations."""
+    coefficient result and permits ModDown to retain Q evaluations.
+
+    ``moddown_rounding`` selects $\lfloor(x+(P-1)/2)/P\rfloor$
+    (nearest, default) or $\lfloor x/P\rfloor$ for each key-switch
+    accumulator coefficient."""
 
     name = "fhelium_ckks.hoisted_rotate_many"
     value = operand_def(CiphertextType)
@@ -455,6 +481,10 @@ class RotateManyOp(IRDLOperation):
     output_domain = attr_def(
         StringAttr, default_value=StringAttr("coefficient")
     )
+    moddown_rounding = opt_attr_def(
+        StringAttr, default_value=StringAttr("nearest")
+    )
+    modup_method = opt_attr_def(StringAttr, default_value=StringAttr("exact"))
     traits = traits_def(Pure())
 
     def dependencies(self) -> OperationDependencies:
@@ -483,6 +513,8 @@ class RotateManyOp(IRDLOperation):
         result_types: tuple[CiphertextType, ...],
         *,
         output_domain: Literal["coefficient", "ntt"] = "coefficient",
+        moddown_rounding: str = "nearest",
+        modup_method: str = "exact",
         parameters: Sequence[SSAValue | Operation] = (),
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
@@ -490,12 +522,22 @@ class RotateManyOp(IRDLOperation):
             operands=(value, keys, parameters),
             result_types=(result_types,),
             attributes={
+                "modup_method": StringAttr(modup_method),
+                "moddown_rounding": StringAttr(moddown_rounding),
                 **(attributes or {}),
                 "output_domain": StringAttr(output_domain),
             },
         )
 
     def verify_(self) -> None:
+        if self.modup_method.data not in {"exact", "crt", "normalized_crt"}:
+            raise VerifyException(
+                "modup_method must be exact, crt, or normalized_crt"
+            )
+        if self.moddown_rounding.data not in {"floor", "nearest"}:
+            raise VerifyException(
+                "moddown_rounding must be 'floor' or 'nearest'"
+            )
         count = len(self.outputs)
         if count == 0:
             raise VerifyException(
@@ -505,6 +547,220 @@ class RotateManyOp(IRDLOperation):
             raise VerifyException(
                 "CKKS rotate-many results and key operands must have equal "
                 "lengths"
+            )
+
+
+@irdl_op_definition
+class ModulusRaiseOp(IRDLOperation):
+    r"""Centered-extend each CT2 component from its Q basis to an earlier depth.
+
+    Input and output are coefficient/standard Q residues. Component count,
+    batch shape and actual scale are preserved; output prime rows and depth
+    belong to target_depth. The lifted decryption phase contains the source
+    modulus times an integer polynomial, consumed by Bootstrap's periodic map.
+    """
+
+    name = "fhelium_ckks.modulus_raise"
+    value = operand_def(CiphertextType)
+    parameters = var_operand_def()
+    result = result_def(CiphertextType)
+    target_depth = attr_def(IntegerAttr)
+    traits = traits_def(Pure())
+
+    def __init__(
+        self,
+        value,
+        result_type,
+        *,
+        target_depth=0,
+        parameters=(),
+        attributes=None,
+    ):
+        super().__init__(
+            operands=(value, parameters),
+            result_types=(result_type,),
+            attributes={
+                **(attributes or {}),
+                "target_depth": IntegerAttr(target_depth, 64),
+            },
+        )
+
+    def verify_(self) -> None:
+        diagnostics = _modulus_raise_specification(self)
+        if diagnostics:
+            raise VerifyException("; ".join(diagnostics))
+
+
+@irdl_op_definition
+class EncapsulatedModulusRaiseOp(IRDLOperation):
+    r"""Switch to a low secret relation, centered-raise and return to the source key.
+
+    The low hybrid key encrypts P_low*E_j*s under t. The one-digit return key
+    encrypts guard*P_return*t under s on [guard,Q,P_return]. Execution applies
+    the low key switch, centered extension, then one return key product and
+    quotient by guard*P_return. Output is CT2 coefficient/standard Q at
+    target_depth; actual scale and batch shape are preserved. Keys and all
+    numerical parameters are ordinary live operands.
+    """
+
+    name = "fhelium_ckks.encapsulated_modulus_raise"
+    value = operand_def(CiphertextType)
+    low_key = operand_def(EvaluationKeyType)
+    return_key = operand_def(EvaluationKeyType)
+    parameters = var_operand_def()
+    result = result_def(CiphertextType)
+    target_depth = attr_def(IntegerAttr)
+    low_p_moduli = attr_def(ArrayAttr[IntegerAttr])
+    return_prime = attr_def(IntegerAttr)
+    return_p_moduli = attr_def(ArrayAttr[IntegerAttr])
+    moddown_rounding = opt_attr_def(
+        StringAttr, default_value=StringAttr("nearest")
+    )
+    traits = traits_def(Pure())
+
+    def __init__(
+        self,
+        value,
+        low_key,
+        return_key,
+        result_type,
+        *,
+        target_depth=0,
+        low_p_moduli,
+        return_prime,
+        return_p_moduli,
+        rounding="nearest",
+        parameters=(),
+        attributes=None,
+    ):
+        super().__init__(
+            operands=(value, low_key, return_key, parameters),
+            result_types=(result_type,),
+            attributes={
+                **(attributes or {}),
+                "target_depth": IntegerAttr(target_depth, 64),
+                "low_p_moduli": ArrayAttr(
+                    IntegerAttr(q, 64) for q in low_p_moduli
+                ),
+                "return_prime": IntegerAttr(return_prime, 64),
+                "return_p_moduli": ArrayAttr(
+                    IntegerAttr(q, 64) for q in return_p_moduli
+                ),
+                "moddown_rounding": StringAttr(rounding),
+            },
+        )
+
+    def verify_(self) -> None:
+        diagnostics = _modulus_raise_specification(self)
+        if diagnostics:
+            raise VerifyException("; ".join(diagnostics))
+
+
+@irdl_op_definition
+class RotationSumOp(IRDLOperation):
+    r"""Sum rotated ciphertext relations with one QP quotient.
+
+    Each source is CT2 over one common Q basis and actual scale. Nonzero
+    rotations contribute hybrid key products under the common destination
+    relation. Ordinary components contribute P times their Q residues and
+    zero P residues. The shared extended-basis sum is divided once by P,
+    or by P times the leading complete Q group when ``rescale`` is one.
+    This changes rounding relative to independent RotateOp results and is
+    selected through a caller-requested numerical rewrite.
+
+    Output is CT2 in coefficient/standard Q form. Without rescaling, depth,
+    prime rows and actual scale are preserved. With rescaling, depth advances
+    by one, the complete leading Q group is removed, and actual scale becomes
+    $\Delta_{out}=\Delta_{in}/\prod_{q\in G_d}q$.
+    """
+
+    name = "fhelium_ckks.rotation_sum"
+    values = var_operand_def(CiphertextType)
+    keys = var_operand_def(EvaluationKeyType)
+    parameters = var_operand_def()
+    result = result_def(CiphertextType)
+    irdl_options = (AttrSizedOperandSegments(as_property=True),)
+    rotation_steps = attr_def(ArrayAttr[IntegerAttr])
+    source_count = attr_def(IntegerAttr)
+    rescale = attr_def(IntegerAttr)
+    input_domain = attr_def(StringAttr)
+    output_domain = attr_def(
+        StringAttr, default_value=StringAttr("coefficient")
+    )
+    moddown_rounding = opt_attr_def(
+        StringAttr, default_value=StringAttr("nearest")
+    )
+    modup_method = opt_attr_def(StringAttr, default_value=StringAttr("exact"))
+    traits = traits_def(Pure())
+
+    def __init__(
+        self,
+        values,
+        keys,
+        steps,
+        result_type,
+        *,
+        rescale=False,
+        input_domain="coefficient",
+        rounding="nearest",
+        modup_method="exact",
+        parameters=(),
+        attributes=None,
+    ):
+        super().__init__(
+            operands=(values, keys, parameters),
+            result_types=(result_type,),
+            attributes={
+                "modup_method": StringAttr(modup_method),
+                **(attributes or {}),
+                "rotation_steps": ArrayAttr(
+                    IntegerAttr(int(step), 64) for step in steps
+                ),
+                "source_count": IntegerAttr(len(values), 64),
+                "rescale": IntegerAttr(int(rescale), 64),
+                "input_domain": StringAttr(input_domain),
+                "output_domain": StringAttr("coefficient"),
+                "moddown_rounding": StringAttr(rounding),
+            },
+        )
+
+    def dependencies(self) -> OperationDependencies:
+        return operand_relations(
+            self,
+            {
+                i: {
+                    "coefficient": "mixing",
+                    "limb": "mixing",
+                    "component": "mixing",
+                    "batch": "element" if i < len(self.values) else "reindexed",
+                }
+                for i in range(len(self.values) + len(self.keys))
+            },
+        )
+
+    def verify_(self) -> None:
+        if self.modup_method.data not in {"exact", "crt", "normalized_crt"}:
+            raise VerifyException(
+                "modup_method must be exact, crt, or normalized_crt"
+            )
+        steps = tuple(int(x.value.data) for x in self.rotation_steps)
+        if self.source_count.value.data != len(self.values):
+            raise VerifyException(
+                "Rotation-sum source_count must match its operands"
+            )
+        if self.rescale.value.data not in {0, 1}:
+            raise VerifyException("Rotation-sum rescale must be zero or one")
+        if not self.values or len(steps) != len(self.values):
+            raise VerifyException(
+                "Rotation-sum sources and steps must have equal nonzero lengths"
+            )
+        if len(self.keys) != sum(step != 0 for step in steps):
+            raise VerifyException(
+                "Rotation sum requires one key for each nonzero step"
+            )
+        if self.moddown_rounding.data not in {"floor", "nearest"}:
+            raise VerifyException(
+                "Rotation-sum rounding must be floor or nearest"
             )
 
 
@@ -526,7 +782,11 @@ class GroupedRotationWeightedSumOp(IRDLOperation):
     multiplication, preserving ordinary key-switch rounding. The output adds
     the group as the first batch axis and is NTT/Montgomery Q at the input
     depth with scale $\Delta_c\Delta_p$.
-    """
+
+
+    ``moddown_rounding`` selects $\lfloor(x+(P-1)/2)/P\rfloor$
+    (nearest, default) or $\lfloor x/P\rfloor$ for each key-switch
+    accumulator coefficient."""
 
     name = "fhelium_ckks.grouped_rotation_weighted_sum"
     value = operand_def(CiphertextType)
@@ -537,6 +797,10 @@ class GroupedRotationWeightedSumOp(IRDLOperation):
     baby_steps = attr_def(ArrayAttr[IntegerAttr])
     term_count = attr_def(IntegerAttr)
     group_count = attr_def(IntegerAttr)
+    moddown_rounding = opt_attr_def(
+        StringAttr, default_value=StringAttr("nearest")
+    )
+    modup_method = opt_attr_def(StringAttr, default_value=StringAttr("exact"))
     traits = traits_def(Pure())
     irdl_options = (AttrSizedOperandSegments(as_property=True),)
 
@@ -574,12 +838,16 @@ class GroupedRotationWeightedSumOp(IRDLOperation):
         *,
         baby_steps: tuple[int, ...],
         group_count: int,
+        moddown_rounding: str = "nearest",
+        modup_method: str = "exact",
         parameters: Sequence[SSAValue | Operation] = (),
     ) -> None:
         super().__init__(
             operands=(value, keys, plaintexts, parameters),
             result_types=[result_type],
             attributes={
+                "modup_method": StringAttr(modup_method),
+                "moddown_rounding": StringAttr(moddown_rounding),
                 "baby_steps": ArrayAttr(
                     IntegerAttr(step, 64) for step in baby_steps
                 ),
@@ -589,6 +857,14 @@ class GroupedRotationWeightedSumOp(IRDLOperation):
         )
 
     def verify_(self) -> None:
+        if self.modup_method.data not in {"exact", "crt", "normalized_crt"}:
+            raise VerifyException(
+                "modup_method must be exact, crt, or normalized_crt"
+            )
+        if self.moddown_rounding.data not in {"floor", "nearest"}:
+            raise VerifyException(
+                "moddown_rounding must be 'floor' or 'nearest'"
+            )
         term_count = int(self.term_count.value.data)
         group_count = int(self.group_count.value.data)
         steps = tuple(int(step.value.data) for step in self.baby_steps)
@@ -1258,6 +1534,10 @@ class _OutputDomainCiphertextOp(IRDLOperation):
     key = operand_def()
     parameters = var_operand_def()
     result = result_def(CiphertextType)
+    moddown_rounding = opt_attr_def(
+        StringAttr, default_value=StringAttr("nearest")
+    )
+    modup_method = opt_attr_def(StringAttr, default_value=StringAttr("exact"))
     traits = traits_def(Pure())
     output_domain = attr_def(
         StringAttr, default_value=StringAttr("coefficient")
@@ -1269,11 +1549,15 @@ class _OutputDomainCiphertextOp(IRDLOperation):
         key: SSAValue | Operation,
         result_type: Attribute | None = None,
         *,
+        moddown_rounding: str = "nearest",
+        modup_method: str = "exact",
         parameters: Sequence[SSAValue | Operation] = (),
         output_domain: Literal["coefficient", "ntt"] = "coefficient",
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         attrs = dict(attributes or {})
+        attrs.setdefault("moddown_rounding", StringAttr(moddown_rounding))
+        attrs.setdefault("modup_method", StringAttr(modup_method))
         domain_attr = attrs.get("output_domain", StringAttr(output_domain))
         if not isinstance(domain_attr, StringAttr):
             raise TypeError("output_domain must be a StringAttr")
@@ -1298,6 +1582,14 @@ class _OutputDomainCiphertextOp(IRDLOperation):
         )
 
     def verify_(self) -> None:
+        if self.modup_method.data not in {"exact", "crt", "normalized_crt"}:
+            raise VerifyException(
+                "modup_method must be exact, crt, or normalized_crt"
+            )
+        if self.moddown_rounding.data not in {"floor", "nearest"}:
+            raise VerifyException(
+                "moddown_rounding must be 'floor' or 'nearest'"
+            )
         if self.output_domain.data not in {"coefficient", "ntt"}:
             raise VerifyException(
                 "CKKS key-switch output_domain must be 'coefficient' or 'ntt'"
@@ -1306,33 +1598,98 @@ class _OutputDomainCiphertextOp(IRDLOperation):
 
 @irdl_op_definition
 class RelinearizeOp(_OutputDomainCiphertextOp):
-    r"""Convert a three-component product ciphertext to two components.
+    r"""Relinearize CT3 and optionally consume the next complete Q group.
 
-    The input is an NTT/Montgomery CT3 product.  For phase
-    $c_0+c_1s+c_2s^2$, hybrid key switching maps the $c_2s^2$ term to
-    correction polynomials $(d_0,d_1)$ under secret $s$.  The result
-    $(c_0+d_0,c_1+d_1)$ preserves the phase up to key-switch error.  Depth,
-    actual scale, and active Q rows remain unchanged. ``output_domain`` selects
-    coefficient/standard or NTT/Montgomery output."""
+    The input is an NTT/Montgomery three-component Q ciphertext.
+
+    With products-only accumulator $v$, original components $a=(c_0,c_1)$ and the key's auxiliary product $P$, the two-component correction is $\lfloor(v+H_P)/P\rfloor+a$. ``moddown_rounding`` selects $H_P=0$ or $(P-1)/2$. With ``rescale=True``, let $D$ be the next complete Q-group product and choose $H_D$ independently from ``rescale_rounding``. The result is $\lfloor(v+Pa+H_P+PH_D)/(PD)\rfloor$, removes D rows, advances depth once and divides actual scale by D. Without rescaling, depth, Q rows and scale are preserved. Both coefficient/standard and NTT/Montgomery outputs implement this same integer equation. The key is consumed at the input depth.
+    """
 
     name = "fhelium_ckks.relinearize"
+    rescale = opt_attr_def(IntegerAttr, default_value=IntegerAttr(0, 64))
+    rescale_rounding = opt_attr_def(
+        StringAttr, default_value=StringAttr("nearest")
+    )
+
+    def __init__(
+        self,
+        value: SSAValue | Operation,
+        key: SSAValue | Operation,
+        result_type: Attribute | None = None,
+        *,
+        rescale: bool = False,
+        rescale_rounding: str = "nearest",
+        output_domain: Literal["coefficient", "ntt"] = "coefficient",
+        moddown_rounding: str = "nearest",
+        modup_method: str = "exact",
+        parameters: Sequence[SSAValue | Operation] = (),
+        attributes: Mapping[str, Attribute] | None = None,
+    ) -> None:
+        attrs = {
+            "rescale": IntegerAttr(int(rescale), 64),
+            "rescale_rounding": StringAttr(rescale_rounding),
+            **(attributes or {}),
+        }
+        domain_attr = attrs.get("output_domain")
+        if isinstance(domain_attr, StringAttr):
+            output_domain = cast(
+                Literal["coefficient", "ntt"], domain_attr.data
+            )
+        if result_type is None:
+            source_type = cast(CiphertextType, SSAValue.get(value).type)
+            fields = {
+                name: attribute
+                for name, attribute in source_type.state.data.items()
+                if name not in {"shape", "strides", "requires_grad"}
+            }
+            fields.update(components=IntegerAttr(2, 64))
+            if cast(IntegerAttr, attrs["rescale"]).value.data:
+                depth = fields.pop("depth", None)
+                rows = fields.pop("prime_ids", None)
+                fields.pop("scale", None)
+                if isinstance(depth, IntegerAttr):
+                    fields["depth"] = IntegerAttr(depth.value.data + 1, 64)
+                drop = attrs.get("joint_drop_prime_ids")
+                if isinstance(rows, ArrayAttr) and isinstance(drop, ArrayAttr):
+                    fields["prime_ids"] = ArrayAttr(
+                        i for i in rows if i not in tuple(drop)
+                    )
+            result_type = CiphertextType().with_state(
+                {
+                    **fields,
+                    "polynomial_domain": StringAttr(output_domain),
+                    "residue_representation": StringAttr(
+                        output_residues(output_domain)
+                    ),
+                }
+            )
+        super().__init__(
+            value,
+            key,
+            result_type,
+            output_domain=output_domain,
+            moddown_rounding=moddown_rounding,
+            modup_method=modup_method,
+            parameters=parameters,
+            attributes=attrs,
+        )
 
     def dependencies(self) -> OperationDependencies:
-        """Describe result reads in this operation's value coordinates."""
+        """Describe result reads in the input value and evaluation key."""
         return operand_relations(
             self,
             {
                 0: {
-                    'coefficient': 'mixing',
-                    'limb': 'mixing',
-                    'component': 'mixing',
-                    'batch': 'element',
+                    "coefficient": "mixing",
+                    "limb": "mixing",
+                    "component": "mixing",
+                    "batch": "element",
                 },
                 1: {
-                    'coefficient': 'mixing',
-                    'limb': 'mixing',
-                    'component': 'mixing',
-                    'batch': 'reindexed',
+                    "coefficient": "mixing",
+                    "limb": "mixing",
+                    "component": "mixing",
+                    "batch": "reindexed",
                 },
             },
         )
@@ -1640,10 +1997,8 @@ class PrepareMultiplyMessageOp(_PrepareOp):
 class PrepareMultiplyPlaintextOp(_PrepareOp):
     r"""Convert a caller-owned plaintext to multiplication-ready state.
 
-    The plaintext retains its own actual scale and must share the ciphertext depth
-    and Q or QP rows.  Encoding, residue conversion, and a forward NTT as needed
-    produce NTT/Montgomery data for ``MultiplyPlaintextOp``.  Preparation itself
-    does not multiply or rescale."""
+    The plaintext must share the ciphertext depth and Q or QP rows. Encoding, residue conversion, and a forward NTT as needed produce NTT/Montgomery data for ``MultiplyPlaintextOp``. The result preserves the plaintext's actual scale and the matching depth and prime rows.
+    """
 
     name = "fhelium_ckks.prepare.multiply.plaintext"
 
@@ -1662,6 +2017,53 @@ class PrepareMultiplyStaticOp(_PrepareOp):
     ``MultiplyPlaintextOp``."""
 
     name = "fhelium_ckks.prepare.multiply.static"
+
+
+def _modulus_raise_specification(operation: Operation) -> tuple[str, ...]:
+    """Reject known raising-state contradictions while leaving absent facts open."""
+    assert isinstance(operation, (ModulusRaiseOp, EncapsulatedModulusRaiseOp))
+    diagnostics = list(flat_operation(operation))
+    for label, value in (
+        ("input", operation.value),
+        ("result", operation.result),
+    ):
+        state = cast(CiphertextType, value.type).state.data
+        for name, expected in (
+            ("basis", "Q"),
+            ("polynomial_domain", "coefficient"),
+            ("residue_representation", "standard"),
+            ("components", 2),
+        ):
+            represented = state.get(name)
+            if represented is None or represented == StringAttr("unknown"):
+                continue
+            actual = (
+                represented.data
+                if isinstance(represented, StringAttr)
+                else int(represented.value.data)
+                if isinstance(represented, IntegerAttr)
+                else represented
+            )
+            if actual != expected:
+                diagnostics.append(
+                    f"{label} {name} must be {expected!r}, got {actual!r}"
+                )
+    target = int(operation.target_depth.value.data)
+    source = cast(CiphertextType, operation.value.type).state.data.get("depth")
+    result = cast(CiphertextType, operation.result.type).state.data.get("depth")
+    if (
+        target < 0
+        or isinstance(source, IntegerAttr)
+        and target > int(source.value.data)
+    ):
+        diagnostics.append(
+            "modulus raise target must precede or equal source depth and be nonnegative"
+        )
+    if isinstance(result, IntegerAttr) and int(result.value.data) != target:
+        diagnostics.append("modulus raise result depth must equal target_depth")
+    if isinstance(operation, EncapsulatedModulusRaiseOp):
+        diagnostics.extend(_moddown_rounding_diagnostics(operation))
+    return tuple(diagnostics)
 
 
 def _with_ciphertext_components(
@@ -1731,8 +2133,11 @@ def _with_ciphertext_components(
 
 def _rotate_specification(operation: Operation) -> tuple[str, ...]:
     diagnostics = list(flat_operation(operation))
+    diagnostics.extend(_moddown_rounding_diagnostics(operation))
+    diagnostics.extend(_modup_method_diagnostics(operation))
     unsupported = unsupported_attributes(
-        operation, ("input_domain", "output_domain")
+        operation,
+        ("input_domain", "output_domain", "moddown_rounding", "modup_method"),
     )
     if unsupported:
         diagnostics.append(f"unsupported attributes {list(unsupported)}")
@@ -1749,7 +2154,11 @@ def _hoisted_rotate_many_specification(
     operation: Operation,
 ) -> tuple[str, ...]:
     diagnostics = list(flat_operation(operation))
-    unsupported = unsupported_attributes(operation, ("output_domain",))
+    diagnostics.extend(_moddown_rounding_diagnostics(operation))
+    diagnostics.extend(_modup_method_diagnostics(operation))
+    unsupported = unsupported_attributes(
+        operation, ("output_domain", "moddown_rounding", "modup_method")
+    )
     if unsupported:
         diagnostics.append(f"unsupported attributes {list(unsupported)}")
     if not isinstance(operation, RotateManyOp):
@@ -1761,6 +2170,27 @@ def _hoisted_rotate_many_specification(
     else:
         diagnostics.extend(_rotation_output_state_diagnostics(operation))
     return tuple(diagnostics)
+
+
+def _modup_method_diagnostics(operation: Operation) -> tuple[str, ...]:
+    value = operation.attributes.get("modup_method", StringAttr("exact"))
+    if not isinstance(value, StringAttr) or value.data not in {
+        "exact",
+        "crt",
+        "normalized_crt",
+    }:
+        return ("modup_method must be exact, crt, or normalized_crt",)
+    return ()
+
+
+def _moddown_rounding_diagnostics(operation: Operation) -> tuple[str, ...]:
+    value = operation.attributes.get("moddown_rounding", StringAttr("nearest"))
+    if not isinstance(value, StringAttr) or value.data not in {
+        "floor",
+        "nearest",
+    }:
+        return ("moddown_rounding must be 'floor' or 'nearest'",)
+    return ()
 
 
 def _rotation_output_state_diagnostics(
@@ -1784,6 +2214,10 @@ def _rotation_output_state_diagnostics(
         ),
     }
     diagnostics: list[str] = []
+    if isinstance(
+        operation, RelinearizeOp
+    ) and operation.rescale_rounding.data not in {"nearest", "floor"}:
+        diagnostics.append("rescale_rounding must be nearest or floor")
     for index, result in enumerate(operation.results):
         if not isinstance(result.type, CiphertextType):
             continue
@@ -1962,10 +2396,29 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         ),
     ),
     registered_operation_spec(
+        ModulusRaiseOp, "ckks", validator=_modulus_raise_specification
+    ),
+    registered_operation_spec(
+        EncapsulatedModulusRaiseOp,
+        "ckks",
+        validator=_modulus_raise_specification,
+    ),
+    registered_operation_spec(RotationSumOp, "ckks"),
+    registered_operation_spec(
         GroupedRotationWeightedSumOp,
         "ckks",
         validator=_with_ciphertext_components(
-            flat_with_attributes("baby_steps", "term_count", "group_count"),
+            lambda operation: (
+                *flat_with_attributes(
+                    "baby_steps",
+                    "term_count",
+                    "group_count",
+                    "moddown_rounding",
+                    "modup_method",
+                )(operation),
+                *_moddown_rounding_diagnostics(operation),
+                *_modup_method_diagnostics(operation),
+            ),
             operands=((0, 2),),
             results=((0, 2),),
         ),
@@ -1996,7 +2449,15 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         "ckks",
         validator=_with_ciphertext_components(
             lambda operation: (
-                *flat_with_attributes("output_domain")(operation),
+                *flat_with_attributes(
+                    "output_domain",
+                    "moddown_rounding",
+                    "modup_method",
+                    "rescale",
+                    "rescale_rounding",
+                )(operation),
+                *_moddown_rounding_diagnostics(operation),
+                *_modup_method_diagnostics(operation),
                 *_rotation_output_state_diagnostics(
                     cast(RelinearizeOp, operation)
                 ),
@@ -2010,7 +2471,11 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         "ckks",
         validator=_with_ciphertext_components(
             lambda operation: (
-                *flat_with_attributes("output_domain")(operation),
+                *flat_with_attributes(
+                    "output_domain", "moddown_rounding", "modup_method"
+                )(operation),
+                *_moddown_rounding_diagnostics(operation),
+                *_modup_method_diagnostics(operation),
                 *_rotation_output_state_diagnostics(
                     cast(SwitchKeyOp, operation)
                 ),
@@ -2024,7 +2489,11 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         "ckks",
         validator=_with_ciphertext_components(
             lambda operation: (
-                *flat_with_attributes("output_domain")(operation),
+                *flat_with_attributes(
+                    "output_domain", "moddown_rounding", "modup_method"
+                )(operation),
+                *_moddown_rounding_diagnostics(operation),
+                *_modup_method_diagnostics(operation),
                 *_rotation_output_state_diagnostics(
                     cast(ConjugateOp, operation)
                 ),
@@ -2093,6 +2562,9 @@ FHEliumCkks = Dialect(
         NegateOp,
         RotateOp,
         RotateManyOp,
+        ModulusRaiseOp,
+        EncapsulatedModulusRaiseOp,
+        RotationSumOp,
         GroupedRotationWeightedSumOp,
         ToNttOp,
         FromNttOp,
@@ -2171,6 +2643,9 @@ __all__ = [
     "RescaleOp",
     "RotateOp",
     "RotateManyOp",
+    "ModulusRaiseOp",
+    "EncapsulatedModulusRaiseOp",
+    "RotationSumOp",
     "SubtractOp",
     "SwitchKeyOp",
     "ToNttOp",

@@ -21,7 +21,7 @@ import torch
 
 
 class NttBackend(Protocol):
-    r"""Representation-explicit NTT operations consumed by ``RnsRuntime``.
+    r"""NTT operations and residue transitions consumed by ``RnsRuntime``.
 
     Method names state both the input and output representation. ``forward``
     consumes coefficient-domain data and produces NTT-domain data; ``inverse``
@@ -34,9 +34,7 @@ class NttBackend(Protocol):
     use it to select the corresponding per-prime twiddles, roots, and RNS
     parameters; they must not infer prime identity from ``operand.size(-2)``.
 
-    The protocol intentionally contains no radix, grouping, or table-layout
-    fields. Those are construction-time properties of a concrete backend, not
-    semantic differences visible to ``RnsRuntime``.
+    Concrete backends select their radix, grouping, and table layout at construction while implementing these shared transform and representation transitions.
 
     Every operand is a dense integral tensor on one execution device
     ``[*batch, limb, coefficient_or_ntt_index]`` with final extent
@@ -150,9 +148,7 @@ def slice_ntt_parameter_rows(
             table.
 
     Notes:
-        The helper deliberately does not infer ``parameter_row_start`` from
-        the operand row count. Multiple RNS subsets can have the same number
-        of rows while referring to different primes.
+        Supply ``parameter_row_start`` to identify the prime interval: different RNS subsets can have the same row count.
     """
 
     if operand.ndim < 2:

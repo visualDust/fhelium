@@ -19,6 +19,8 @@ from types import MappingProxyType
 from fhelium.backend.execution import ProgramDispatchTable, ProgramExecutable
 from fhelium.backend.resources import ResourceBindings
 
+from ._prepare_ntt_schedules import prepare_ntt_schedules
+
 from ._operations import (
     program_material_values,
     program_resource_requirements,
@@ -49,6 +51,7 @@ class LinkProgramPass:
         material_values = program_material_values(
             program, compilation.material_bindings
         )
+        prepare_ntt_schedules(program, material_values)
         resource_references, requirements = program_resource_requirements(
             program,
             dispatch_table,

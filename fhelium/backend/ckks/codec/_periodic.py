@@ -67,6 +67,9 @@ def periodic_materials(
     rns_ops.to_montgomery_(compact, parameters)
     twiddle_indices = torch.tensor(twists, dtype=torch.long, device=device)
     twiddles = compact[:, twiddle_indices].contiguous()
+    even_indices = torch.tensor(even, dtype=torch.int32, device="cpu")
+    odd_indices = torch.tensor(odd, dtype=torch.int32, device="cpu")
+    ntt_ops.validate_indexed_schedule(even_indices, odd_indices, u)
     return (
         pre,
         _twister(u, str(device)),
@@ -75,8 +78,8 @@ def periodic_materials(
         torch.tensor(
             [2 * q for q in moduli], dtype=context.dtype, device=device
         ),
-        torch.tensor(even, dtype=torch.int32, device=device),
-        torch.tensor(odd, dtype=torch.int32, device=device),
+        even_indices.to(device=device),
+        odd_indices.to(device=device),
         twiddles,
     )
 

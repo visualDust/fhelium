@@ -82,15 +82,15 @@ class NativeScalarArithmeticImplementation:
                 [scaled], dtype=torch.float64, device=ciphertext.device
             ),
             auxiliary,
-        ).to(parameters.dtype)
+        )
         if invocation.attributes["centered_lift"]:
             residues = rns_ops.lift_centered_coefficients(
-                coefficient, parameters[0]
+                coefficient.to(parameters.dtype), parameters[0]
             )
         else:
             residues = torch.remainder(
                 coefficient.unsqueeze(-2), (parameters[0] // 2).view(-1, 1)
-            )
+            ).to(parameters.dtype)
         if invocation.operation_type is ckks.AddScalarOp:
             output = ciphertext.clone()
             rns_ops.add_standard_(output[0, ..., :1], residues, parameters)

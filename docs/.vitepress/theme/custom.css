@@ -218,6 +218,14 @@ body {
   backdrop-filter: blur(18px) saturate(135%);
 }
 
+/* Keep search aligned across pages with and without a document sidebar. */
+@media (min-width: 960px) {
+  .Layout .VPNav .VPNavBar.has-sidebar .container > .title {
+    min-width: 0;
+    max-width: none;
+  }
+}
+
 .VPNavBarTitle .title {
   font-weight: 760;
   letter-spacing: -0.02em;
@@ -398,15 +406,14 @@ body {
 @media (min-width: 768px) and (max-width: 959px) {
   .Layout .VPNav .VPNavBarMenuLink { padding: 0 8px; font-size: 12px; }
   .Layout .VPNav .VPNavBarSearch { padding-left: 8px; }
-  .Layout .VPNav .DocSearch-Button {
+  .Layout .VPNav .VPNavBarSearchButton {
     width: 36px;
     padding: 0;
     justify-content: center;
     background: transparent;
   }
-  .Layout .VPNav .DocSearch-Button-Placeholder,
-  .Layout .VPNav .DocSearch-Button-Keys { display: none; }
-  .Layout .VPNav .DocSearch-Search-Icon { margin-right: 0; }
+  .Layout .VPNav .VPNavBarSearchButton .text,
+  .Layout .VPNav .VPNavBarSearchButton .keys { display: none; }
 }
 
 /* Benchmark browse, result, and compare routes use VitePress's `page` layout
@@ -893,18 +900,18 @@ body {
   grid-row: 1;
 }
 
-.home-install-selector-row.is-torch {
+.home-install-selector-row.is-compute {
   grid-column: 7 / -1;
   grid-row: 1;
 }
 
 .home-install-selector-row.is-method {
-  grid-column: 1 / span 8;
+  grid-column: 5 / -1;
   grid-row: 2;
 }
 
-.home-install-selector-row.is-compute {
-  grid-column: 9 / -1;
+.home-install-selector-row.is-torch {
+  grid-column: 1 / span 4;
   grid-row: 2;
 }
 
@@ -932,6 +939,7 @@ body {
 
 .home-install-options > button {
   display: inline-flex;
+  gap: 7px;
   align-items: center;
   justify-content: center;
   min-height: 30px;
@@ -947,6 +955,18 @@ body {
   background: var(--fhe-c-surface);
   box-shadow: 0 1px 2px color-mix(in srgb, var(--fhe-c-text-1) 4%, transparent);
   cursor: pointer;
+}
+
+.home-install-option-icon {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  color: inherit;
+}
+
+.home-install-rocm-note {
+  display: block;
+  margin-top: 5px;
 }
 
 .home-install-options > button:is(:hover, :focus-visible) {

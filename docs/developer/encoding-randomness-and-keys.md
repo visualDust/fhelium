@@ -46,7 +46,7 @@ Use fixed seeds for reproducible experiments. Cryptographic use requires suitabl
 | Relinearization key | Switch the $s^2$ term to $s$ | Hybrid key-switch layout |
 | Rotation/conjugation key | Switch the automorphed secret relation to the target secret | Hybrid key-switch layout with operation identity |
 
-Secret and public key payloads are constructed at depth zero in NTT/Montgomery representation. Hybrid key-switch keys use depth-zero QP rows and stable key-digit identities. For digit $d$, the embedded source rows satisfy
+Secret and public key payloads are constructed at depth zero in NTT/Montgomery representation. A hybrid key-switch key stores the Q suffix selected by `source_depth`, its selected auxiliary P rows and the corresponding digit planes. The default P comes from the configuration; `p_prime_ids` selects a disjoint ordered auxiliary basis from the same catalog. For digit $d$, the embedded source rows satisfy
 
 $$
 k_{d,0}+k_{d,1}s_{\mathrm{dst}}=P s_{\mathrm{src}}+e_d,

@@ -1,4 +1,4 @@
-"""Lower captured semantic operations to role-explicit logical operations."""
+"""Classify captured operand roles and lower semantic operations to logical IR."""
 
 from __future__ import annotations
 

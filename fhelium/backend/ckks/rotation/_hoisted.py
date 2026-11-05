@@ -2,13 +2,13 @@ r"""Share coefficient-digit preparation across direct rotation key products."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from typing import cast
 
 import torch
 
 from fhelium.backend.rns.moddown import moddown_ntt_qp_to_q, moddown_qp_to_q
-from fhelium.backend.rns.modup import modup_digit
+from fhelium.backend.ckks.key_switch import lift_key_switch_digit
 from fhelium.backend.ntt.operations import execute_named_transform
 from fhelium.backend.ntt.automorphism import ntt_galois_indices
 from ._galois import rotation_galois_element
@@ -41,21 +41,35 @@ def prepare_digits(
 ) -> torch.Tensor:
     """Materialize each active hybrid digit once in QP NTT/Montgomery form."""
     spans = cast(tuple[tuple[int, int, int], ...], attributes["digits"])
-    digits: torch.Tensor | None = None
+    if not spans:
+        raise ValueError("Rotation hoisting requires an active RNS digit")
+    digits = source.new_empty(
+        (
+            len(spans),
+            *source.shape[:-2],
+            tensors["qp_parameters"].size(1),
+            source.size(-1),
+        )
+    )
+    width = max(stop - start for start, stop, _ in spans)
+    scratch = (
+        source.new_empty((*source.shape[:-2], width, source.size(-1)))
+        if width > 1 and attributes.get("modup_method", "exact") == "exact"
+        else None
+    )
     for index, span in enumerate(spans):
-        lifted = modup_digit(source, tensors, index, span)
+        lifted = lift_key_switch_digit(
+            source,
+            tensors,
+            attributes,
+            index,
+            span,
+            out=digits[index],
+            scratch=scratch,
+        )
         execute_named_transform(
             lifted, tensors, attributes, "qp", "forward_montgomery_"
         )
-        if digits is None:
-            digits = torch.empty(
-                (len(spans), *lifted.shape),
-                dtype=lifted.dtype,
-                device=lifted.device,
-            )
-        digits[index].copy_(lifted)
-    if digits is None:
-        raise ValueError("Rotation hoisting requires an active RNS digit")
     return digits
 
 
@@ -142,3 +156,64 @@ def apply_rotation(
     return rns_ops.add_standard(
         rotated, corrections[0], tensors["q_parameters"]
     ), corrections[1]
+
+
+def iter_rotations(
+    source: torch.Tensor,
+    keys: Sequence[torch.Tensor | None],
+    steps: Sequence[int],
+    tensors: Mapping[str, torch.Tensor],
+    attributes: Mapping[str, object],
+    *,
+    output_ntt: bool = False,
+) -> Iterator[torch.Tensor]:
+    """Yield direct rotations from one shared decomposition of component one.
+
+    A None key denotes the identity. Outputs own their payloads; consuming
+    one does not retain previous outputs. The prepared digits live only until
+    the iterator completes or is closed.
+    """
+    prepared = (
+        prepare_digits(source[1], tensors, attributes)
+        if any(k is not None for k in keys)
+        else None
+    )
+    c0 = (
+        execute_named_transform(
+            source[0],
+            tensors,
+            attributes,
+            "q",
+            "forward_to_montgomery_",
+            in_place=False,
+        )
+        if output_ntt
+        else source[0]
+    )
+    for key, step in zip(keys, steps, strict=True):
+        if key is None:
+            yield (
+                execute_named_transform(
+                    source,
+                    tensors,
+                    attributes,
+                    "q",
+                    "forward_to_montgomery_",
+                    in_place=False,
+                )
+                if output_ntt
+                else source.clone()
+            )
+        else:
+            assert prepared is not None
+            yield torch.stack(
+                apply_rotation(
+                    c0,
+                    prepared,
+                    key,
+                    step,
+                    tensors,
+                    attributes,
+                    output_ntt=output_ntt,
+                )
+            )

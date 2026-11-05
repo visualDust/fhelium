@@ -1,7 +1,6 @@
 """Metadata equations shared by CKKS execution and callable capture.
 
-These functions operate on scales, prime identities, and representation labels;
-they do not construct Programs, allocate Tensor storage, or execute arithmetic.
+These functions derive scale, prime-row, and representation metadata from operation inputs.
 """
 
 from __future__ import annotations

@@ -170,7 +170,7 @@ A consumer that launches reads on more streams must call `lease.add_consumer_str
 
 ## 7. Choose manual or automatic admission
 
-This example deliberately keeps placement actions and plan order under direct application control. Use the separate [automatic residency admission](./automatic-residency.md) workflow when the application should state working-set endpoints and headroom while a deterministic policy selects legal reclaim actions. Both workflows execute through the same manager authority and strict leases; automation does not change `ResidencyManager.acquire()` or introduce background movement.
+The application supplies placement actions and plan order in this example. Use the separate [automatic residency admission](./automatic-residency.md) workflow when the application should state working-set endpoints and headroom while a deterministic policy selects legal reclaim actions. Both workflows execute through the same manager authority and strict leases; automation does not change `ResidencyManager.acquire()` or introduce background movement.
 
 ## 8. Read the accounting layers correctly
 

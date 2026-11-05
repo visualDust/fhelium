@@ -110,7 +110,7 @@ def main() -> None:
         )
 
         # Matching-state ciphertext multiplication is also limb-local. It returns three components;
-        # relinearization is deliberately delayed until the limbs are complete.
+        # relinearization runs after reconstruction of the complete limb set.
         local_triplet = engine.multiply(local_operand, local_operand)
         full_triplet = dist.gather_ciphertext_limbs(local_triplet, dst=0)
 

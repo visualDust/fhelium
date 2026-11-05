@@ -1,10 +1,6 @@
 """CUDA Graph capture and replay for fixed-schedule FHElium evaluators.
 
-``CudaGraphProgram`` stages dynamic positional tensor and FHElium-value inputs
-through reusable fixed-address buffers. Callers bind encryption, keys,
-resources, and schedule before capture; captured callables use fixed Python
-control flow.
-"""
+``CudaGraphProgram`` stages dynamic positional tensor and FHElium-value inputs through reusable fixed-address buffers. Callers bind static resources and schedule before capture; captured callables use fixed Python control flow."""
 
 from __future__ import annotations
 
@@ -12,6 +8,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Generic, TypeVar, cast, overload
+from weakref import WeakSet
 
 import torch
 
@@ -55,6 +52,70 @@ class CudaGraphCaptureStats:
     memory_reserved_bytes: int
 
 
+class CudaGraphPool:
+    """Own shared temporary storage for sequential CUDA Graph programs.
+
+    Programs captured with this pool keep their inputs and retained outputs
+    outside its scratch storage. Their graphs may therefore replay in a
+    different order without overwriting another program's retained output.
+    An event chain serializes scratch use across caller-selected streams.
+    Persistent resources are prepared outside capture; captured intermediates
+    must not escape into application state outside the returned output tree.
+
+    One host caller controls a pool. Concurrent workers use separate pools.
+    Retained output leaves have independent storage and no autograd history;
+    input/output and output/output aliases are not preserved. The callable
+    executes in the caller's grad mode. Closing a pool synchronizes its work
+    and closes its live member programs without extending their lifetimes.
+    """
+
+    def __init__(self, device: torch.device | str = "cuda") -> None:
+        device = torch.device(device)
+        if device.type != "cuda":
+            raise ValueError("CUDA Graph pools require a CUDA device")
+        if device.index is None:
+            device = torch.device("cuda", torch.cuda.current_device())
+        self._device = device
+        with torch.cuda.device(device):
+            self._handle = torch.cuda.graph_pool_handle()
+            self._capture_stream = torch.cuda.Stream(device=device)
+        self._programs: WeakSet[CudaGraphProgram[Any]] = WeakSet()
+        self._last_event: torch.cuda.Event | None = None
+        self._closed = False
+
+    @property
+    def device(self) -> torch.device:
+        """Device owning the pool's scratch storage."""
+        return self._device
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise ExecutionError("CUDA Graph pool is closed")
+
+    def _wait(self, stream: torch.cuda.Stream) -> None:
+        self._require_open()
+        if self._last_event is not None:
+            stream.wait_event(self._last_event)
+
+    def close(self) -> None:
+        """Wait for scratch users and close this pool's live member programs."""
+        if self._closed:
+            return
+        if self._last_event is not None:
+            self._last_event.synchronize()
+        for program in tuple(self._programs):
+            program.close()
+        self._last_event = None
+        self._closed = True
+
+    def __enter__(self) -> CudaGraphPool:
+        self._require_open()
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
+
 class CudaGraphProgram(Generic[_OutputT]):
     """CUDA Graph adapter for an eager callable with reusable dynamic inputs.
 
@@ -74,6 +135,10 @@ class CudaGraphProgram(Generic[_OutputT]):
     overlap requires pinned sources and the advanced :meth:`copy_inputs_from`
     plus :meth:`replay_prepared` path. Ordinary :meth:`replay` remains a
     same-call convenience.
+
+    With a :class:`CudaGraphPool`, specializations share temporary storage while
+    retaining separate input/output buffers. The pool orders scratch use and
+    closes its live members; replay order may differ from capture order.
 
     Replay returns a borrowed output tree whose storage is overwritten by the
     next replay. Pass ``copy_output=True`` when the result must outlive that
@@ -122,6 +187,7 @@ class CudaGraphProgram(Generic[_OutputT]):
         static_inputs: tuple[object, ...],
         output: _OutputT,
         stats: CudaGraphCaptureStats,
+        pool: CudaGraphPool | None = None,
     ) -> None:
         self._function: Callable[..., _OutputT] | None = function
         self._device = device
@@ -132,6 +198,9 @@ class CudaGraphProgram(Generic[_OutputT]):
         self._static_inputs: tuple[object, ...] | None = static_inputs
         self._output: _OutputT | None = output
         self._stats = stats
+        self._pool = pool
+        if pool is not None:
+            pool._programs.add(self)
         self._latest_copy: CopyHandle | None = None
         self._last_replay_event: torch.cuda.Event | None = None
         self._closed = False
@@ -145,6 +214,7 @@ class CudaGraphProgram(Generic[_OutputT]):
         example_inputs: Sequence[object],
         warmup: int = 3,
         check_input_liveness: bool = True,
+        pool: CudaGraphPool | None = None,
     ) -> CudaGraphProgram[_OutputT]: ...
 
     @overload
@@ -156,6 +226,7 @@ class CudaGraphProgram(Generic[_OutputT]):
         example_inputs: Sequence[object],
         warmup: int = 3,
         check_input_liveness: bool = True,
+        pool: CudaGraphPool | None = None,
     ) -> Callable[[Callable[..., _OutputT]], CudaGraphProgram[_OutputT]]: ...
 
     @classmethod
@@ -166,6 +237,7 @@ class CudaGraphProgram(Generic[_OutputT]):
         example_inputs: Sequence[object],
         warmup: int = 3,
         check_input_liveness: bool = True,
+        pool: CudaGraphPool | None = None,
     ) -> (
         CudaGraphProgram[_OutputT]
         | Callable[[Callable[..., _OutputT]], CudaGraphProgram[_OutputT]]
@@ -177,10 +249,7 @@ class CudaGraphProgram(Generic[_OutputT]):
         backend JIT and lazy materialization happen without mutating the buffer
         retained by the captured graph.
 
-        Bind static parameters through a closure, ``functools.partial``, or a
-        callable object. This method intentionally does not accept dynamic
-        keyword arguments or arbitrary Python control objects. Use a positional
-        adapter for a dynamic keyword-only tensor or FHElium value.
+        Bind static parameters through a closure, ``functools.partial``, or a callable object. Dynamic inputs use positional Tensor or FHElium-value arguments. Use a positional adapter for a dynamic keyword-only argument.
 
         Passing ``function`` directly is the primary API. Omitting it returns
         a decorator shorthand that captures at function-definition time::
@@ -203,6 +272,12 @@ class CudaGraphProgram(Generic[_OutputT]):
             warmup: Number of fresh-buffer side-stream evaluations before
                 capture.
             check_input_liveness: Forwarded to ``torch.cuda.graph``.
+            pool: Optional owner of shared temporary storage. Requires at least
+                one warmup to allocate retained output storage outside the pool.
+                Retained output leaves have cloned storage without autograd
+                history or input/output and output/output aliases. The callable
+                retains the caller's grad mode.
+                Programs in a pool execute sequentially across streams.
 
         Returns:
             A ready CUDA Graph program with one reusable input buffer, or a
@@ -211,7 +286,8 @@ class CudaGraphProgram(Generic[_OutputT]):
         Raises:
             TypeError: If ``function`` or an input/output leaf is unsupported.
             ValueError: If warmup is negative, examples have no tensor leaves,
-                are not on one CUDA device, or representative storage aliases.
+                are not on one CUDA device, representative storage aliases,
+                or shared-pool capture lacks a warmup or uses another device.
             CudaGraphCaptureError: If warmup, capture, output validation, or the
                 first native replay fails.
         """
@@ -226,6 +302,7 @@ class CudaGraphProgram(Generic[_OutputT]):
                     example_inputs=example_inputs,
                     warmup=warmup,
                     check_input_liveness=check_input_liveness,
+                    pool=pool,
                 )
                 assert isinstance(result, CudaGraphProgram)
                 return result
@@ -235,6 +312,12 @@ class CudaGraphProgram(Generic[_OutputT]):
             raise TypeError("function must be callable")
         if warmup < 0:
             raise ValueError("warmup must be non-negative")
+        if pool is not None:
+            pool._require_open()
+            if warmup == 0:
+                raise ValueError(
+                    "Shared-pool capture needs a warmup to allocate retained outputs"
+                )
         inputs = tuple(example_inputs)
         function_name = getattr(function, "__qualname__", repr(function))
         input_buffer = ReusableValueBuffer.like(inputs)
@@ -245,15 +328,24 @@ class CudaGraphProgram(Generic[_OutputT]):
                 "CUDA Graph example inputs must target one CUDA device; "
                 f"got device={device}"
             )
+        if pool is not None and device != pool.device:
+            input_buffer.close()
+            raise ValueError(
+                "Program inputs and CUDA Graph pool must use the same device"
+            )
         static_inputs = input_buffer.value
+        output: object = None
+        output_signature: object = None
 
         warmup_start = time.perf_counter()
         try:
             with torch.cuda.device(device):
                 warmup_stream = torch.cuda.Stream(device=device)
                 warmup_stream.wait_stream(torch.cuda.current_stream(device))
+                if pool is not None:
+                    pool._wait(warmup_stream)
                 with torch.cuda.stream(warmup_stream):
-                    for _ in range(warmup):
+                    for iteration in range(warmup):
                         warm_buffer = ReusableValueBuffer.like(
                             inputs,
                             device=device,
@@ -261,6 +353,10 @@ class CudaGraphProgram(Generic[_OutputT]):
                         warm_inputs = warm_buffer.value
                         warm_output = function(*warm_inputs)
                         _validate_output_tree(warm_output, device=device)
+                        if pool is not None and iteration == warmup - 1:
+                            output_signature = _output_signature(warm_output)
+                            with torch.no_grad():
+                                output = _clone_output_tree(warm_output)
                         warmup_stream.synchronize()
                         warm_buffer.close()
                         del warm_output, warm_inputs, warm_buffer
@@ -282,10 +378,27 @@ class CudaGraphProgram(Generic[_OutputT]):
                 cuda_graph_context: Any = torch.cuda.graph
                 with cuda_graph_context(
                     graph,
+                    pool=pool._handle if pool is not None else None,
+                    stream=pool._capture_stream
+                    if pool is not None
+                    else warmup_stream,
                     check_input_liveness=check_input_liveness,
                 ):
-                    output = function(*static_inputs)
-                _validate_output_tree(output, device=device)
+                    captured_output = function(*static_inputs)
+                    _validate_output_tree(captured_output, device=device)
+                    if pool is None:
+                        output = captured_output
+                    else:
+                        if (
+                            _output_signature(captured_output)
+                            != output_signature
+                        ):
+                            raise ValueError(
+                                "Output state or topology changed between warmup and capture"
+                            )
+                        with torch.no_grad():
+                            _copy_output_tree(output, captured_output)
+                    del captured_output
                 torch.cuda.synchronize(device)
         except Exception as error:
             graph.reset()
@@ -300,7 +413,13 @@ class CudaGraphProgram(Generic[_OutputT]):
         first_replay_start = time.perf_counter()
         try:
             with torch.cuda.device(device):
+                stream = torch.cuda.current_stream(device)
+                if pool is not None:
+                    pool._wait(stream)
                 graph.replay()
+                if pool is not None:
+                    pool._last_event = torch.cuda.Event()
+                    pool._last_event.record(stream)
                 torch.cuda.synchronize(device)
         except Exception as error:
             graph.reset()
@@ -326,8 +445,9 @@ class CudaGraphProgram(Generic[_OutputT]):
             graph=graph,
             input_buffer=input_buffer,
             static_inputs=static_inputs,
-            output=output,
+            output=cast(_OutputT, output),
             stats=stats,
+            pool=pool,
         )
 
     @property
@@ -437,7 +557,7 @@ class CudaGraphProgram(Generic[_OutputT]):
             copy_handle: Optional handle returned by the latest
                 :meth:`copy_inputs_from`. The current compute stream waits on
                 its completion event without blocking the CPU. Omit this only
-                to intentionally replay the buffer's current payload again.
+                to replay the buffer's current payload again.
             copy_output: Clone the output after replay instead of returning
                 borrowed graph storage.
             synchronize: Synchronize the capture device before returning.
@@ -474,6 +594,8 @@ class CudaGraphProgram(Generic[_OutputT]):
                     buffer.wait_for(copy_handle, compute_stream)
                 except ExecutionInputError as error:
                     raise CudaGraphInputError(str(error)) from error
+            if self._pool is not None:
+                self._pool._wait(compute_stream)
             self._graph.replay()
             result = cast(
                 _OutputT,
@@ -484,6 +606,8 @@ class CudaGraphProgram(Generic[_OutputT]):
             replay_complete = torch.cuda.Event()
             replay_complete.record(compute_stream)
             self._last_replay_event = replay_complete
+            if self._pool is not None:
+                self._pool._last_event = replay_complete
             self._latest_copy = None
             if synchronize:
                 torch.cuda.synchronize(self._device)
@@ -545,6 +669,9 @@ class CudaGraphProgram(Generic[_OutputT]):
         self._latest_copy = None
         self._last_replay_event = None
         self._closed = True
+        if self._pool is not None:
+            self._pool._programs.discard(self)
+            self._pool = None
 
     def __enter__(self) -> CudaGraphProgram[_OutputT]:
         self._require_open()
@@ -609,6 +736,45 @@ def _validate_output_tree(value: object, *, device: torch.device) -> None:
     )
 
 
+def _output_signature(value: object) -> object:
+    if value is None:
+        return None
+    if isinstance(value, TensorResident):
+        return ValueSignature.from_value(value)
+    if isinstance(value, torch.Tensor):
+        return TensorSignature.from_tensor(value)
+    if isinstance(value, dict):
+        return {key: _output_signature(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return (type(value), tuple(_output_signature(item) for item in value))
+    raise TypeError(f"Unsupported CUDA Graph output {type(value).__name__}")
+
+
+def _copy_output_tree(target: object, source: object) -> None:
+    if source is None:
+        return
+    if isinstance(source, TensorResident):
+        source_tensors = ValueEnvelope.from_value(source).tensors
+        target_tensors = ValueEnvelope.from_value(
+            cast(TensorResident, target)
+        ).tensors
+        for name, tensor in source_tensors.items():
+            target_tensors[name].copy_(tensor)
+    elif isinstance(source, torch.Tensor):
+        cast(torch.Tensor, target).copy_(source)
+    elif isinstance(source, dict):
+        target_dict = cast(dict[object, object], target)
+        for key, item in source.items():
+            _copy_output_tree(target_dict[key], item)
+    else:
+        for destination, item in zip(
+            cast(Sequence[object], target),
+            cast(Sequence[object], source),
+            strict=True,
+        ):
+            _copy_output_tree(destination, item)
+
+
 def _clone_output_tree(value: object) -> object:
     if value is None:
         return None
@@ -634,6 +800,7 @@ def _clone_output_tree(value: object) -> object:
 
 __all__ = [
     "CudaGraphCaptureStats",
+    "CudaGraphPool",
     "CudaGraphProgram",
     "TensorSignature",
     "ValueSignature",

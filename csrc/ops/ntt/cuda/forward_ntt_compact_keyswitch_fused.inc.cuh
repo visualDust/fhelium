@@ -5,10 +5,10 @@
 // the final eight stages remain in a 256-coefficient shared-memory tile and
 // feed the unbatched key-switch-key table directly. Final digit NTT values are
 // never written to global memory.
-template <typename scalar_t>
+template <typename scalar_t, typename TwiddleAccessor>
 __global__ void forward_ntt_compact_smem_tail_keyswitch_accumulate_kernel(
     CudaTensorAccessor32<scalar_t, 3> digit,
-    const CudaTensorAccessor32<scalar_t, 2> forward_twiddles,
+    const TwiddleAccessor forward_twiddles,
     const CudaTensorAccessor32<scalar_t, 2> params,
     const CudaTensorAccessor32<scalar_t, 3> key_digit,
     CudaTensorAccessor32<scalar_t, 3> accumulator0,
@@ -48,17 +48,14 @@ __global__ void forward_ntt_compact_smem_tail_keyswitch_accumulate_kernel(
     const int twiddle_group = global_lo >> (t_log + 1);
     const scalar_t U = values[lo];
     const scalar_t V =
-        montgomery_mul(forward_twiddles[row][(1 << stage) + twiddle_group],
-                       values[hi],
+        compact_twiddle_multiply(forward_twiddles, row,
+                       (1 << stage) + twiddle_group, values[hi],
                        modulus_lo,
                        modulus_hi,
                        neg_inv_modulus_lo,
                        neg_inv_modulus_hi);
-    const scalar_t sum = U + V;
-    const scalar_t difference = U + twice_modulus - V;
-    values[lo] = sum < twice_modulus ? sum : sum - twice_modulus;
-    values[hi] =
-        difference < twice_modulus ? difference : difference - twice_modulus;
+    values[lo] = add_lazy_residues(U, V, twice_modulus);
+    values[hi] = sub_lazy_residues(U, V, twice_modulus);
     __syncthreads();
   }
 
@@ -116,16 +113,18 @@ void launch_forward_ntt_compact_keyswitch_accumulate_cuda(
       stream);
 
   const dim3 grid(row_count, N / kCudaBlockSize, coefficient_digit.size(0));
-  forward_ntt_compact_smem_tail_keyswitch_accumulate_kernel<scalar_t>
-      <<<grid, kCudaBlockSize / 2, kCudaBlockSize * sizeof(scalar_t), stream>>>(
-          FHELIUM_CUDA_ACCESSOR32(coefficient_digit, scalar_t, 3),
-          FHELIUM_CUDA_ACCESSOR32(forward_twiddles, scalar_t, 2),
-          FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2),
-          FHELIUM_CUDA_ACCESSOR32(key_digit, scalar_t, 3),
-          FHELIUM_CUDA_ACCESSOR32(accumulator0, scalar_t, 3),
-          FHELIUM_CUDA_ACCESSOR32(accumulator1, scalar_t, 3),
-          tail_start_stage,
-          key_row_start);
+  with_compact_twiddles<scalar_t>(forward_twiddles, [&](auto twiddle_reader) {
+    forward_ntt_compact_smem_tail_keyswitch_accumulate_kernel<scalar_t>
+        <<<grid, kCudaBlockSize / 2, kCudaBlockSize * sizeof(scalar_t), stream>>>(
+            FHELIUM_CUDA_ACCESSOR32(coefficient_digit, scalar_t, 3),
+            twiddle_reader,
+            FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2),
+            FHELIUM_CUDA_ACCESSOR32(key_digit, scalar_t, 3),
+            FHELIUM_CUDA_ACCESSOR32(accumulator0, scalar_t, 3),
+            FHELIUM_CUDA_ACCESSOR32(accumulator1, scalar_t, 3),
+            tail_start_stage,
+            key_row_start);
+  });
 }
 
 void forward_ntt_montgomery_compact_keyswitch_accumulate_inplace_cuda(

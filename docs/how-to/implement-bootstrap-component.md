@@ -67,15 +67,9 @@ class MyEvaluator:
         )
 ```
 
-State the basis your evaluator accepts. The built-in evaluators consume a two-component coefficient-domain standard-RNS Q ciphertext with axes `[component, *batch, limb, coefficient]` and active `prime_ids`. Their ciphertext products require a relinearization key and perform
+State the basis your evaluator accepts. The built-in evaluators accept two-component Q ciphertexts in coefficient/standard or NTT/Montgomery form, with axes `[component, *batch, limb, coefficient_or_ntt_index]` and active `prime_ids`. A ciphertext product produces three NTT/Montgomery components. Relinearization restores two components, and rescale removes one complete Q group while retaining the actual quotient scale. `BootstrapArithmetic.retain_ntt` controls intermediate representation retention.
 
-```text
-coefficient/standard/Q/two components
-  -> NTT/Montgomery/Q/two components
-  -> NTT/Montgomery/Q/three components
-  -> coefficient/standard/Q/two components
-  -> drop one complete Q group and retain the actual quotient scale
-```
+Several equal-state, equal-actual-scale products may be accumulated as three-component ciphertexts before a shared relinearization and rescale. `BlockedChebyshevEvaluator` follows this schedule for its final block products. Use one plan for dependencies, required depths, coefficient decomposition and operation inventory so those reports describe the executed circuit.
 
 A custom evaluator must report its actual scale recurrence, such as $\Delta_{\rm product}/M_d$ for the dropped Q-group product $M_d$. It must not claim `required_depths(polynomial) == d` unless every execution path advances by exactly $d$ depths. An evaluator may accept `relinearization_key=None` only on an execution path whose polynomial DAG contains no ciphertext product, such as a constant or linear built-in polynomial.
 
@@ -124,7 +118,7 @@ class SparseEvaluator:
         ciphertext,
         transform,
         *,
-        rotation_keys,
+        rotation_paths,
         rotate,
         encode_diagonal,
     ):
@@ -132,13 +126,13 @@ class SparseEvaluator:
             arithmetic,
             ciphertext,
             transform.matrix,
-            rotation_keys=rotation_keys,
+            rotation_paths=rotation_paths,
             rotate=rotate,
             encode=encode_diagonal,
         )
 ```
 
-The callbacks provide rotation-key decomposition and diagonal encoding/cache policy. A built-in diagonal stage encodes an unbatched `[limb, ntt_index]` Montgomery plaintext at the selected scale $\Delta_{p,j}$. For input scale $\Delta_j$ and dropped group product $M_j$, one stage returns
+`rotation_paths` maps each normalized logical rotation to the ordered tuple of selected primitive keys. The `rotate` callback executes that path, while `encode_diagonal` applies the diagonal encoding/cache policy. A built-in diagonal stage encodes an unbatched `[limb, ntt_index]` Montgomery plaintext at the selected scale $\Delta_{p,j}$. For input scale $\Delta_j$ and dropped group product $M_j$, one stage returns
 
 $$
 \ell_{j+1}=\ell_j+1,\qquad
@@ -187,6 +181,9 @@ class MyReduction:
     def fused_input_divisor(self):
         return float(self.input_bound) if self.fuse_input_normalization else 1.0
 
+    def relinearization_depths(self, *, input_depth=0):
+        return ()
+
     def reference(self, normalized_values):
         return my_plaintext_periodic_oracle(normalized_values)
 
@@ -217,7 +214,7 @@ The component interface specification must state:
 - output depth, component count, domain, basis, residue representation, and `prime_ids`;
 - whether execution mutates or aliases an input.
 
-`FullSlotBootstrap` expects `fused_input_divisor` to be the numerical factor folded into CoeffsToSlots. Returning $B$ asserts that the reducer will receive $x$ and must not divide by $B$ again. The reducer is a slotwise stage and does not receive rotation keys. Its `evaluate()` method receives keyword-only `relinearization_key` and `conjugation_key` values. A custom reduction that does not multiply ciphertexts supports `relinearization_key=None`; built-in reductions reject `None`. The full-slot topology always has a conjugation key for branch splitting, so reducers may use that same primitive without a second key declaration.
+`FullSlotBootstrap` expects `fused_input_divisor` to be the numerical factor folded into CoeffsToSlots. Returning $B$ asserts that the reducer will receive $x$ and must not divide by $B$ again. The reducer is a slotwise stage and does not receive rotation keys. Its `evaluate()` method receives keyword-only `relinearization_key` and `conjugation_key` materials. Pass the former to `arithmetic.relinearize` or `arithmetic.multiply_relinearize_rescale`: these consumers accept a primitive key, an inventory during material discovery, or a bound depth-to-key mapping during prepared execution. A custom reduction without ciphertext products can ignore that argument. `relinearization_depths(input_depth=...)` declares the depths of actual key-consuming products, including normalization offsets and delayed relinearization; an empty tuple declares no consumers, while an absent method or `None` leaves the schedule unknown and provisioning uses full-basis coverage. The full-slot topology always has a conjugation key for branch splitting, so reducers may use that same primitive without a second key declaration.
 
 ## Full-slot integration requirements
 

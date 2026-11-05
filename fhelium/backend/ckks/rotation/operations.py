@@ -18,10 +18,13 @@ from fhelium.backend.ntt.operations import execute_named_transform
 from ..key_switch import key_switch_corrections
 from .._key_switch_preparation import (
     native_key_switch_requirements,
+    rotation_sum_requirements,
     prepare_native_key_switch,
 )
-from ._hoisted import prepare_digits, apply_rotation
+from ._hoisted import prepare_digits, apply_rotation, iter_rotations
 from ._galois import rotation_galois_element
+from ._aggregate import RotationSumAccumulator
+from fhelium.backend.ckks.tables import RotationSumTables
 
 
 @dataclass(frozen=True)
@@ -135,6 +138,47 @@ class NativeRotateImplementation:
 
 
 @dataclass(frozen=True)
+class NativeRotationSumImplementation:
+    """Stream all rotation key products and execute one quotient tail."""
+
+    name: str = 'native-rotation-sum-aggregate'
+    supports_in_place: bool = False
+    operation_types: tuple = (ckks.RotationSumOp,)
+    tensor_requirements = staticmethod(rotation_sum_requirements)
+    prepare_operation = prepare_native_key_switch
+
+    def resource_requirements(self, invocation):
+        return ()
+
+    def execute(self, invocation, inputs, resources, *, in_place):
+        del resources, in_place
+        attributes = invocation.attributes
+        count = int(attributes['source_count'])
+        steps = tuple(attributes['rotation_steps'])
+        key_count = sum(step != 0 for step in steps)
+        keys = iter(inputs[count : count + key_count])
+        tensors = dict(
+            zip(
+                attributes['parameter_names'],
+                inputs[count + key_count :],
+                strict=True,
+            )
+        )
+        tables = RotationSumTables.from_operands(tensors, attributes)
+        accumulator = RotationSumAccumulator(
+            tables, input_domain=str(attributes['input_domain'])
+        )
+        for value, step in zip(inputs[:count], steps, strict=True):
+            accumulator.add(
+                value,
+                None if step == 0 else next(keys),
+                int(step),
+                indices=tensors.get(f'sum_galois_{step}'),
+            )
+        return (accumulator.finish(),)
+
+
+@dataclass(frozen=True)
 class NativeHoistedRotateManyImplementation:
     """Execute one scheduled rotation group without changing its membership."""
 
@@ -170,35 +214,18 @@ class NativeHoistedRotateManyImplementation:
             )
         )
         steps = cast(tuple[int, ...], invocation.attributes["rotation_steps"])
-        prepared = prepare_digits(source[1], tensors, invocation.attributes)
-        output_ntt = (
-            invocation.attributes.get("output_domain", "coefficient") == "ntt"
-        )
-        c0 = (
-            execute_named_transform(
-                source[0],
+        return tuple(
+            iter_rotations(
+                source,
+                keys,
+                steps,
                 tensors,
                 invocation.attributes,
-                "q",
-                "forward_to_montgomery_",
-                in_place=False,
-            )
-            if output_ntt
-            else source[0]
-        )
-        return tuple(
-            torch.stack(
-                apply_rotation(
-                    c0,
-                    prepared,
-                    key,
-                    step,
-                    tensors,
-                    invocation.attributes,
-                    output_ntt=output_ntt,
+                output_ntt=invocation.attributes.get(
+                    "output_domain", "coefficient"
                 )
+                == "ntt",
             )
-            for key, step in zip(keys, steps, strict=True)
         )
 
 
@@ -211,6 +238,8 @@ class NativeGroupedRotationWeightedSumImplementation:
     operation_types: tuple[type[Operation], ...] = (
         ckks.GroupedRotationWeightedSumOp,
     )
+    tensor_requirements = staticmethod(native_key_switch_requirements)
+    prepare_operation = prepare_native_key_switch
 
     def resource_requirements(
         self, invocation: OperationInvocation

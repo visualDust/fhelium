@@ -23,11 +23,7 @@ from ._purity import known_pure, known_region_blocks
 class EliminateDeadValuesPass:
     """Erase unused operations according to registered effects.
 
-    The pass handles high-level CKKS, lowered RNS/NTT, and pure fusion regions.
-    It enters known structured regions, preserving their terminators and result
-    interfaces. Unknown operations/regions, random draws, mutation, and opaque
-    effects remain roots. Registration must name the exact operation class;
-    inheriting a Pure trait does not grant an extension permission to disappear.
+    The pass traverses known structured regions while preserving terminators and result interfaces. Unknown operations or regions, random draws, mutation, and opaque effects remain liveness roots. Removal requires purity registered for the operation's concrete class; an inherited ``Pure`` trait alone is insufficient.
     """
 
     name: str = "eliminate-dead-values"

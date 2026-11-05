@@ -72,7 +72,7 @@ del plaintext
 
 Retaining, reading, or mutating a pre-adoption alias after a successful transfer is unsupported. Mutating a borrowed value at any time, or retaining, reading, or submitting new work through an extracted alias after lease release, is also unsupported. The manager's storage accounting, immutable-value assumptions, removal protection, and asynchronous lifetime safety apply only while callers follow these rules.
 
-The adoption and lease APIs deliberately pass direct Python objects. The manager transfers and borrows those objects in place and relies on callers to follow the alias rules above.
+The adoption and lease APIs pass direct Python objects. The manager transfers and borrows those objects in place and relies on callers to follow the alias rules above.
 
 ## Lazy local locations and optional budgets
 

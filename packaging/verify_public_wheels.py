@@ -15,13 +15,26 @@ from typing import Mapping
 PACKAGING_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PACKAGING_ROOT))
 
-from matrix import LINUX, WINDOWS, Configuration, Platform, load_matrix
+from matrix import (
+    LINUX,
+    WINDOWS,
+    MATRIX_PATH,
+    Configuration,
+    Platform,
+    load_matrix,
+)
 
 ROOT = Path(os.path.abspath(PACKAGING_ROOT.parent))
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--matrix", type=Path, default=MATRIX_PATH)
+    parser.add_argument(
+        "--configuration",
+        action="append",
+        help="verify selected configuration identities only",
+    )
     parser.add_argument("--platform", choices=(LINUX, WINDOWS), required=True)
     parser.add_argument("--python-312", type=Path, required=True)
     parser.add_argument("--python-313", type=Path, required=True)
@@ -48,12 +61,29 @@ def run(
 
 def clean_environment() -> dict[str, str]:
     environment = dict(os.environ)
-    prefixes = ("CMAKE_", "CONDA_", "CUDA_", "NVCC_", "VC", "VS", "WINDOWSSDK")
+    prefixes = (
+        "CMAKE_",
+        "CONDA_",
+        "CUDA_",
+        "NVCC_",
+        "HIP_",
+        "ROCM_",
+        "VC",
+        "VS",
+        "WINDOWSSDK",
+    )
     names = {
         "CC",
         "CL",
         "CXX",
         "CUDACXX",
+        "HIPCXX",
+        "HIP_PATH",
+        "ROCM_PATH",
+        "ROCM_HOME",
+        "PYTORCH_ROCM_ARCH",
+        "LD_LIBRARY_PATH",
+        "LIBRARY_PATH",
         "CUDAARCHS",
         "CUDA_HOME",
         "CUDA_PATH",
@@ -70,6 +100,12 @@ def clean_environment() -> dict[str, str]:
     }
     for name in list(environment):
         upper = name.upper()
+        if upper in {
+            "CUDA_VISIBLE_DEVICES",
+            "HIP_VISIBLE_DEVICES",
+            "ROCR_VISIBLE_DEVICES",
+        }:
+            continue
         if upper in names or upper.startswith(prefixes):
             environment.pop(name, None)
     environment.update(
@@ -107,16 +143,29 @@ def verification_code(
     target: Platform,
     version: str,
 ) -> str:
+    """Check an installed wheel using its declared Torch and device identity."""
+    product_source = (
+        "def product(x):\n"
+        "    ntt = engine.coefficient_domain_to_ntt_domain(x)\n"
+        "    return engine.ntt_domain_to_coefficient_domain(engine.multiply(ntt, ntt))\n"
+    )
     return f"""
+import importlib.metadata
 import json
+from pathlib import Path
+import shutil
+import sys
 
-import fhelium
 import torch
+import fhelium
 from fhelium.native import native_status
 
+assert Path(fhelium.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()), fhelium.__file__
 assert fhelium.__version__ == {version!r}
 assert str(torch.__version__) == {configuration.torch_runtime_version!r}
 assert torch.version.cuda == {configuration.torch_cuda_version!r}
+assert torch.version.hip == {configuration.torch_hip_version!r}
+assert bool(torch.compiled_with_cxx11_abi()) == {configuration.torch_cxx11_abi!r}
 status = native_status()
 assert status.available, status
 assert set(status.backends) == {set(configuration.native_backends)!r}, status
@@ -126,18 +175,50 @@ value = torch.tensor([[[1, 2, 3, 4]]], dtype=torch.int64)
 expected = torch.tensor([[[2, 4, 6, 8]]], dtype=torch.int64)
 actual = torch.ops.fhelium_rns_ops.add_standard(value, value, parameters)
 assert torch.equal(actual, expected)
-if {configuration.has_cuda!r}:
+if {configuration.has_gpu!r}:
     assert torch.cuda.is_available()
     value = value.cuda()
     parameters = parameters.cuda()
     actual = torch.ops.fhelium_rns_ops.add_standard(value, value, parameters)
     assert torch.equal(actual.cpu(), expected)
+    from fhelium.native.cuda import get_cuda_device_properties
+    assert get_cuda_device_properties()
+    from fhelium.eager import Engine
+    from fhelium import compile as fc
+    engine = Engine(fhelium.Preset.slots8192_scale40_depth7_int64, rng_seed=24, rng_nonce=7)
+    secret = engine.create_secret_key(device="cuda:0")
+    public = engine.create_public_key(secret)
+    message = torch.linspace(-0.02, 0.03, engine.num_slots, dtype=torch.float64, device="cuda:0")
+    ciphertext = engine.encrypt_message(message, public, device="cuda:0")
+    torch.testing.assert_close(engine.decrypt_message(ciphertext, secret, is_real=True), message, rtol=0, atol=5e-6)
+    # Keep source inspection available when verification runs with Python -c.
+    namespace = {{"engine": engine}}
+    source = {product_source!r}
+    import linecache
+    filename = "<fhelium-wheel-product>"
+    linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
+    exec(compile(source, filename, "exec"), namespace)
+    reference = namespace["product"]
+    compiled = fc.compile(reference)
+    for operand in (ciphertext, engine.negate(ciphertext)):
+        actual = compiled(operand)
+        torch.testing.assert_close(actual.data, reference(operand).data, rtol=0, atol=0)
+    names = {{dispatch.implementation.name for dispatch in compiled.specializations[0].executable.dispatch_table.operations.values()}}
+    assert any(name.startswith("triton-") for name in names), names
+    torch.cuda.synchronize()
+if {configuration.has_hip!r}:
+    installed = {{d.metadata["Name"].lower().replace("_", "-") for d in importlib.metadata.distributions()}}
+    assert "rocm-sdk-devel" not in installed, "installed-wheel verification must exclude the HIP development SDK"
+    assert shutil.which("hipcc") is None, "installed-wheel verification must hide the HIP compiler"
+    mappings = Path("/proc/self/maps").read_text()
+    assert "_rocm_sdk_devel/" not in mappings, "runtime loaded a development SDK library"
 print(json.dumps({{
     "platform": {target.id!r},
     "configuration": {configuration.id!r},
     "fhelium": fhelium.__version__,
     "torch": str(torch.__version__),
     "torch_cuda": torch.version.cuda,
+    "torch_hip": torch.version.hip,
     "native": str(status),
 }}))
 """
@@ -213,6 +294,7 @@ def verify_cell(
         "--index-url",
         configuration.torch_index_url,
         configuration.torch_requirement,
+        *configuration.runtime_requirements,
         cwd=root,
         environment=environment,
     )
@@ -239,7 +321,7 @@ def verify_cell(
 
 def main() -> None:
     arguments = parse_args()
-    matrix = load_matrix()
+    matrix = load_matrix(arguments.matrix)
     target = matrix.platform(arguments.platform)
     work_root = Path(os.path.abspath(arguments.work_root))
     work_root.mkdir(parents=True, exist_ok=True)
@@ -247,7 +329,12 @@ def main() -> None:
         "cp312-cp312": Path(os.path.abspath(arguments.python_312)),
         "cp313-cp313": Path(os.path.abspath(arguments.python_313)),
     }
-    for configuration in matrix.configurations:
+    configurations = (
+        tuple(matrix.configuration(name) for name in arguments.configuration)
+        if arguments.configuration
+        else matrix.configurations
+    )
+    for configuration in configurations:
         if not configuration.supports(target.id):
             continue
         for python_abi in matrix.python_abis:

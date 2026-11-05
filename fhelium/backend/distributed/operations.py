@@ -34,9 +34,7 @@ def prepare_ciphertext_add_combine(
 ) -> Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]:
     """Bind ciphertext addition through an existing operation backend.
 
-    The returned callable owns no Engine or public CKKS value.  It reuses the
-    execution owner's selected RNS implementation and concrete arithmetic
-    parameters supplied by each distributed reduction.
+    The returned callable uses the selected RNS implementation and the arithmetic parameters supplied by each distributed reduction.
     """
 
     invocation = OperationInvocation(

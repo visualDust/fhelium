@@ -48,11 +48,7 @@ def _normalize_cuda_device(device: torch.device | str) -> torch.device:
 class ResidencyLocation:
     """Immutable identity of one managed memory tier.
 
-    Host locations always store the unindexed ``cpu`` device. An
-    indexed CPU spelling such as ``cpu:0`` is accepted but normalized, which
-    prevents two identities for the same host tier.  CUDA locations require an
-    device index because an ambient current device is not a stable
-    placement identity.
+    Host locations always store the unindexed ``cpu`` device. An indexed CPU spelling such as ``cpu:0`` is accepted but normalized, which prevents two identities for the same host tier. CUDA locations require a device index because an ambient current device is not a stable placement identity.
 
     Args:
         kind: Storage class represented by the location.

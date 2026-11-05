@@ -39,12 +39,9 @@ class RnsDigitSpec:
 class RnsLayout:
     r"""Mathematical Q/P layout independent of execution placement.
 
-    This object intentionally contains no device assignment or communication
-    policy.  An SPMD workload may partition returned prime ids, but
-    doing so does not change the local CKKS value or native-kernel ABI.
+    An SPMD workload may partition the returned prime IDs; each local interval retains the CKKS value and native-kernel row mapping.
 
-    For any tensor ``[..., limb, coefficient_or_ntt_index]``, limb ``j`` maps
-    exactly to ``prime_ids(...)[j]``. ``include_p`` chooses between internal
+    For any tensor ``[..., limb, coefficient_or_ntt_index]``, limb ``j`` uses prime ``prime_ids(...)[j]``. ``include_p`` chooses between internal
     $Q_\ell$ and $Q_\ell P$ row sets; semantic values carry ``modulus_basis``
     separately and must not expose this implementation flag.
     """

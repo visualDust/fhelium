@@ -303,11 +303,36 @@ def analyze_state_flow(
             )
         elif isinstance(operation, ckks.RelinearizeOp):
             domain = operation.output_domain.data
+            updates: dict[str, StateFact] = {}
+            if operation.rescale.value.data:
+                source = states[operation.value]
+                depth, rows = source.field("depth"), source.field("prime_ids")
+                drop = operation.attributes.get("joint_drop_prime_ids")
+                updates.update(
+                    depth=StateFact.known(int(depth.value) + 1)
+                    if depth.status == "known" and isinstance(depth.value, int)
+                    else _DYNAMIC,
+                    scale=_DYNAMIC,
+                    shape=_DYNAMIC,
+                    strides=_DYNAMIC,
+                    prime_ids=StateFact.known(
+                        tuple(
+                            i
+                            for i in rows.value
+                            if i not in {int(x.value.data) for x in drop}
+                        )
+                    )
+                    if rows.status == "known"
+                    and isinstance(rows.value, tuple)
+                    and isinstance(drop, ArrayAttr)
+                    else _DYNAMIC,
+                )
             inferred = (
                 _unary_state(
                     operation,
                     states,
                     components=StateFact.known(2),
+                    **updates,
                     basis=StateFact.known("Q"),
                     polynomial_domain=StateFact.known(domain),
                     residue_representation=StateFact.known(

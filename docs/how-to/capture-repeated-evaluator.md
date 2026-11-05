@@ -56,7 +56,7 @@ program = CudaGraphProgram.capture(
 )
 ```
 
-The prototype must match every later input in structure and CKKS state. Its device may be part of the staging path, but device residency is deliberately separate from the signature.
+The prototype must match every later input in structure and CKKS state. The signature is device-independent; the buffer records the staging destination.
 
 ## 5. Replay changing inputs
 
@@ -98,6 +98,36 @@ Do not concurrently replay one program instance. For concurrent workers, create 
 - graph-private allocations;
 - static closure/key/weight references;
 - stream and event scheduling.
+
+## Share temporary storage across specializations
+
+Use `CudaGraphPool` when several fixed schedules execute sequentially. Inputs and retained outputs are allocated outside its shared scratch storage. At least one warmup evaluation supplies the output prototype. Each output leaf owns cloned storage; input/output and output/output aliases are not preserved. Pooled outputs carry no autograd history. The captured callable retains the caller's grad mode, and input signatures retain their `requires_grad` state.
+
+```python
+from fhelium.runtime import CudaGraphPool, CudaGraphProgram
+
+with CudaGraphPool(device=prototype_ciphertext.device) as pool:
+    negate = CudaGraphProgram.capture(
+        engine.negate,
+        example_inputs=(prototype_ciphertext,),
+        warmup=1,
+        pool=pool,
+    )
+    double = CudaGraphProgram.capture(
+        lambda source: engine.add(source, source),
+        example_inputs=(prototype_ciphertext,),
+        warmup=1,
+        pool=pool,
+    )
+    doubled = double.replay(next_ciphertext)
+    negated = negate.replay(next_ciphertext)
+    # doubled remains valid until double is replayed again or closed.
+    owned = double.replay(next_ciphertext, copy_output=True)
+```
+
+Prepare persistent numerical resources before capture. A captured callable must not retain newly allocated intermediates in application state outside its returned output tree. Programs may replay in a different order from capture. The pool inserts event dependencies between replay streams; input copies can still use the existing transfer-stream interface. One host caller controls a pool. Use separate pools for concurrent workers. Closing the pool waits for its submitted work and closes its programs; finish external consumers of borrowed outputs before closing it. Calling the raw underlying CUDA graph bypasses this serialization.
+
+For one schedule with different weights, pass those weights as dynamic Tensor arguments instead of creating a program per weight set. A shared pool is useful when the operation schedule or value signature requires distinct programs.
 
 ## 8. Benchmark the full replay path
 

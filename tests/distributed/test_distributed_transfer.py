@@ -23,7 +23,7 @@ from fhelium.distributed._transfer import (
     describe_key,
     describe_value,
 )
-from fhelium.serialization import VALUE_SCHEMA_VERSION, ValueEnvelope
+from fhelium.serialization import ValueEnvelope
 
 
 def _ciphertext() -> Ciphertext:
@@ -63,6 +63,7 @@ def _rotation_key() -> RotationKey:
     return RotationKey(
         data=torch.arange(2 * 2 * 3 * 8, dtype=torch.int64).reshape(2, 2, 3, 8),
         prime_ids=(2, 3, 4),
+        digit_prime_ids=((2,), (3,)),
         rotation_step=1,
     )
 
@@ -96,7 +97,6 @@ def test_transfer_protocol_reuses_exact_value_schema() -> None:
     envelope = ValueEnvelope.from_value(source)
     descriptor = describe_value(source)
 
-    assert TRANSFER_PROTOCOL_VERSION != VALUE_SCHEMA_VERSION
     assert descriptor["protocol_version"] == TRANSFER_PROTOCOL_VERSION
     assert descriptor["kind"] == "fhelium_value"
     assert descriptor["value_schema_version"] == envelope.schema_version

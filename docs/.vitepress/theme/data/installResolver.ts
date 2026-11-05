@@ -20,15 +20,15 @@ export type ResolvedInstall = {
   commands: readonly string[]
 }
 
-const axisOrder: readonly InstallAxis[] = ['os', 'method', 'torch', 'compute']
+const axisOrder: readonly InstallAxis[] = ['os', 'compute', 'torch', 'method']
 const osOrder: readonly OsId[] = [
   'linux-x86_64',
   'windows-x86_64',
   'macos-arm64',
 ]
-const methodOrder: readonly MethodId[] = ['prebuilt-pip', 'source-pip', 'source-github']
-const torchOrder = ['2.13', '2.12'] as const
-const computeOrder: readonly ComputeId[] = ['cuda-130', 'cuda-129', 'cpu']
+const methodOrder: readonly MethodId[] = ['prebuilt-pip', 'source-pip', 'source-github', 'source-local']
+const torchOrder = ['2.13', '2.12', 'installed-rocm'] as const
+const computeOrder: readonly ComputeId[] = ['cuda-130', 'cuda-129', 'rocm', 'cpu']
 
 function availableBinaryRecipes(catalog: InstallCatalog): BinaryRecipe[] {
   return catalog.binary_recipes.filter(recipe => recipe.published)
@@ -40,9 +40,8 @@ function candidateSelections(catalog: InstallCatalog): InstallSelection[] {
     catalog.torch_distributions
       .filter(distribution => distribution.os === profile.os)
       .filter(distribution => {
-        if (profile.os === 'macos-arm64') return distribution.compute === 'cpu'
-        if (distribution.compute === 'cpu') return true
-        return profile.native_backend_by_compute.cuda !== undefined
+        const family = distribution.compute.startsWith('cuda-') ? 'cuda' : distribution.compute
+        return profile.native_backend_by_compute[family as 'cpu' | 'cuda' | 'rocm'] !== undefined
       })
       .map(distribution => ({
         os: profile.os,
@@ -111,7 +110,8 @@ export function changeSelection(
   }
   Object.assign(next, { [axis]: value })
   for (const key of axisOrder.slice(changedIndex + 1)) {
-    const candidate = optionsFor(key, next, catalog)[0]
+    const choices = optionsFor(key, next, catalog)
+    const candidate = choices.includes(selection[key]) ? selection[key] : choices[0]
     if (candidate === undefined) throw new Error(`No legal installation option for ${key}`)
     Object.assign(next, { [key]: candidate })
   }
@@ -153,7 +153,7 @@ function binaryCommand(
 
 function sourcePipCommand(
   selection: InstallSelection,
-  backend: 'CPU' | 'CPU+CUDA',
+  backend: 'CPU' | 'CPU+CUDA' | 'CPU+HIP',
   version: string,
 ): string {
   if (selection.os === 'windows-x86_64') {
@@ -169,7 +169,7 @@ python -m pip install --no-binary=fhelium \`
 
 function sourceGitHubCommand(
   selection: InstallSelection,
-  backend: 'CPU' | 'CPU+CUDA',
+  backend: 'CPU' | 'CPU+CUDA' | 'CPU+HIP',
   version: string,
 ): string {
   if (selection.os === 'windows-x86_64') {
@@ -214,10 +214,18 @@ export function resolveInstall(
   )
   if (profiles.length !== 1) throw new Error(`Expected one source profile, found ${profiles.length}`)
   const source = profiles[0]
-  const backend = selection.compute === 'cpu'
-    ? source.native_backend_by_compute.cpu
-    : source.native_backend_by_compute.cuda
-  if (backend === undefined) throw new Error('Selected source profile has no CUDA backend')
+  const family = selection.compute.startsWith('cuda-') ? 'cuda' : selection.compute
+  const backend = source.native_backend_by_compute[family as 'cpu' | 'cuda' | 'rocm']
+  if (backend === undefined) throw new Error('Selected source profile has no matching backend')
+  if (selection.method === 'source-local') {
+    return {
+      selection, torch, source,
+      commands: [
+        'python -m pip install "scikit-build-core==1.0.3" "cmake>=3.21" ninja',
+        'CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS=CPU+HIP" python -m pip install . --no-build-isolation --no-cache-dir --verbose',
+      ],
+    }
+  }
   return {
     selection,
     torch,

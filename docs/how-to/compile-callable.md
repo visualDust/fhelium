@@ -35,6 +35,23 @@ result = encrypted_sum(cx, cy)
 
 The second block uses the `engine`, `cx`, and `cy` from the CKKS guide. Ordinary Tensor inputs retain their public numerical role; a ciphertext argument does not encrypt the other arguments. Capture retains the actual fixed Tensor operands, including supplied key data. Prepare keys before capture and keep randomized encryption outside the repeated evaluator.
 
+Python callable instances and bound methods use the same interface. Object configuration is read during capture; Tensor members become live materials when used. Capture rejects assignment to bound object attributes. Clear or recreate the compiled callable after changing captured Python configuration.
+
+```python
+class Affine:
+    def __init__(self, weight):
+        self.weight = weight
+
+    def __call__(self, x):
+        return x * self.weight
+
+operation = Affine(torch.ones_like(x))
+compiled_operation = fc.compile(operation)
+object_result = compiled_operation(x)
+```
+
+Prepared library computations follow this model as well: `prepared = bootstrap.prepare(ciphertext, evaluation_keys=keys)` supplies the complete refresh callable, and `fc.compile(prepared)` expands its numerical body through the ordinary pipeline. Prepare encoded constants and keys before capture.
+
 ## 2. Separate preparation from execution
 
 ```python
@@ -66,7 +83,7 @@ controlled = fc.compile(affine.reference, backend=backend, pipeline=recipe)
 controlled.prepare(x)
 ```
 
-An omitted pipeline uses `default_lower_and_fuse_pipeline`; a supplied `Pipeline` replaces the whole recipe. A function from `CallSignature` to `Pipeline` can choose a recipe for each signature. Inspect `recipe.names` and compose passes with `before`, `after`, `replace`, or `then`. The default recipe preserves represented CKKS transitions and does not insert rescaling or relinearization; add those scheduling passes when the source calculation requires them.
+An omitted pipeline uses `default_lower_and_fuse_pipeline`; a supplied `Pipeline` replaces the whole recipe. A function from `CallSignature` to `Pipeline` can choose a recipe for each signature. Inspect `recipe.names` and compose passes with `before`, `after`, `replace`, or `then`. For CKKS arithmetic that needs additional rescale or relinearization scheduling, insert the corresponding passes before depth and scale assignment; the default recipe preserves the source transitions.
 
 `compiled.with_backend(other_backend)` creates a callable with the other Backend and fresh linked executables. Clear a callable after changing captured Python constants. Construct a new callable after changing its source Program or pass policy. Binding dictionaries are copied at callable construction, but their Tensor storage remains shared with the caller.
 

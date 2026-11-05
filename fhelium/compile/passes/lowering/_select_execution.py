@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 import json
 from typing import cast
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from xdsl.dialects.builtin import StringAttr
@@ -30,8 +30,11 @@ from fhelium.ir import EXECUTION_IMPLEMENTATION_ATTRIBUTE, Program
 
 from ..._pipeline import DecisionRecord, PassResult, PassStats
 from .._operation_transforms import program_operations
-from ..backend._operations import _STRUCTURAL_OPERATION_TYPES
-from ..fusion import _fusion_segments
+from ..backend._operations import (
+    _STRUCTURAL_OPERATION_TYPES,
+    executable_operations,
+)
+from ..fusion import FuseOperationsPass, _fusion_segments
 from ._core import CkksLoweringRegistry
 from ._driver import DEFAULT_CKKS_LOWERINGS
 
@@ -46,6 +49,13 @@ class SelectExecutionLoweringsPass:
     implementation supports the complete expression. With partial fusion enabled,
     supported subregions may instead be combined with independent implementations
     for the remaining operations.
+
+    ``execution_cost`` may compare the whole operation with the detached lowered
+    candidate after this pass's fusion scheduling. It returns ``(whole, lowered)``
+    costs in one caller-selected unit, or None when the comparison is unknown.
+    Lowering is selected only for a strictly smaller supplied cost; ties retain
+    the whole operation. Missing estimates retain the fusion-coverage decision.
+    Implementation assignments always take precedence over this callback.
     """
 
     implementations: OperationImplementationRegistry
@@ -53,6 +63,10 @@ class SelectExecutionLoweringsPass:
     lowerings: CkksLoweringRegistry = DEFAULT_CKKS_LOWERINGS
     allow_partial_fusion: bool = True
     name: str = "select-execution-lowerings"
+    execution_cost: (
+        Callable[[Operation, Sequence[Operation]], tuple[float, float] | None]
+        | None
+    ) = None
 
     def _independent_support(self, operation: Operation) -> bool:
         if not self.implementations.supports(operation):
@@ -120,6 +134,9 @@ class SelectExecutionLoweringsPass:
             expression = None
             accepted = not whole
             reason = "no whole-operation coverage"
+            cost_details: tuple[str, ...] = ()
+            attached = False
+            cost_eligible = False
             try:
                 expression = self.lowerings.lower(
                     probe, config, probe_compilation
@@ -144,6 +161,9 @@ class SelectExecutionLoweringsPass:
                                 self.fusion_implementations,
                             )
                             if region[2] >= 2
+                            and (count := region[1].match_fusion(region[0]))
+                            is not None
+                            and count >= 2
                         ]
                         covered = {op for ops, _, _ in regions for op in ops}
                         remaining = [
@@ -163,17 +183,57 @@ class SelectExecutionLoweringsPass:
                                 f"lowering covered by {len(regions)} fusion regions "
                                 f"and {len(remaining)} independent operations"
                             )
+                    cost_eligible = self.execution_cost is not None and (
+                        accepted
+                        or all(
+                            self._independent_support(nested)
+                            for item in expression.operations
+                            for nested in item.walk()
+                            if not isinstance(
+                                nested, _STRUCTURAL_OPERATION_TYPES
+                            )
+                        )
+                    )
             except ValueError as error:
                 # A partial Program need not yet have the mathematical facts
                 # required by a lowering. Linking still checks execution readiness.
                 accepted = False
                 reason = str(error)
                 diagnostics.append(f"{operation.name}: {reason}")
+            else:
+                if cost_eligible and self.execution_cost is not None:
+                    Rewriter.replace_op(
+                        probe,
+                        expression.operations,
+                        new_results=(expression.result,),
+                    )
+                    attached = True
+                    FuseOperationsPass(self.fusion_implementations).run(
+                        probe_compilation
+                    )
+                    costs = self.execution_cost(
+                        operation, executable_operations(probe_program)
+                    )
+                    if costs is None:
+                        cost_details = (
+                            "execution costs unknown; fusion-coverage decision retained",
+                        )
+                    else:
+                        whole_cost, lowered_cost = costs
+                        accepted = lowered_cost < whole_cost
+                        reason = (
+                            "lowered execution has smaller caller-provided cost"
+                            if accepted
+                            else "whole execution has no larger caller-provided cost"
+                        )
+                        cost_details = (
+                            f"whole_cost={whole_cost}; lowered_cost={lowered_cost}; unit=caller-selected shared unit",
+                        )
             finally:
-                if expression is not None:
+                if expression is not None and not attached:
                     for item in reversed(expression.operations):
                         item.drop_all_references()
-                probe.drop_all_references()
+                probe_program.module.drop_all_references()
             if not accepted:
                 skipped += 1
                 decisions.append(
@@ -181,7 +241,7 @@ class SelectExecutionLoweringsPass:
                         operation.name,
                         "preserve",
                         candidates,
-                        (reason,),
+                        (reason, *cost_details),
                     )
                 )
                 continue
@@ -199,7 +259,7 @@ class SelectExecutionLoweringsPass:
                     operation.name,
                     self.lowerings.resolve(type(operation)).name,
                     candidates,
-                    (reason,),
+                    (reason, *cost_details),
                 )
             )
         return PassResult(

@@ -110,7 +110,23 @@ class RnsParameterStore:
         return self.basis_row_starts[depth], stop
 
     def row_parameters(self, key) -> RnsRowParameters:
-        return self._row_parameters[tuple(key)]
+        """Prepare parameter and mixed-radix tables for a contiguous prime interval."""
+        key = tuple(key)
+        if (
+            not key
+            or key != tuple(range(key[0], key[-1] + 1))
+            or not 0 <= key[0] <= key[-1] < self.qp_row_stop
+        ):
+            raise ValueError(
+                "RNS row parameters require a nonempty contiguous prime interval"
+            )
+        if key not in self._row_parameters:
+            self._row_parameters[key] = self._build_row_parameters(
+                key[0], key[-1] + 1
+            )
+        result = self._row_parameters[key]
+        self._attach_digit_coefficients(result)
+        return result
 
     def basis_parameters(
         self, depth: int, *, include_p: bool = False
@@ -177,6 +193,19 @@ class RnsParameterStore:
         return list(dict.fromkeys(key for key in keys if key))
 
     def _attach_basis_extension_coefficients(self) -> None:
+        for depth in range(self.rns_layout.basis_count):
+            for spec in self.rns_layout.digit_specs(depth):
+                self.row_parameters(spec.prime_ids)
+
+    def _attach_digit_coefficients(
+        self, row_parameters: RnsRowParameters
+    ) -> None:
+        if (
+            len(row_parameters.prime_ids) == 1
+            or row_parameters.mixed_radix_normalizers is not None
+        ):
+            return
+        source_prime_ids = row_parameters.prime_ids
         destination_prime_ids = self.rns_layout.prime_ids(0, include_p=True)
         destination_moduli = [
             self.montgomery_parameters.moduli[index]
@@ -187,80 +216,69 @@ class RnsParameterStore:
             for index in destination_prime_ids
         ]
 
-        for depth in range(self.rns_layout.basis_count):
-            for digit_spec in self.rns_layout.digit_specs(depth):
-                source_prime_ids = digit_spec.prime_ids
-                row_parameters = self.row_parameters(source_prime_ids)
-                if row_parameters.mixed_radix_normalizers is not None:
-                    continue
+        digit_width = len(source_prime_ids)
+        source_moduli = [
+            self.montgomery_parameters.moduli[index]
+            for index in source_prime_ids
+        ]
+        basis_products = [source_moduli[0]]
+        for index in range(1, digit_width - 1):
+            basis_products.append(basis_products[-1] * source_moduli[index])
 
-                digit_width = len(source_prime_ids)
-                source_moduli = [
-                    self.montgomery_parameters.moduli[index]
-                    for index in source_prime_ids
-                ]
-                basis_products = [source_moduli[0]]
-                for index in range(1, digit_width - 1):
-                    basis_products.append(
-                        basis_products[-1] * source_moduli[index]
-                    )
+        normalizers = []
+        propagation = torch.zeros(
+            (max(digit_width - 1, 0), digit_width),
+            dtype=self.torch_dtype,
+            device=self.device,
+        )
+        for component_index in range(digit_width - 1):
+            inverse = pow(
+                basis_products[component_index],
+                -1,
+                source_moduli[component_index + 1],
+            )
+            normalizers.append(
+                (inverse * self.montgomery_parameters.R)
+                % source_moduli[component_index + 1]
+            )
+            for target_index in range(component_index + 2, digit_width):
+                propagation[component_index, target_index] = (
+                    basis_products[component_index]
+                    * self.montgomery_parameters.R
+                ) % source_moduli[target_index]
 
-                normalizers = []
-                propagation = torch.zeros(
-                    (max(digit_width - 1, 0), digit_width),
-                    dtype=self.torch_dtype,
-                    device=self.device,
-                )
-                for component_index in range(digit_width - 1):
-                    inverse = pow(
-                        basis_products[component_index],
-                        -1,
-                        source_moduli[component_index + 1],
-                    )
-                    normalizers.append(
-                        (inverse * self.montgomery_parameters.R)
-                        % source_moduli[component_index + 1]
-                    )
-                    for target_index in range(component_index + 2, digit_width):
-                        propagation[component_index, target_index] = (
-                            basis_products[component_index]
-                            * self.montgomery_parameters.R
-                        ) % source_moduli[target_index]
-
-                if not normalizers:
-                    continue
-                object.__setattr__(
-                    row_parameters,
-                    "mixed_radix_normalizers",
-                    torch.tensor(
-                        normalizers,
-                        dtype=self.torch_dtype,
-                        device=self.device,
-                    ),
-                )
-                object.__setattr__(
-                    row_parameters,
-                    "mixed_radix_propagation_coefficients",
-                    propagation,
-                )
-                object.__setattr__(
-                    row_parameters,
-                    "basis_extension_coefficients",
-                    torch.tensor(
-                        [
-                            [
-                                (basis_product * r2) % modulus
-                                for r2, modulus in zip(
-                                    destination_r2,
-                                    destination_moduli,
-                                    strict=True,
-                                )
-                            ]
-                            for basis_product in basis_products[
-                                : digit_width - 1
-                            ]
-                        ],
-                        dtype=self.torch_dtype,
-                        device=self.device,
-                    ),
-                )
+        if not normalizers:
+            return
+        object.__setattr__(
+            row_parameters,
+            "mixed_radix_normalizers",
+            torch.tensor(
+                normalizers,
+                dtype=self.torch_dtype,
+                device=self.device,
+            ),
+        )
+        object.__setattr__(
+            row_parameters,
+            "mixed_radix_propagation_coefficients",
+            propagation,
+        )
+        object.__setattr__(
+            row_parameters,
+            "basis_extension_coefficients",
+            torch.tensor(
+                [
+                    [
+                        (basis_product * r2) % modulus
+                        for r2, modulus in zip(
+                            destination_r2,
+                            destination_moduli,
+                            strict=True,
+                        )
+                    ]
+                    for basis_product in basis_products[: digit_width - 1]
+                ],
+                dtype=self.torch_dtype,
+                device=self.device,
+            ),
+        )

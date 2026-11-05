@@ -1,4 +1,4 @@
-"""Transform and inspect Programs without assuming one operation dialect."""
+"""Program-wide analyses and transformations over mixed dialects."""
 
 from ._eliminate_dead_values import EliminateDeadValuesPass
 from ._reuse_intermediates import ReuseIntermediatesPass

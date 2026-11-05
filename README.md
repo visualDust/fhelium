@@ -6,13 +6,13 @@
 
 **Documentation:** [fhelium.550w.host](https://fhelium.550w.host)
 
-FHElium is a full-stack CKKS framework for Python and PyTorch. It provides native CPU and NVIDIA CUDA execution, tensor-backed encrypted values, immediate Eager evaluation, inspectable Compile Programs, runtime resource management, and rank-local distributed execution.
+FHElium is a full-stack CKKS framework for Python and PyTorch. It provides native CPU and NVIDIA CUDA execution, experimental AMD HIP execution, tensor-backed encrypted values, immediate Eager evaluation, inspectable Compile Programs, runtime resource management, and rank-local distributed execution.
 
 ## Install
 
-FHElium supports CPython 3.12 and 3.13 on Linux x86-64, Windows x86-64, and macOS Apple Silicon. It builds against the PyTorch installation selected by the user. CUDA builds require a compatible CUDA toolkit and C++17 compiler; macOS uses the CPU implementation rather than PyTorch MPS.
+FHElium supports CPython 3.12 and 3.13 on Linux x86-64, Windows x86-64, and macOS Apple Silicon. It builds against the PyTorch installation selected by the user. CUDA builds require a compatible CUDA toolkit and a compiler supporting the selected PyTorch build's C++ standard (C++17 or C++20); macOS uses the CPU implementation rather than PyTorch MPS.
 
-Use the [installation selector](https://fhelium.550w.host/#install-fhelium) to choose the operating system, Python version, PyTorch version, and CPU or CUDA configuration. The selector provides a prebuilt-wheel command when that exact combination is published and a source-build command otherwise.
+Use the [installation selector](https://fhelium.550w.host/#install-fhelium) to choose the operating system, Python version, PyTorch version, and CPU or CUDA configuration. The selector provides a prebuilt-wheel command when a wheel for that combination is published and a source-build command otherwise.
 
 For a source installation, install the intended PyTorch package first, then build FHElium in the same environment:
 
@@ -24,7 +24,7 @@ python -m pip install \
   fhelium
 ```
 
-`--no-build-isolation` keeps the selected Torch build available to CMake, and `--no-cache-dir` prevents reuse of a wheel compiled for another Torch or CUDA environment. Set `CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS=CPU"` for a CPU-only build, `CUDA` for CUDA-only, or `CPU+CUDA` for both implementations.
+`--no-build-isolation` keeps the selected Torch build available to CMake, and `--no-cache-dir` prevents reuse of a wheel compiled for another Torch or CUDA environment. Set `CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS=CPU"` for a CPU-only build, `CUDA` for CUDA-only, or `CPU+CUDA` for both implementations. Experimental AMD ROCm support is available through Linux source builds using `HIP` or `CPU+HIP` with the selected ROCm PyTorch and HIP toolkit; AMD GPU Tensors retain PyTorch's `cuda` device type.
 
 See the [installation guide](https://fhelium.550w.host/tutorial/installation) for compiler requirements, CUDA architecture selection, and troubleshooting.
 
@@ -224,7 +224,7 @@ If you use FHElium in research or software, cite the project as:
   author  = {Zhaoting Gong and Jiaming Liang and Ran Ran and Wujie Wen},
   title   = {FHElium: A Cross-Stack CKKS Research Framework for CPU and CUDA},
   year    = {2026},
-  version = {0.30.0},
+  version = {0.40.0},
   url     = {https://github.com/VisualDust/fhelium}
 }
 ```

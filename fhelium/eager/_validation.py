@@ -51,9 +51,7 @@ class CkksValidator:
         if type(depth) is not int:
             raise TypeError("depth must be an integer")
         if not 0 <= depth <= self.config.max_depth:
-            raise ValueError(
-                f"depth must be in [0, {self.config.max_depth}]"
-            )
+            raise ValueError(f"depth must be in [0, {self.config.max_depth}]")
         return depth
 
     def _validate_tensor(
@@ -159,30 +157,37 @@ class CkksValidator:
             raise ValueError(
                 f"{type(key).__name__} requires {required_basis} basis"
             )
-        self._validate_prime_ids(
-            depth=0,
-            modulus_basis=key.modulus_basis,
-            prime_ids=key.prime_ids,
-            value_name=type(key).__name__,
-        )
         if isinstance(key, KeySwitchKey):
-            if key.digit_count != self.rns_layout.key_digit_count:
+            q_rows = tuple(i for rows in key.digit_prime_ids for i in rows)
+            p_rows = key.prime_ids[len(q_rows) :]
+            if (
+                not q_rows
+                or q_rows != tuple(range(q_rows[0], self.config.num_q_primes))
+                or key.prime_ids[: len(q_rows)] != q_rows
+                or not p_rows
+                or any(i >= self.config.total_num_primes for i in key.prime_ids)
+            ):
                 raise ValueError(
-                    f"{type(key).__name__} digit count {key.digit_count} "
-                    f"differs from {self.rns_layout.key_digit_count}"
+                    "Key-switch rows must store a Q suffix followed by distinct auxiliary catalog rows"
                 )
             expected_shape = (
-                self.rns_layout.key_digit_count,
+                len(key.digit_prime_ids),
                 2,
-                len(self.rns_layout.prime_ids(0, include_p=True)),
+                len(key.prime_ids),
                 self.config.N,
             )
             if tuple(key.data.shape) != expected_shape:
                 raise ValueError(
-                    f"{type(key).__name__} shape {tuple(key.data.shape)} "
-                    f"differs from {expected_shape}"
+                    f"Key-switch shape differs from {expected_shape}"
                 )
-        elif isinstance(key, PublicKey):
+        else:
+            self._validate_prime_ids(
+                depth=0,
+                modulus_basis=key.modulus_basis,
+                prime_ids=key.prime_ids,
+                value_name=type(key).__name__,
+            )
+        if isinstance(key, PublicKey):
             expected_shape = (2, len(key.prime_ids), self.config.N)
             if tuple(key.data.shape) != expected_shape:
                 raise ValueError(

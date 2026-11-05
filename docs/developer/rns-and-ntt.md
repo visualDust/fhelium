@@ -55,6 +55,22 @@ An SPMD workload selects subsets of the layout's prime IDs for each rank.
 
 A caller or lowering supplies the physical basis role and any internal digit-row mapping. A native operator must not infer a global prime solely from an ambiguous local row count.
 
+## Hybrid-digit extension
+
+`modup_digit` extends one coefficient-domain digit into QP Montgomery residues using its supplied Garner and basis-extension tensors. For source primes $q_0,\ldots,q_{w-1}$, Garner decomposition produces mixed-radix digits $d_j$, and each destination row evaluates $R_p\sum_j d_j\prod_{i<j}q_i\pmod p$. The operation preserves the ordered modular arithmetic and lazy-residue representation of the separate native decomposition and extension operations.
+
+CUDA multi-prime digits use a coefficient tile that retains the Garner digits in shared memory while destination rows consume them. The shared-memory extent must fit 48 KiB. Single-prime digits, CPU/HIP execution, larger extents, and calls that supply decomposition scratch retain the separate operations. Allocating and caller-owned output forms share the tiled kernel; caller-supplied scratch remains populated with the decomposition. The same Backend entry serves whole CKKS implementations and lowered `HybridModUpDigitOp` operations.
+
+## Linear CRT lifts
+
+`CrtBasisExtendOp` evaluates a supplied source-normalization vector and coefficient matrix into target Montgomery residues. For a digit product $D=\prod_i q_i$, define $D_i=D/q_i$ and $u_i=D_i^{-1}\bmod q_i$. Let $a_i=\mathrm{source}_i\bmod q_i$ after canonicalizing each lazy source word. The raw lift is $L=\sum_i a_iD_i u_i$; the normalized lift is $L=\sum_i(a_i u_i\bmod q_i)D_i$. Both agree with the source residues, but differ from the canonical Garner lift by integer multiples of $D$. The normalized lift satisfies $0\le L<wD$ for $w$ source rows; the raw lift does not have that bound.
+
+The six parameter Tensor operands, in addition to the source Tensor, contain source and target RNS parameters, the matrix, target reciprocals, source normalizers and source reciprocals. Matrix entries include one target Montgomery factor. Source words lie in $[0,2q_i)$, matrix entries and normalizers are canonical, and reciprocals equal $\lfloor2^{64}/q\rfloor$. The CUDA int32 implementation supports primes below $2^{30}$, canonicalizes source words, optionally normalizes them and reduces dot products in blocks of at most sixteen terms. Allocating and output-buffer forms share the same kernel. Other supported layouts and word formats use ordinary RNS primitives; the portable output-buffer path requires storage separate from all read operands. Tables remain read-only and live.
+
+## NTT-domain rotation sums
+
+A rotation sum with NTT/Montgomery inputs applies each supplied Galois permutation in that domain. The ordinary $c_0$ contributions and identity terms remain in NTT form; only each nonzero rotation's $c_1$ is inverse-transformed for key switching. The unrounded QP key products and ordinary contributions then enter the existing shared quotient. Whole-operation execution and logical lowering consume the same permutation tensors and retain the same rescale group, scale transition, and rounding choice.
+
 ## Implementation path
 
 `fhelium.eager.Engine` creates its Q/P chain and immutable `RnsLayout` once. When a call first selects a local device, the Engine creates one `RnsContext` that binds this shared layout to device-resident Montgomery parameters and one composing `NttContext`. NTT construction selects the transform policy and builds its device tables. Context methods prepare the corresponding numerical calls through the shared NTT operation layer. Arithmetic calls then pass tensor views through generated wrappers to the shared PyTorch operator schemas.
@@ -117,13 +133,27 @@ Every name describes a complete policy. `group8` means three fused radix-2 stage
 
 ### Indexed plans
 
-The sole indexed policy, `radix2_indexed`, stores twiddle/index tables. It is the CPU production backend and the cross-device validation baseline for compact CUDA policies. CPU executes every stage for one batch/limb row inside one native parallel region; CUDA launches one radix-2 stage at a time. Expanded twiddles store only the nontrivial odd lane.
+The sole indexed policy, `radix2_indexed`, stores twiddle/index tables. It is the CPU production backend and the cross-device validation baseline for compact CUDA policies. CPU processes each stage with parallel work across batch rows, limbs, and butterflies; CUDA launches one radix-2 stage at a time. Expanded twiddles store only the nontrivial odd lane.
+
+Indexed schedules are structural execution data. Table preparation validates that every stage partitions the $N$ coefficients into disjoint butterfly pairs. Their index values and layout remain fixed for the lifetime of prepared execution; violating this precondition is undefined behavior. Changing a schedule requires preparing it again. Twiddles and RNS parameters remain live numerical Tensor inputs.
+
+`prepare_ntt_tables` validates forward and inverse schedules before copying them to the execution device. Periodic plaintext preparation validates its shorter $U$-point schedule in the same way. Native indexed transforms retain their Tensor shape, dtype, device, and alias checks, but do not rescan schedule contents on each call. Callers constructing custom schedules for direct native or Backend execution validate them during preparation:
+
+```python
+from fhelium.native.wrapper import ntt_ops
+
+ntt_ops.validate_indexed_schedule(even_indices, odd_indices, ring_dimension)
+```
 
 ### Compact plans
 
-Compact policies retain smaller per-prime transform data and derive indices in CUDA. They are CUDA backends. The selectable policies are `radix2_compact_group4_smem8`, `radix2_compact_group8_smem8`, and `radix2_compact_group16_smem8`; the group-8 policy is the CUDA default. CPU contexts and native CPU selection use `radix2_indexed`. Their eight shared-memory stages are listed in both the policy name and native ABI.
+Compact policies retain smaller per-prime transform data and derive indices in CUDA. They are CUDA backends. The selectable policies are `radix2_compact_group4_smem8`, `radix2_compact_group8_smem8`, and `radix2_compact_group16_smem8`; the group-16 policy is the CUDA default. CPU contexts and native CPU selection use `radix2_indexed`. Their eight shared-memory stages are listed in both the policy name and native ABI.
 
 Plan objects are temporary construction values. `NttContext` retains the resulting `IndexedRadix2Tables`, `CompactRadix2Tables`, or `CompactPowerOfTwoRadixTables` package on its selected device. Indexed tables can reside on CPU or CUDA; compact table packages currently reside on CUDA.
+
+Compact CUDA int32 policies also support `twiddle_encoding="shoup32"`. The table layout is `[prime, N, 2]`: each pair stores the standard root and the uint32 bit pattern of its Shoup quotient, `floor(root * 2**32 / q)`. Ciphertext payloads remain Montgomery residues. The default Montgomery table layout remains `[prime, N]`; preparation returns the selected ready-to-consume encoding, without a second unconditional Montgomery conversion. Shoup tables require twice the root-table storage. Native transforms and generated NTT endpoints consume these pairs with their supplied strides; generated endpoints combine surrounding arithmetic with the same stage partitions used for Montgomery tables. Policy comparisons include complete-workload execution and table residency.
+
+Complete compact inverse transforms apply inverse normalization and the requested residue conversion in the final butterfly store. Stage-range operations remain unnormalized, so composing partial ranges does not normalize twice.
 
 ## Grouped radix-2 stages
 
@@ -189,7 +219,7 @@ The supported schedules are:
 
 The power-of-two radix kernels may choose a different representative in the lazy $[0,2q)$ interval than sequential radix-2 because modular additions are associated differently. Forward results are therefore congruent modulo $q$, rather than necessarily bit-for-bit equal as signed integers. Standard-range inverse outputs are equal and all domain and representation states are unchanged.
 
-The CUDA default is `radix2_compact_group8_smem8`. Radix-4/8/16 trade transform digits and launches against register pressure and fixed-root arithmetic; compare full CKKS workloads when evaluating another default.
+The CUDA default is `radix2_compact_group16_smem8`. Radix-4/8/16 trade transform digits and launches against register pressure and fixed-root arithmetic; compare full CKKS workloads when evaluating another default.
 
 ## Representation invariants
 

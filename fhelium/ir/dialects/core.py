@@ -78,7 +78,7 @@ class MaterialRefOp(IRDLOperation):
     """Reference an external Tensor by its entry in the material table.
 
     Missing Tensor dimensions or state may remain unknown in a saved Program.
-    The symbol names data; it does not select a resource class or a factory.
+    The symbol resolves through the Compilation's material-binding table.
     """
 
     name = "fhelium.material.ref"

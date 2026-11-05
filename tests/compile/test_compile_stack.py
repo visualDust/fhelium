@@ -328,3 +328,241 @@ def _rotation_program(
         block,
         tuple(ciphertext_type for _ in rotations),
     )
+
+
+@pytest.mark.parametrize(
+    "costs,assigned,lowered",
+    [
+        ((2.0, 1.0), False, True),
+        ((1.0, 2.0), False, False),
+        ((1.0, 1.0), False, False),
+        (None, False, True),
+        ((2.0, 1.0), True, False),
+    ],
+)
+def test_execution_lowering_compares_caller_costs(costs, assigned, lowered):
+    from xdsl.dialects.builtin import ArrayAttr
+    from fhelium.backend import OperationBackend
+    from fhelium.backend.triton._pointwise import TritonFusionImplementation
+    from fhelium.compile.passes.lowering import SelectExecutionLoweringsPass
+    from fhelium.ir.dialects import ckks, fusion, rns
+
+    def ciphertext(components):
+        return ckks.CiphertextType(
+            {
+                "components": IntegerAttr(components, 64),
+                "shape": ArrayAttr(
+                    IntegerAttr(x, 64) for x in (components, 2, 256)
+                ),
+                "polynomial_domain": StringAttr("ntt"),
+                "residue_representation": StringAttr("montgomery"),
+                "device": StringAttr("cuda:0"),
+                "dtype": StringAttr("torch.int64"),
+            }
+        )
+
+    typ = ciphertext(2)
+    block = Block(arg_types=(typ, typ, rns.RnsParametersType()))
+    operation = ckks.MultiplyOp(
+        block.args[0],
+        block.args[1],
+        ciphertext(3),
+        parameters=(block.args[2],),
+    )
+    if assigned:
+        operation.attributes[ir.EXECUTION_IMPLEMENTATION_ATTRIBUTE] = (
+            StringAttr("native-ct2-convolution")
+        )
+    block.add_ops((operation, ReturnOp(operation)))
+    compilation = fh_compile.Compilation(
+        ir.Program.from_function(block, (ciphertext(3),))
+    )
+    uses = tuple(tuple(v.uses) for v in block.args)
+    calls = []
+
+    def estimate(whole, candidate):
+        assert whole is operation
+        assert any(isinstance(op, fusion.FusedOp) for op in candidate)
+        assert all(op.parent_block() is not block for op in candidate)
+        calls.append(True)
+        return costs
+
+    result = SelectExecutionLoweringsPass(
+        OperationBackend().registry,
+        (TritonFusionImplementation(),),
+        execution_cost=estimate,
+    ).run(compilation)
+    assert bool(result.stats.transformed) == lowered
+    assert bool(calls) != assigned
+    if not lowered:
+        assert tuple(tuple(v.uses) for v in block.args) == uses
+    if not assigned and costs is not None:
+        assert any(
+            "whole_cost=" in line for line in result.decisions[0].details
+        )
+
+
+@pytest.mark.parametrize("lowered", [False, True])
+def test_reuse_internal_arithmetic_preserves_materials_rounding_and_returns(
+    lowered,
+):
+    from xdsl.dialects.builtin import UnrealizedConversionCastOp
+    from fhelium.ir.dialects import ckks, rns
+
+    ciphertext = ckks.CiphertextType()
+    compact = ckks.CompressedPlaintextType()
+    parameters = rns.RnsParametersType()
+    bundle = rns.RnsBundleType()
+    block = Block(
+        arg_types=(ciphertext, compact, compact, parameters, parameters)
+    )
+
+    def multiply(value, plaintext, table):
+        operation = ckks.MultiplyCompressedPlaintextOp.create(
+            operands=(value, plaintext, table),
+            result_types=(ciphertext,),
+            attributes={"compression_layout": StringAttr("contiguous")},
+        )
+        block.add_op(operation)
+        return operation
+
+    def rescale(value, table, rounding="nearest"):
+        if lowered:
+            cast = UnrealizedConversionCastOp.get((value,), (bundle,))
+            operation = rns.RescaleDropLeadingPrimesOp(
+                cast.outputs[0],
+                (table,),
+                bundle,
+                rounding=rounding,
+                polynomial_domain="ntt",
+            )
+            result = UnrealizedConversionCastOp.get(
+                (operation.result,), (ciphertext,)
+            )
+            block.add_ops((cast, operation, result))
+            return operation, result.outputs[0]
+        operation = ckks.RescaleOp(
+            value,
+            ciphertext,
+            parameters=(table,),
+            rounding=rounding,
+            polynomial_domain="ntt",
+        )
+        block.add_op(operation)
+        return operation, operation.result
+
+    products = []
+    quotients = []
+    outputs = []
+    for plaintext, table in ((1, 3), (1, 3), (2, 3), (1, 4)):
+        product = multiply(
+            block.args[0], block.args[plaintext], block.args[table]
+        )
+        quotient, result = rescale(product.result, block.args[table])
+        products.append(product)
+        quotients.append(quotient)
+        outputs.append(multiply(result, block.args[1], block.args[3]).result)
+    floor, result = rescale(products[0].result, block.args[3], "floor")
+    outputs.append(multiply(result, block.args[1], block.args[3]).result)
+    block.add_op(ReturnOp(*outputs))
+    program = ir.Program.from_function(
+        block, tuple(ciphertext for _ in outputs)
+    )
+
+    fh_compile.ReuseIntermediatesPass().run(fh_compile.Compilation(program))
+
+    program.verify_structure()
+    assert products[1].parent is None and quotients[1].parent is None
+    assert all(
+        operation.parent is block
+        for operation in (
+            products[0],
+            *products[2:],
+            quotients[0],
+            *quotients[2:],
+            floor,
+        )
+    )
+    assert tuple(block.last_op.operands) == tuple(outputs)
+    assert len({value.owner for value in outputs}) == len(outputs)
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        "return",
+        "view-return",
+        "assigned-producer",
+        "assigned-reader",
+        "assignment",
+        "opaque",
+        "random",
+    ],
+)
+def test_reuse_preserves_escaping_storage_and_effect_boundaries(guard):
+    from xdsl.dialects.builtin import FloatAttr, Float64Type
+    from xdsl.dialects.test import TestOp as OpaqueOp
+    from fhelium.ir.dialects import ckks
+
+    ciphertext = ckks.CiphertextType()
+    block = Block(arg_types=(ciphertext, ciphertext, ckks.MessageType()))
+    first = ckks.NegateOp(block.args[0])
+    second = ckks.NegateOp(block.args[0])
+    leaves = [
+        ckks.AddOp(operation, block.args[1]) for operation in (first, second)
+    ]
+    assignment = StringAttr("caller-selected")
+    if guard == "assigned-producer":
+        for operation in (first, second):
+            operation.attributes[ir.EXECUTION_IMPLEMENTATION_ATTRIBUTE] = (
+                assignment
+            )
+    if guard == "assigned-reader":
+        for operation in leaves:
+            operation.attributes[ir.EXECUTION_IMPLEMENTATION_ATTRIBUTE] = (
+                assignment
+            )
+    block.add_ops((first, leaves[0]))
+    if guard == "assignment":
+        barrier = ckks.NegateOp(
+            block.args[1],
+            attributes={ir.EXECUTION_IMPLEMENTATION_ATTRIBUTE: assignment},
+        )
+        block.add_op(barrier)
+    elif guard == "opaque":
+        block.add_op(OpaqueOp())
+    elif guard == "random":
+        block.add_op(
+            ckks.EncodeOp.create(
+                operands=(block.args[2],),
+                result_types=(ckks.PlaintextType(),),
+                attributes={
+                    "depth": IntegerAttr(0, 64),
+                    "scale": FloatAttr(8.0, Float64Type()),
+                },
+            )
+        )
+    block.add_ops((second, leaves[1]))
+    if guard == "view-return":
+        views = [
+            ckks.ReinterpretScaleOp(
+                operation, attributes={"scale": FloatAttr(8.0, Float64Type())}
+            )
+            for operation in (first, second)
+        ]
+        block.add_ops(views)
+        returned = views
+    elif guard == "return":
+        returned = [first, second]
+    else:
+        returned = leaves
+    block.add_op(ReturnOp(*returned))
+    program = ir.Program.from_function(block, (ciphertext, ciphertext))
+
+    fh_compile.ReuseIntermediatesPass().run(fh_compile.Compilation(program))
+
+    program.verify_structure()
+    assert first.parent is block and second.parent is block
+    assert tuple(block.last_op.operands) == tuple(
+        operation.results[0] for operation in returned
+    )

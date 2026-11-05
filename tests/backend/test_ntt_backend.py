@@ -92,6 +92,8 @@ def _cpu_indexed_runtime(
     dtype = RnsExecutionFormat.select(config.moduli).dtype
     montgomery = MontgomeryParameters(config)
     plan = IndexedRadix2NttPlan(config, device="cpu")
+    for indices in (plan.forward_indices, plan.inverse_indices):
+        ntt_ops.validate_indexed_schedule(indices[0], indices[1], config.N)
     parameters = torch.tensor(
         [
             montgomery.twice_modulus,
@@ -276,7 +278,7 @@ def test_cpu_indexed_ntt_uses_the_same_exact_schema_and_representation(
         assert torch.equal(table, snapshot)
 
 
-def test_cpu_indexed_ntt_rejects_unsafe_schedules_and_storage() -> None:
+def test_indexed_ntt_preparation_rejects_invalid_schedules_and_execution_checks_storage() -> None:
     config, tables, parameters = _cpu_indexed_runtime(
         Preset.slots8192_scale25_depth14_int32
     )
@@ -301,23 +303,15 @@ def test_cpu_indexed_ntt_rejects_unsafe_schedules_and_storage() -> None:
     out_of_range = plan.forward_indices[0].clone()
     out_of_range[0, 0] = config.N
     with pytest.raises(RuntimeError, match="out-of-range coefficient index"):
-        ntt_ops.forward_ntt_to_montgomery_indexed(
-            standard,
-            out_of_range,
-            plan.forward_indices[1],
-            forward_twiddles,
-            parameters,
+        ntt_ops.validate_indexed_schedule(
+            out_of_range, plan.forward_indices[1], config.N
         )
 
     duplicate = plan.forward_indices[0].clone()
     duplicate[0, 1] = duplicate[0, 0]
     with pytest.raises(RuntimeError, match="partition every coefficient"):
-        ntt_ops.forward_ntt_to_montgomery_indexed(
-            standard,
-            duplicate,
-            plan.forward_indices[1],
-            forward_twiddles,
-            parameters,
+        ntt_ops.validate_indexed_schedule(
+            duplicate, plan.forward_indices[1], config.N
         )
 
     overlapping = standard[:1].expand(2, -1, -1)

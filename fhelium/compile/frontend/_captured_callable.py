@@ -23,8 +23,7 @@ class CapturedCallable(Generic[ReturnT]):
     The full Python signature and input specifications record which arguments
     capture specialized as static values. ``reference`` restores those values
     before invoking ``function``. ``fx_code`` is the captured PyTorch FX source
-    retained for diagnostics. The transformed Program and CompileWorkspace
-    belong to ``Compilation`` rather than this frontend record.
+    retained for diagnostics.
     """
 
     function: Callable[..., ReturnT]

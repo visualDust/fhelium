@@ -36,7 +36,7 @@ The manager interprets each ordered `ResidencyPlan` in Python: it simulates acti
 | `drop(handle, at)` | `DropResident` | Remove one unprotected materialization while retaining the managed value. It is a no-op if already absent and rejects loss of the final `MUST_PRESERVE` copy. |
 | `discard(handle)` | `DiscardValue` | End the managed value, remove all unprotected materializations and its source, and retain the opaque handle for discarded-state diagnostics. |
 
-Source selection is deterministic when omitted: pageable host precedes pinned host, followed by indexed CUDA locations. An explicit source must exist, and the action always supplies its destination.
+Source selection is deterministic when omitted: pageable host precedes pinned host, followed by indexed CUDA locations. A caller-selected source must exist, and the action always supplies its destination.
 
 Host materialization is synchronous. CUDA materialization selects the supplied copy stream or current stream on the destination device, enqueues functional movement, records completion, and synchronizes that copy before installing the ready destination. Failed transfer submission cleans temporary state before propagating the failure.
 
@@ -60,11 +60,11 @@ $$
 
 For an unbudgeted location, the manager performs the same charge and peak updates without applying that inequality. The zero-argument `ResidencyManager()` uses this mode for every valid location. Supplying `budgets={location: bytes}` adds the inequality only to listed locations; other valid pageable, pinned, or indexed CUDA locations remain available and receive state lazily on their first successful managed use.
 
-Every replica pays the full value-specification `storage_nbytes` at its location. A reconstruction source is temporarily charged while `load()` returns an uninstalled value. `MemoryReservation` objects are also charged as accounting headroom. A reservation reduces `remaining_budget_bytes` at a budgeted location and remains attributable accounting at an unbudgeted location; the consuming operation owns its tensor or workspace allocation. Peak charged bytes therefore expose transient reconstruction and scoped headroom that peak used bytes intentionally excludes.
+Every replica pays the full value-specification `storage_nbytes` at its location. A reconstruction source is temporarily charged while `load()` returns an uninstalled value. `MemoryReservation` objects are also charged as accounting headroom. A reservation reduces `remaining_budget_bytes` at a budgeted location and remains attributable accounting at an unbudgeted location; the consuming operation owns its tensor or workspace allocation. Peak charged bytes include transient reconstruction and scoped headroom; peak used bytes count installed materializations.
 
 The registered charge is a conservative ceiling. A functional transition may compact a view-backed allocation, so the destination's actual unique storage may be smaller; it may never exceed the charge. Accounting continues to debit the full fixed charge at every location so movement cannot silently weaken accounting or budget guarantees.
 
-CUDA snapshots additionally sample process-wide `torch.cuda.memory_allocated()` and `torch.cuda.memory_reserved()` for each budgeted or observed device. Transition reports sample allocator values around affected CUDA actions and name the sampled device. A cross-device action reports the destination device; inspect per-location snapshots for the complete multi-GPU state. These process-wide metrics complement manager-local budget and charge measurements. A caller converts selected observations into explicit budget inputs.
+CUDA snapshots additionally sample process-wide `torch.cuda.memory_allocated()` and `torch.cuda.memory_reserved()` for each budgeted or observed device. Transition reports sample allocator values around affected CUDA actions and name the sampled device. A cross-device action reports the destination device; inspect per-location snapshots for the complete multi-GPU state. These process-wide metrics complement manager-local budget and charge measurements. A caller sets budget inputs from the selected observations.
 
 ## Lease execution lifetime
 
@@ -139,7 +139,7 @@ A `ResidencyPlanExecutionError` distinguishes `execute`, `reclaim`, `reserve`, `
 
 `ResidencyController` is an optional orchestration layer over one manager. It accepts an immutable `ResidencyRequest` containing required `(handle, location)` requirements and named headroom. Repeated handles are valid when their locations differ and the value is `REPLICABLE`; an `EXCLUSIVE` value cannot have simultaneous location requirements.
 
-The controller snapshots manager state, filters out active, held, or pending-event materializations, and runs a deterministic state search. A `ResidencyPolicy` ranks eligible candidates and provides only explicitly configured fallback edges. The built-in `DeterministicTieredLRU` orders lower priority first, then older logical access epoch, then stable application key or manager registration order. Policy callbacks receive frozen tensor-free candidates and never call sources or execute transitions.
+The controller snapshots manager state, filters out active, held, or pending-event materializations, and runs a deterministic state search. A `ResidencyPolicy` ranks eligible candidates and provides the configured fallback edges. The built-in `DeterministicTieredLRU` orders lower priority first, then older logical access epoch, then stable application key or manager registration order. Policy callbacks receive frozen tensor-free candidates and never call sources or execute transitions.
 
 The planner accounts:
 
@@ -152,7 +152,7 @@ The planner accounts:
 - required endpoint restoration; and
 - protected materializations that cannot be reclaimed.
 
-It never emits `DiscardValue`: ending logical identity remains a separate application operation. It also does not infer capacity from allocator/NVML observations, spill to an unconfigured location, start background work, wait for a protected victim, retry a source, roll back a committed prefix, or silently replan.
+The controller preserves logical value identities and uses configured budgets and fallback locations. Protected materializations are ineligible for eviction. Decisions and transitions run on request; stale decisions or failed actions return control to the caller, with completed transitions retained. Applications end logical identities with `discard`.
 
 `search_state_limit` bounds deterministic planner work. Exhaustive failure within that bound raises `ResidencyPlanError` as infeasible; reaching the bound raises `ResidencySearchLimitError` as an inconclusive search instead. The error's `state_limit` and `explored_states` fields expose the search-limit evidence when the search is inconclusive.
 
@@ -181,7 +181,7 @@ Completed primitive transitions produce `ResidencyTransitionReport` records with
 
 ## Failure and cleanup semantics
 
-Plan execution is preflighted and intentionally non-transactional. Preflight catches predictable failures represented by the current state simulation; it does not convert the action sequence into an atomic transaction. If action $i$ fails after actions $0, \ldots, i-1$ completed, those earlier transitions remain committed and appear in the raised `ResidencyPlanExecutionError.partial_report`. Scope entry releases admitted reservations on failure but does not roll back completed entry actions. Scope entry failure also consumes and closes that single-use scope, so a later `close()` cannot fabricate a complete report or run exit actions. Scope exit always attempts to release reservations. If the body has already raised, its exception remains primary and the scope retains the structured exit failure in `scope.exit_error`; otherwise the plan execution error propagates directly.
+Plan execution is preflighted and non-transactional. Preflight catches predictable failures represented by the current state simulation; it does not convert the action sequence into an atomic transaction. If action $i$ fails after actions $0, \ldots, i-1$ completed, those earlier transitions remain committed and appear in the raised `ResidencyPlanExecutionError.partial_report`. Scope entry releases admitted reservations on failure but does not roll back completed entry actions. Scope entry failure also consumes and closes that single-use scope, so a later `close()` cannot fabricate a complete report or run exit actions. Scope exit always attempts to release reservations. If the body has already raised, its exception remains primary and the scope retains the structured exit failure in `scope.exit_error`; otherwise the plan execution error propagates directly.
 
 Transitions reject:
 

@@ -32,7 +32,7 @@ _CKKS_VALUE_BRIDGE_TYPES = frozenset(
 def is_ckks_value_bridge(operation: object) -> bool:
     """Identify a cross-dialect cast that carries one encrypted value.
 
-    Same-dialect casts may intentionally refine represented CKKS state and are
+    Same-dialect casts can refine represented CKKS state and are
     never transparent to transition placement.
     """
 
@@ -274,6 +274,18 @@ def _refresh_reachable_states(
         elif isinstance(operation, ckks.RelinearizeOp):
             state = represented_state(operation.value)
             if state is not None:
+                if operation.rescale.value.data:
+                    output = represented_state(operation.result) or {}
+                    for field in (
+                        "depth",
+                        "scale",
+                        "prime_ids",
+                        "shape",
+                        "strides",
+                    ):
+                        state.pop(field, None)
+                        if field in output:
+                            state[field] = output[field]
                 domain = operation.output_domain.data
                 state.update(
                     {

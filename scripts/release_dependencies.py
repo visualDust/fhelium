@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Mapping
 
@@ -22,7 +23,7 @@ DEPENDENCIES = [
     "rich>=15.0.0",
     "safetensors>=0.8.0",
     "textual>=8.2.8",
-    "torch>=2.10,<2.14",
+    "torch>=2.10,<2.15",
     "triton-csprng>=0.1.4,<0.2",
     "triton-windows==3.7.1.post27; sys_platform == 'win32'",
     "xdsl>=0.68,<0.69",
@@ -37,13 +38,18 @@ def dynamic_metadata(
     if settings != {"field": "dependencies"}:
         raise ValueError(f"invalid dynamic metadata settings: {settings!r}")
     requirement = os.environ.get("FHELIUM_RELEASE_TORCH_REQUIREMENT")
-    if requirement is None:
-        return {"dependencies": DEPENDENCIES}
     dependencies = [
-        requirement if item.startswith("torch>=") else item
+        requirement if requirement and item.startswith("torch>=") else item
         for item in DEPENDENCIES
     ]
-    return {"dependencies": dependencies}
+    runtime_requirements = json.loads(
+        os.environ.get("FHELIUM_RELEASE_RUNTIME_REQUIREMENTS", "[]")
+    )
+    if not isinstance(runtime_requirements, list) or any(
+        not isinstance(item, str) or not item for item in runtime_requirements
+    ):
+        raise ValueError("Release runtime requirements must be a JSON string array")
+    return {"dependencies": [*dependencies, *runtime_requirements]}
 
 
 def dynamic_wheel(settings: Mapping[str, object]) -> dict[str, bool]:

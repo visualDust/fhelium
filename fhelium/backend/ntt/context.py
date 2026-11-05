@@ -60,9 +60,7 @@ class NttContext:
             materialize_parameter_rows=rns_context.materialize_parameter_rows,
             device=self.device,
             dtype=rns_context.dtype,
-        )
-        self.ntt_tables.convert_twiddles_to_montgomery_(
-            rns_context.rns_parameter_tensor
+            rns_params=rns_context.rns_parameter_tensor,
         )
 
     def _active_row_start(
@@ -81,7 +79,7 @@ class NttContext:
     def tensor_operands(
         self, prime_ids: tuple[int, ...], *, inverse: bool
     ) -> tuple[torch.Tensor, ...]:
-        """Return native table views for the selected rows and transform direction.
+        """Return native numerical tables in the selected row order and direction.
 
         Parameter generation belongs to this context. The returned Tensors can
         be supplied directly or placed in a Program's external material table.
@@ -93,27 +91,45 @@ class NttContext:
             return cached
         executor = self.ntt_tables
         direction = "inverse" if inverse else "forward"
-        rows = slice(prime_ids[0], prime_ids[-1] + 1)
         parameters = self.rns_context.rns_parameters_for_prime_ids(prime_ids)
+        contiguous = prime_ids == tuple(
+            range(prime_ids[0], prime_ids[0] + len(prime_ids))
+        )
+        rows = slice(prime_ids[0], prime_ids[0] + len(prime_ids))
+        indices = (
+            None
+            if contiguous
+            else torch.tensor(
+                prime_ids, dtype=torch.long, device=self.rns_context.device
+            )
+        )
+
+        def select(table):
+            return (
+                table[rows]
+                if indices is None
+                else table.index_select(0, indices)
+            )
+
         if self.ntt_backend_name == "radix2_indexed":
             result = (
                 parameters,
-                getattr(executor, f"{direction}_twiddles")[rows].contiguous(),
+                select(getattr(executor, f"{direction}_twiddles")).contiguous(),
                 getattr(executor, f"{direction}_even_indices"),
                 getattr(executor, f"{direction}_odd_indices"),
             )
         elif self.ntt_backend_name.startswith("radix2_compact"):
             result = (
                 parameters,
-                getattr(executor, f"{direction}_twiddles")[rows].contiguous(),
+                select(getattr(executor, f"{direction}_twiddles")).contiguous(),
             )
         else:
             result = (
                 parameters,
-                getattr(executor, f"{direction}_outer_twiddles")[
-                    rows
-                ].contiguous(),
-                getattr(executor, f"{direction}_radix_root_powers")[rows],
+                select(
+                    getattr(executor, f"{direction}_outer_twiddles")
+                ).contiguous(),
+                select(getattr(executor, f"{direction}_radix_root_powers")),
             )
         cache[identity] = result
         return result

@@ -35,7 +35,7 @@ A `TensorSignature` records:
 
 A `ValueSignature` additionally records the serialization type and schema, normalized stored arithmetic metadata, and ordered tensor-leaf signatures. That metadata includes fields such as depth, scale, representation, domain, basis, `prime_ids`, and key specialization where present. It does not record CKKS parameter provenance.
 
-Device is intentionally excluded. A compatible CPU source and CUDA source can feed the same fixed CUDA buffer because the buffer, rather than the signature, owns target residency.
+Signatures are device-independent. Compatible CPU and CUDA sources can feed the same fixed CUDA buffer, whose storage records the target device.
 
 ```mermaid
 graph LR

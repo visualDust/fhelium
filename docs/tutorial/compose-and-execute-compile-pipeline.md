@@ -60,7 +60,7 @@ This sequence records the following caller-selected pipeline choices:
 - it assigns concrete depths and per-value actual scales after transition placement;
 - it lowers the remaining CKKS arithmetic into RNS and NTT operations.
 
-Another caller may choose late transition placement, additional analyses, a different lowering route, or a pipeline that intentionally stops at an intermediate Program.
+Another caller may choose late transition placement, additional analyses, a different lowering route, or a pipeline that returns an intermediate Program.
 
 ## Keys, resources, and linking
 
@@ -92,7 +92,7 @@ Registered Backend implementations remain Tensor-oriented internally. `ProgramEx
 
 ## Why this differs from Example 14
 
-Example 12 uses only operations and passes already supplied by FHElium. [Example 14](customize-compile-pass-and-pipeline.md) defines a new pass that rewrites captured `torch.matmul` into a baby-step/giant-step schedule before composing, linking, and executing its pipeline. [Example 13](ir-textual-program.md) instead focuses on textual Program IR and analysis-pass composition and intentionally stops before Backend execution.
+Example 12 uses only operations and passes already supplied by FHElium. [Example 14](customize-compile-pass-and-pipeline.md) defines a new pass that rewrites captured `torch.matmul` into a baby-step/giant-step schedule before composing, linking, and executing its pipeline. [Example 13](ir-textual-program.md) instead focuses on textual Program IR and analysis-pass composition and returns the analyzed Program for inspection.
 
 ::: details Source
 

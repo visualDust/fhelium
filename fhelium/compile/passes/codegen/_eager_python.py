@@ -172,7 +172,7 @@ def _eager_expression(
 ) -> tuple[str | None, tuple[str, ...]]:
     """Return one Eager call expression and implicit resource symbols."""
 
-    if tuple(getattr(operation, "parameters", ())):
+    if getattr(operation, "parameters", ()):
         raise PythonCodegenError(
             "Tensor-parameterized operations require Backend Python emission; Eager calls select their arithmetic tables through Engine"
         )
@@ -213,14 +213,44 @@ def _eager_expression(
         return f"engine.multiply({operands[0]}, {operands[1]})", resources
     if isinstance(operation, ckks.RotateOp):
         return (
-            f"engine.rotate_with_key({operands[0]}, {operands[1]}, output_domain={operation.output_domain.data!r})",
+            f"engine.rotate_with_key({operands[0]}, {operands[1]}, output_domain={operation.output_domain.data!r}, moddown_rounding={operation.moddown_rounding.data!r}, modup_method={operation.modup_method.data!r})",
+            resources,
+        )
+    if isinstance(operation, ckks.ModulusRaiseOp):
+        return (
+            f"engine.modulus_raise({operands[0]}, target_depth={operation.target_depth.value.data!r})",
+            resources,
+        )
+    if isinstance(operation, ckks.EncapsulatedModulusRaiseOp):
+        low_p = tuple(int(x.value.data) for x in operation.low_p_moduli)
+        return_p = tuple(int(x.value.data) for x in operation.return_p_moduli)
+        return (
+            f"engine.encapsulated_modulus_raise({operands[0]}, {operands[1]}, {operands[2]}, "
+            f"target_depth={operation.target_depth.value.data!r}, low_p_moduli={low_p!r}, "
+            f"return_prime={operation.return_prime.value.data!r}, return_p_moduli={return_p!r}, "
+            f"moddown_rounding={operation.moddown_rounding.data!r})",
+            resources,
+        )
+    if isinstance(operation, ckks.RotationSumOp):
+        count = len(operation.values)
+        keys = iter(operands[count : count + len(operation.keys)])
+        terms = [
+            f"({value}, {next(keys) if step.value.data else 'None'})"
+            for value, step in zip(
+                operands[:count], operation.rotation_steps, strict=True
+            )
+        ]
+        return (
+            f"engine.sum_rotations(({', '.join(terms)},), "
+            f"rescale={bool(operation.rescale.value.data)!r}, "
+            f"moddown_rounding={operation.moddown_rounding.data!r}, modup_method={operation.modup_method.data!r})",
             resources,
         )
     if isinstance(operation, ckks.RotateManyOp):
         keys = ", ".join(operands[1:])
         return (
             f"engine.rotate_many_with_keys({operands[0]}, ({keys},), "
-            f"use_hoisting=True, output_domain={operation.output_domain.data!r})",
+            f"use_hoisting=True, output_domain={operation.output_domain.data!r}, moddown_rounding={operation.moddown_rounding.data!r}, modup_method={operation.modup_method.data!r})",
             resources,
         )
     if isinstance(operation, ckks.GroupedRotationWeightedSumOp):
@@ -239,7 +269,7 @@ def _eager_expression(
         ]
         return (
             f"engine.sum_rotated_plaintext_product_groups({operands[0]}, "
-            f"({', '.join(entries)},), ({', '.join(groups)},))",
+            f"({', '.join(entries)},), ({', '.join(groups)},), moddown_rounding={operation.moddown_rounding.data!r}, modup_method={operation.modup_method.data!r})",
             resources,
         )
     if isinstance(operation, ckks.ToNttOp):
@@ -305,8 +335,13 @@ def _eager_expression(
             ckks.SwitchKeyOp: "switch_key",
             ckks.ConjugateOp: "conjugate",
         }[type(operation)]
+        compound = (
+            f", rescale={bool(operation.rescale.value.data)!r}, rescale_rounding={operation.rescale_rounding.data!r}"
+            if isinstance(operation, ckks.RelinearizeOp)
+            else ""
+        )
         return (
-            f"engine.{method}({operands[0]}, {operands[1]}, output_domain={operation.output_domain.data!r})",
+            f"engine.{method}({operands[0]}, {operands[1]}, output_domain={operation.output_domain.data!r}, moddown_rounding={operation.moddown_rounding.data!r}, modup_method={operation.modup_method.data!r}{compound})",
             resources,
         )
     if isinstance(operation, ckks.RescaleOp):

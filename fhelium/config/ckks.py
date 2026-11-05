@@ -181,7 +181,7 @@ def _dumped_moduli(
 
 
 def _preset_parameters(preset: Preset) -> dict[str, object]:
-    """Resolve one built-in recipe into exact Q and P moduli."""
+    """Resolve a preset recipe to its Q and P prime values."""
 
     recipe = _PRESET_CONFIGS[preset]
     log_n = recipe["logN"]
@@ -244,9 +244,7 @@ def _preset_parameters(preset: Preset) -> dict[str, object]:
 class CkksConfig:
     r"""Immutable CKKS mathematical and security parameters.
 
-    The configuration defines CKKS over
-    $R=\mathbb{Z}[X]/(X^N+1)$, where $N=2^{\mathtt{logN}}$, together with
-    the exact ciphertext-modulus chain and hybrid key-switch modulus.
+    The configuration defines CKKS over $R=\mathbb{Z}[X]/(X^N+1)$, where $N=2^{\mathtt{logN}}$, together with the ciphertext-modulus prime groups and hybrid key-switch modulus.
 
     ``q_depth_groups`` contains ordered Q groups. At depth ``d``, the active
     Q basis is the concatenation of groups ``d:``. A rescale removes group
@@ -258,8 +256,7 @@ class CkksConfig:
     ``p_moduli`` contains the special primes whose product is the key-switch
     modulus P. ``default_scale`` is used only when value creation omits a
     scale; every live plaintext and ciphertext carries its own actual scale.
-    The Engine selects the residue dtype and Montgomery radix from these exact
-    primes, and each device-local RNS context materializes the corresponding
+    The Engine selects the residue dtype and Montgomery radix from these prime values, and each device-local RNS context materializes the corresponding
     arithmetic tables.
     """
 
@@ -354,7 +351,7 @@ class CkksConfig:
         src: Mapping[str, Any] | Preset,
         **overrides: Any,
     ) -> "CkksConfig":
-        """Resolve a preset or a serialized exact configuration."""
+        """Resolve a preset or deserialize a CKKS parameter set."""
 
         if isinstance(src, Preset):
             parameters = _preset_parameters(src)
@@ -399,7 +396,7 @@ class CkksConfig:
         )
 
     def dumps(self) -> dict[str, object]:
-        """Return a versioned dictionary containing the exact parameter set."""
+        """Serialize the parameter values and package version into a dictionary."""
 
         return {
             "fhelium_version": __version__,

@@ -9,4 +9,8 @@ TORCH_LIBRARY_FRAGMENT(fhelium_ntt_ops, m) {
       "compact_ntt_stage_range_(Tensor(a!) residues, Tensor compact_twiddles, "
       "Tensor rns_params, bool inverse, int start_stage, int end_stage, "
       "int grouped_stage_count) -> ()");
+  m.def(
+      "fixed_radix_ntt_stage_range_(Tensor(a!) residues, Tensor outer_twiddles, "
+      "Tensor root_powers, Tensor rns_params, bool inverse, int start_stage, "
+      "int end_stage) -> ()");
 }

@@ -28,7 +28,7 @@ Use `--output-dir PATH` to retain the file. Otherwise the example cleans up its 
 
 `prepare_material_bindings(restored, resources=..., keys=...)` fills missing entries using caller-supplied resources and keys. Existing bindings are left untouched. Unsupported descriptions and ambiguous candidates remain unbound and are returned as symbols. Keys are not generated.
 
-The example then assigns `rotation_2` directly and calls `OperationBackend().link(restored)`. That assignment can deliberately select a different Tensor; linking does not authenticate it against the description. Numerical implementations retain their actual execution ABI requirements.
+The example then assigns `rotation_2` directly and calls `OperationBackend().link(restored)`. That assignment can select a different Tensor; linking does not authenticate it against the description. Numerical implementations retain their actual execution ABI requirements.
 
 Changing a bound Tensor's contents is visible to execution. Replacing its binding with another Tensor requires relinking. Each returned rotation is compared with the original Eager computation using the same key. The Program contains native-supported rotations, so this example needs no arithmetic-lowering pipeline.
 

@@ -57,8 +57,7 @@ class Plaintext(TensorResident):
     storage-sharing views.
 
     A program that needs the same semantic message in multiple arithmetic states
-    constructs separate values. The object owns no engine, cache, placement, or
-    persistence reference. ``scale`` is the positive finite actual scale
+    constructs separate values. ``scale`` is the positive finite actual scale
     $\Delta(v)$; ``depth`` identifies $Q_\ell$ but never substitutes for
     ``prime_ids``.
     """

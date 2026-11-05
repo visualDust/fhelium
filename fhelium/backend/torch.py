@@ -26,6 +26,7 @@ TORCH_FUNCTIONS: dict[str, Callable[..., Any]] = {
     "torch.mul": torch.mul,
     "torch.div": torch.div,
     "torch.neg": torch.neg,
+    "torch.remainder": torch.remainder,
     "torch.pow": torch.pow,
     "torch.roll": torch.roll,
     "torch.matmul": torch.matmul,
@@ -52,6 +53,7 @@ TORCH_FUNCTIONS: dict[str, Callable[..., Any]] = {
     "torch.select": torch.select,
     "torch.narrow": torch.narrow,
     "torch.Tensor.to": torch.Tensor.to,
+    "torch.Tensor.view": torch.Tensor.view,
     "torch.Tensor.contiguous": torch.Tensor.contiguous,
 }
 _FUNCTION_SYMBOLS = {

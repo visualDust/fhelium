@@ -27,7 +27,7 @@ def _tree_reduce_phases(
 ) -> tuple[tuple[tuple[int, int], ...], ...]:
     """Return logical sender/receiver edges for a general binomial tree.
 
-    The construction deliberately supports non-power-of-two world sizes.  At
+    The tree supports non-power-of-two world sizes.  At
     phase ``mask``, every available ``receiver + mask`` subtree sends its
     accumulated value to ``receiver``.  Exactly ``world_size - 1`` messages are
     emitted, and no rank needs more than one incoming ciphertext buffer.
@@ -196,13 +196,7 @@ def all_reduce_ciphertext(
 ) -> None:
     """Synchronously sum ciphertext partials and update every rank in place.
 
-    The reduction phase uses the arbitrary-world-size binomial tree documented
-    by ``reduce_ciphertext``.  The root then uses a representation-preserving
-    tensor broadcast because broadcasting ciphertext payload bits requires no
-    arithmetic specialization.  Asynchronous composite Work semantics are
-    intentionally deferred until a measured workload demonstrates useful
-    communication/``add`` overlap.  The implicit root is the first global rank
-    in process-group-rank order.
+    The reduction phase uses the arbitrary-world-size binomial tree documented by ``reduce_ciphertext``. The root then uses a representation-preserving tensor broadcast because broadcasting ciphertext payload bits requires no arithmetic specialization. The implicit root is the first global rank in process-group-rank order.
 
     Args:
         value: Rank-local additive ciphertext partial.  Every rank's object is

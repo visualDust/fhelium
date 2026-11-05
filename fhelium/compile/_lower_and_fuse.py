@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, cast
+from dataclasses import replace
 
 
 from fhelium.backend import OperationBackend
@@ -48,25 +49,13 @@ def default_lower_and_fuse_pipeline(
     | Iterable[CkksDeviceResources | RnsContext | NttContext] = (),
     keys: Mapping[object, object] | Iterable[object] | EvaluationKeySet = (),
 ) -> Pipeline:
-    """Build the default lowering-and-fusion recipe for a mixed-level Program.
+    """Build an editable lowering-and-fusion pipeline for a mixed-level Program.
 
-    The returned Pipeline is an ordinary editable value. Known Tensor facts are
-    read from supplied bindings; no callable signature, Engine, data factory or
-    device-wide routing policy participates. Explicit CKKS state transitions
-    remain authoritative. High-level encrypted arithmetic uses the existing
-    logical/CKKS passes and propagates represented entry state. No rescale or
-    relinearization is inserted by this baseline recipe; callers can insert
-    those scheduling passes before depth and scale assignment.
+    The recipe lowers high-level encrypted arithmetic, propagates represented entry state, removes dead values, hoists compatible rotations, reuses internal pure computations, and selects supported fusion regions. Supplied CKKS transitions are preserved. Rescale and relinearization scheduling require caller-added passes before depth and scale assignment.
 
-    Optional resources and keys supply numerical data through the existing
-    operand-preparation stage. Every pass reads the current Compilation's single
-    material dictionary; bindings are available before dependent fusion choices.
-    Missing keys stay unresolved and are never generated.
+    Passes read Tensor facts from the Compilation's shared material bindings. Optional resources and keys supply missing numerical data during operand preparation, before dependent fusion choices. Missing keys remain unresolved for caller provisioning.
 
-    Lowerings are chosen per operation using the registered implementations and
-    their fusion support. The policy does not benchmark alternatives or retry
-    failed execution through another implementation. Missing preparation facts
-    can remain in the optimized Program until execution linking needs them.
+    Lowerings are selected per operation from registered implementations and their fusion support. Selection uses represented operation and layout facts. Missing preparation facts may remain in the optimized Program until linking requires them.
     """
     backend = OperationBackend() if backend is None else backend
     generated = tuple(
@@ -92,15 +81,16 @@ def default_lower_and_fuse_pipeline(
         ReuseIntermediatesPass(),
         SelectNttImplementationsPass(backend.registry),
     ]
+    passes.append(replace(prepare, name="prepare-before-hoisting"))
     if ckks.RotateManyOp in backend.registry.operation_types:
         passes.append(RotationHoistingPass())
     passes.extend(
         (
-            prepare,
+            replace(prepare, name="prepare-before-lowering"),
             ResolveTensorPlaceholdersPass(),
             SelectExecutionLoweringsPass(backend.registry, generated),
             SelectNttImplementationsPass(backend.registry),
-            prepare,
+            replace(prepare, name="prepare-after-lowering"),
             ResolveTensorPlaceholdersPass(),
             ReuseIntermediatesPass(),
         )

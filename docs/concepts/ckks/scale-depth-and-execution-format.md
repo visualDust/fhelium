@@ -1,6 +1,6 @@
 # Scale, depth, and RNS execution
 
-A CKKS parameter set determines how encoded magnitude is tracked, how many rescale transitions a circuit can consume, and which prime basis represents a value. The Engine derives its native residue format from those exact primes. This page traces that relationship from a value's scale to the kernel selected at execution.
+A CKKS parameter set determines how encoded magnitude is tracked, how many rescale transitions a circuit can consume, and which prime basis represents a value. The Engine derives its native residue format from those prime values. This page traces that relationship from a value's scale to the kernel selected at execution.
 
 ## Scale tracks encoded magnitude
 
@@ -66,7 +66,7 @@ G_d = [one prime near 2^50]
 G_d = [two primes near 2^25 whose product is near 2^50]
 ```
 
-Both groups consume one CKKS depth and divide scale by approximately $2^{50}$. Their execution costs differ because the first shape stores one RNS row at that depth and the second stores two. The exact primes also determine which residue formats satisfy the native kernels' lazy-reduction bounds.
+Both groups consume one CKKS depth and divide scale by approximately $2^{50}$. Their execution costs differ because the first shape stores one RNS row at that depth and the second stores two. The prime values also determine which residue formats satisfy the native kernels' lazy-reduction bounds.
 
 This is why `q_depth_groups` stores nested prime groups rather than a flat prime count. Semantic depth follows the outer group sequence; NTT, key-switch, and RNS work follow the flattened prime rows.
 
@@ -91,7 +91,7 @@ The encoder uses `int64` to hold signed integer coefficients before modular redu
 
 ## Execution-format selection and kernel dispatch
 
-When an Engine is constructed, `RnsExecutionFormat.select` examines every exact Q and P modulus in the configuration and chooses the narrowest supported residue Tensor and Montgomery-radix pairing. `engine.dtype` reports the result. An expert `rns_dtype=` argument requests a supported Tensor dtype; construction checks that every configured prime fits the corresponding lazy-reduction range. The Engine uses one format for its lifetime. Device-local `RnsContext` resources own the dense RNS parameters and residue-representation arithmetic in that format. `NttContext` composes that RNS context and owns the selected NTT policy, transform tables, and transforms; CKKS preparation supplies the basis-conversion and key-switch materials needed by the chosen operations.
+When an Engine is constructed, `RnsExecutionFormat.select` examines every configured Q and P modulus in the configuration and chooses the narrowest supported residue Tensor and Montgomery-radix pairing. `engine.dtype` reports the result. An expert `rns_dtype=` argument requests a supported Tensor dtype; construction checks that every configured prime fits the corresponding lazy-reduction range. The Engine uses one format for its lifetime. Device-local `RnsContext` resources own the dense RNS parameters and residue-representation arithmetic in that format. `NttContext` composes that RNS context and owns the selected NTT policy, transform tables, and transforms; CKKS preparation supplies the basis-conversion and key-switch materials needed by the chosen operations.
 
 The registered CKKS and RNS operations have shared schemas. Native dtype dispatch selects the scalar specialization of the same implementation. The operation graph, Ciphertext type, depth transition, and Backend registration remain unchanged.
 

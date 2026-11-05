@@ -36,7 +36,7 @@ endmacro()
 
 macro(fhelium_finalize_native_install)
   # Generated wrappers describe backend-neutral schemas and therefore remain
-  # identical across CPU-only, CUDA-only, and combined builds.
+  # identical across CPU, CUDA, HIP, and combined builds.
   set(WrapperGenScript ${CMAKE_SOURCE_DIR}/scripts/generate_native_wrappers.py)
   add_custom_target(
     native_wrappers_check
@@ -87,6 +87,10 @@ macro(fhelium_finalize_native_install)
                 --source-root \"${CMAKE_SOURCE_DIR}\"
                 --package-root \"${FHELIUM_FINAL_PACKAGE_ROOT}\"
                 --backends \"${FHELIUM_FINAL_BACKENDS}\"
+                --hip-architectures \"${CMAKE_HIP_ARCHITECTURES}\"
+                --hip-compiler-id \"${CMAKE_HIP_COMPILER_ID}\"
+                --hip-compiler-version \"${CMAKE_HIP_COMPILER_VERSION}\"
+                --hip-version \"${hip_VERSION}\"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         RESULT_VARIABLE result
     )

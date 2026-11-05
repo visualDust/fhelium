@@ -1,4 +1,4 @@
-"""Permissive context and value helpers for multi-depth FHElium IR.
+"""xDSL context and value helpers for mixed-level FHElium IR.
 
 First-party operations and types live in distinct registered dialect modules.
 The context loads all registered first-party dialects while preserving unknown operations and

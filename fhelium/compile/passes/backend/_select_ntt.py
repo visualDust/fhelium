@@ -1,4 +1,4 @@
-"""Select NTT schedules without replacing supplied numerical materials."""
+"""Select NTT schedules from operation constraints and supplied materials."""
 
 from __future__ import annotations
 
@@ -28,7 +28,9 @@ from ..._pipeline import DecisionRecord, PassResult, PassStats
 from .._operation_transforms import program_operations
 
 _NTT_TYPES = tuple(
-    cast(type[Operation], spec.operation_type) for spec in ntt.OPERATION_SPECS
+    cast(type[Operation], spec.operation_type)
+    for spec in ntt.OPERATION_SPECS
+    if issubclass(cast(type[Operation], spec.operation_type), ntt._NttOp)
 )
 _TRANSFORMS = (*_NTT_TYPES, ckks.ToNttOp, ckks.FromNttOp)
 

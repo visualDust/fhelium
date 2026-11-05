@@ -6,7 +6,6 @@ import inspect
 from collections.abc import Callable, Mapping
 from functools import update_wrapper
 from threading import RLock
-from types import FunctionType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -35,6 +34,7 @@ from ._specialization import CallSignature, SpecializationMiss, describe_call
 from ._workspace import CompileWorkspace
 from .frontend._captured_callable import CapturedCallable
 from .frontend._invocation import capture_invocation
+from .frontend._objects import python_callable
 from .frontend._specs import InputSpec
 
 if TYPE_CHECKING:
@@ -102,37 +102,9 @@ def _prepare_argument_binding(signature: inspect.Signature):
 
 
 class CompiledCallable(Generic[_P, _R]):
-    """Prepare and repeatedly execute a Python function or Compile Program.
+    """A callable that caches input-specialized executables for one source computation.
 
-    Construction does not capture, compile, allocate execution buffers, or run
-    the computation. A first call prepares its input variant unless
-    ``on_miss='error'`` requires prior ``prepare``. Later calls reuse a linked
-    executable when recorded input conditions match. No global capture context
-    is installed, and compilation failures never silently execute Python.
-
-    ``pipeline`` is a complete caller-supplied pass sequence, or a function
-    selecting one from a ``CallSignature``. Omitting it selects dead-value
-    removal, legal rotation hoisting, internal-transform reuse, and supported
-    CUDA fusion while retaining native whole-operation routes. It does not
-    insert rescaling or relinearization. Explicit pipelines replace that
-    sequence rather than extending an implicit default.
-
-    ``backend=None`` uses the standard operation registry. Captured numerical
-    data belongs to each Compilation's material_bindings. Capture may use
-    several Engines as data providers; it does not establish an Engine owner
-    or generate missing evaluation keys. Each specialization exposes the actual
-    Backend selected for its transformed Program.
-
-    Inputs are flat Tensor/CKKS values and immutable scalar parameters. Capture
-    supports pure Python functions, not async functions, methods, or arbitrary
-    callable objects. A compiled helper is source-inlined during Eager capture;
-    the outer pipeline and Backend govern its operations.
-
-    The top-level workspace and material binding dictionary are copied. Their
-    materials and other custom mutable entries remain caller-owned and shared.
-    Clear a callable after changing captured Python constants, and create a new
-    one after changing a source Program or pass policy. Ordinary input Tensor
-    contents may change without recompilation.
+    ``prepare`` creates and links a specialization for given arguments. Calls reuse a matching executable; a cache miss prepares a new specialization by default, or raises ``SpecializationMiss`` when ``on_miss='error'``. ``clear`` releases the cached specializations.
     """
 
     def __init__(
@@ -146,6 +118,20 @@ class CompiledCallable(Generic[_P, _R]):
         inputs: Mapping[str, InputSpec] | None = None,
         material_names: Mapping[str, object] | None = None,
     ) -> None:
+        """Record the source and options used to prepare specializations.
+
+        Program sources are cloned. Workspace and material-binding dictionaries are shallow-copied; referenced Tensors and custom mutable entries remain shared. Python sources retain their signature, function metadata, and ``reference`` callable. Construct a new object after changing the source Program or pass policy.
+
+        Args:
+            source: Python callable, Program, or Compilation to specialize.
+            backend: Implementation registry and execution resources. ``None`` selects the standard operation registry during preparation.
+            pipeline: Complete pass sequence, or a function from ``CallSignature`` to Pipeline. ``None`` selects ``default_lower_and_fuse_pipeline``.
+            on_miss: ``"compile"`` prepares a missing specialization on invocation; ``"error"`` requires a matching specialization from ``prepare``.
+            workspace: Shared capture and pass inputs for a Python callable or Program source. A Compilation supplies its own workspace.
+            inputs: Input-role declarations selecting the FX frontend for Python capture.
+            material_names: Stable symbols for fixed Tensor/value objects encountered during Python capture.
+        """
+
         if on_miss not in ("compile", "error"):
             raise ValueError("on_miss must be 'compile' or 'error'")
         if material_names is not None and isinstance(
@@ -161,7 +147,7 @@ class CompiledCallable(Generic[_P, _R]):
         self._material_names = (
             None if material_names is None else dict(material_names)
         )
-        self._source: Compilation | FunctionType
+        self._source: Compilation | Callable[_P, _R]
         self._workspace: CompileWorkspace | None
         self.reference: Callable[_P, _R] | None = None
         origin: CapturedCallable[Any] | None = None
@@ -182,11 +168,8 @@ class CompiledCallable(Generic[_P, _R]):
                 fresh_workspace({} if workspace is None else workspace),
             )
             self._workspace = None
-        elif (
-            isinstance(source, FunctionType)
-            and not inspect.iscoroutinefunction(source)
-            and not inspect.isasyncgenfunction(source)
-        ):
+        elif callable(source):
+            python_callable(source)
             self._source = source
             self._workspace = fresh_workspace(
                 {} if workspace is None else workspace
@@ -194,7 +177,7 @@ class CompiledCallable(Generic[_P, _R]):
             self.reference = source
         else:
             raise TypeError(
-                "compile source must be a pure Python function, Program, or Compilation"
+                "compile source must be a Python callable, Program, or Compilation"
             )
         if isinstance(self._source, Compilation):
             if inputs is not None:
@@ -301,21 +284,19 @@ class CompiledCallable(Generic[_P, _R]):
             return prepared
 
     def prepare(self, *args: _P.args, **kwargs: _P.kwargs) -> Specialization:
-        """Capture, transform, and link this invocation without executing it.
+        """Prepare and return the specialization matching these arguments.
 
-        Preparation is allowed with ``on_miss='error'``. That option governs the
-        callable's prepared-program cache, not a Backend compiler's kernel cache.
-        Lazy Triton kernels may compile GPU binaries on the first actual call;
-        execute representative warmup calls before timing or CUDA Graph capture.
-        Material bindings and existing execution resources are supplied during
-        linking; preparation neither generates evaluation keys nor executes
-        the captured numerical computation.
+        Preparation captures the source when needed, runs its selected pipeline, and links the resulting Program. A matching cached specialization is returned directly. This method populates the cache under either ``on_miss`` policy.
+
+        Device-kernel compilation may occur on first execution after linking. Warm representative calls before measuring steady-state execution or capturing device launches.
         """
 
         arguments = self._arguments(args, kwargs)
         return self._prepare(arguments, describe_call(arguments))
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _R:
+        """Execute a matching specialization, preparing it on a permitted cache miss."""
+
         values = self._bind_arguments(*args, **kwargs)
         prepared = self._last_prepared
         if prepared is not None and prepared._matches(values):
@@ -339,11 +320,7 @@ class CompiledCallable(Generic[_P, _R]):
     ) -> CompiledCallable[_P, _R]:
         """Relink a snapshot of compiled variants against another Backend.
 
-        The returned callable starts without linked executables: call ``prepare``
-        first when ``on_miss='error'``. Existing compilations retain their selected
-        implementations and target/ABI assumptions. A changed Backend is not an
-        instruction to silently reselect implementations or migrate machine code.
-        New input signatures are prepared independently by each callable.
+        Call ``prepare`` to link the returned callable before execution when ``on_miss='error'``. Existing compilations retain their selected implementations and target/ABI requirements, which the new Backend must satisfy. Each callable prepares new input signatures independently.
         """
 
         rebound: CompiledCallable[_P, _R] = CompiledCallable(
@@ -360,10 +337,9 @@ class CompiledCallable(Generic[_P, _R]):
         return rebound
 
     def clear(self) -> None:
-        """Release this callable's variants without destroying caller resources.
+        """Release this callable's specialization cache.
 
-        Peers made with ``with_backend`` retain their previously shared compiled
-        results. No allocator flush or resource mutation is performed.
+        Call this after changing captured Python constants so the next preparation captures their new values. Changes to input Tensor contents reuse the existing specialization while its recorded input conditions hold. Caller resources and compiled results retained by peers made with ``with_backend`` remain live.
         """
 
         with self._prepare_lock:

@@ -19,8 +19,7 @@ class IndexedRadix2NttPlan:
     twiddles contain only the nontrivial odd lane and have shape
     ``[prime, logN, N/2]``. No all-one even-lane tensor is allocated.
     Schedules use ``torch.int32``; standard-residue twiddles use the config's
-    integral dtype. All tensors are on ``device`` and prime rows follow
-    ``ckks_config.moduli`` exactly. These immutable plan tables do not alias.
+    integral dtype. All tensors are on ``device`` and prime rows follow ``ckks_config.moduli`` order. These immutable plan tables do not alias.
     """
 
     def __init__(

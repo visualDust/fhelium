@@ -15,10 +15,12 @@ namespace {
 
 using fhelium::ckks::cpu::check_cpu_peer;
 
-torch::Tensor keyswitch_moddown_cpu(const torch::Tensor q_residues,
+template <bool Nearest>
+torch::Tensor keyswitch_moddown_cpu_impl(const torch::Tensor q_residues,
                                     const torch::Tensor p_residues,
                                     const torch::Tensor inverse,
-                                    const torch::Tensor rns_params) {
+                                    const torch::Tensor rns_params,
+                                    const std::optional<torch::Tensor> half) {
   constexpr const char* operation = "keyswitch_moddown_qp_to_q";
   for (const auto& peer : {p_residues, inverse, rns_params}) {
     check_cpu_peer(q_residues, peer, operation, "peer tensor");
@@ -36,9 +38,18 @@ torch::Tensor keyswitch_moddown_cpu(const torch::Tensor q_residues,
                   inverse.size(1) >= q.size(1) + p.size(1) - 1,
               operation,
               " inverse table shape mismatch");
+  if constexpr (Nearest) {
+    TORCH_CHECK(half.has_value(), operation, " nearest requires moddown_half");
+    check_cpu_peer(q_residues, *half, operation, "moddown_half");
+    TORCH_CHECK(half->dim() == 1 && half->is_contiguous() &&
+                    half->numel() == q.size(1) + p.size(1),
+                operation, " moddown_half must contain one value per QP row");
+  }
   auto out = torch::empty_like(q_residues);
   auto output = view_rns_batch_3d(out, "out");
   AT_DISPATCH_INTEGRAL_TYPES(q_residues.scalar_type(), operation, [&] {
+    const scalar_t* half_values = nullptr;
+    if constexpr (Nearest) half_values = half->data_ptr<scalar_t>();
     const scalar_t* q_values = q.data_ptr<scalar_t>();
     const scalar_t* p_values = p.data_ptr<scalar_t>();
     const scalar_t* inverse_values = inverse.data_ptr<scalar_t>();
@@ -100,8 +111,17 @@ torch::Tensor keyswitch_moddown_cpu(const torch::Tensor q_residues,
                  coefficient < coefficient_end;
                  ++coefficient) {
               for (int64_t row = 0; row < p_count; ++row) {
-                p_chain[static_cast<size_t>(row)] =
-                    p_rows[row * p_stride1 + coefficient * p_stride2];
+                scalar_t value = p_rows[row * p_stride1 + coefficient * p_stride2];
+                if constexpr (Nearest) {
+                  const auto constants = fhelium::cpu::load_constants(
+                      parameter_rows, parameter_row_stride, parameter_limb_stride,
+                      q_count + row);
+                  value = fhelium::cpu::reduce_to_standard(
+                      fhelium::cpu::add_lazy(value, half_values[q_count + row],
+                                            constants.twice_modulus),
+                      constants.twice_modulus);
+                }
+                p_chain[static_cast<size_t>(row)] = value;
               }
               for (int64_t row = p_count - 2; row >= 0; --row) {
                 scalar_t value = p_chain[static_cast<size_t>(row)];
@@ -132,8 +152,14 @@ torch::Tensor keyswitch_moddown_cpu(const torch::Tensor q_residues,
                                                  parameter_row_stride,
                                                  parameter_limb_stride,
                                                  row);
+                scalar_t source = q_rows[row * q_stride1 + coefficient * q_stride2];
+                if constexpr (Nearest) {
+                  source = fhelium::cpu::reduce_to_standard(
+                      fhelium::cpu::add_lazy(source, half_values[row], constants.twice_modulus),
+                      constants.twice_modulus);
+                }
                 scalar_t value = fhelium::cpu::multiply(
-                    q_rows[row * q_stride1 + coefficient * q_stride2],
+                    source,
                     prefix_inverse[row * p_count + p_count - 1],
                     constants);
                 for (int64_t p_row = 0; p_row < p_count; ++p_row) {
@@ -155,6 +181,18 @@ torch::Tensor keyswitch_moddown_cpu(const torch::Tensor q_residues,
         });
   });
   return out;
+}
+
+torch::Tensor keyswitch_moddown_cpu(
+    const torch::Tensor q, const torch::Tensor p,
+    const torch::Tensor inverse, const torch::Tensor parameters,
+    const std::optional<torch::Tensor> half, const std::string& rounding) {
+  TORCH_CHECK(rounding == "nearest" || rounding == "floor",
+              "ModDown rounding must be 'nearest' or 'floor'");
+  if (rounding == "nearest") {
+    return keyswitch_moddown_cpu_impl<true>(q, p, inverse, parameters, half);
+  }
+  return keyswitch_moddown_cpu_impl<false>(q, p, inverse, parameters, half);
 }
 
 void keyswitch_accumulate_cpu_(torch::Tensor accumulator0_qp,

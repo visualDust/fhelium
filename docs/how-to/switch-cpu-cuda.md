@@ -103,7 +103,7 @@ Generating a new secret key independently on another device creates a different 
 cuda_secret_key = cpu_secret_key.to("cuda:0")
 cuda_public_key = engine.create_public_key(cuda_secret_key)
 
-# Equivalent explicit placement request; the input relation is copied first.
+# Equivalent placement request; the input relation is copied first.
 cuda_rotation_key = engine.create_rotation_key(
     1,
     cpu_secret_key,
