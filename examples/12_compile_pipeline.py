@@ -59,7 +59,9 @@ def main() -> None:
         workspace=workspace,
     )
 
-    # Compose the built-in passes required by this workload.
+    # Compile with declared layouts and unbound numerical materials.
+    backend = OperationBackend()
+    prepare_operands = fh_compile.PrepareOperationOperandsPass(backend.registry)
     pipeline = fh_compile.Pipeline(
         (
             fh_compile.EliminateDeadValuesPass(),
@@ -70,22 +72,18 @@ def main() -> None:
             fh_compile.InsertRelinearizationPass(),
             fh_compile.InsertRescalePass(),
             fh_compile.AssignCkksDepthsPass(entry_depth=0),
-            fh_compile.AssignCkksScalesPass(
-                entry_scale=config.default_scale,
-            ),
+            fh_compile.AssignCkksScalesPass(entry_scale=config.default_scale),
+            prepare_operands,
             fh_compile.AssignNttImplementationPass(
                 "native-ntt", ntt_backend="radix2_indexed"
             ),
             fh_compile.LowerCkksToRnsNttPass(),
-            fh_compile.SelectNttImplementationsPass(
-                OperationBackend().registry
-            ),
-            fh_compile.PrepareOperationOperandsPass(
-                OperationBackend().registry
-            ),
+            fh_compile.SelectNttImplementationsPass(backend.registry),
+            prepare_operands,
         )
     )
     compiled = pipeline.run(captured)
+    assert not compiled.material_bindings
 
     requirements = ir.analyze_evaluation_key_requirements(compiled.program)
     engine = Engine(config, rng_seed=17)
@@ -105,6 +103,8 @@ def main() -> None:
         device=device,
         rng_seed=29,
     )
+    # Supply numerical data after compilation. Another compatible key set can
+    # bind the same Program without repeating lowering.
     fh_compile.prepare_material_bindings(
         compiled,
         resources=resources,
@@ -117,7 +117,6 @@ def main() -> None:
             ),
         ),
     )
-    backend = OperationBackend()
     executable = backend.link(compiled)
 
     logical_x = torch.linspace(

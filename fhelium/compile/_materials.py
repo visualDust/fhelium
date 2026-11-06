@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, cast
 
 import torch
-from xdsl.dialects.builtin import StringAttr
+from xdsl.dialects.builtin import ArrayAttr, IntegerAttr, StringAttr
 from xdsl.ir import Attribute, Operation, SSAValue
 
 from fhelium.config import (
@@ -271,8 +271,8 @@ def prepare_material_bindings(
             symbol, named_keys.get(str(description.get("label", "")))
         )
         if selected is not None:
-            compilation.material_bindings[symbol] = _key_tensor(selected)
             _represent_key_layout(compilation, symbol, selected)
+            compilation.material_bindings[symbol] = _key_tensor(selected)
             continue
         kind = description.get("kind")
         if not isinstance(kind, str):
@@ -327,10 +327,10 @@ def prepare_material_bindings(
                     candidates[id(tensor)] = tensor
         if len(candidates) == 1:
             tensor = next(iter(candidates.values()))
-            compilation.material_bindings[symbol] = tensor
             _represent_key_layout(
                 compilation, symbol, candidate_keys.get(id(tensor))
             )
+            compilation.material_bindings[symbol] = tensor
         else:
             missing.append(symbol)
     return tuple(missing)
@@ -345,7 +345,7 @@ def _inventory_key_for_symbol(
     """Select references covering the actual rows of all CKKS key consumers."""
     import json
     from xdsl.dialects.builtin import ArrayAttr, IntegerAttr
-    from fhelium.ir.dialects import ckks
+    from fhelium.ir.dialects import ckks, rns
 
     kind = description.get("kind")
     if kind not in {"RotationKey", "RelinearizationKey", "ConjugationKey"}:
@@ -434,7 +434,61 @@ def _inventory_key_for_symbol(
                 steps = tuple(step for _, step in pairs)
                 operands = tuple(consumer.keys)
             else:
-                return None
+                # A lowered consumer uses the already declared stored layout.
+                state = getattr(
+                    getattr(reference.value.type, "state", None), "data", {}
+                )
+                rows = integer_tuple(state.get("prime_ids"))
+                supports = state.get("digit_prime_ids")
+                if rows is None or not isinstance(supports, ArrayAttr):
+                    return None
+                q_ids = tuple(
+                    i
+                    for digit in supports
+                    for i in cast(tuple[int, ...], integer_tuple(digit))
+                )
+                physical = dict(state)
+                if (
+                    isinstance(consumer, rns.KeySwitchDigitProductOp)
+                    and use.index == 1
+                ):
+                    source_state = getattr(
+                        getattr(consumer.operands[0].type, "state", None),
+                        "data",
+                        {},
+                    )
+                    for name in ("ring_dimension", "dtype", "device"):
+                        if (
+                            physical.get(name) in (None, StringAttr("unknown"))
+                            and name in source_state
+                        ):
+                            physical[name] = source_state[name]
+                ring = physical.get("ring_dimension")
+                dtype = physical.get("dtype")
+                device = physical.get("device")
+                source_facts.append(
+                    {
+                        "q_prime_ids": q_ids,
+                        "p_prime_ids": rows[len(q_ids) :],
+                        "ring_dimension": int(ring.value.data)
+                        if isinstance(ring, IntegerAttr)
+                        else None,
+                        "dtype": getattr(
+                            torch, dtype.data.removeprefix("torch.")
+                        )
+                        if isinstance(dtype, StringAttr)
+                        and dtype.data != "unknown"
+                        else None,
+                        "device": device.data
+                        if isinstance(device, StringAttr)
+                        and device.data != "unknown"
+                        else None,
+                    }
+                )
+                group_keys.append(reference.value)
+                if kind == "RotationKey":
+                    required_steps.append(cast(int, requested_step))
+                continue
             if any(step is None for step in steps):
                 return None
             group_keys.extend(operands)
@@ -568,29 +622,253 @@ def _inventory_key_for_symbol(
     return inventory.select_conjugation(**facts)
 
 
-def _represent_key_layout(
-    compilation: Compilation, symbol: str, key: object
-) -> None:
-    """Assign supplied key value facts to its named Tensor placeholder."""
-    if not isinstance(key, KeySwitchKey):
-        return
+def _key_state_attributes(fields: Mapping[str, object]) -> dict[str, Attribute]:
+    """Convert ordinary key-layout fields to the existing open type state."""
+    from .frontend._eager_values import state_attribute
+
+    facts = {}
+    for name, value in fields.items():
+        if name in {"prime_ids", "shape", "strides"}:
+            value = tuple(cast(Iterable[int], value))
+        elif name == "digit_prime_ids":
+            value = tuple(
+                tuple(rows) for rows in cast(Iterable[Iterable[int]], value)
+            )
+        attribute = state_attribute(value)
+        if attribute is None:
+            raise TypeError(f"Unsupported key layout field {name!r}: {value!r}")
+        facts[name] = attribute
+    return facts
+
+
+def _key_layout_description(
+    facts: Mapping[str, Attribute],
+) -> dict[str, object]:
+    """Describe the mathematical layout carried by a key operand."""
+    result: dict[str, object] = {}
+    for name in (
+        "prime_ids",
+        "digit_prime_ids",
+        "polynomial_domain",
+        "residue_representation",
+        "rotation_step",
+        "basis",
+    ):
+        value = facts.get(name)
+        if isinstance(value, ArrayAttr):
+            result[name] = (
+                [
+                    [
+                        int(cast(IntegerAttr, i).value.data)
+                        for i in cast(ArrayAttr, rows)
+                    ]
+                    for rows in value
+                ]
+                if name == "digit_prime_ids"
+                else [int(cast(IntegerAttr, i).value.data) for i in value]
+            )
+        elif isinstance(value, StringAttr) and value.data != "unknown":
+            result["modulus_basis" if name == "basis" else name] = value.data
+        elif isinstance(value, IntegerAttr):
+            result[name] = int(value.value.data)
+    return result
+
+
+def _assign_key_facts(
+    compilation: Compilation,
+    symbol: str,
+    facts: Mapping[str, Attribute],
+    description: Mapping[str, object],
+) -> bool:
+    """Fill key facts without changing a represented execution contract."""
     from xdsl.rewriter import Rewriter
     from fhelium.ir.dialects import ckks
-    from .frontend._eager_values import state_attributes
 
-    facts = state_attributes(key)
-    for operation in tuple(compilation.program.walk()):
+    previous = compilation.program.material_descriptions.get(symbol, {})
+    for name in (
+        "prime_ids",
+        "digit_prime_ids",
+        "polynomial_domain",
+        "residue_representation",
+        "modulus_basis",
+        "rotation_step",
+    ):
+        known = previous.get(name)
+        value = description.get(name)
         if (
+            known is not None
+            and known != "unknown"
+            and value is not None
+            and known != value
+        ):
+            raise ValueError(
+                f"Key material {symbol!r} conflicts with declared {name}"
+            )
+    updates = []
+    for operation in compilation.program.walk():
+        if not (
             isinstance(operation, core.MaterialRefOp)
             and operation.symbol is not None
             and operation.symbol.data == symbol
             and isinstance(operation.value.type, ckks.EvaluationKeyType)
         ):
-            typ = operation.value.type
-            Rewriter.replace_value_with_new_type(
-                operation.value, typ.with_state({**typ.state.data, **facts})
-            )
-    compilation.program.set_material_description(symbol, key_description(key))
+            continue
+        typ = operation.value.type
+        additions = {}
+        for name, value in facts.items():
+            represented = typ.state.data.get(name)
+            if represented is None or represented == StringAttr("unknown"):
+                additions[name] = value
+            elif represented != value:
+                if (
+                    name == "dtype"
+                    and isinstance(represented, StringAttr)
+                    and isinstance(value, StringAttr)
+                    and represented.data.removeprefix("torch.")
+                    == value.data.removeprefix("torch.")
+                ):
+                    continue
+                # Physical extents may still contain unknown dimensions.
+                if (
+                    name in {"shape", "strides"}
+                    and isinstance(represented, ArrayAttr)
+                    and isinstance(value, ArrayAttr)
+                    and len(represented) == len(value)
+                    and all(
+                        known == actual
+                        or isinstance(known, IntegerAttr)
+                        and known.value.data < 0
+                        for known, actual in zip(
+                            represented, value, strict=True
+                        )
+                    )
+                ):
+                    additions[name] = value
+                else:
+                    raise ValueError(
+                        f"Key material {symbol!r} conflicts with declared {name}"
+                    )
+        if additions:
+            updates.append((operation.value, typ.with_state(additions)))
+    for value, typ in updates:
+        Rewriter.replace_value_with_new_type(value, typ)
+    merged = {**previous, **description}
+    # A named binding can supply a generic key object for a declared role.
+    if "kind" in previous:
+        merged["kind"] = previous["kind"]
+    if merged != previous:
+        compilation.program.set_material_description(symbol, merged)
+    return bool(updates) or merged != previous
+
+
+def _prepare_key_layouts(
+    compilation: Compilation,
+    layouts: Mapping[str, Mapping[str, object]],
+    *,
+    defaults: bool,
+) -> int:
+    """Declare layouts without numerical data, sharing facts across aliases.
+
+    Explicit entries use material symbols or labels and can retain partial
+    state. Defaults select the configured depth-zero layout only when no
+    layout has been declared. Bound-key facts are supplied between these steps.
+    """
+    import json
+    from fhelium.backend.rns.layout import RnsLayout
+    from fhelium.ir.dialects import ckks
+
+    references: dict[str, list[core.MaterialRefOp]] = {}
+    for operation in compilation.program.walk():
+        if (
+            isinstance(operation, core.MaterialRefOp)
+            and operation.symbol is not None
+            and isinstance(operation.value.type, ckks.EvaluationKeyType)
+        ):
+            references.setdefault(operation.symbol.data, []).append(operation)
+    changed = 0
+    for symbol, aliases in references.items():
+        description = compilation.program.material_descriptions.get(symbol, {})
+        supplied = layouts.get(
+            symbol, layouts.get(str(description.get("label", "")))
+        )
+        if supplied is None and not defaults:
+            continue
+        facts = _key_state_attributes(supplied) if supplied is not None else {}
+        for alias in aliases:
+            for name, value in cast(
+                ckks.EvaluationKeyType, alias.value.type
+            ).state.data.items():
+                if name not in {"shape", "strides"} and value != StringAttr(
+                    "unknown"
+                ):
+                    facts.setdefault(name, value)
+        for name in (
+            "prime_ids",
+            "digit_prime_ids",
+            "polynomial_domain",
+            "residue_representation",
+            "rotation_step",
+            "modulus_basis",
+        ):
+            value = description.get(name)
+            if value is not None and value != "unknown":
+                state_name = "basis" if name == "modulus_basis" else name
+                facts.setdefault(
+                    state_name,
+                    _key_state_attributes({state_name: value})[state_name],
+                )
+        if supplied is None and not any(
+            isinstance(facts.get(name), ArrayAttr)
+            for name in ("prime_ids", "digit_prime_ids")
+        ):
+            if description.get("kind") not in {
+                "KeySwitchKey",
+                "RotationKey",
+                "RelinearizationKey",
+                "ConjugationKey",
+            }:
+                continue
+            config = compilation.workspace.get(CkksConfig)
+            for alias in aliases:
+                for use in alias.value.uses:
+                    represented = use.operation.attributes.get("ckks_config")
+                    if (
+                        isinstance(represented, StringAttr)
+                        and represented.data != "unknown"
+                    ):
+                        config = CkksConfig.parse(json.loads(represented.data))
+                        break
+            if not isinstance(config, CkksConfig):
+                continue
+            layout = RnsLayout.from_config(config)
+            for name, value in _key_state_attributes(
+                {
+                    "prime_ids": layout.prime_ids(0, include_p=True),
+                    "digit_prime_ids": layout.hybrid_decomposition.depth_zero_digits,
+                    "polynomial_domain": "ntt",
+                    "residue_representation": "montgomery",
+                    "basis": "QP",
+                    "ring_dimension": config.N,
+                }
+            ).items():
+                facts.setdefault(name, value)
+        changed += _assign_key_facts(
+            compilation, symbol, facts, _key_layout_description(facts)
+        )
+    return changed
+
+
+def _represent_key_layout(
+    compilation: Compilation, symbol: str, key: object
+) -> None:
+    """Assign missing key facts and check the already declared layout."""
+    if not isinstance(key, KeySwitchKey):
+        return
+    from .frontend._eager_values import state_attributes
+
+    facts = state_attributes(key)
+    facts["ring_dimension"] = IntegerAttr(key.data.size(-1), 64)
+    _assign_key_facts(compilation, symbol, facts, key_description(key))
 
 
 def _key_tensor(value: object) -> torch.Tensor:

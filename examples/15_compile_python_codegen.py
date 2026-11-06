@@ -73,19 +73,23 @@ def main() -> None:
 
     # Continue lowering, then independently emit direct Backend implementation
     # calls. Moving either emitter to an unsupported stage makes that emitter
-    # report the first operation it cannot convert.
+    # report the first operation it cannot convert. Key layouts are declared
+    # without key data; the generated function receives materials when called.
+    registry = OperationBackend().registry
+    prepare_operands = fh_compile.PrepareOperationOperandsPass(
+        registry,
+    )
     backend_compilation = fh_compile.Pipeline(
         (
+            prepare_operands,
+            fh_compile.ResolveTensorPlaceholdersPass(),
             fh_compile.AssignNttImplementationPass(
                 "native-ntt", ntt_backend="radix2_indexed"
             ),
             fh_compile.LowerCkksToRnsNttPass(),
-            fh_compile.SelectNttImplementationsPass(
-                OperationBackend().registry
-            ),
-            fh_compile.PrepareOperationOperandsPass(
-                OperationBackend().registry
-            ),
+            fh_compile.SelectNttImplementationsPass(registry),
+            prepare_operands,
+            fh_compile.ResolveTensorPlaceholdersPass(),
             fh_compile.EmitBackendPythonPass(),
         )
     ).run(ckks_compilation)
@@ -93,6 +97,8 @@ def main() -> None:
         fh_compile.BackendPythonSource,
         backend_compilation.workspace[fh_compile.BackendPythonSource],
     )
+
+    assert not backend_compilation.material_bindings
 
     engine = Engine(config, rng_seed=23)
     secret_key = engine.create_secret_key(device="cpu")
@@ -102,6 +108,18 @@ def main() -> None:
         secret_key,
         device="cpu",
     )
+    materializer = CkksDeviceResources(
+        config=config,
+        device="cpu",
+        rng_seed=29,
+    )
+
+    fh_compile.prepare_material_bindings(
+        backend_compilation,
+        resources=materializer,
+        keys=(rotation_key,),
+    )
+
     logical_x = torch.linspace(
         -0.04,
         0.04,
@@ -126,14 +144,6 @@ def main() -> None:
     )
     assert isinstance(eager_result, Ciphertext)
 
-    materializer = CkksDeviceResources(
-        config=config,
-        device="cpu",
-        rng_seed=29,
-    )
-    fh_compile.prepare_material_bindings(
-        backend_compilation, resources=materializer, keys=(rotation_key,)
-    )
     backend_function = _load_function(backend_source)
     backend_result = backend_function(
         encrypted_x.data,

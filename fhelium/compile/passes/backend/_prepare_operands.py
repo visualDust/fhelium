@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 import json
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import cast
 
 from xdsl.dialects.builtin import (
@@ -30,6 +30,7 @@ from fhelium.config import CkksConfig
 from fhelium.ir.dialects import core, rns
 
 from ..._materials import (
+    _prepare_key_layouts,
     material_sources,
     declare_material,
     rns_parameter_identity,
@@ -55,7 +56,11 @@ class PrepareOperationOperandsPass:
     A Backend's optional ``tensor_requirements(operation, config)`` returns
     operation attributes and named material descriptions. This pass adds only
     missing operands; supplied Tensors, assignments, and existing symbols remain
-    unchanged. Optional caller-supplied resources and keys populate missing
+    unchanged. Unbound key placeholders use the configured depth-zero Q/P and
+    digit layout. ``key_layouts`` supplies per-symbol or per-label type-state
+    fields instead; partial entries keep unspecified layout facts unresolved.
+    Existing key facts are retained. Layout declaration needs no key Tensor.
+    Optional caller-supplied resources and keys populate missing
     entries in the current Compilation's material table through the shared
     preparation utility. Implementations can defer requirements when execution facts are insufficient.
     """
@@ -68,6 +73,10 @@ class PrepareOperationOperandsPass:
         | Iterable[CkksDeviceResources | RnsContext | NttContext]
     ) = ()
     keys: Mapping[object, object] | Iterable[object] | EvaluationKeySet = ()
+
+    key_layouts: Mapping[str, Mapping[str, object]] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         from collections.abc import Mapping
@@ -84,8 +93,16 @@ class PrepareOperationOperandsPass:
         workspace = compilation.workspace
         matched = transformed = inserted = skipped = 0
         decisions = []
+        layouts = _prepare_key_layouts(
+            compilation, self.key_layouts, defaults=False
+        )
         if self.keys:
             prepare_material_bindings(compilation, keys=self.keys)
+        layouts += _prepare_key_layouts(
+            compilation, self.key_layouts, defaults=True
+        )
+        transformed += layouts
+        matched += layouts
         for operation in program_operations(program):
             if not self.registry.supports(operation):
                 continue

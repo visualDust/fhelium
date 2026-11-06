@@ -48,12 +48,13 @@ def default_lower_and_fuse_pipeline(
     | NttContext
     | Iterable[CkksDeviceResources | RnsContext | NttContext] = (),
     keys: Mapping[object, object] | Iterable[object] | EvaluationKeySet = (),
+    key_layouts: Mapping[str, Mapping[str, object]] | None = None,
 ) -> Pipeline:
     """Build an editable lowering-and-fusion pipeline for a mixed-level Program.
 
     The recipe lowers high-level encrypted arithmetic, propagates represented entry state, removes dead values, hoists compatible rotations, reuses internal pure computations, and selects supported fusion regions. Supplied CKKS transitions are preserved. Rescale and relinearization scheduling require caller-added passes before depth and scale assignment.
 
-    Passes read Tensor facts from the Compilation's shared material bindings. Optional resources and keys supply missing numerical data during operand preparation, before dependent fusion choices. Missing keys remain unresolved for caller provisioning.
+    Passes read Tensor facts from the Compilation's shared material bindings. Optional resources and keys supply missing numerical data during operand preparation, before dependent fusion choices. Missing key data remains unresolved for caller provisioning. Unbound key layouts default to the configured depth-zero layout; ``key_layouts`` provides per-symbol or per-label alternatives without numerical material.
 
     Lowerings are selected per operation from registered implementations and their fusion support. Selection uses represented operation and layout facts. Missing preparation facts may remain in the optimized Program until linking requires them.
     """
@@ -64,7 +65,10 @@ def default_lower_and_fuse_pipeline(
         if callable(getattr(implementation, "match_fusion", None))
     )
     prepare = PrepareOperationOperandsPass(
-        backend.registry, resources=resources, keys=keys
+        backend.registry,
+        resources=resources,
+        keys=keys,
+        key_layouts={} if key_layouts is None else key_layouts,
     )
     passes: list[Pass] = [
         ResolveTensorPlaceholdersPass(),

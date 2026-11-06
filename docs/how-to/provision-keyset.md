@@ -31,6 +31,8 @@ print(requirements.requires_relinearization)
 
 Here `compiled` is the Compilation after the chosen scheduling passes. The analysis reports roles and rotation steps; provisioning also needs the consuming Q/P bases, key layouts and devices. Supply the resulting material through [Compilation preparation](persist-compiled-program.md#3-supply-missing-data-or-replace-an-assignment).
 
+A material-free compilation declares the selected key layout before lowering and binds actual keys afterwards. `PrepareOperationOperandsPass` uses the configured depth-zero layout for unassigned keys; pass `key_layouts={symbol: {"prime_ids": rows, "digit_prime_ids": digits}}` for a different stored layout. The key factories must generate that layout. The same compiled Program can later use another key set with the same parameter and layout contract, without carrying any earlier key payloads.
+
 ## 2. Choose rotation coverage
 
 Derive rotation steps from the actual packing and evaluator schedule, normalize them with the Engine's slot convention, and verify the directions against a cleartext reference. Padding, negative rotations and baby-step/giant-step decomposition can change the required steps even when matrix dimensions agree.

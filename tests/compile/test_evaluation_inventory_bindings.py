@@ -210,3 +210,73 @@ def test_relinearization_and_conjugation_inventory_selection():
             == ()
         )
         assert current.material_bindings['key'] is compact.data
+
+
+def test_declared_layouts_constrain_inventory_and_propagate_to_symbol_aliases():
+    import pytest
+    from fhelium.backend import OperationBackend
+    from fhelium.compile import PrepareOperationOperandsPass
+
+    backend = OperationBackend()
+    full, compact = key(), key(compact=True)
+    for reverse in (False, True):
+        types = (
+            ckks.EvaluationKeyType(),
+            ckks.EvaluationKeyType().with_state(state_attributes(compact)),
+        )
+        if reverse:
+            types = types[::-1]
+        block = Block()
+        refs = [core.MaterialRefOp(typ, symbol="key") for typ in types]
+        block.add_ops(refs)
+        state = compilation(
+            block,
+            tuple(ref.value for ref in refs),
+            {"key": {"kind": "RotationKey", "rotation_step": 1}},
+        )
+        PrepareOperationOperandsPass(backend.registry).run(state)
+        expected = state_attributes(compact)
+        assert all(
+            ref.value.type.state.data["prime_ids"] == expected["prime_ids"]
+            for ref in refs
+        )
+        assert all(
+            ref.value.type.state.data["digit_prime_ids"]
+            == expected["digit_prime_ids"]
+            for ref in refs
+        )
+        assert state.material_bindings == {}
+
+    block = Block(arg_types=(value_type(1),))
+    ref = core.MaterialRefOp(ckks.EvaluationKeyType(), symbol="key")
+    rotation = ckks.RotateOp(block.args[0], ref.value, block.args[0].type)
+    block.add_ops((ref, rotation))
+    state = compilation(
+        block,
+        (rotation.result,),
+        {"key": {"kind": "RotationKey", "rotation_step": 1}},
+    )
+    # An explicit full layout is applied before inventory preference for compact keys.
+    PrepareOperationOperandsPass(
+        backend.registry,
+        keys=EvaluationKeySet((full, compact)),
+        key_layouts={
+            "key": {
+                "prime_ids": full.prime_ids,
+                "digit_prime_ids": full.digit_prime_ids,
+            }
+        },
+    ).run(state)
+    assert state.material_bindings["key"] is full.data
+    before = state.program.to_text()
+    with pytest.raises(ValueError, match="conflicts with declared"):
+        PrepareOperationOperandsPass(
+            backend.registry,
+            key_layouts={
+                "key": {
+                    "prime_ids": compact.prime_ids,
+                    "digit_prime_ids": compact.digit_prime_ids,
+                }
+            },
+        ).run(state)
+    assert state.program.to_text() == before

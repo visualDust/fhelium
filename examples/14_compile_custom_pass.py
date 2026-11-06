@@ -323,6 +323,9 @@ def main() -> None:
         workspace=workspace,
     )
 
+    # Declare layouts and lower without generating or binding evaluation keys.
+    backend = OperationBackend()
+    prepare_operands = fh_compile.PrepareOperationOperandsPass(backend.registry)
     compiled = fh_compile.Pipeline(
         (
             # Replace torch.matmul with the inspectable BSGS rotation and
@@ -350,18 +353,15 @@ def main() -> None:
             fh_compile.AssignCkksScalesPass(
                 entry_scale=config.default_scale,
             ),
-            # Expose message encoding and lower the numerical computation.
+            # Expose message encoding ahead of the numerical lowering.
             fh_compile.LowerMessagePlaintextPreparationPass(),
+            prepare_operands,
             fh_compile.AssignNttImplementationPass(
                 "native-ntt", ntt_backend="radix2_indexed"
             ),
             fh_compile.LowerCkksToRnsNttPass(),
-            fh_compile.SelectNttImplementationsPass(
-                OperationBackend().registry
-            ),
-            fh_compile.PrepareOperationOperandsPass(
-                OperationBackend().registry
-            ),
+            fh_compile.SelectNttImplementationsPass(backend.registry),
+            prepare_operands,
         )
     ).run(captured)
 
@@ -380,7 +380,7 @@ def main() -> None:
         if requirements.requires_relinearization
         else None
     )
-    # Prepare numerical data separately from the portable Program.
+    # Fill the Program's material symbols only after numerical lowering.
     device_resources = CkksDeviceResources(
         config=config,
         device=device,
@@ -398,7 +398,6 @@ def main() -> None:
             ),
         ),
     )
-    backend = OperationBackend()
     executable = backend.link(compiled)
 
     # Check the custom BSGS algebra independently with ordinary float64 data.

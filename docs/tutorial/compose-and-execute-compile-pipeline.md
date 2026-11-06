@@ -33,6 +33,8 @@ Pipelines express workload-specific choices. This example composes the built-in 
 ```python
 from fhelium import compile as fh_compile
 
+backend = OperationBackend()
+prepare_operands = fh_compile.PrepareOperationOperandsPass(backend.registry)
 pipeline = fh_compile.Pipeline(
     (
         fh_compile.EliminateDeadValuesPass(),
@@ -46,25 +48,30 @@ pipeline = fh_compile.Pipeline(
         fh_compile.AssignCkksScalesPass(
             entry_scale=config.default_scale,
         ),
+        prepare_operands,
         fh_compile.AssignNttImplementationPass("native-ntt", ntt_backend="radix2_indexed"),
         fh_compile.LowerCkksToRnsNttPass(),
+        fh_compile.SelectNttImplementationsPass(backend.registry),
+        prepare_operands,
     )
 )
 compiled = pipeline.run(captured)
+assert not compiled.material_bindings
 ```
 
 This sequence records the following caller-selected pipeline choices:
 
-- it selects the CPU indexed NTT schedule;
 - it inserts immediate relinearization and rescale operations for the ciphertext product;
 - it assigns concrete depths and per-value actual scales after transition placement;
-- it lowers the remaining CKKS arithmetic into RNS and NTT operations.
+- it declares the configured key layout and lowers CKKS arithmetic to RNS/NTT operations without generating or binding keys.
 
 Another caller may choose late transition placement, additional analyses, a different lowering route, or a pipeline that returns an intermediate Program.
 
+`PrepareOperationOperandsPass` declares the configured depth-zero Q/P rows and digit supports on unbound key operands. Lowering reads these type facts while key payloads and arithmetic tables remain symbolic inputs. The `key_layouts` argument supplies alternative layouts by material symbol or label; existing captured key facts retain their declared layout.
+
 ## Keys, resources, and linking
 
-`analyze_evaluation_key_requirements(...)` finds the required rotation and relinearization uses. The example creates those keys and uses `prepare_material_bindings` to prepare numerical data from saved descriptions before linking:
+`analyze_evaluation_key_requirements(...)` finds the required rotation and relinearization uses in the compiled Program. The example creates compatible keys afterwards and supplies the numerical materials before linking:
 
 ```python
 fh_compile.prepare_material_bindings(
@@ -72,11 +79,10 @@ fh_compile.prepare_material_bindings(
     resources=resources,
     keys=(*rotation_keys, *((relinearization_key,) if relinearization_key is not None else ())),
 )
-backend = OperationBackend()
 executable = backend.link(compiled)
 ```
 
-The Program contains named placeholders. The separate dictionary supplies Tensor data without embedding an Engine or arithmetic Context in the Program. Linking does not generate data and leaves the source Compilation unchanged.
+Operand preparation runs before lowering to declare the chosen key layout and again after NTT selection to declare its table requirements. Neither invocation needs a material provider. The final binding step fills the existing symbols; linking consumes these bindings. A Program saved without materials can be loaded and bound to another compatible key set without repeating lowering.
 
 ## Encrypted execution
 

@@ -38,7 +38,14 @@ function(add_fhelium_torch_module name src_dir out_subdir)
   set(_FHELIUM_TORCH_MODULE_CXX_STANDARD 17)
   file(STRINGS "${TORCH_PACKAGE_ROOT}/include/ATen/ATen.h"
        _FHELIUM_TORCH_REQUIRES_CXX20 REGEX "__cplusplus < 202002L")
-  if(MSVC OR _FHELIUM_TORCH_REQUIRES_CXX20)
+  # Recent Torch headers default-initialize bit-fields
+  # (c10/core/AutogradState.h), which is a C++20 construct. Host compilers
+  # accept it as an extension in C++17 mode, but the nvcc front end does not,
+  # so a CUDA build must raise the dialect even when ATen.h carries no guard.
+  file(STRINGS "${TORCH_PACKAGE_ROOT}/include/c10/core/AutogradState.h"
+       _FHELIUM_TORCH_BITFIELD_INITIALIZERS REGEX ": 1 =")
+  if(MSVC OR _FHELIUM_TORCH_REQUIRES_CXX20
+     OR _FHELIUM_TORCH_BITFIELD_INITIALIZERS)
     set(_FHELIUM_TORCH_MODULE_CXX_STANDARD 20)
   endif()
 
@@ -69,18 +76,26 @@ function(add_fhelium_torch_module name src_dir out_subdir)
   list(SORT CPP_SOURCES)
   list(SORT CU_SOURCES)
   list(SORT HIP_SOURCES)
-  foreach(_FHELIUM_CUDA_SOURCE IN LISTS CU_SOURCES)
-    file(RELATIVE_PATH _FHELIUM_CUDA_SOURCE_RELATIVE "${CMAKE_SOURCE_DIR}"
-         "${_FHELIUM_CUDA_SOURCE}")
-    string(SHA256 _FHELIUM_CUDA_SOURCE_HASH
-                  "fhelium/${_FHELIUM_CUDA_SOURCE_RELATIVE}")
-    string(SUBSTRING "${_FHELIUM_CUDA_SOURCE_HASH}" 0 16
-                     _FHELIUM_CUDA_SOURCE_SEED)
-    set_property(
-      SOURCE "${_FHELIUM_CUDA_SOURCE}"
-      APPEND
-      PROPERTY COMPILE_OPTIONS "--frandom-seed=0x${_FHELIUM_CUDA_SOURCE_SEED}")
-  endforeach()
+  # --frandom-seed makes each translation unit reproducible, but the option
+  # only exists in CUDA 12.9 and newer. CMake passes nvcc
+  # -forward-unknown-to-host-compiler, so an older toolkit forwards the
+  # unrecognized option to the host compiler, which rejects it.
+  if(FHELIUM_BUILD_CUDA
+     AND CMAKE_CUDA_COMPILER_ID STREQUAL "NVIDIA"
+     AND CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 12.9)
+    foreach(_FHELIUM_CUDA_SOURCE IN LISTS CU_SOURCES)
+      file(RELATIVE_PATH _FHELIUM_CUDA_SOURCE_RELATIVE "${CMAKE_SOURCE_DIR}"
+           "${_FHELIUM_CUDA_SOURCE}")
+      string(SHA256 _FHELIUM_CUDA_SOURCE_HASH
+                    "fhelium/${_FHELIUM_CUDA_SOURCE_RELATIVE}")
+      string(SUBSTRING "${_FHELIUM_CUDA_SOURCE_HASH}" 0 16
+                       _FHELIUM_CUDA_SOURCE_SEED)
+      set_property(
+        SOURCE "${_FHELIUM_CUDA_SOURCE}"
+        APPEND
+        PROPERTY COMPILE_OPTIONS "--frandom-seed=0x${_FHELIUM_CUDA_SOURCE_SEED}")
+    endforeach()
+  endif()
   message(STATUS "Torch module ${name} C++ sources: ${CPP_SOURCES}")
   if(FHELIUM_BUILD_CUDA)
     message(STATUS "Torch module ${name} CUDA sources: ${CU_SOURCES}")

@@ -101,3 +101,31 @@ def test_expected_index_paths_are_derived_from_release_matrix() -> None:
     assert {path.parts[0] for path in expected} == {
         configuration.id for configuration in matrix.configurations
     }
+
+
+@pytest.mark.parametrize("version", ["0.40.0", "0.40.1rc1"])
+def test_pypi_identity_probe_accepts_final_and_candidate_versions(
+    tmp_path, monkeypatch, version
+):
+    pypi_probe = importlib.import_module("pypi_probe")
+    sdist = tmp_path / f"fhelium-{version}.tar.gz"
+    sdist.write_bytes(b"source distribution fixture")
+    requested = []
+
+    def fetch(actual_version):
+        requested.append(actual_version)
+        return {
+            "urls": [
+                {
+                    "filename": sdist.name,
+                    "packagetype": "sdist",
+                    "digests": {"sha256": pypi_probe.sha256(sdist)},
+                    "size": sdist.stat().st_size,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(pypi_probe, "fetch", fetch)
+    monkeypatch.setattr(sys, "argv", ["pypi_probe.py", str(sdist)])
+    pypi_probe.main()
+    assert requested == [version]

@@ -59,13 +59,22 @@ The Eager emitter accepts flat CKKS operations that have a public Engine equival
 
 ## Backend Python emission
 
-The example continues from the CKKS Compilation, lowers arithmetic and rotation into RNS/NTT operations, and invokes the Backend emitter:
+The example continues from the CKKS Compilation, lowers arithmetic and rotation into RNS/NTT operations, and invokes the Backend emitter. Key layouts are declared before lowering; the key and table payloads are supplied after code generation:
 
 ```python
+registry = OperationBackend().registry
+prepare_operands = fh_compile.PrepareOperationOperandsPass(
+    registry,
+)
 backend_compilation = fh_compile.Pipeline(
     (
+        prepare_operands,
+        fh_compile.ResolveTensorPlaceholdersPass(),
         fh_compile.AssignNttImplementationPass("native-ntt", ntt_backend="radix2_indexed"),
         fh_compile.LowerCkksToRnsNttPass(),
+        fh_compile.SelectNttImplementationsPass(registry),
+        prepare_operands,
+        fh_compile.ResolveTensorPlaceholdersPass(),
         fh_compile.EmitBackendPythonPass(),
     )
 ).run(ckks_compilation)
@@ -74,6 +83,8 @@ backend_source = backend_compilation.workspace[
     fh_compile.BackendPythonSource
 ]
 ```
+
+Operand preparation first declares the configured key layout and later declares table requirements for the selected implementations. The generated source retains material symbols and can be emitted with an empty binding dictionary. After creating keys, `prepare_material_bindings(backend_compilation, resources=materializer, keys=(rotation_key,))` supplies the dictionary passed to the generated function.
 
 The generated module imports and instantiates the selected implementation classes, reconstructs literal `OperationInvocation` descriptors, and calls each implementation directly:
 

@@ -108,19 +108,29 @@ The example evaluates the same BSGS formula with clear float64 PyTorch tensors, 
 
 The eight-element input and diagonals are repeated periodically across all configured slots. This makes a full-ring CKKS rotation agree with the intended eight-element cyclic rotation instead of padding the remaining slots with zeros. The example encrypts that tiled input, calls `ProgramExecutable.run(ciphertext)`, decrypts the returned `Ciphertext`, and compares every decoded slot with the tiled clear result.
 
-The example prepares numerical tables and key data separately from the Program:
+The example declares key layouts before lowering and supplies numerical tables and key data after compilation. Its preparation pass has no resources or keys:
 
 ```python
+backend = OperationBackend()
+prepare_operands = fh_compile.PrepareOperationOperandsPass(backend.registry)
+compiled = fh_compile.Pipeline(
+    (
+        prepare_operands,
+        fh_compile.AssignNttImplementationPass("native-ntt", ntt_backend="radix2_indexed"),
+        fh_compile.LowerCkksToRnsNttPass(),
+        fh_compile.SelectNttImplementationsPass(backend.registry),
+        prepare_operands,
+    )
+).run(compiled)
 fh_compile.prepare_material_bindings(
     compiled,
     resources=device_resources,
     keys=(*rotation_keys, *((relinearization_key,) if relinearization_key is not None else ())),
 )
-backend = OperationBackend()
 executable = backend.link(compiled)
 ```
 
-The automatic preparation step adds parameters and key data to `Compilation.material_bindings`, leaving captured matrix materials in place. Backend linking reads this dictionary without generation or description-based correctness checks.
+The first preparation declares the configured key row and digit layout; the second declares materials needed by newly exposed operations. Binding supplies key and table Tensors while retaining the captured matrix materials. Compatible key sets can be bound to separate instances of the compiled Program.
 
 Backend implementations still consume and return Tensor payloads. The executable owns the public Program boundary: it unwraps the input ciphertext, runs the linked Tensor operations, and reconstructs the output ciphertext from the concrete result state assigned by Compile passes.
 

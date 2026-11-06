@@ -30,13 +30,21 @@ This mechanism applies to retained native whole operations as well as newly expo
 
 `SelectNttImplementationsPass` selects missing schedules under existing constraints and declares corresponding table references. Supplied table operands remain dataflow inputs. Selecting a compact radix-2 group width can reuse the compatible compact table layout; incompatible layouts must not be silently substituted.
 
+## Declaring key layouts without payloads
+
+Key operands carry their mathematical layout in `EvaluationKeyType.state`. The ordered `prime_ids` and `digit_prime_ids` determine stored rows, active digit intersections and stable key-plane indices. These fields can be declared without constructing a key Tensor. `PrepareOperationOperandsPass` retains existing key facts and selects the configured depth-zero Q/P layout for unbound keys whose layout has not been declared.
+
+`key_layouts` accepts ordinary dictionaries keyed by material symbol or label. It is available on `PrepareOperationOperandsPass` and `default_lower_and_fuse_pipeline`. Entries use existing type-state field names, for example `{"prime_ids": rows, "digit_prime_ids": digits}`. The rows list the stored Q support followed by the auxiliary basis, and each digit lists the Q support of its stored plane. Explicit partial entries keep unspecified layout facts unresolved; omit layout-dependent lowering until those facts are supplied. Repeated references to one symbol share the same declared layout.
+
+Preparation applies caller-declared constraints before selecting supplied keys, then declares defaults only where layout remains unassigned. The shared RNS decomposition code derives active intervals from these facts. Lowering and Python emission retain symbolic key/table inputs, so a complete Program can be compiled and saved without evaluation-key payloads or arithmetic tables.
+
 ## How does optional data provision work?
 
 `prepare_material_bindings(compilation, resources=..., keys=...)` fills absent entries and returns the symbols still unresolved. Resources can be existing `CkksDeviceResources`, `RnsContext` or `NttContext` providers. Keys can be named entries, an iterable of key values or an application-owned `EvaluationKeySet`.
 
-Named entries matching a material symbol or label supply that binding directly. An iterable supplies candidates whose represented metadata is matched against the material description; absent or ambiguous matches remain unresolved. Existing bindings are preserved. An `EvaluationKeySet` additionally exposes selection among alternative layouts and devices using the actual requirements of the consuming key operands. Active Q supports, P basis, physical rows, digit supports, ring dimension, dtype and device determine a suitable key. Shared material uses must admit one consistent selection. When some execution facts are unknown, selection requires a unique candidate compatible with all known facts; ambiguous or incompatible choices leave the symbol unresolved.
+Named entries matching a material symbol or label supply that binding directly and must satisfy the key operand's declared layout. An iterable supplies candidates whose represented metadata is matched against the material description; absent or ambiguous matches remain unresolved. Existing bindings are preserved. An `EvaluationKeySet` additionally exposes selection among alternative layouts and devices using the actual requirements of the consuming key operands. Active Q supports, P basis, physical rows, digit supports, ring dimension, dtype and device determine a suitable key. Shared material uses must admit one consistent selection. When some execution facts are unknown, selection requires a unique candidate compatible with all known facts; ambiguous or incompatible choices leave the symbol unresolved.
 
-The inventory contains existing rotation, relinearization and conjugation values. Callers create or load those values before preparation and maintain their parameter context and secret relations. Capability or layout matching cannot establish those relations. `prepare_material_bindings` consumes the selected key Tensors and represents their stored row and digit metadata in the Program; it performs no key generation.
+The inventory contains existing rotation, relinearization and conjugation values. Callers create or load those values before preparation and maintain their parameter context and secret relations. Capability or layout matching cannot establish those relations. `prepare_material_bindings` consumes the selected key Tensors, fills missing facts, and checks supplied key objects against already declared row, digit and physical-layout facts before binding them. Named raw Tensor bindings retain the caller's responsibility for the represented key semantics. Binding performs no key generation.
 
 ```python
 from fhelium import compile as fc
@@ -53,7 +61,7 @@ Prepared consumers such as Bootstrap discover encoded materials and selected key
 
 ## What remains live after linking?
 
-Linking resolves references to Tensor objects and builds a host callable retaining those objects. Replacing `compilation.material_bindings[symbol]` later does not rebind an existing executable; relink to use the replacement. In-place writes to the bound Tensor remain visible because linking did not snapshot its contents.
+Linking resolves references to Tensor objects and builds a host callable retaining those objects. Replacing `compilation.material_bindings[symbol]` later does not rebind an existing executable; relink to use a compatible replacement. Loading a material-free Program into separate Compilations gives independent bindings for different key sets without repeating lowering. Changing the Q/P layout or digit partition requires a matching specialization. In-place writes to the bound Tensor remain visible because linking did not snapshot its contents.
 
 Layout-specialized execution still requires its prepared shape, stride, dtype, extent, and placement contract. Mutating storage structure is different from updating compatible contents. Synchronization with active device work or concurrent writers remains the caller's responsibility.
 

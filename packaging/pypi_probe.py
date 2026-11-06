@@ -6,11 +6,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import re
 import time
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+
+from packaging.utils import parse_sdist_filename
 
 
 PROJECT = "fhelium"
@@ -86,8 +87,8 @@ def main() -> None:
     sdist = args.sdist.resolve()
     if not sdist.is_file():
         raise FileNotFoundError(sdist)
-    match = re.fullmatch(r"fhelium-(\d+(?:\.\d+)*)\.tar\.gz", sdist.name)
-    if match is None:
+    project, parsed_version = parse_sdist_filename(sdist.name)
+    if project != PROJECT:
         raise ValueError(
             f"unexpected source distribution filename: {sdist.name}"
         )
@@ -96,7 +97,7 @@ def main() -> None:
             "--attempts must be positive and --interval nonnegative"
         )
 
-    version = match.group(1)
+    version = str(parsed_version)
     for attempt in range(args.attempts):
         value = fetch(version)
         if value is not None:

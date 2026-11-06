@@ -310,3 +310,172 @@ def test_lowered_ntt_switch_keeps_live_coefficient_input_and_key(
             key.data.copy_(
                 engine.create_key_switch_key(secret, secret, device=device).data
             )
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+@pytest.mark.parametrize("lowered", [False, True])
+@pytest.mark.parametrize("custom_layout", [False, True])
+def test_material_free_program_rebinds_independent_keys(
+    tmp_path, lowered, custom_layout, device
+):
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    from fhelium import ir
+    from fhelium.serialization import load_compilation, save_compilation
+    from fhelium.values import EvaluationKeySet
+
+    preset = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    config = CkksConfig(
+        logN=8,
+        q_depth_groups=tuple((q,) for q in preset.q_moduli[:4]),
+        p_moduli=preset.p_moduli[:1],
+        default_scale=preset.default_scale,
+        enforce_security_budget=False,
+    )
+
+    def expression(x):
+        mixed = x + torch.roll(x, 3, dims=-1)
+        return mixed * mixed
+
+    backend = OperationBackend()
+    captured = fc.capture(
+        expression,
+        inputs={
+            "x": fc.encrypted(
+                slots=16,
+                polynomial_domain="coefficient",
+                residue_representation="standard",
+            )
+        },
+        workspace=fc.CompileWorkspace({CkksConfig: config}),
+    )
+    compilation = fc.Pipeline(
+        (
+            fc.LowerSemanticToLogicalPass(),
+            fc.InsertMultiplyNttTransitionsPass(),
+            fc.LowerLogicalToCkksPass(),
+            fc.ResolveRotationKeyOperandsPass(),
+            fc.InsertRelinearizationPass(),
+            fc.InsertRescalePass(),
+            fc.AssignCkksDepthsPass(entry_depth=1),
+            fc.AssignCkksScalesPass(entry_scale=config.default_scale),
+        )
+    ).run(captured)
+    layouts = {
+        symbol: {
+            "prime_ids": (1, 2, 3, 0, 4),
+            "digit_prime_ids": ((1,), (2, 3)),
+        }
+        for symbol, description in compilation.program.material_descriptions.items()
+        if custom_layout
+        and description.get("kind") in {"RotationKey", "RelinearizationKey"}
+    }
+    prepare = fc.PrepareOperationOperandsPass(
+        backend.registry, key_layouts=layouts
+    )
+    compilation = fc.Pipeline(
+        (
+            prepare,
+            fc.AssignNttImplementationPass(
+                "native-ntt", ntt_backend="radix2_indexed"
+            ),
+            fc.LowerCkksToRnsNttPass(
+                preserve=frozenset()
+                if lowered
+                else frozenset({ckks.RotateOp.name, ckks.RelinearizeOp.name})
+            ),
+            fc.SelectNttImplementationsPass(backend.registry),
+            prepare,
+        )
+    ).run(compilation)
+    assert compilation.material_bindings == {}
+    requirements = ir.analyze_evaluation_key_requirements(compilation.program)
+    assert requirements.rotation_steps == frozenset({3})
+    assert requirements.requires_relinearization
+    path = tmp_path / "unbound.safetensors"
+    save_compilation(compilation, path)
+    original = path.read_bytes()
+
+    clear = torch.linspace(
+        -0.03, 0.04, 16, dtype=torch.float64, device=device
+    ).repeat(config.num_slots // 16)
+    expected = (clear + torch.roll(clear, 3, dims=-1)).square()
+    executions = []
+    for seed, named in ((301, True), (302, False)):
+        # No Engine, keys, parameters or NTT tables existed during compilation.
+        engine = Engine(config, rng_seed=seed, rng_nonce=0)
+        secret = engine.create_secret_key(device=device)
+        public = engine.create_public_key(secret, device=device)
+        options = (
+            {
+                "source_depth": 1,
+                "p_prime_ids": (0, 4),
+                "digit_prime_ids": ((1,), (2, 3)),
+            }
+            if custom_layout
+            else {}
+        )
+        rotation = engine.create_rotation_key(
+            3, secret, device=device, **options
+        )
+        relin = engine.create_relinearization_key(
+            secret, device=device, **options
+        )
+        bound = load_compilation(path)
+        assert bound.material_bindings == {}
+        keys = (
+            {
+                symbol: rotation
+                if description.get("kind") == "RotationKey"
+                else relin
+                for symbol, description in bound.program.material_descriptions.items()
+                if description.get("kind")
+                in {"RotationKey", "RelinearizationKey"}
+            }
+            if named
+            else EvaluationKeySet((rotation, relin))
+        )
+        assert (
+            fc.prepare_material_bindings(
+                bound,
+                resources=CkksDeviceResources(config=config, device=device),
+                keys=keys,
+            )
+            == ()
+        )
+        encrypted = engine.encrypt_message(
+            clear, public, depth=1, scale=config.default_scale, device=device
+        )
+        executable = backend.link(bound)
+        result = executable.run(encrypted)
+        torch.testing.assert_close(
+            engine.decrypt_message(result, secret).real,
+            expected,
+            atol=5e-6,
+            rtol=5e-6,
+        )
+        assert result.depth == 2
+        assert result.component_count == 2
+        assert result.prime_ids == (2, 3)
+        assert result.scale == config.default_scale**2 / config.rescale_divisor(
+            1
+        )
+        executions.append((executable, encrypted, result.data.clone()))
+    for executable, encrypted, expected_data in executions:
+        assert torch.equal(executable.run(encrypted).data, expected_data)
+    assert path.read_bytes() == original
+    assert compilation.material_bindings == {}
+
+    rejected = load_compilation(path)
+    symbol = next(
+        symbol
+        for symbol, description in rejected.program.material_descriptions.items()
+        if description.get("kind") == "RotationKey"
+    )
+    wrong_options = {} if custom_layout else {"source_depth": 1}
+    incompatible = engine.create_rotation_key(
+        3, secret, device=device, **wrong_options
+    )
+    with pytest.raises(ValueError, match="conflicts with declared"):
+        fc.prepare_material_bindings(rejected, keys={symbol: incompatible})
+    assert rejected.material_bindings == {}
