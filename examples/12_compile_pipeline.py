@@ -13,7 +13,7 @@ from common import print_table
 from fhelium import Preset
 from fhelium import compile as fh_compile
 from fhelium import ir
-from fhelium.backend import OperationBackend
+from fhelium.backend import OperationBackend, OperationImplementationRegistry
 from fhelium.backend.ckks import CkksDeviceResources
 from fhelium.config import CkksConfig
 from fhelium.eager import Engine
@@ -44,7 +44,13 @@ def _dialect_counts(program: ir.Program) -> Counter[str]:
 def main() -> None:
     config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
     device = "cpu"
-    workspace = fh_compile.CompileWorkspace({CkksConfig: config})
+    backend = OperationBackend()
+    workspace = fh_compile.CompileWorkspace(
+        {
+            CkksConfig: config,
+            OperationImplementationRegistry: backend.registry,
+        }
+    )
 
     captured = fh_compile.capture(
         rotated_quadratic,
@@ -70,19 +76,12 @@ def main() -> None:
             fh_compile.InsertRelinearizationPass(),
             fh_compile.InsertRescalePass(),
             fh_compile.AssignCkksDepthsPass(entry_depth=0),
-            fh_compile.AssignCkksScalesPass(
-                entry_scale=config.default_scale,
-            ),
+            fh_compile.AssignCkksScalesPass(entry_scale=config.default_scale),
             fh_compile.AssignNttImplementationPass(
                 "native-ntt", ntt_backend="radix2_indexed"
             ),
             fh_compile.LowerCkksToRnsNttPass(),
-            fh_compile.SelectNttImplementationsPass(
-                OperationBackend().registry
-            ),
-            fh_compile.PrepareOperationOperandsPass(
-                OperationBackend().registry
-            ),
+            fh_compile.SelectNttImplementationsPass(),
         )
     )
     compiled = pipeline.run(captured)
@@ -117,7 +116,6 @@ def main() -> None:
             ),
         ),
     )
-    backend = OperationBackend()
     executable = backend.link(compiled)
 
     logical_x = torch.linspace(

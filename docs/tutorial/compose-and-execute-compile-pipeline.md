@@ -28,7 +28,20 @@ Capture assigns `x` the encrypted role and treats `rotation` as a compile-time i
 
 ## Caller-selected pipeline
 
-Pipelines express workload-specific choices. This example composes the built-in passes directly rather than using the `default_lower_and_fuse_pipeline` recipe:
+Pipelines express workload-specific choices. The example supplies the configuration and implementation registry through the capture workspace:
+
+```python
+from fhelium.backend import OperationBackend, OperationImplementationRegistry
+from fhelium import compile as fh_compile
+
+backend = OperationBackend()
+workspace = fh_compile.CompileWorkspace({
+    CkksConfig: config,
+    OperationImplementationRegistry: backend.registry,
+})
+```
+
+Pass the workspace to `capture`. The pipeline then composes the built-in transformations:
 
 ```python
 from fhelium import compile as fh_compile
@@ -48,6 +61,7 @@ pipeline = fh_compile.Pipeline(
         ),
         fh_compile.AssignNttImplementationPass("native-ntt", ntt_backend="radix2_indexed"),
         fh_compile.LowerCkksToRnsNttPass(),
+        fh_compile.SelectNttImplementationsPass(),
     )
 )
 compiled = pipeline.run(captured)
@@ -55,16 +69,18 @@ compiled = pipeline.run(captured)
 
 This sequence records the following caller-selected pipeline choices:
 
-- it selects the CPU indexed NTT schedule;
 - it inserts immediate relinearization and rescale operations for the ciphertext product;
 - it assigns concrete depths and per-value actual scales after transition placement;
-- it lowers the remaining CKKS arithmetic into RNS and NTT operations.
+- it declares the configured key layout;
+- it selects the indexed radix-2 NTT schedule and lowers CKKS arithmetic to RNS/NTT operations.
 
 Another caller may choose late transition placement, additional analyses, a different lowering route, or a pipeline that returns an intermediate Program.
 
+Lowering and implementation selection declare their required materials using the workspace registry. Custom key layouts can be supplied through `workspace["key_layouts"]`, keyed by material symbol or label; see [Materials and preparation](../developer/materials-and-preparation.md#evaluation-key-layout-declarations) for the fields and selection rules.
+
 ## Keys, resources, and linking
 
-`analyze_evaluation_key_requirements(...)` finds the required rotation and relinearization uses. The example creates those keys and uses `prepare_material_bindings` to prepare numerical data from saved descriptions before linking:
+`analyze_evaluation_key_requirements(...)` finds the required rotation and relinearization uses in the compiled Program. The example creates compatible keys and uses `prepare_material_bindings` to supply the numerical materials for execution:
 
 ```python
 fh_compile.prepare_material_bindings(
@@ -72,11 +88,10 @@ fh_compile.prepare_material_bindings(
     resources=resources,
     keys=(*rotation_keys, *((relinearization_key,) if relinearization_key is not None else ())),
 )
-backend = OperationBackend()
 executable = backend.link(compiled)
 ```
 
-The Program contains named placeholders. The separate dictionary supplies Tensor data without embedding an Engine or arithmetic Context in the Program. Linking does not generate data and leaves the source Compilation unchanged.
+`prepare_material_bindings` supplies Tensor data for the declared symbols, and linking builds an executable from the resulting bindings.
 
 ## Encrypted execution
 
@@ -102,4 +117,4 @@ Example 12 uses only operations and passes already supplied by FHElium. [Example
 
 ## Leaving NTT choices open
 
-Logical NTT operations can leave their algorithm unassigned. Add `SelectNttImplementationsPass(backend.registry)` where the required facts become available, then supply any newly introduced table materials before linking. `AssignNttImplementationPass` can constrain an algorithm, group width or fixed radix without assigning every execution detail. See [NTT semantics and selection](../developer/compiled-execution-and-kernels#ntt-semantics-and-selection) for the selection order and table-data responsibilities.
+Logical NTT operations can leave their algorithm unassigned. Add `SelectNttImplementationsPass()` where the required facts become available, then supply any newly introduced table materials before linking. `AssignNttImplementationPass` can constrain an algorithm, group width or fixed radix without assigning every execution detail. See [NTT semantics and selection](../developer/compiled-execution-and-kernels#ntt-semantics-and-selection) for the selection order and table-data responsibilities.

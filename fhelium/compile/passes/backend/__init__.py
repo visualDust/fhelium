@@ -13,10 +13,10 @@ from ._resolve_tensor_placeholders import ResolveTensorPlaceholdersPass
 from ._select_ntt import SelectNttImplementationsPass
 from ._validate_representations import ValidateExecutionRepresentationsPass
 
-from ._prepare_operands import PrepareOperationOperandsPass
+from ._resolve_material_requirements import ResolveMaterialRequirementsPass
 
 __all__ = [
-    "PrepareOperationOperandsPass",
+    "ResolveMaterialRequirementsPass",
     "AssignImplementationsPass",
     "AssignNttImplementationPass",
     "SelectNttImplementationsPass",

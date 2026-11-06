@@ -170,7 +170,18 @@ class CkksLoweringRegistry:
     ) -> LoweredCkksOperation:
         """Apply one selected lowering without choosing an implementation."""
 
+        from fhelium.backend.implementation import (
+            OperationImplementationRegistry,
+        )
+        from ..._material_requirements import (
+            resolve_key_layouts,
+            resolve_material_requirements,
+        )
+
         definition = self.resolve(type(operation), requested)
+        resolve_key_layouts(compilation, (operation,))
+        if OperationImplementationRegistry in compilation.workspace:
+            resolve_material_requirements(compilation, (operation,))
         diagnostics = self._operation_specs.require(operation.name).diagnostics(
             operation
         )

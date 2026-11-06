@@ -8,6 +8,9 @@ if TYPE_CHECKING:
     from fhelium.compile._compilation import Compilation
 
 
+from fhelium.backend.implementation import OperationImplementationRegistry
+from ..._material_requirements import resolve_material_requirements
+
 from ..._pipeline import (
     DecisionRecord,
     PassResult,
@@ -65,8 +68,7 @@ class AssignImplementationsPass:
         program = compilation.program
         workspace = compilation.workspace
 
-        del workspace
-        matched = transformed = skipped = 0
+        matched = transformed = inserted = skipped = 0
         decisions: list[DecisionRecord] = []
         for operation in program_operations_and_known_region_owners(program):
             subject = operation_name(operation)
@@ -102,6 +104,14 @@ class AssignImplementationsPass:
             operation.attributes[EXECUTION_IMPLEMENTATION_ATTRIBUTE] = (
                 StringAttr(selected)
             )
+            if OperationImplementationRegistry in workspace:
+                requirements = resolve_material_requirements(
+                    compilation, (operation,)
+                )
+                matched += requirements.stats.matched
+                transformed += requirements.stats.transformed
+                inserted += requirements.stats.inserted
+                skipped += requirements.stats.skipped
             transformed += 1
             details = (
                 (f"replaced={previous_name}",)
@@ -123,6 +133,7 @@ class AssignImplementationsPass:
             PassStats(
                 matched=matched,
                 transformed=transformed,
+                inserted=inserted,
                 skipped=skipped,
             ),
             decisions=tuple(decisions),

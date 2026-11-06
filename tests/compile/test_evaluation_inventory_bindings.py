@@ -210,3 +210,218 @@ def test_relinearization_and_conjugation_inventory_selection():
             == ()
         )
         assert current.material_bindings['key'] is compact.data
+
+
+def test_declared_layouts_constrain_inventory_and_propagate_to_symbol_aliases():
+    import pytest
+    from fhelium.backend import OperationBackend
+    from fhelium.compile import ResolveMaterialRequirementsPass
+
+    backend = OperationBackend()
+    full, compact = key(), key(compact=True)
+    for reverse in (False, True):
+        types = (
+            ckks.EvaluationKeyType(),
+            ckks.EvaluationKeyType().with_state(state_attributes(compact)),
+        )
+        if reverse:
+            types = types[::-1]
+        block = Block()
+        refs = [core.MaterialRefOp(typ, symbol="key") for typ in types]
+        block.add_ops(refs)
+        state = compilation(
+            block,
+            tuple(ref.value for ref in refs),
+            {"key": {"kind": "RotationKey", "rotation_step": 1}},
+        )
+        ResolveMaterialRequirementsPass(backend.registry).run(state)
+        expected = state_attributes(compact)
+        assert all(
+            ref.value.type.state.data["prime_ids"] == expected["prime_ids"]
+            for ref in refs
+        )
+        assert all(
+            ref.value.type.state.data["digit_prime_ids"]
+            == expected["digit_prime_ids"]
+            for ref in refs
+        )
+        assert state.material_bindings == {}
+
+    block = Block(arg_types=(value_type(1),))
+    ref = core.MaterialRefOp(ckks.EvaluationKeyType(), symbol="key")
+    rotation = ckks.RotateOp(block.args[0], ref.value, block.args[0].type)
+    block.add_ops((ref, rotation))
+    state = compilation(
+        block,
+        (rotation.result,),
+        {"key": {"kind": "RotationKey", "rotation_step": 1}},
+    )
+    # The declared full layout constrains selection from the inventory.
+    state.workspace["evaluation_keys"] = EvaluationKeySet((full, compact))
+    ResolveMaterialRequirementsPass(
+        backend.registry,
+        key_layouts={
+            "key": {
+                "prime_ids": full.prime_ids,
+                "digit_prime_ids": full.digit_prime_ids,
+            }
+        },
+    ).run(state)
+    assert state.material_bindings == {}
+    prepare_material_bindings(state, keys=state.workspace["evaluation_keys"])
+    assert state.material_bindings["key"] is full.data
+    before = state.program.to_text()
+    with pytest.raises(ValueError, match="conflicts with declared"):
+        ResolveMaterialRequirementsPass(
+            backend.registry,
+            key_layouts={
+                "key": {
+                    "prime_ids": compact.prime_ids,
+                    "digit_prime_ids": compact.digit_prime_ids,
+                }
+            },
+        ).run(state)
+    assert state.program.to_text() == before
+
+
+def test_material_resolution_requires_registry_and_retains_partial_layout():
+    import pytest
+    from fhelium.backend import (
+        OperationBackend,
+        OperationImplementationRegistry,
+    )
+    from fhelium.compile import (
+        ResolveMaterialRequirementsPass,
+        LowerCkksToRnsNttPass,
+        Pipeline,
+    )
+
+    source_type = value_type(0).with_state({"components": IntegerAttr(2, 64)})
+    block = Block(arg_types=(source_type,))
+    ref = core.MaterialRefOp(ckks.EvaluationKeyType(), symbol="key")
+    rotation = ckks.RotateOp(block.args[0], ref.value, block.args[0].type)
+    block.add_ops((ref, rotation))
+    state = compilation(
+        block,
+        (rotation.result,),
+        {"key": {"kind": "RotationKey", "rotation_step": 1}},
+    )
+    with pytest.raises(
+        ValueError, match="OperationImplementationRegistry in CompileWorkspace"
+    ):
+        ResolveMaterialRequirementsPass().run(state)
+    state.workspace[OperationImplementationRegistry] = (
+        OperationBackend().registry
+    )
+    state.workspace["key_layouts"] = {"key": {}}
+    ResolveMaterialRequirementsPass().run(state)
+    assert "prime_ids" not in ref.value.type.state.data
+    assert state.material_bindings == {}
+    with pytest.raises(
+        ValueError, match="key layout needs 'prime_ids' and 'digit_prime_ids'"
+    ):
+        Pipeline((LowerCkksToRnsNttPass(),)).run(state)
+
+
+def test_execution_selection_declares_existing_hoisted_rotation_materials():
+    from fhelium.backend import (
+        OperationBackend,
+        OperationImplementationRegistry,
+    )
+    from fhelium.compile import Pipeline, SelectExecutionLoweringsPass
+
+    source_type = value_type(0, q_ids=(0, 1, 2)).with_state(
+        {
+            "components": IntegerAttr(2, 64),
+            "polynomial_domain": StringAttr("coefficient"),
+            "residue_representation": StringAttr("standard"),
+        }
+    )
+    block = Block(arg_types=(source_type,))
+    keys = tuple(
+        core.MaterialRefOp(ckks.EvaluationKeyType(), symbol=f"key-{step}")
+        for step in (1, 2)
+    )
+    rotations = ckks.RotateManyOp(
+        block.args[0],
+        tuple(key.value for key in keys),
+        (source_type, source_type),
+    )
+    block.add_ops((*keys, rotations))
+    state = compilation(
+        block,
+        tuple(rotations.results),
+        {
+            f"key-{step}": {"kind": "RotationKey", "rotation_step": step}
+            for step in (1, 2)
+        },
+    )
+    backend = OperationBackend()
+    state.workspace[OperationImplementationRegistry] = backend.registry
+    resolved = Pipeline((SelectExecutionLoweringsPass(backend.registry),)).run(
+        state
+    )
+    operation = next(
+        op
+        for op in resolved.program.walk()
+        if isinstance(op, ckks.RotateManyOp)
+    )
+    assert operation.parameters
+    assert operation.attributes["parameter_names"]
+    assert resolved.material_bindings == {}
+    assert all(
+        "digit_prime_ids" in key.type.state.data for key in operation.keys
+    )
+
+
+def test_execution_selection_registry_override_reaches_nested_lowerings():
+    from dataclasses import replace
+    from fhelium.backend import (
+        OperationBackend,
+        OperationImplementationRegistry,
+    )
+    from fhelium.compile import Pipeline, SelectExecutionLoweringsPass
+    from fhelium.compile.passes.lowering._driver import DEFAULT_CKKS_LOWERINGS
+    from fhelium.compile.passes.lowering._core import CkksLoweringRegistry
+
+    original = OperationImplementationRegistry()
+    backend = OperationBackend()
+    selected = OperationImplementationRegistry(
+        tuple(
+            impl
+            for impl in backend.registry.implementations
+            if ckks.AddOp not in impl.operation_types
+        )
+    )
+    definition = DEFAULT_CKKS_LOWERINGS.resolve(ckks.AddOp)
+    observed = []
+
+    def lower(operation, config, state):
+        observed.append(state.workspace[OperationImplementationRegistry])
+        return definition.lower(operation, config, state)
+
+    source_type = value_type(0, q_ids=(0, 1, 2)).with_state(
+        {
+            "components": IntegerAttr(2, 64),
+            "polynomial_domain": StringAttr("coefficient"),
+            "residue_representation": StringAttr("standard"),
+        }
+    )
+    block = Block(arg_types=(source_type, source_type))
+    add = ckks.AddOp(block.args[0], block.args[1], source_type)
+    block.add_op(add)
+    state = compilation(block, (add.result,), {})
+    state.workspace[OperationImplementationRegistry] = original
+    resolved = Pipeline(
+        (
+            SelectExecutionLoweringsPass(
+                selected,
+                lowerings=CkksLoweringRegistry(
+                    (replace(definition, lower=lower),)
+                ),
+            ),
+        )
+    ).run(state)
+    assert observed and all(registry is selected for registry in observed)
+    assert not any(isinstance(op, ckks.AddOp) for op in resolved.program.walk())
+    assert resolved.workspace[OperationImplementationRegistry] is original

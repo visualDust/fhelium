@@ -294,6 +294,6 @@ def prepare_native_key_switch(implementation, operation: Operation):
         for name in required
     ):
         raise ValueError(
-            f"{operation.name} execution operands remain unresolved; run PrepareOperationOperandsPass with the required execution facts"
+            f"{operation.name} execution operands remain unresolved; check the configuration, layout and implementation requirements reported during compilation"
         )
     return implementation

@@ -1,7 +1,7 @@
 """Built-in partial transforms for captured tensor and CKKS operations."""
 
 from .backend import (
-    PrepareOperationOperandsPass,
+    ResolveMaterialRequirementsPass,
     AssignImplementationsPass,
     AssignNttImplementationPass,
     InitializeResourceBindingsPass,
@@ -73,7 +73,7 @@ __all__ = [
     'LowerSemanticToLogicalPass',
     'LowerSpecializedCollectivesPass',
     'MaterializeResourcesPass',
-    'PrepareOperationOperandsPass',
+    'ResolveMaterialRequirementsPass',
     'ResolveBackendOperationsPass',
     'ResolveRotationKeyOperandsPass',
     'ResolveTensorPlaceholdersPass',

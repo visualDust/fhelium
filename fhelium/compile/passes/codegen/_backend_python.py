@@ -15,7 +15,7 @@ from ..._pipeline import (
 import inspect
 import importlib
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from xdsl.dialects.builtin import UnrealizedConversionCastOp
 from xdsl.dialects.func import ReturnOp
@@ -50,11 +50,12 @@ class EmitBackendPythonPass:
     def run(self, compilation: "Compilation") -> PassResult:
         program = compilation.program
         shared_data = compilation.workspace
-        registry = (
-            OperationBackend().registry
-            if self.registry is None
-            else self.registry
+        registry = self.registry or shared_data.get(
+            OperationImplementationRegistry
         )
+        if registry is None:
+            registry = OperationBackend().registry
+        registry = cast(OperationImplementationRegistry, registry)
         artifact = emit_backend_python(
             program,
             registry=registry,

@@ -20,7 +20,9 @@ from ....ir._program import Program
 
 from .._operation_transforms import program_operations
 from ._arithmetic import ARITHMETIC_LOWERINGS
-from ._core import CkksLoweringRegistry
+from ._core import CkksLoweringRegistry, LoweredCkksOperation
+from fhelium.backend.implementation import OperationImplementationRegistry
+from ..._material_requirements import resolve_material_requirements
 from ._keyswitch import KEY_SWITCH_LOWERINGS
 from ._rotation_sum import ROTATION_SUM_LOWERINGS
 from ._modulus_raise import MODULUS_RAISE_LOWERINGS
@@ -62,6 +64,37 @@ class _LoweringResult:
         return self.stats.transformed > 0
 
 
+def apply_lowering(operation, config, compilation, *, registry, requested=None):
+    """Replace an operation and complete its replacement material declarations."""
+    block = operation.parent_block()
+    if block is None:
+        raise ValueError(
+            "Lowering material requirements needs an operation attached to a Program"
+        )
+    before, after = operation.prev_op, operation.next_op
+    lowered = registry.lower(
+        operation, config, compilation, requested=requested
+    )
+    Rewriter.replace_op(
+        operation, lowered.operations, new_results=(lowered.result,)
+    )
+    for symbol, description in lowered.material_descriptions.items():
+        if symbol not in compilation.program.material_descriptions:
+            compilation.program.set_material_description(symbol, description)
+    if OperationImplementationRegistry in compilation.workspace:
+        resolve_material_requirements(compilation, lowered.operations)
+    replacements = []
+    current = block.first_op if before is None else before.next_op
+    while current is not after:
+        if current is None:
+            break
+        replacements.append(current)
+        current = current.next_op
+    return LoweredCkksOperation(
+        tuple(replacements), lowered.result, lowered.material_descriptions
+    )
+
+
 def lower_ckks_program(
     compilation,
     config: CkksConfig | None,
@@ -100,7 +133,15 @@ def lower_ckks_program(
         matched += 1
         candidates = registry.available(type(operation))
         if operation.name in preserved:
-            skipped += 1
+            material_changes = False
+            if OperationImplementationRegistry in compilation.workspace:
+                requirements = resolve_material_requirements(
+                    compilation, (operation,)
+                )
+                material_changes = requirements.changed
+                inserted += requirements.stats.inserted
+            transformed += int(material_changes)
+            skipped += int(not material_changes)
             decisions.append(
                 DecisionRecord(
                     operation.name,
@@ -127,20 +168,13 @@ def lower_ckks_program(
             if isinstance(represented, StringAttr)
             else config
         )
-        lowered = registry.lower(
+        lowered = apply_lowering(
             operation,
             selected_config,
             compilation,
+            registry=registry,
             requested=definition.name,
         )
-        Rewriter.replace_op(
-            operation,
-            lowered.operations,
-            new_results=(lowered.result,),
-        )
-        for symbol, description in lowered.material_descriptions.items():
-            if symbol not in program.material_descriptions:
-                program.set_material_description(symbol, description)
         transformed += 1
         inserted += len(lowered.operations)
         decisions.append(

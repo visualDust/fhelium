@@ -33,7 +33,7 @@ inspection = fc.Pipeline((InspectOperations(),))
 
 ## Where do configuration and intermediate products live?
 
-`CompileWorkspace` is a mapping for caller inputs and pass-owned products. For example, CKKS transformations read `CkksConfig`; resolution writes `ProgramDispatchTable`; linking writes `ProgramExecutable`. A workspace entry's owner defines its meaning and freshness requirements.
+`CompileWorkspace` is a mapping for caller inputs and pass-owned products. For example, CKKS transformations read `CkksConfig`; material and implementation selection read `OperationImplementationRegistry`; resolution writes `ProgramDispatchTable`; linking writes `ProgramExecutable`. A workspace entry's owner defines its meaning and freshness requirements.
 
 Tensor data belongs in `Compilation.material_bindings`, indexed by Program symbols. A pass that creates a new reference and one that consumes it see the same dictionary. Configuration and material descriptions guide operand preparation. Material lookup retrieves the Tensor bound to a symbol. See [materials and preparation](materials-and-preparation.md).
 
@@ -61,17 +61,17 @@ pipeline = fc.default_lower_and_fuse_pipeline(backend)
 pass_names = pipeline.names
 ```
 
-The same recipe accepts `resources=` and `keys=` for optional material preparation. An omitted Backend creates the standard registry, while key data comes from supplied bindings or preparation inputs. The recipe selects per-operation execution through implementation coverage and fusion matching.
+An omitted Backend creates the standard registry. The recipe selects per-operation execution through implementation coverage and fusion matching. For callable execution, pass optional `resources=` and `keys=` to `fc.compile`; execution preparation supplies the resulting material symbols before linking. Manual Programs use `prepare_material_bindings` for the same step.
 
-`SelectExecutionLoweringsPass.execution_cost` optionally receives a whole operation and its detached, fusion-processed lowering candidate. Return `(whole_cost, lowered_cost)` in one common unit, or `None` when no estimate applies. A lower cost wins; ties retain whole execution. Caller implementation assignments take precedence. `DecisionRecord` retains the supplied costs and selection. With no estimate, ordinary implementation-coverage and fusion rules remain in force.
+`SelectExecutionLoweringsPass.execution_cost` optionally receives a whole operation and its isolated, fusion-processed lowering candidate. Return `(whole_cost, lowered_cost)` in one common unit, or `None` when no estimate applies. A lower cost wins; ties retain whole execution. Caller implementation assignments take precedence. `DecisionRecord` retains the supplied costs and selection. With no estimate, ordinary implementation-coverage and fusion rules remain in force.
 
 A measured cost is specific to the executed implementation, parameter state and physical input conditions. Unknown strides or placement remain unknown in the Program. A caller using observed layouts must establish their correspondence to the current candidate; operation counts or fewer materialized bytes alone do not constitute a latency estimate.
 
-The three preparation stages use the same idempotent pass under the names `prepare-before-hoisting`, `prepare-before-lowering` and `prepare-after-lowering`. They supply operands at the points where new consumers appear; Tensor lookup still reads the ordinary material dictionary and does not generate keys.
+Lowering and implementation selection complete material declarations for their affected operations using the registry in the workspace. `ResolveMaterialRequirementsPass` exposes the same logic for an explicit whole-Program resolution. The default recipe uses the operation-local integration.
 
 ## How are passes customized?
 
-`then`, `before`, `after`, and `replace` return new Pipelines. Named insertion and replacement require one matching pass name. The default recipe repeats some preparation and cleanup passes, so inspect `pipeline.names` and construct a tuple directly when the desired location is ambiguous.
+`then`, `before`, `after`, and `replace` return new Pipelines. Named insertion and replacement require one matching pass name. The default recipe repeats some fact-resolution and cleanup passes, so inspect `pipeline.names` and construct a tuple directly when the desired location is ambiguous.
 
 A caller-supplied callable pipeline replaces the default recipe. It may also be selected by a function of `CallSignature`. A supplied linking pipeline separately replaces the standard linking sequence. Optimization and linking are independently composable because the former transforms computation while the latter binds execution.
 

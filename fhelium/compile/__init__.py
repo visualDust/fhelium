@@ -51,7 +51,7 @@ from .frontend._specs import (
 )
 from .passes import (
     AggregateRotationSumsPass,
-    PrepareOperationOperandsPass,
+    ResolveMaterialRequirementsPass,
     AssignCkksDepthsPass,
     AssignCkksScalesPass,
     AssignImplementationsPass,
@@ -150,7 +150,7 @@ __all__ = [
     'PassStats',
     'Pipeline',
     'PlanningError',
-    'PrepareOperationOperandsPass',
+    'ResolveMaterialRequirementsPass',
     'PythonCodegenError',
     'ResolveBackendOperationsPass',
     'ResolveRotationKeyOperandsPass',

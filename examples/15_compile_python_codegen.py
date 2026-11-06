@@ -12,7 +12,7 @@ from common import print_table
 
 from fhelium import Preset
 from fhelium import compile as fh_compile
-from fhelium.backend import OperationBackend
+from fhelium.backend import OperationBackend, OperationImplementationRegistry
 from fhelium.backend.ckks import CkksDeviceResources
 from fhelium.config import CkksConfig
 from fhelium.eager import Engine
@@ -38,7 +38,13 @@ def _load_function(
 
 def main() -> None:
     config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
-    workspace = fh_compile.CompileWorkspace({CkksConfig: config})
+    backend = OperationBackend()
+    workspace = fh_compile.CompileWorkspace(
+        {
+            CkksConfig: config,
+            OperationImplementationRegistry: backend.registry,
+        }
+    )
     captured = fh_compile.capture(
         rotated_sum,
         inputs={
@@ -71,21 +77,16 @@ def main() -> None:
         ckks_compilation.workspace[fh_compile.EagerPythonSource],
     )
 
-    # Continue lowering, then independently emit direct Backend implementation
-    # calls. Moving either emitter to an unsupported stage makes that emitter
-    # report the first operation it cannot convert.
+    # Continue lowering and emit direct Backend implementation calls.
     backend_compilation = fh_compile.Pipeline(
         (
+            fh_compile.ResolveTensorPlaceholdersPass(),
             fh_compile.AssignNttImplementationPass(
                 "native-ntt", ntt_backend="radix2_indexed"
             ),
             fh_compile.LowerCkksToRnsNttPass(),
-            fh_compile.SelectNttImplementationsPass(
-                OperationBackend().registry
-            ),
-            fh_compile.PrepareOperationOperandsPass(
-                OperationBackend().registry
-            ),
+            fh_compile.SelectNttImplementationsPass(),
+            fh_compile.ResolveTensorPlaceholdersPass(),
             fh_compile.EmitBackendPythonPass(),
         )
     ).run(ckks_compilation)
@@ -102,6 +103,18 @@ def main() -> None:
         secret_key,
         device="cpu",
     )
+    materializer = CkksDeviceResources(
+        config=config,
+        device="cpu",
+        rng_seed=29,
+    )
+
+    fh_compile.prepare_material_bindings(
+        backend_compilation,
+        resources=materializer,
+        keys=(rotation_key,),
+    )
+
     logical_x = torch.linspace(
         -0.04,
         0.04,
@@ -126,14 +139,6 @@ def main() -> None:
     )
     assert isinstance(eager_result, Ciphertext)
 
-    materializer = CkksDeviceResources(
-        config=config,
-        device="cpu",
-        rng_seed=29,
-    )
-    fh_compile.prepare_material_bindings(
-        backend_compilation, resources=materializer, keys=(rotation_key,)
-    )
     backend_function = _load_function(backend_source)
     backend_result = backend_function(
         encrypted_x.data,

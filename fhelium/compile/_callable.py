@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from functools import update_wrapper
 from threading import RLock
 from typing import (
@@ -19,6 +19,7 @@ from typing import (
 from fhelium.ir import Program, value_role
 
 from ._compilation import Compilation
+from ._materials import material_sources, prepare_material_bindings
 from ._pipeline import Pipeline
 from ._preparation import (
     Specialization,
@@ -38,6 +39,10 @@ from .frontend._objects import python_callable
 from .frontend._specs import InputSpec
 
 if TYPE_CHECKING:
+    from fhelium.backend.ckks.materialization import CkksDeviceResources
+    from fhelium.backend.ntt.context import NttContext
+    from fhelium.backend.rns.context import RnsContext
+    from fhelium.values import EvaluationKeySet
     from fhelium.backend import OperationBackend
 
 _P = ParamSpec("_P")
@@ -112,6 +117,13 @@ class CompiledCallable(Generic[_P, _R]):
         source: Program | Compilation | Callable[_P, _R],
         *,
         backend: OperationBackend | None = None,
+        resources: CkksDeviceResources
+        | RnsContext
+        | NttContext
+        | Iterable[CkksDeviceResources | RnsContext | NttContext] = (),
+        keys: Mapping[object, object]
+        | Iterable[object]
+        | EvaluationKeySet = (),
         pipeline: Pipeline | Callable[[CallSignature], Pipeline] | None = None,
         on_miss: Literal["compile", "error"] = "compile",
         workspace: CompileWorkspace | None = None,
@@ -125,6 +137,8 @@ class CompiledCallable(Generic[_P, _R]):
         Args:
             source: Python callable, Program, or Compilation to specialize.
             backend: Implementation registry and execution resources. ``None`` selects the standard operation registry during preparation.
+            resources: Numerical table providers used when preparing execution.
+            keys: Existing key values or an inventory used to select layouts and bind execution.
             pipeline: Complete pass sequence, or a function from ``CallSignature`` to Pipeline. ``None`` selects ``default_lower_and_fuse_pipeline``.
             on_miss: ``"compile"`` prepares a missing specialization on invocation; ``"error"`` requires a matching specialization from ``prepare``.
             workspace: Shared capture and pass inputs for a Python callable or Program source. A Compilation supplies its own workspace.
@@ -140,7 +154,15 @@ class CompiledCallable(Generic[_P, _R]):
             raise ValueError(
                 "material_names applies to Python capture; Program symbols are already defined"
             )
+        from fhelium.values import EvaluationKeySet
+
         self.backend: OperationBackend | None = backend
+        self._resources = material_sources(resources)
+        self._keys = (
+            keys
+            if isinstance(keys, (Mapping, EvaluationKeySet))
+            else tuple(keys)
+        )
         self.pipeline = pipeline
         self.on_miss: Literal["compile", "error"] = on_miss
         self.inputs = None if inputs is None else dict(inputs)
@@ -268,6 +290,13 @@ class CompiledCallable(Generic[_P, _R]):
                     signature,
                     pipeline=self.pipeline,
                     backend=backend,
+                    keys=self._keys,
+                )
+            if self._resources or self._keys:
+                prepare_material_bindings(
+                    variant.compilation,
+                    resources=self._resources,
+                    keys=self._keys,
                 )
             prepared = bind_variant(variant, cast("OperationBackend", backend))
             physical_arguments = input_values(
@@ -326,6 +355,8 @@ class CompiledCallable(Generic[_P, _R]):
         rebound: CompiledCallable[_P, _R] = CompiledCallable(
             self._source,
             backend=backend,
+            resources=self._resources,
+            keys=self._keys,
             pipeline=self.pipeline,
             on_miss=self.on_miss,
             workspace=self._workspace,
