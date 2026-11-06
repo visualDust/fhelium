@@ -22,7 +22,7 @@ authors:
     given-names: Ran
   - family-names: Wen
     given-names: Wujie
-version: 0.40.1rc1
+version: 0.40.1rc2
 repository-code: "https://github.com/VisualDust/fhelium"
 url: "https://fhelium.550w.host"
 license: MIT

@@ -1,6 +1,6 @@
 [project]
 name = "fhelium"
-version = "0.40.1rc1"
+version = "0.40.1rc2"
 description = "A tensor-native CKKS framework with Python and PyTorch for CPU, NVIDIA CUDA, and experimental AMD ROCm source builds."
 authors = [
     { name = "Gavin Gong", email = "gavin@gong.host" },

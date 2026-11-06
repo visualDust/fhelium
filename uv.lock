@@ -152,7 +152,7 @@ wheels = [
 
 [[package]]
 name = "fhelium"
-version = "0.40.1rc1"
+version = "0.40.1rc2"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
