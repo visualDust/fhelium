@@ -224,7 +224,7 @@ If you use FHElium in research or software, cite the project as:
   author  = {Zhaoting Gong and Jiaming Liang and Ran Ran and Wujie Wen},
   title   = {FHElium: A Cross-Stack CKKS Research Framework for CPU and CUDA},
   year    = {2026},
-  version = {0.40.1rc1},
+  version = {0.40.1rc2},
   url     = {https://github.com/VisualDust/fhelium}
 }
 ```
