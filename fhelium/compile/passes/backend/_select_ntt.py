@@ -24,6 +24,10 @@ from fhelium.config import CkksConfig
 from fhelium.ir.dialects import ckks, core, ntt
 
 from ..._materials import material_symbol, parameter_description
+from ..._material_requirements import (
+    implementation_registry,
+    resolve_material_requirements,
+)
 from ..._pipeline import DecisionRecord, PassResult, PassStats
 from .._operation_transforms import program_operations
 
@@ -59,12 +63,13 @@ class SelectNttImplementationsPass:
     remain unchanged and report why their choice was deferred.
     """
 
-    registry: OperationImplementationRegistry
+    registry: OperationImplementationRegistry | None = None
     name: str = "select-ntt-implementations"
 
     def run(self, compilation: "Compilation") -> PassResult:
         program = compilation.program
         workspace = compilation.workspace
+        registry = implementation_registry(compilation, self.registry)
         matched = transformed = inserted = skipped = 0
         decisions = []
         for operation in program_operations(program):
@@ -81,9 +86,9 @@ class SelectNttImplementationsPass:
                 if logical
                 else ntt.CoefficientStandardToNttMontgomeryOp
             )
-            if operation_type in self.registry.operation_types:
+            if operation_type in registry.operation_types:
                 providers = (
-                    self.registry.resolve_type(
+                    registry.resolve_type(
                         operation_type, requested=requested if logical else None
                     ),
                 )
@@ -102,7 +107,7 @@ class SelectNttImplementationsPass:
             else:
                 # A region implementation can support NTT without registering
                 # an individual-operation executor.
-                providers = self.registry.implementations
+                providers = registry.implementations
             selectors = tuple(
                 choose
                 for provider in providers
@@ -234,6 +239,13 @@ class SelectNttImplementationsPass:
                     )
                     inserted += len(references)
                     changed = True
+            requirements = resolve_material_requirements(
+                compilation, (operation,), registry
+            )
+            matched += requirements.stats.matched
+            transformed += requirements.stats.transformed
+            inserted += requirements.stats.inserted
+            skipped += requirements.stats.skipped
             if changed:
                 transformed += 1
             else:

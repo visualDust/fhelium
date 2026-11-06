@@ -31,6 +31,8 @@ print(requirements.requires_relinearization)
 
 Here `compiled` is the Compilation after the chosen scheduling passes. The analysis reports roles and rotation steps; provisioning also needs the consuming Q/P bases, key layouts and devices. Supply the resulting material through [Compilation preparation](persist-compiled-program.md#3-supply-missing-data-or-replace-an-assignment).
 
+For a custom stored key layout, set `workspace["key_layouts"] = {symbol: {"prime_ids": rows, "digit_prime_ids": digits}}`. Supplied keys, whether generated or loaded, must match the layout selected for numerical lowering. See [Evaluation-key layout declarations](../developer/materials-and-preparation.md#evaluation-key-layout-declarations) for default selection and partial declarations.
+
 ## 2. Choose rotation coverage
 
 Derive rotation steps from the actual packing and evaluator schedule, normalize them with the Engine's slot convention, and verify the directions against a cleartext reference. Padding, negative rotations and baby-step/giant-step decomposition can change the required steps even when matrix dimensions agree.

@@ -835,11 +835,13 @@ def test_aggregate_rotation_sum_preserves_decoded_values_and_live_keys(device):
         )
 
     backend = OperationBackend()
-    pipeline = fc.default_lower_and_fuse_pipeline(
-        backend,
-        resources=engine._dispatcher_for(device).device_resources,
-    ).before("rotation-hoisting", fc.AggregateRotationSumsPass())
-    compiled = fc.compile(source, backend=backend, pipeline=pipeline)
+    resources = engine._dispatcher_for(device).device_resources
+    pipeline = fc.default_lower_and_fuse_pipeline(backend).before(
+        "rotation-hoisting", fc.AggregateRotationSumsPass()
+    )
+    compiled = fc.compile(
+        source, backend=backend, pipeline=pipeline, resources=resources
+    )
 
     def aggregate(x, key1, key2):
         return engine.sum_rotations(
@@ -910,18 +912,21 @@ def test_aggregate_rotation_sum_preserves_decoded_values_and_live_keys(device):
     def identity_sum(x):
         return engine.sum_rotations(((x, None), (x, None)))
 
-    logical = fc.default_lower_and_fuse_pipeline(
-        backend, resources=engine.rns_context(device)
-    ).before("select-execution-lowerings", fc.LowerCkksToRnsNttPass())
+    logical = fc.default_lower_and_fuse_pipeline(backend).before(
+        "select-execution-lowerings", fc.LowerCkksToRnsNttPass()
+    )
 
     def rotations_only(x, key1, key2):
         return engine.sum_rotations(((x, key1), (x, key2)), rescale=True)
 
     for value in (positive, engine.coefficient_domain_to_ntt_domain(positive)):
         for function in (aggregate, rotations_only):
-            actual = fc.compile(function, backend=backend, pipeline=logical)(
-                value, *keys
-            )
+            actual = fc.compile(
+                function,
+                backend=backend,
+                pipeline=logical,
+                resources=engine.rns_context(device),
+            )(value, *keys)
             expected_value = function(value, *keys)
             torch.testing.assert_close(
                 actual.data, expected_value.data, rtol=0, atol=0
@@ -932,9 +937,12 @@ def test_aggregate_rotation_sum_preserves_decoded_values_and_live_keys(device):
                 expected_value.prime_ids,
             )
 
-    observed = fc.compile(identity_sum, backend=backend, pipeline=logical)(
-        positive
-    )
+    observed = fc.compile(
+        identity_sum,
+        backend=backend,
+        pipeline=logical,
+        resources=engine.rns_context(device),
+    )(positive)
     torch.testing.assert_close(
         observed.data, identity_sum(positive).data, rtol=0, atol=0
     )

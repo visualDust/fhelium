@@ -82,7 +82,9 @@ class _KeySwitchLowering:
             )
             if layout_facts is None:
                 raise ValueError(
-                    "Key-switch lowering requires represented key rows and digit supports"
+                    f"Cannot lower {operation.name}: key layout needs 'prime_ids' "
+                    "and 'digit_prime_ids'. Complete the key layout declaration "
+                    "in CompileWorkspace or on the key operand."
                 )
             qp_ids = ArrayAttr(
                 IntegerAttr(i, 64)

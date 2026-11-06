@@ -122,7 +122,7 @@ An `Engine` owns one CKKS configuration and creates per-device services lazily. 
 | Program analyses | `fhelium/ir/_analysis.py` |
 | Compilation and caller-owned workspace | `fhelium/compile/_compilation.py`, `fhelium/compile/_workspace.py` |
 | Pass and Pipeline protocol | `fhelium/compile/_pipeline.py` |
-| Tensor material provision | `fhelium/compile/_materials.py`, `fhelium/compile/passes/backend/_prepare_operands.py` |
+| Tensor material provision | `fhelium/compile/_materials.py`, `fhelium/compile/_material_requirements.py`, `fhelium/compile/passes/backend/_resolve_material_requirements.py` |
 | Prepared host execution | `fhelium/compile/passes/backend/_prepare_host.py`, `fhelium/compile/passes/codegen/_host.py` |
 | Source capture and input roles | `fhelium/compile/frontend/` |
 | Semantic-to-logical transformation | `fhelium/compile/passes/frontend/` |

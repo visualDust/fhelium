@@ -18,6 +18,9 @@ from fhelium.config.ntt import resolve_ntt_backend_policy
 from fhelium.ir import EXECUTION_IMPLEMENTATION_ATTRIBUTE
 from fhelium.ir.dialects import ckks, ntt
 
+from fhelium.backend.implementation import OperationImplementationRegistry
+from ..._material_requirements import resolve_material_requirements
+
 from ..._pipeline import DecisionRecord, PassResult, PassStats
 from .._operation_transforms import program_operations
 
@@ -71,7 +74,7 @@ class AssignNttImplementationPass:
             attributes["ntt_group_width"] = IntegerAttr(self.group_width, 64)
         if self.radix is not None:
             attributes["ntt_radix"] = IntegerAttr(self.radix, 64)
-        matched = transformed = skipped = 0
+        matched = transformed = inserted = skipped = 0
         decisions = []
         for operation in program_operations(program):
             if isinstance(operation, _TRANSFORM_TYPES):
@@ -104,6 +107,14 @@ class AssignNttImplementationPass:
                     )
                 operation.attributes[key] = value
                 changed = True
+            if OperationImplementationRegistry in workspace:
+                requirements = resolve_material_requirements(
+                    compilation, (operation,)
+                )
+                matched += requirements.stats.matched
+                transformed += requirements.stats.transformed
+                inserted += requirements.stats.inserted
+                skipped += requirements.stats.skipped
             transformed += int(changed)
             skipped += int(not changed)
             decisions.append(
@@ -116,7 +127,10 @@ class AssignNttImplementationPass:
         return PassResult(
             program,
             PassStats(
-                matched=matched, transformed=transformed, skipped=skipped
+                matched=matched,
+                transformed=transformed,
+                inserted=inserted,
+                skipped=skipped,
             ),
             decisions=tuple(decisions),
         )

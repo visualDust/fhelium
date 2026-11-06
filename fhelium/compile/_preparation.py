@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, cast
@@ -28,6 +28,7 @@ from .frontend._eager_values import state_attributes
 
 if TYPE_CHECKING:
     from fhelium.backend import OperationBackend, ProgramExecutable
+    from fhelium.values import EvaluationKeySet
 
 
 @dataclass(frozen=True)
@@ -281,10 +282,16 @@ def prepare_variant(
     *,
     pipeline: Pipeline | Callable[[CallSignature], Pipeline] | None,
     backend: OperationBackend,
+    keys: Mapping[object, object] | Iterable[object] | EvaluationKeySet = (),
 ) -> tuple[_CompiledVariant, OperationBackend]:
     """Prepare a Program and select the Backend used to bind its execution."""
 
+    from fhelium.backend.implementation import OperationImplementationRegistry
+
     request = _input_specialization(source, arguments)
+    request.workspace[OperationImplementationRegistry] = backend.registry
+    if keys:
+        request.workspace["evaluation_keys"] = keys
     if pipeline is None:
         optimized = default_lower_and_fuse_pipeline(backend).run(request)
     else:

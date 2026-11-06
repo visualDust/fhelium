@@ -28,7 +28,7 @@ from xdsl.rewriter import Rewriter
 
 from fhelium import Preset, compile as fh_compile
 from fhelium import ir
-from fhelium.backend import OperationBackend
+from fhelium.backend import OperationBackend, OperationImplementationRegistry
 from fhelium.backend.ckks import CkksDeviceResources
 from fhelium.config import CkksConfig
 from fhelium.eager import Engine
@@ -314,7 +314,13 @@ def main() -> None:
             residue_representation="standard",
         )
     }
-    workspace = fh_compile.CompileWorkspace({CkksConfig: config})
+    backend = OperationBackend()
+    workspace = fh_compile.CompileWorkspace(
+        {
+            CkksConfig: config,
+            OperationImplementationRegistry: backend.registry,
+        }
+    )
     # Capture the source call while retaining the matrix Tensor in the
     # Compilation's material_bindings rather than embedding it in textual IR.
     captured = fh_compile.capture(
@@ -356,12 +362,7 @@ def main() -> None:
                 "native-ntt", ntt_backend="radix2_indexed"
             ),
             fh_compile.LowerCkksToRnsNttPass(),
-            fh_compile.SelectNttImplementationsPass(
-                OperationBackend().registry
-            ),
-            fh_compile.PrepareOperationOperandsPass(
-                OperationBackend().registry
-            ),
+            fh_compile.SelectNttImplementationsPass(),
         )
     ).run(captured)
 
@@ -380,7 +381,6 @@ def main() -> None:
         if requirements.requires_relinearization
         else None
     )
-    # Prepare numerical data separately from the portable Program.
     device_resources = CkksDeviceResources(
         config=config,
         device=device,
@@ -398,7 +398,6 @@ def main() -> None:
             ),
         ),
     )
-    backend = OperationBackend()
     executable = backend.link(compiled)
 
     # Check the custom BSGS algebra independently with ordinary float64 data.

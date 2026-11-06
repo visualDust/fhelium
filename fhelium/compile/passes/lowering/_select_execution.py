@@ -14,7 +14,6 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from xdsl.dialects.builtin import StringAttr
-from xdsl.rewriter import Rewriter
 from xdsl.ir import Block, Operation
 from xdsl.dialects.func import ReturnOp
 from fhelium.compile._compilation import Compilation
@@ -36,7 +35,11 @@ from ..backend._operations import (
 )
 from ..fusion import FuseOperationsPass, _fusion_segments
 from ._core import CkksLoweringRegistry
-from ._driver import DEFAULT_CKKS_LOWERINGS
+from ._driver import DEFAULT_CKKS_LOWERINGS, apply_lowering
+from ..._material_requirements import (
+    implementation_registry,
+    resolve_material_requirements,
+)
 
 
 @dataclass(frozen=True)
@@ -45,12 +48,12 @@ class SelectExecutionLoweringsPass:
 
     A supplied implementation assignment is local to its operation. Unassigned
     operations without whole-operation coverage require lowering. Where both
-    routes exist, a detached lowering probe is accepted only when a fusion
+    routes exist, an isolated lowering probe is accepted only when a fusion
     implementation supports the complete expression. With partial fusion enabled,
     supported subregions may instead be combined with independent implementations
     for the remaining operations.
 
-    ``execution_cost`` may compare the whole operation with the detached lowered
+    ``execution_cost`` may compare the whole operation with the isolated lowered
     candidate after this pass's fusion scheduling. It returns ``(whole, lowered)``
     costs in one caller-selected unit, or None when the comparison is unknown.
     Lowering is selected only for a strictly smaller supplied cost; ties retain
@@ -78,13 +81,34 @@ class SelectExecutionLoweringsPass:
         return cast(bool, supports(operation)) if callable(supports) else True
 
     def run(self, compilation: "Compilation") -> PassResult:
+        previous = compilation.workspace.get(OperationImplementationRegistry)
+        compilation.workspace[OperationImplementationRegistry] = (
+            self.implementations
+        )
+        try:
+            return self._run(compilation)
+        finally:
+            if previous is not None:
+                compilation.workspace[OperationImplementationRegistry] = (
+                    previous
+                )
+
+    def _run(self, compilation: "Compilation") -> PassResult:
         program = compilation.program
         shared_data = compilation.workspace
         matched = transformed = inserted = skipped = 0
         decisions: list[DecisionRecord] = []
         diagnostics: list[str] = []
+        implementation_registry(compilation, self.implementations)
         fallback_config = shared_data.get(CkksConfig)
         for operation in program_operations(program):
+            requirements = resolve_material_requirements(
+                compilation, (operation,), self.implementations
+            )
+            matched += requirements.stats.matched
+            transformed += requirements.stats.transformed
+            inserted += requirements.stats.inserted
+            skipped += requirements.stats.skipped
             if not self.lowerings.supports(operation):
                 continue
             matched += 1
@@ -138,9 +162,10 @@ class SelectExecutionLoweringsPass:
             attached = False
             cost_eligible = False
             try:
-                expression = self.lowerings.lower(
-                    probe, config, probe_compilation
+                expression = apply_lowering(
+                    probe, config, probe_compilation, registry=self.lowerings
                 )
+                attached = True
                 if whole:
                     accepted = any(
                         (count := candidate.match_fusion(expression.operations))
@@ -202,12 +227,6 @@ class SelectExecutionLoweringsPass:
                 diagnostics.append(f"{operation.name}: {reason}")
             else:
                 if cost_eligible and self.execution_cost is not None:
-                    Rewriter.replace_op(
-                        probe,
-                        expression.operations,
-                        new_results=(expression.result,),
-                    )
-                    attached = True
                     FuseOperationsPass(self.fusion_implementations).run(
                         probe_compilation
                     )
@@ -245,13 +264,9 @@ class SelectExecutionLoweringsPass:
                     )
                 )
                 continue
-            lowered = self.lowerings.lower(operation, config, compilation)
-            Rewriter.replace_op(
-                operation, lowered.operations, new_results=(lowered.result,)
+            lowered = apply_lowering(
+                operation, config, compilation, registry=self.lowerings
             )
-            for symbol, description in lowered.material_descriptions.items():
-                if symbol not in program.material_descriptions:
-                    program.set_material_description(symbol, description)
             transformed += 1
             inserted += len(lowered.operations)
             decisions.append(

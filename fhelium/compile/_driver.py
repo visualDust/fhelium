@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, overload
 
 from fhelium.ir import Program
@@ -15,6 +15,10 @@ from ._workspace import CompileWorkspace
 from .frontend._specs import InputSpec
 
 if TYPE_CHECKING:
+    from fhelium.backend.ckks.materialization import CkksDeviceResources
+    from fhelium.backend.ntt.context import NttContext
+    from fhelium.backend.rns.context import RnsContext
+    from fhelium.values import EvaluationKeySet
     from fhelium.backend import OperationBackend
 
 _P = ParamSpec("_P")
@@ -26,6 +30,11 @@ def compile(
     source: Callable[_P, _R],
     *,
     backend: OperationBackend | None = None,
+    resources: CkksDeviceResources
+    | RnsContext
+    | NttContext
+    | Iterable[CkksDeviceResources | RnsContext | NttContext] = (),
+    keys: Mapping[object, object] | Iterable[object] | EvaluationKeySet = (),
     pipeline: Pipeline | Callable[[CallSignature], Pipeline] | None = None,
     on_miss: Literal["compile", "error"] = "compile",
     workspace: CompileWorkspace | None = None,
@@ -39,6 +48,11 @@ def compile(
     source: Program | Compilation,
     *,
     backend: OperationBackend | None = None,
+    resources: CkksDeviceResources
+    | RnsContext
+    | NttContext
+    | Iterable[CkksDeviceResources | RnsContext | NttContext] = (),
+    keys: Mapping[object, object] | Iterable[object] | EvaluationKeySet = (),
     pipeline: Pipeline | Callable[[CallSignature], Pipeline] | None = None,
     on_miss: Literal["compile", "error"] = "compile",
     workspace: CompileWorkspace | None = None,
@@ -51,6 +65,11 @@ def compile(
     source: None = None,
     *,
     backend: OperationBackend | None = None,
+    resources: CkksDeviceResources
+    | RnsContext
+    | NttContext
+    | Iterable[CkksDeviceResources | RnsContext | NttContext] = (),
+    keys: Mapping[object, object] | Iterable[object] | EvaluationKeySet = (),
     pipeline: Pipeline | Callable[[CallSignature], Pipeline] | None = None,
     on_miss: Literal["compile", "error"] = "compile",
     workspace: CompileWorkspace | None = None,
@@ -63,6 +82,11 @@ def compile(
     source: Program | Compilation | Callable[_P, _R] | None = None,
     *,
     backend: OperationBackend | None = None,
+    resources: CkksDeviceResources
+    | RnsContext
+    | NttContext
+    | Iterable[CkksDeviceResources | RnsContext | NttContext] = (),
+    keys: Mapping[object, object] | Iterable[object] | EvaluationKeySet = (),
     pipeline: Pipeline | Callable[[CallSignature], Pipeline] | None = None,
     on_miss: Literal["compile", "error"] = "compile",
     workspace: CompileWorkspace | None = None,
@@ -83,6 +107,8 @@ def compile(
         return CompiledCallable(
             function,
             backend=backend,
+            resources=resources,
+            keys=keys,
             pipeline=pipeline,
             on_miss=on_miss,
             workspace=workspace,

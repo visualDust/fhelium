@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from fhelium.backend.implementation import OperationImplementationRegistry
+from ..._material_requirements import resolve_material_requirements
+from .._operation_transforms import program_operations
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -139,6 +143,7 @@ class RotationHoistingPass:
         block: Block,
         position: int,
         references: tuple[Operation, ...],
+        compilation: Compilation,
     ) -> DecisionRecord:
         anchor = tuple(block.ops)[position]
         for reference in references:
@@ -174,6 +179,8 @@ class RotationHoistingPass:
             },
         )
         block.insert_op_before(hoisted, anchor)
+        if OperationImplementationRegistry in compilation.workspace:
+            resolve_material_requirements(compilation, (hoisted,))
         for rotation, result in zip(group, hoisted.results, strict=True):
             result.name_hint = rotation.result.name_hint
             rotation.result.replace_all_uses_with(result)
@@ -193,7 +200,16 @@ class RotationHoistingPass:
         """Identify compatible rotations and place legal multi-result groups."""
         program = compilation.program
         workspace = compilation.workspace
-        del workspace
+        requirement_stats = PassStats()
+        if OperationImplementationRegistry in workspace:
+            rotations = tuple(
+                op
+                for op in program_operations(program)
+                if type(op) is ckks.RotateOp
+            )
+            requirement_stats = resolve_material_requirements(
+                compilation, rotations
+            ).stats
         decisions: list[DecisionRecord] = []
         diagnostics: list[str] = []
         removed = skipped = 0
@@ -281,7 +297,9 @@ class RotationHoistingPass:
                         )
                         continue
                     decisions.append(
-                        self._rewrite(tuple(group), block, *placement)
+                        self._rewrite(
+                            tuple(group), block, *placement, compilation
+                        )
                     )
                     removed += len(group)
 
@@ -322,11 +340,11 @@ class RotationHoistingPass:
         return PassResult(
             program,
             PassStats(
-                matched=count + skipped,
-                transformed=count,
-                inserted=count,
+                matched=count + skipped + requirement_stats.matched,
+                transformed=count + requirement_stats.transformed,
+                inserted=count + requirement_stats.inserted,
                 removed=removed,
-                skipped=skipped,
+                skipped=skipped + requirement_stats.skipped,
             ),
             diagnostics=tuple(dict.fromkeys(diagnostics)),
             decisions=tuple(decisions),
