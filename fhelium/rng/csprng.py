@@ -249,6 +249,22 @@ class Csprng:
         return stochastic_round_(coef, self.rounding_state).to(target_dtype)
 
 
+def _sample_encryption_mask(rng: Csprng, *, repeats: int) -> list[torch.Tensor]:
+    """Sample the CKKS encryption mask v with the ZO(0.5) law.
+
+    Cheon, Kim, Kim, and Song, "Homomorphic Encryption for Arithmetic of
+    Approximate Numbers", Section 3.4 (distribution definitions and Enc),
+    https://yongsoosong.github.io/files/papers/HEAAN.pdf (ePrint 2016/421),
+    samples v with Pr[-1] = 1/4, Pr[0] = 1/2, Pr[+1] = 1/4.
+    For public-key error e_pk = k0 + k1*s, the encryption error is
+    v*e_pk + e0 + e1*s. The mask coefficients have zero mean.
+    """
+    # The bounded integer sampler is unbiased for the power-of-two bound 4.
+    # u = 0, 1, 2, 3 maps to 0, +1, -1, 0: two of the four equally likely
+    # inputs yield zero, and one yields each sign. Keep the existing streams.
+    return [(u & 1) - (u >> 1) for u in rng.randint(amax=4, repeats=repeats)]
+
+
 def stochastic_round_(
     values: torch.Tensor, state: torch.Tensor, *, word_stride: int = 1
 ) -> torch.Tensor:

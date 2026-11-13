@@ -13,6 +13,7 @@ from fhelium.backend.rns.context import lift_integer_coefficients_exact
 from fhelium.ir.dialects import ckks
 from fhelium.native.wrapper import rns_ops
 from fhelium.rng import Csprng
+from fhelium.rng.csprng import _sample_encryption_mask
 from ._resources import (
     RANDOM_STREAM_RESOURCE_KIND,
     RANDOM_STREAM_RESOURCE_SYMBOL,
@@ -50,10 +51,11 @@ def encrypt_tensor(
     pte0 = rns_ops.add_lazy(plaintext, e0, parameters)
     start = int(cast(int, attributes["key_row_start"]))
     pk0, pk1 = public_key[:, start : start + parameters.size(1)]
-    binary = rng.randint(amax=2, shift=0, repeats=batch_size)[0].view(
+    # ZO(0.5) encryption mask; sampling law and source are in the RNG helper.
+    mask = _sample_encryption_mask(rng, repeats=batch_size)[0].view(
         *batch_shape, plaintext.size(-1)
     )
-    v = rns_ops.lift_centered_coefficients(binary, parameters[0])
+    v = rns_ops.lift_centered_coefficients(mask, parameters[0])
     execute_transition(
         "forward_to_montgomery_", (v, *forward), policy, in_place=True
     )

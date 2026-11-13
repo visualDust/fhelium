@@ -30,9 +30,9 @@ The [compressed plaintext article](compressed-plaintext-internals.md) explains e
 
 `rng.Csprng` configures CKKS sampling through the `triton-csprng` package's ChaCha20 generators and RNS stream interface. It supplies coefficient counts, channel counts, repeated channels, integral dtype, and discrete-Gaussian standard deviation for CPU/CUDA streams.
 
-Secret-key generation samples ternary coefficients. Public-key generation samples uniform components and Gaussian error. Encryption samples a binary masking polynomial and Gaussian errors. Encoding consumes its mutable rounding-state Tensor. These uses have distinct distributions and must retain their intended stream advancement.
+Secret-key generation samples ternary coefficients. Public-key generation samples uniform components and Gaussian error. Encryption samples a zero-mean ZO(0.5) masking polynomial and Gaussian errors. Encoding consumes its mutable rounding-state Tensor. These uses have distinct distributions and must retain their intended stream advancement.
 
-Use fixed seeds for reproducible experiments. Cryptographic use requires suitable seed entropy and unique nonces for independent streams under the same key. Reusing a seed/nonce or restoring the same stream state can repeat samples. CKKS security estimates depend on ring dimension, modulus chain, secret distribution, and error parameters.
+Use fixed seeds and nonces for reproducible experiments. Cryptographic use requires suitable seed entropy and unique nonces for independent streams under the same key. Reusing a seed/nonce or restoring the same stream state can repeat samples. CKKS security estimates depend on ring dimension, modulus chain, secret distribution, and error parameters.
 
 ## What relation does each key represent?
 
@@ -56,11 +56,15 @@ where $P$ is the auxiliary-basis product. The source term is present only in the
 
 ## How does encryption use the public key?
 
-For encoded message polynomial $m$, binary mask $v$, and sampled errors $e_0,e_1$, encryption constructs
+For encoded message polynomial $m$, ZO(0.5) mask $v$, and sampled errors $e_0,e_1$, encryption constructs
 
 $$
 c_0=vk_0+m+e_0,\qquad c_1=vk_1+e_1.
 $$
+
+The mask follows Section 3.4 of [Cheon, Kim, Kim, and Song, *Homomorphic Encryption for Arithmetic of Approximate Numbers*](https://yongsoosong.github.io/files/papers/HEAAN.pdf) (ePrint 2016/421): ZO($\rho$) assigns probability $\rho/2$ to each of $-1$ and $+1$, and $1-\rho$ to zero; encryption selects $\rho=0.5$. The shared RNG helper draws uniform integers $u\in\{0,1,2,3\}$ and maps them to $0,+1,-1,0$, respectively, using the difference of the two bits. The power-of-two bound is unbiased, giving probabilities $1/4,1/2,1/4$ for $-1,0,+1$ while preserving Tensor device, integral dtype, and channel layout. Backend and Legacy encryption use the same helper and retain the existing stream/nonce mechanism. Correcting the former binary mask changes encryption samples even with the same fixed seed and nonce.
+
+Writing the public-key error as $e_{\mathrm{pk}}=k_0+k_1s$, decryption yields $m+ve_{\mathrm{pk}}+e_0+e_1s$. Conditional on a fixed public key, the zero-mean mask removes the contribution $\mathbb{E}[v]e_{\mathrm{pk}}$ caused by the former nonzero mask mean. The remaining noise and the encoding error determine slot precision; individual slots need not have equal errors.
 
 `crypto/_encryption.py` performs the supplied NTT transitions and modular products. It consumes public-key and parameter/table Tensors plus a bound sampler handle. Coefficient output performs the inverse transition and standard-residue addition; NTT output retains the selected NTT/Montgomery arithmetic form.
 
