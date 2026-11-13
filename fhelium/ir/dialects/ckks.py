@@ -193,7 +193,8 @@ class EncryptOp(IRDLOperation):
     r"""Encrypt an integer plaintext polynomial as a CT2 ciphertext.
 
     Let the public key be $(k_0,k_1)$, satisfying
-    $k_0+k_1s\approx0$, let $v$ be a sampled binary polynomial, and let
+    $k_0+k_1s\approx0$, let $v$ have independent ZO(0.5) coefficients
+    (probabilities 1/4, 1/2, 1/4 for -1, 0, +1), and let
     $e_0,e_1$ be sampled error polynomials.  For plaintext $a$, the result is
     $c_0=k_0v+a+e_0$ and $c_1=k_1v+e_1$ modulo every active prime.  The output
     has two components and keeps the plaintext depth and actual scale.

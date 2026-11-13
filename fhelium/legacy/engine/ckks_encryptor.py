@@ -15,6 +15,7 @@ from fhelium.legacy.engine.rns.montgomery import MontgomeryParameters
 from fhelium.legacy.engine.rns.layout import RnsLayout
 from fhelium.legacy.engine.rns.runtime import RnsRuntime
 from fhelium.rng import Csprng
+from fhelium.rng.csprng import _sample_encryption_mask
 
 
 class CkksEncryptor:
@@ -199,7 +200,8 @@ class CkksEncryptor:
         start = self.rns_runtime.depth_row_starts[depth]
         pk0 = public_key.k0[start:]
         pk1 = public_key.k1[start:]
-        v = self._rng.randint(amax=2, shift=0, repeats=batch_size)[0].view(
+        # ZO(0.5) encryption mask; sampling law and source are in the RNG helper.
+        v = _sample_encryption_mask(self._rng, repeats=batch_size)[0].view(
             *batch_shape, self.config.N
         )
         v = self.rns_runtime.lift_centered_coefficients(
