@@ -1,12 +1,12 @@
 #include <ATen/Dispatch.h>
 #include <ATen/Parallel.h>
-#include <torch/library.h>
 #include <torch/torch.h>
 
 #include <algorithm>
 
 #include "../../common/cpu/montgomery.h"
 #include "../../common/rns_batch.h"
+#include "../backends.h"
 #include "tensor_validation.h"
 
 namespace {
@@ -166,7 +166,20 @@ torch::Tensor ntt_galois_cpu(const torch::Tensor residues,
 
 }  // namespace
 
-TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CPU, m) {
-  m.impl("apply_coefficient_galois_automorphism", &coefficient_galois_cpu);
-  m.impl("apply_ntt_galois_automorphism", &ntt_galois_cpu);
+namespace fhelium::ckks::cpu {
+
+at::Tensor apply_coefficient_galois_automorphism(
+    const at::Tensor& residues,
+    const at::Tensor& source_indices,
+    const at::Tensor& source_sign,
+    const at::Tensor& twice_modulus) {
+  return ::coefficient_galois_cpu(
+      residues, source_indices, source_sign, twice_modulus);
 }
+
+at::Tensor apply_ntt_galois_automorphism(const at::Tensor& residues_ntt,
+                                         const at::Tensor& source_indices) {
+  return ::ntt_galois_cpu(residues_ntt, source_indices);
+}
+
+}  // namespace fhelium::ckks::cpu

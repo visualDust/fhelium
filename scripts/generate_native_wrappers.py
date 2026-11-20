@@ -18,8 +18,10 @@ import argparse
 import ast
 import difflib
 import keyword
+import os
 import shutil
 import subprocess
+import sys
 import sysconfig
 import tempfile
 from collections.abc import Iterable
@@ -171,7 +173,9 @@ def sanitize_arg_name(name: str, used: set[str]) -> str:
     return py_name
 
 
-def load_libraries(lib_dir: Path, *, verbose: bool) -> list[Path]:
+def load_libraries(
+    lib_dir: Path, *, library_dir: Path | None, verbose: bool
+) -> list[Path]:
     if not lib_dir.is_dir():
         raise FileNotFoundError(f"Torch-op directory not found: {lib_dir}")
 
@@ -183,6 +187,10 @@ def load_libraries(lib_dir: Path, *, verbose: bool) -> list[Path]:
         raise RuntimeError(f"No current-ABI FHElium _ops library found: {path}")
     if verbose:
         print(f"  -> loading {path}")
+    # Windows resolves _ops' libfhelium dependency through DLL directories;
+    # other platforms use the module's runtime search path.
+    if library_dir is not None and sys.platform == "win32":
+        os.add_dll_directory(str(library_dir))
     torch.ops.load_library(str(path))
     return [path]
 
@@ -571,6 +579,12 @@ def parse_args() -> argparse.Namespace:
         help="Directory containing compiled custom op .so files.",
     )
     parser.add_argument(
+        "--library-dir",
+        type=Path,
+        default=None,
+        help="Directory containing libfhelium, added to the Windows DLL search path.",
+    )
+    parser.add_argument(
         "--output",
         "-o",
         type=Path,
@@ -601,7 +615,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def generate(args: argparse.Namespace) -> dict[str, list[OpSpec]]:
-    load_libraries(args.path.resolve(), verbose=args.verbose)
+    load_libraries(
+        args.path.resolve(),
+        library_dir=args.library_dir.resolve() if args.library_dir else None,
+        verbose=args.verbose,
+    )
     specs = collect_specs(args.namespace_prefix)
     if not specs:
         raise RuntimeError(

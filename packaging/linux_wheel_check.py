@@ -18,7 +18,13 @@ from zipfile import ZipFile
 from packaging.requirements import Requirement
 
 
-EXPECTED_OPS_RUNPATH = "$ORIGIN/../../../torch/lib"
+EXPECTED_OPS_RUNPATH = "$ORIGIN/../lib:$ORIGIN/../../../torch/lib"
+EXPECTED_LIBRARY_RUNPATH = "$ORIGIN/../../../torch/lib"
+SDK_FILES = (
+    "fhelium/native/include/fhelium/fhelium.h",
+    "fhelium/native/share/cmake/FHElium/FHEliumConfig.cmake",
+    "fhelium/native/share/cmake/FHElium/FHEliumConfigVersion.cmake",
+)
 FORBIDDEN_PATH_PREFIXES = ("/home/", "/project/", "/tmp/", "/usr/local/cuda")
 
 
@@ -225,6 +231,19 @@ def main() -> None:
             )
 
         ops_files = list(root.glob("fhelium/native/torchops/_ops*.so"))
+        library_files = list(root.glob("fhelium/native/lib/*.so*"))
+        if [path.name for path in library_files] != ["libfhelium.so"]:
+            raise RuntimeError(
+                "wheel must contain exactly one native library, libfhelium.so"
+            )
+        library = library_files[0]
+        missing_sdk_files = [
+            name for name in SDK_FILES if not (root / name).is_file()
+        ]
+        if missing_sdk_files:
+            raise RuntimeError(
+                "wheel C++ SDK is incomplete: " + ", ".join(missing_sdk_files)
+            )
         cuda_info_files = list(root.glob("fhelium/native/cuda/cuda_info*.so"))
         if len(ops_files) != 1:
             raise RuntimeError(
@@ -314,13 +333,26 @@ def main() -> None:
                 f"_ops runtime path must be {EXPECTED_OPS_RUNPATH!r}, got {ops_paths!r}"
             )
         assert_no_build_paths(ops_section, label="_ops dynamic section")
+        if "libfhelium.so" not in dynamic_values(ops_section, "NEEDED"):
+            raise RuntimeError("_ops must link libfhelium.so")
+
+        library_section = dynamic_section(library)
+        library_paths = dynamic_values(library_section, "(?:RPATH|RUNPATH)")
+        if library_paths != [EXPECTED_LIBRARY_RUNPATH]:
+            raise RuntimeError(
+                f"libfhelium runtime path must be {EXPECTED_LIBRARY_RUNPATH!r}, "
+                f"got {library_paths!r}"
+            )
+        assert_no_build_paths(
+            library_section, label="libfhelium dynamic section"
+        )
 
         if args.cuobjdump is not None:
             actual_cubins = cuda_image_architectures(
-                args.cuobjdump, ops_files[0], "--list-elf"
+                args.cuobjdump, library, "--list-elf"
             )
             actual_ptx = cuda_image_architectures(
-                args.cuobjdump, ops_files[0], "--list-ptx"
+                args.cuobjdump, library, "--list-ptx"
             )
             expected_cubins = set(configuration.cuda_architectures)
             expected_ptx = set(configuration.cuda_ptx_architectures)
@@ -338,9 +370,7 @@ def main() -> None:
                 )
 
         if configuration.has_hip:
-            actual_hip = hip_image_architectures(
-                args.llvm_objdump, ops_files[0]
-            )
+            actual_hip = hip_image_architectures(args.llvm_objdump, library)
             if actual_hip != set(configuration.hip_architectures):
                 raise RuntimeError(
                     f"wheel HIP code-object targets differ: expected={configuration.hip_architectures!r}, actual={sorted(actual_hip)!r}"
@@ -357,7 +387,7 @@ def main() -> None:
 
         external = {
             library
-            for native_file in (*ops_files, *cuda_info_files)
+            for native_file in (*ops_files, library, *cuda_info_files)
             for library in dynamic_values(
                 dynamic_section(native_file), "NEEDED"
             )

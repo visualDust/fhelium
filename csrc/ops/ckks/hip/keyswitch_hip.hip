@@ -1,10 +1,10 @@
-#include <torch/library.h>
 #include <torch/torch.h>
 
 #include "../../common/hip/kernel_support.hpp"
 #include "../../common/montgomery.hpp"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
+#include "../backends.h"
 
 namespace {
 
@@ -25,13 +25,13 @@ namespace {
 // accumulators. key_digit_row_start maps local limb j to stable key row
 // key_digit_row_start+j. It mutates only the two accumulators by
 // $a_{k,i}\leftarrow a_{k,i}+d_i k_{k,i}\bmod q_i$ in lazy [0, 2q_i).
-// Optional int32 source_indices[N] gather the digit's NTT indices while reading;
-// key rows and accumulator indices stay in destination order.
+// Optional int32 source_indices[N] gather the digit's NTT indices while
+// reading; key rows and accumulator indices stay in destination order.
 
 inline void check_keyswitch_hip_peer(const torch::Tensor& reference,
-                                      const torch::Tensor& peer,
-                                      const char* operation,
-                                      const char* peer_name) {
+                                     const torch::Tensor& peer,
+                                     const char* operation,
+                                     const char* peer_name) {
   TORCH_CHECK(reference.is_cuda(), operation, " requires CUDA tensors");
   TORCH_CHECK(peer.is_cuda(),
               operation,
@@ -93,8 +93,8 @@ __global__ void keyswitch_moddown_prepare_p_basis_kernel(
       // unequal-width dropped bases retain the same recurrence as CPU.
       const scalar_t lower_digit =
           p_scratch[batch][lower][coefficient] % modulus;
-      const scalar_t difference = sub_lazy_residues(
-          value, lower_digit, twice_modulus);
+      const scalar_t difference =
+          sub_lazy_residues(value, lower_digit, twice_modulus);
       // Match the CPU multiply_split recurrence by reducing this lazy
       // difference before multiplication. Canonicalize the result as well
       // because later P steps reinterpret the stored residue as an ordinary
@@ -140,11 +140,14 @@ __global__ void keyswitch_moddown_qp_to_q_kernel(
     scalar_t product = inverse[p_count - 1][row];
     prefix_inverse[0] = product;
     for (int j = 1; j < p_count; ++j) {
-      product = reduce_lazy_residue(
-          montgomery_mul(product, inverse[p_count - j - 1][row],
-                         modulus_lo, modulus_hi,
-                         neg_inv_modulus_lo, neg_inv_modulus_hi),
-          twice_modulus);
+      product =
+          reduce_lazy_residue(montgomery_mul(product,
+                                             inverse[p_count - j - 1][row],
+                                             modulus_lo,
+                                             modulus_hi,
+                                             neg_inv_modulus_lo,
+                                             neg_inv_modulus_hi),
+                              twice_modulus);
       prefix_inverse[j] = product;
     }
   }
@@ -157,8 +160,10 @@ __global__ void keyswitch_moddown_qp_to_q_kernel(
   }
   scalar_t value = montgomery_mul(source,
                                   prefix_inverse[p_count - 1],
-                                  modulus_lo, modulus_hi,
-                                  neg_inv_modulus_lo, neg_inv_modulus_hi);
+                                  modulus_lo,
+                                  modulus_hi,
+                                  neg_inv_modulus_lo,
+                                  neg_inv_modulus_hi);
   for (int p_row = 0; p_row < p_count; ++p_row) {
     // d_j < p_j < R/4, coefficient < q_i: REDC(d_j * coefficient)
     // is in [0, 2q_i), even when p_j is much larger than q_i.
@@ -184,16 +189,17 @@ torch::Tensor keyswitch_moddown_qp_to_q_hip_impl(
   constexpr const char* operation = "keyswitch_moddown_qp_to_q";
   check_keyswitch_hip_peer(q_residues, p_residues, operation, "p_residues");
   check_keyswitch_hip_peer(q_residues,
-                            moddown_p_drop_inverses_montgomery,
-                            operation,
-                            "moddown_p_drop_inverses_montgomery");
+                           moddown_p_drop_inverses_montgomery,
+                           operation,
+                           "moddown_p_drop_inverses_montgomery");
   check_keyswitch_hip_peer(q_residues, rns_params, operation, "rns_params");
   if constexpr (Nearest) {
     TORCH_CHECK(half.has_value(), operation, " nearest requires moddown_half");
     check_keyswitch_hip_peer(q_residues, *half, operation, "moddown_half");
     TORCH_CHECK(half->dim() == 1 && half->is_contiguous() &&
                     half->numel() == q_residues.size(-2) + p_residues.size(-2),
-                operation, " moddown_half must contain one value per QP row");
+                operation,
+                " moddown_half must contain one value per QP row");
   }
   auto out = torch::empty_like(q_residues);
   auto p_scratch_public = torch::empty_like(p_residues);
@@ -230,29 +236,38 @@ torch::Tensor keyswitch_moddown_qp_to_q_hip_impl(
                     moddown_p_drop_inverses_montgomery, scalar_t, 2),
                 FHELIUM_HIP_ACCESSOR32(rns_params, scalar_t, 2),
                 q.size(1),
-                p.size(1), half_values);
+                p.size(1),
+                half_values);
         keyswitch_moddown_qp_to_q_kernel<scalar_t, Nearest>
-            <<<moddown_grid, kHipBlockSize, p.size(1) * sizeof(scalar_t), stream>>>(
-                FHELIUM_HIP_ACCESSOR32(output, scalar_t, 3),
-                FHELIUM_HIP_ACCESSOR32(q, scalar_t, 3),
-                FHELIUM_HIP_ACCESSOR32(p, scalar_t, 3),
-                FHELIUM_HIP_ACCESSOR32(
-                    moddown_p_drop_inverses_montgomery, scalar_t, 2),
-                FHELIUM_HIP_ACCESSOR32(rns_params, scalar_t, 2), half_values);
+            <<<moddown_grid,
+               kHipBlockSize,
+               p.size(1) * sizeof(scalar_t),
+               stream>>>(FHELIUM_HIP_ACCESSOR32(output, scalar_t, 3),
+                         FHELIUM_HIP_ACCESSOR32(q, scalar_t, 3),
+                         FHELIUM_HIP_ACCESSOR32(p, scalar_t, 3),
+                         FHELIUM_HIP_ACCESSOR32(
+                             moddown_p_drop_inverses_montgomery, scalar_t, 2),
+                         FHELIUM_HIP_ACCESSOR32(rns_params, scalar_t, 2),
+                         half_values);
       });
   return out;
 }
 
 torch::Tensor keyswitch_moddown_qp_to_q_hip(
-    const torch::Tensor q, const torch::Tensor p,
-    const torch::Tensor inverse, const torch::Tensor parameters,
-    const std::optional<torch::Tensor> half, const std::string& rounding) {
+    const torch::Tensor q,
+    const torch::Tensor p,
+    const torch::Tensor inverse,
+    const torch::Tensor parameters,
+    const std::optional<torch::Tensor> half,
+    const std::string& rounding) {
   TORCH_CHECK(rounding == "nearest" || rounding == "floor",
               "ModDown rounding must be 'nearest' or 'floor'");
   if (rounding == "nearest") {
-    return keyswitch_moddown_qp_to_q_hip_impl<true>(q, p, inverse, parameters, half);
+    return keyswitch_moddown_qp_to_q_hip_impl<true>(
+        q, p, inverse, parameters, half);
   }
-  return keyswitch_moddown_qp_to_q_hip_impl<false>(q, p, inverse, parameters, half);
+  return keyswitch_moddown_qp_to_q_hip_impl<false>(
+      q, p, inverse, parameters, half);
 }
 
 // Multiply one ModUp digit by one unbatched key-switch-key pair and accumulate
@@ -345,10 +360,11 @@ __global__ void keyswitch_accumulate_products_kernel(
   for (int digit_index = 0; digit_index < kMaximumGroupedKeyDigits;
        ++digit_index) {
     if (digit_index >= digit_count) break;
-    const scalar_t digit = digits.values[digit_index][
-        batch * digits.batch_stride[digit_index] +
-        row * digits.row_stride[digit_index] +
-        source_coefficient * digits.coefficient_stride[digit_index]];
+    const scalar_t digit =
+        digits.values[digit_index][batch * digits.batch_stride[digit_index] +
+                                   row * digits.row_stride[digit_index] +
+                                   source_coefficient *
+                                       digits.coefficient_stride[digit_index]];
     sum0 = add_lazy_residues(
         sum0,
         montgomery_mul(digit,
@@ -386,9 +402,9 @@ void keyswitch_accumulate_digit_products_inplace_hip(
   check_keyswitch_hip_peer(
       extended_digit_ntt_qp, accumulator1_qp, operation, "accumulator1_qp");
   check_keyswitch_hip_peer(extended_digit_ntt_qp,
-                            key_switch_key_digit,
-                            operation,
-                            "key_switch_key_digit");
+                           key_switch_key_digit,
+                           operation,
+                           "key_switch_key_digit");
   check_keyswitch_hip_peer(
       extended_digit_ntt_qp, rns_params, operation, "rns_params");
   auto accumulator0 = view_rns_batch_3d(accumulator0_qp, "accumulator0_qp");
@@ -402,7 +418,8 @@ void keyswitch_accumulate_digit_products_inplace_hip(
     TORCH_CHECK(indices.device() == extended_digit_ntt_qp.device() &&
                     indices.scalar_type() == torch::kInt32 &&
                     indices.dim() == 1 && indices.size(0) == digit.size(2),
-                operation, " requires int32 source indices matching N");
+                operation,
+                " requires int32 source indices matching N");
     permutation = indices.data_ptr<int32_t>();
     permutation_stride = indices.stride(0);
   }
@@ -423,8 +440,7 @@ void keyswitch_accumulate_digit_products_inplace_hip(
   at::assert_no_internal_overlap(accumulator0);
   at::assert_no_internal_overlap(accumulator1);
   at::assert_no_overlap(accumulator0, accumulator1);
-  for (const auto& read_only :
-       {digit, key_switch_key_digit, rns_params}) {
+  for (const auto& read_only : {digit, key_switch_key_digit, rns_params}) {
     at::assert_no_overlap(accumulator0, read_only);
     at::assert_no_overlap(accumulator1, read_only);
   }
@@ -442,19 +458,19 @@ void keyswitch_accumulate_digit_products_inplace_hip(
       extended_digit_ntt_qp.scalar_type(),
       "keyswitch_accumulate_digit_products",
       [&] {
-        const auto kernel = permutation
-            ? keyswitch_accumulate_digit_products_kernel<scalar_t, true>
-            : keyswitch_accumulate_digit_products_kernel<scalar_t, false>;
-        kernel
-            <<<grid, kHipBlockSize, 0, stream>>>(
-                FHELIUM_HIP_ACCESSOR32(accumulator0, scalar_t, 3),
-                FHELIUM_HIP_ACCESSOR32(accumulator1, scalar_t, 3),
-                FHELIUM_HIP_ACCESSOR32(digit, scalar_t, 3),
-                FHELIUM_HIP_ACCESSOR32(key_switch_key_digit, scalar_t, 3),
-                FHELIUM_HIP_ACCESSOR32(rns_params, scalar_t, 2),
-                static_cast<int>(key_digit_row_start),
-                permutation,
-                permutation_stride);
+        const auto kernel =
+            permutation
+                ? keyswitch_accumulate_digit_products_kernel<scalar_t, true>
+                : keyswitch_accumulate_digit_products_kernel<scalar_t, false>;
+        kernel<<<grid, kHipBlockSize, 0, stream>>>(
+            FHELIUM_HIP_ACCESSOR32(accumulator0, scalar_t, 3),
+            FHELIUM_HIP_ACCESSOR32(accumulator1, scalar_t, 3),
+            FHELIUM_HIP_ACCESSOR32(digit, scalar_t, 3),
+            FHELIUM_HIP_ACCESSOR32(key_switch_key_digit, scalar_t, 3),
+            FHELIUM_HIP_ACCESSOR32(rns_params, scalar_t, 2),
+            static_cast<int>(key_digit_row_start),
+            permutation,
+            permutation_stride);
       });
 }
 
@@ -478,25 +494,25 @@ void keyswitch_accumulate_products_inplace_hip(
   auto accumulator1 = view_rns_batch_3d(accumulator1_qp, "accumulator1_qp");
   const auto prototype =
       view_rns_batch_3d(prototype_tensor, "extended_digits_ntt_qp[0]");
-  check_keyswitch_hip_peer(prototype_tensor, accumulator0_qp, operation,
-                            "accumulator0_qp");
-  check_keyswitch_hip_peer(prototype_tensor, accumulator1_qp, operation,
-                            "accumulator1_qp");
-  check_keyswitch_hip_peer(prototype_tensor, key_switch_key, operation,
-                            "key_switch_key");
-  check_keyswitch_hip_peer(prototype_tensor, rns_params, operation,
-                            "rns_params");
+  check_keyswitch_hip_peer(
+      prototype_tensor, accumulator0_qp, operation, "accumulator0_qp");
+  check_keyswitch_hip_peer(
+      prototype_tensor, accumulator1_qp, operation, "accumulator1_qp");
+  check_keyswitch_hip_peer(
+      prototype_tensor, key_switch_key, operation, "key_switch_key");
+  check_keyswitch_hip_peer(
+      prototype_tensor, rns_params, operation, "rns_params");
   check_rns_binary_3d(accumulator0, prototype, operation, false);
   check_rns_binary_3d(accumulator1, prototype, operation, false);
   check_rns_parameter_rows(prototype, rns_params, operation);
-  TORCH_CHECK(key_switch_key.dim() == 4 &&
-                  key_switch_key.size(0) == extended_digits_ntt_qp.size() &&
-                  key_switch_key.size(1) == 2 &&
-                  key_digit_row_start >= 0 &&
-                  key_digit_row_start + prototype.size(1) <=
-                      key_switch_key.size(2) &&
-                  key_switch_key.size(3) == prototype.size(2),
-              operation, " key shape or row interval mismatch");
+  TORCH_CHECK(
+      key_switch_key.dim() == 4 &&
+          key_switch_key.size(0) == extended_digits_ntt_qp.size() &&
+          key_switch_key.size(1) == 2 && key_digit_row_start >= 0 &&
+          key_digit_row_start + prototype.size(1) <= key_switch_key.size(2) &&
+          key_switch_key.size(3) == prototype.size(2),
+      operation,
+      " key shape or row interval mismatch");
   for (const auto& digit_tensor : extended_digits_ntt_qp) {
     check_keyswitch_hip_peer(
         prototype_tensor, digit_tensor, operation, "digit");
@@ -517,7 +533,8 @@ void keyswitch_accumulate_products_inplace_hip(
     TORCH_CHECK(indices.device() == prototype_tensor.device() &&
                     indices.scalar_type() == torch::kInt32 &&
                     indices.dim() == 1 && indices.size(0) == prototype.size(2),
-                operation, " requires int32 source indices matching N");
+                operation,
+                " requires int32 source indices matching N");
     permutation = indices.data_ptr<int32_t>();
     permutation_stride = indices.stride(0);
     at::assert_no_overlap(accumulator0, indices);
@@ -534,16 +551,16 @@ void keyswitch_accumulate_products_inplace_hip(
     for (int digit_index = 0;
          digit_index < static_cast<int>(extended_digits_ntt_qp.size());
          ++digit_index) {
-      const auto digit = view_rns_batch_3d(
-          extended_digits_ntt_qp[digit_index], "digit");
+      const auto digit =
+          view_rns_batch_3d(extended_digits_ntt_qp[digit_index], "digit");
       pointers.values[digit_index] = digit.data_ptr<scalar_t>();
       pointers.batch_stride[digit_index] = digit.stride(0);
       pointers.row_stride[digit_index] = digit.stride(1);
       pointers.coefficient_stride[digit_index] = digit.stride(2);
     }
-    const auto kernel = permutation
-        ? keyswitch_accumulate_products_kernel<scalar_t, true>
-        : keyswitch_accumulate_products_kernel<scalar_t, false>;
+    const auto kernel =
+        permutation ? keyswitch_accumulate_products_kernel<scalar_t, true>
+                    : keyswitch_accumulate_products_kernel<scalar_t, false>;
     kernel<<<grid, kHipBlockSize, 0, stream>>>(
         FHELIUM_HIP_ACCESSOR32(accumulator0, scalar_t, 3),
         FHELIUM_HIP_ACCESSOR32(accumulator1, scalar_t, 3),
@@ -559,10 +576,55 @@ void keyswitch_accumulate_products_inplace_hip(
 
 }  // namespace
 
-TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
-  m.impl("keyswitch_moddown_qp_to_q", &keyswitch_moddown_qp_to_q_hip);
-  m.impl("keyswitch_accumulate_digit_products_",
-         &keyswitch_accumulate_digit_products_inplace_hip);
-  m.impl("keyswitch_accumulate_products_",
-         &keyswitch_accumulate_products_inplace_hip);
+namespace fhelium::ckks::gpu {
+
+at::Tensor keyswitch_moddown_qp_to_q(
+    const at::Tensor& q_residues,
+    const at::Tensor& p_residues,
+    const at::Tensor& moddown_p_drop_inverses_montgomery,
+    const at::Tensor& rns_params,
+    const std::optional<at::Tensor>& moddown_half,
+    c10::string_view rounding) {
+  return ::keyswitch_moddown_qp_to_q_hip(q_residues,
+                                         p_residues,
+                                         moddown_p_drop_inverses_montgomery,
+                                         rns_params,
+                                         moddown_half,
+                                         std::string(rounding));
 }
+
+void keyswitch_accumulate_digit_products_(
+    at::Tensor& accumulator0_qp,
+    at::Tensor& accumulator1_qp,
+    const at::Tensor& extended_digit_ntt_qp,
+    const at::Tensor& key_switch_key_digit,
+    const at::Tensor& rns_params,
+    int64_t key_digit_row_start,
+    const std::optional<at::Tensor>& source_indices) {
+  ::keyswitch_accumulate_digit_products_inplace_hip(accumulator0_qp,
+                                                    accumulator1_qp,
+                                                    extended_digit_ntt_qp,
+                                                    key_switch_key_digit,
+                                                    rns_params,
+                                                    key_digit_row_start,
+                                                    source_indices);
+}
+
+void keyswitch_accumulate_products_(
+    at::Tensor& accumulator0_qp,
+    at::Tensor& accumulator1_qp,
+    at::TensorList extended_digits_ntt_qp,
+    const at::Tensor& key_switch_key,
+    const at::Tensor& rns_params,
+    int64_t key_digit_row_start,
+    const std::optional<at::Tensor>& source_indices) {
+  ::keyswitch_accumulate_products_inplace_hip(accumulator0_qp,
+                                              accumulator1_qp,
+                                              extended_digits_ntt_qp,
+                                              key_switch_key,
+                                              rns_params,
+                                              key_digit_row_start,
+                                              source_indices);
+}
+
+}  // namespace fhelium::ckks::gpu

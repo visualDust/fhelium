@@ -95,6 +95,19 @@ torchrun --standalone --nproc-per-node=2 examples/23_distributed_rns_shards.py
 
 Gather, ciphertext reduction, and RNS reconstruction express different mathematical relationships. Read the [SPMD model](../docs/concepts/distributed/spmd-model.md) before adapting the partition.
 
+## C++ library
+
+[`cpp/`](cpp) is a CMake project that links the installed `libfhelium` through `find_package(FHElium)`. It computes an RNS parameter table, runs RNS Montgomery multiplication, standard addition, and CKKS two-component multiplication on CPU and, when available, on the first CUDA device, and compares the results with 128-bit integer arithmetic. Build it with the Python environment that provides FHElium and Torch:
+
+```bash
+cmake -S examples/cpp -B build/cpp-example \
+  -DCMAKE_PREFIX_PATH="$(python -c 'import fhelium.native, torch.utils; print(fhelium.native.cmake_prefix_path + ";" + torch.utils.cmake_prefix_path)')"
+cmake --build build/cpp-example
+build/cpp-example/rns_ckks_example
+```
+
+See [Call the native library from C++](../docs/how-to/call-native-library-from-cpp.md) for the interface and linking requirements.
+
 ## Experimental scope
 
 Examples 25–26 remain last and opt-in. The bootstrap example does not prove an application's encrypted input range. The multiparty example uses synthetic data and throwaway keys; its output protocols have no supported privacy or production security guarantee. Read the linked tutorials before running them.

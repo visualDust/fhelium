@@ -1,13 +1,13 @@
 #include <ATen/Dispatch.h>
 #include <ATen/MemoryOverlap.h>
 #include <ATen/Parallel.h>
-#include <torch/library.h>
 #include <torch/torch.h>
 
 #include <algorithm>
 
 #include "../../common/cpu/montgomery.h"
 #include "../../common/rns_batch.h"
+#include "../backends.h"
 #include "tensor_validation.h"
 
 namespace {
@@ -137,49 +137,40 @@ torch::Tensor rescale_cpu(const torch::Tensor remaining,
 
 }  // namespace
 
-TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CPU, m) {
-  m.impl("rescale_drop_leading_prime_nearest",
-         [](const torch::Tensor a,
-            const torch::Tensor inv,
-            const torch::Tensor dropped,
-            const torch::Tensor p,
-            int64_t half) {
-           return rescale_cpu<true>(a,
-                                    inv,
-                                    dropped,
-                                    p,
-                                    half,
-                                    "ckks_rescale_drop_leading_prime_nearest");
-         });
-  m.impl("rescale_drop_leading_prime_nearest_",
-         [](torch::Tensor a,
-            const torch::Tensor inv,
-            const torch::Tensor dropped,
-            const torch::Tensor p,
-            int64_t half) {
-           rescale_cpu_<true>(a,
-                              inv,
-                              dropped,
-                              p,
-                              half,
-                              "ckks_rescale_drop_leading_prime_nearest");
-         });
-  m.impl(
-      "rescale_drop_leading_prime_truncate",
-      [](const torch::Tensor a,
-         const torch::Tensor inv,
-         const torch::Tensor dropped,
-         const torch::Tensor p) {
-        return rescale_cpu<false>(
-            a, inv, dropped, p, 0, "ckks_rescale_drop_leading_prime_truncate");
-      });
-  m.impl(
-      "rescale_drop_leading_prime_truncate_",
-      [](torch::Tensor a,
-         const torch::Tensor inv,
-         const torch::Tensor dropped,
-         const torch::Tensor p) {
-        rescale_cpu_<false>(
-            a, inv, dropped, p, 0, "ckks_rescale_drop_leading_prime_truncate");
-      });
+namespace fhelium::ckks::cpu {
+
+at::Tensor rescale_drop_leading_prime_nearest(const at::Tensor& a,
+                                              const at::Tensor& inv,
+                                              const at::Tensor& dropped,
+                                              const at::Tensor& p,
+                                              int64_t half) {
+  return rescale_cpu<true>(
+      a, inv, dropped, p, half, "ckks_rescale_drop_leading_prime_nearest");
 }
+
+void rescale_drop_leading_prime_nearest_(at::Tensor& a,
+                                         const at::Tensor& inv,
+                                         const at::Tensor& dropped,
+                                         const at::Tensor& p,
+                                         int64_t half) {
+  rescale_cpu_<true>(
+      a, inv, dropped, p, half, "ckks_rescale_drop_leading_prime_nearest");
+}
+
+at::Tensor rescale_drop_leading_prime_truncate(const at::Tensor& a,
+                                               const at::Tensor& inv,
+                                               const at::Tensor& dropped,
+                                               const at::Tensor& p) {
+  return rescale_cpu<false>(
+      a, inv, dropped, p, 0, "ckks_rescale_drop_leading_prime_truncate");
+}
+
+void rescale_drop_leading_prime_truncate_(at::Tensor& a,
+                                          const at::Tensor& inv,
+                                          const at::Tensor& dropped,
+                                          const at::Tensor& p) {
+  rescale_cpu_<false>(
+      a, inv, dropped, p, 0, "ckks_rescale_drop_leading_prime_truncate");
+}
+
+}  // namespace fhelium::ckks::cpu

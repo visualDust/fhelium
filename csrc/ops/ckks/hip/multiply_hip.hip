@@ -1,4 +1,3 @@
-#include <torch/library.h>
 #include <torch/torch.h>
 
 #include <hip/hip_runtime.h>
@@ -7,6 +6,7 @@
 
 #include "../../common/hip/kernel_support.hpp"
 #include "../../common/montgomery.hpp"
+#include "../backends.h"
 #include "../ciphertext_components.h"
 
 namespace {
@@ -17,8 +17,8 @@ using fhelium::ckks::TwoComponentMultiplyInputs;
 constexpr const char* kOperation = "multiply_two_component_ntt_montgomery";
 
 void check_hip_status(const hipError_t status,
-                       const char* operation,
-                       const char* action) {
+                      const char* operation,
+                      const char* action) {
   TORCH_CHECK(status == hipSuccess,
               operation,
               " could not ",
@@ -85,8 +85,8 @@ void launch(const TwoComponentMultiplyInputs& inputs,
 }
 
 torch::Tensor multiply_two_component_hip(const torch::Tensor lhs_components,
-                                          const torch::Tensor rhs_components,
-                                          const torch::Tensor rns_params) {
+                                         const torch::Tensor rhs_components,
+                                         const torch::Tensor rns_params) {
   const auto inputs = fhelium::ckks::check_two_component_multiply_inputs(
       lhs_components, rhs_components, rns_params, kOperation);
   const auto output =
@@ -101,6 +101,14 @@ torch::Tensor multiply_two_component_hip(const torch::Tensor lhs_components,
 
 }  // namespace
 
-TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
-  m.impl("multiply_two_component_ntt_montgomery", &multiply_two_component_hip);
+namespace fhelium::ckks::gpu {
+
+at::Tensor multiply_two_component_ntt_montgomery(
+    const at::Tensor& lhs_components,
+    const at::Tensor& rhs_components,
+    const at::Tensor& rns_params) {
+  return ::multiply_two_component_hip(
+      lhs_components, rhs_components, rns_params);
 }
+
+}  // namespace fhelium::ckks::gpu

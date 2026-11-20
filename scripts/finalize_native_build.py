@@ -34,6 +34,11 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Comma-separated native execution backends included in _ops.",
     )
+    parser.add_argument(
+        "--sdk-root",
+        default="",
+        help="Absolute C++ SDK root recorded for editable installs.",
+    )
     parser.add_argument("--hip-architectures", default="")
     parser.add_argument("--hip-compiler-id", default="")
     parser.add_argument("--hip-compiler-version", default="")
@@ -91,6 +96,7 @@ def main() -> None:
             "manifest_schema_version": helpers.MANIFEST_SCHEMA_VERSION,
             "project_version": project["version"],
             "native_backends": list(backends),
+            **({"sdk_root": args.sdk_root} if args.sdk_root else {}),
             **(
                 {
                     "build_hip_architectures": [

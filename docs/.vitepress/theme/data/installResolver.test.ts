@@ -8,6 +8,7 @@ import {
 import {
   changeSelection,
   defaultSelection,
+  libraryCommands,
   optionsFor,
   resolveInstall,
   validateCatalog,
@@ -98,6 +99,7 @@ const sourceSelection: InstallSelection = {
   method: 'source-pip',
   torch: '2.13',
   compute: 'cuda-130',
+  language: 'python',
 }
 const source = resolveInstall(sourceSelection, windowsCatalog)
 assert.match(source.commands[2], /^\$env:CMAKE_ARGS = /u)
@@ -132,6 +134,7 @@ const linux = resolveInstall(
     method: 'prebuilt-pip',
     torch: '2.13',
     compute: 'cuda-130',
+    language: 'python',
   },
   installCatalog,
 )
@@ -153,3 +156,16 @@ const backToCuda = changeSelection(amd, 'compute', 'cuda-130')
 assert.equal(backToCuda.method, 'prebuilt-pip')
 assert.equal(backToCuda.torch, '2.13')
 assert.match(resolveInstall(backToCuda).commands[1], /--only-binary=fhelium/u)
+
+// C++ selects a source build and appends CMake configuration with the installed FHElium and Torch prefixes.
+const cpp = changeSelection(backToCuda, 'language', 'cpp')
+assert.equal(cpp.method, 'source-pip')
+assert.ok(!optionsFor('method', cpp).includes('prebuilt-pip'))
+const linuxLibrary = resolveInstall(cpp).commands.join('\n')
+assert.match(linuxLibrary, /--no-binary=fhelium/u)
+assert.match(linuxLibrary, /FHELIUM_PREFIX="\$\(python -c 'import fhelium\.native, torch\.utils;/u)
+assert.match(linuxLibrary, /-DCMAKE_CUDA_COMPILER="\$\(command -v nvcc\)"/u)
+const windowsLibrary = libraryCommands(sourceSelection).join('\n')
+assert.match(windowsLibrary, /^\$FHEliumPrefix = python -c "import fhelium\.native, torch\.utils; print\(fhelium\.native\.cmake_prefix_path \+ ';' \+/mu)
+assert.match(windowsLibrary, /--config Release/u)
+assert.doesNotMatch(libraryCommands({ ...sourceSelection, compute: 'cpu' }).join('\n'), /CMAKE_CUDA_COMPILER/u)

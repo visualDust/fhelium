@@ -3,12 +3,14 @@ import catalogJson from './install-catalog.json'
 export type OsId = 'linux-x86_64' | 'windows-x86_64' | 'macos-arm64'
 export type MethodId = 'prebuilt-pip' | 'source-pip' | 'source-github' | 'source-local'
 export type ComputeId = 'cpu' | 'rocm' | `cuda-${number}`
+export type LanguageId = 'python' | 'cpp'
 
 export type InstallSelection = {
   os: OsId
   method: MethodId
   torch: string
   compute: ComputeId
+  language: LanguageId
 }
 
 export type TorchDistribution = {
@@ -20,7 +22,7 @@ export type TorchDistribution = {
   preinstalled?: boolean
 }
 
-export type BinaryRecipe = InstallSelection & {
+export type BinaryRecipe = Omit<InstallSelection, 'language'> & {
   configuration: string
   fhelium_version: string
   simple_index_url: string
@@ -70,6 +72,11 @@ export const methodLabels: Record<MethodId, string> = {
   'source-pip': 'Build from source (pip)',
   'source-github': 'Build from source (GitHub)',
   'source-local': 'Build from source',
+}
+
+export const languageLabels: Record<LanguageId, string> = {
+  python: 'Python',
+  cpp: 'C++ (libfhelium)',
 }
 
 export function computeLabel(compute: ComputeId): string {

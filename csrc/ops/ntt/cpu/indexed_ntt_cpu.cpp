@@ -1,6 +1,5 @@
 #include <ATen/Dispatch.h>
 #include <ATen/Parallel.h>
-#include <torch/library.h>
 #include <torch/torch.h>
 
 #include <algorithm>
@@ -8,6 +7,7 @@
 #include "../../common/cpu/montgomery.h"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
+#include "../backends.h"
 #include "../ntt_validation.h"
 
 namespace {
@@ -431,19 +431,91 @@ void inverse_ntt_to_centered_indexed_cpu_(torch::Tensor residues,
 
 }  // namespace
 
-TORCH_LIBRARY_IMPL(fhelium_ntt_ops, CPU, m) {
-  m.impl("forward_ntt_montgomery_indexed_",
-         &forward_ntt_montgomery_indexed_cpu_);
-  m.impl("forward_ntt_to_montgomery_indexed_",
-         &forward_ntt_to_montgomery_indexed_cpu_);
-  m.impl("forward_ntt_to_montgomery_indexed",
-         &forward_ntt_to_montgomery_indexed_cpu);
-  m.impl("inverse_ntt_montgomery_indexed_",
-         &inverse_ntt_montgomery_indexed_cpu_);
-  m.impl("inverse_ntt_to_standard_lazy_indexed_",
-         &inverse_ntt_to_standard_lazy_indexed_cpu_);
-  m.impl("inverse_ntt_to_standard_indexed_",
-         &inverse_ntt_to_standard_indexed_cpu_);
-  m.impl("inverse_ntt_to_centered_indexed_",
-         &inverse_ntt_to_centered_indexed_cpu_);
+namespace fhelium::ntt::cpu {
+
+void forward_ntt_montgomery_indexed_(at::Tensor& montgomery_residues,
+                                     const at::Tensor& even_indices,
+                                     const at::Tensor& odd_indices,
+                                     const at::Tensor& forward_twiddles,
+                                     const at::Tensor& rns_params) {
+  ::forward_ntt_montgomery_indexed_cpu_(montgomery_residues,
+                                        even_indices,
+                                        odd_indices,
+                                        forward_twiddles,
+                                        rns_params);
 }
+
+void forward_ntt_to_montgomery_indexed_(at::Tensor& standard_residues,
+                                        const at::Tensor& even_indices,
+                                        const at::Tensor& odd_indices,
+                                        const at::Tensor& forward_twiddles,
+                                        const at::Tensor& rns_params) {
+  ::forward_ntt_to_montgomery_indexed_cpu_(standard_residues,
+                                           even_indices,
+                                           odd_indices,
+                                           forward_twiddles,
+                                           rns_params);
+}
+
+at::Tensor forward_ntt_to_montgomery_indexed(
+    const at::Tensor& standard_residues,
+    const at::Tensor& even_indices,
+    const at::Tensor& odd_indices,
+    const at::Tensor& forward_twiddles,
+    const at::Tensor& rns_params) {
+  return ::forward_ntt_to_montgomery_indexed_cpu(standard_residues,
+                                                 even_indices,
+                                                 odd_indices,
+                                                 forward_twiddles,
+                                                 rns_params);
+}
+
+void inverse_ntt_montgomery_indexed_(at::Tensor& montgomery_residues,
+                                     const at::Tensor& even_indices,
+                                     const at::Tensor& odd_indices,
+                                     const at::Tensor& inverse_twiddles,
+                                     const at::Tensor& rns_params) {
+  ::inverse_ntt_montgomery_indexed_cpu_(montgomery_residues,
+                                        even_indices,
+                                        odd_indices,
+                                        inverse_twiddles,
+                                        rns_params);
+}
+
+void inverse_ntt_to_standard_lazy_indexed_(at::Tensor& montgomery_residues,
+                                           const at::Tensor& even_indices,
+                                           const at::Tensor& odd_indices,
+                                           const at::Tensor& inverse_twiddles,
+                                           const at::Tensor& rns_params) {
+  ::inverse_ntt_to_standard_lazy_indexed_cpu_(montgomery_residues,
+                                              even_indices,
+                                              odd_indices,
+                                              inverse_twiddles,
+                                              rns_params);
+}
+
+void inverse_ntt_to_standard_indexed_(at::Tensor& montgomery_residues,
+                                      const at::Tensor& even_indices,
+                                      const at::Tensor& odd_indices,
+                                      const at::Tensor& inverse_twiddles,
+                                      const at::Tensor& rns_params) {
+  ::inverse_ntt_to_standard_indexed_cpu_(montgomery_residues,
+                                         even_indices,
+                                         odd_indices,
+                                         inverse_twiddles,
+                                         rns_params);
+}
+
+void inverse_ntt_to_centered_indexed_(at::Tensor& montgomery_residues,
+                                      const at::Tensor& even_indices,
+                                      const at::Tensor& odd_indices,
+                                      const at::Tensor& inverse_twiddles,
+                                      const at::Tensor& rns_params) {
+  ::inverse_ntt_to_centered_indexed_cpu_(montgomery_residues,
+                                         even_indices,
+                                         odd_indices,
+                                         inverse_twiddles,
+                                         rns_params);
+}
+
+}  // namespace fhelium::ntt::cpu

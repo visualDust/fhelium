@@ -1,4 +1,3 @@
-#include <torch/library.h>
 #include <torch/torch.h>
 
 #include <cuda_runtime.h>
@@ -7,6 +6,7 @@
 
 #include "../../common/cuda/kernel_support.cuh"
 #include "../../common/montgomery.hpp"
+#include "../backends.h"
 #include "../ciphertext_components.h"
 
 namespace {
@@ -101,6 +101,14 @@ torch::Tensor multiply_two_component_cuda(const torch::Tensor lhs_components,
 
 }  // namespace
 
-TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
-  m.impl("multiply_two_component_ntt_montgomery", &multiply_two_component_cuda);
+namespace fhelium::ckks::gpu {
+
+at::Tensor multiply_two_component_ntt_montgomery(
+    const at::Tensor& lhs_components,
+    const at::Tensor& rhs_components,
+    const at::Tensor& rns_params) {
+  return ::multiply_two_component_cuda(
+      lhs_components, rhs_components, rns_params);
 }
+
+}  // namespace fhelium::ckks::gpu

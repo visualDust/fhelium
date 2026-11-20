@@ -1,9 +1,9 @@
-#include <torch/library.h>
 #include <torch/torch.h>
 
 #include "../../common/hip/kernel_support.hpp"
 #include "../../common/montgomery.hpp"
 #include "../../common/rns_batch.h"
+#include "../backends.h"
 
 namespace {
 
@@ -115,8 +115,20 @@ torch::Tensor apply_ntt_galois_automorphism_hip(
 
 }  // namespace
 
-TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
-  m.impl("apply_coefficient_galois_automorphism",
-         &apply_coefficient_galois_automorphism_hip);
-  m.impl("apply_ntt_galois_automorphism", &apply_ntt_galois_automorphism_hip);
+namespace fhelium::ckks::gpu {
+
+at::Tensor apply_coefficient_galois_automorphism(
+    const at::Tensor& residues,
+    const at::Tensor& source_indices,
+    const at::Tensor& source_sign,
+    const at::Tensor& twice_modulus) {
+  return ::apply_coefficient_galois_automorphism_hip(
+      residues, source_indices, source_sign, twice_modulus);
 }
+
+at::Tensor apply_ntt_galois_automorphism(const at::Tensor& residues_ntt,
+                                         const at::Tensor& source_indices) {
+  return ::apply_ntt_galois_automorphism_hip(residues_ntt, source_indices);
+}
+
+}  // namespace fhelium::ckks::gpu
