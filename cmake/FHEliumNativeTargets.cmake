@@ -1,4 +1,5 @@
-# Define the native operator and backend runtime-information targets.
+# Define libfhelium, its Torch operator registration module, and the backend
+# runtime-information module.
 
 function(_fhelium_map_msvc_build_paths target)
   if(NOT MSVC)
@@ -34,23 +35,75 @@ function(_fhelium_map_msvc_build_paths target)
   endforeach()
 endfunction()
 
-function(add_fhelium_torch_module name src_dir out_subdir)
-  set(_FHELIUM_TORCH_MODULE_CXX_STANDARD 17)
+function(_fhelium_torch_cxx_standard output)
+  set(_standard 17)
   file(STRINGS "${TORCH_PACKAGE_ROOT}/include/ATen/ATen.h"
        _FHELIUM_TORCH_REQUIRES_CXX20 REGEX "__cplusplus < 202002L")
   # Torch's bit-field initializers require C++20 even when ATen.h has no
   # corresponding version guard.
   file(STRINGS "${TORCH_PACKAGE_ROOT}/include/c10/core/AutogradState.h"
        _FHELIUM_TORCH_BITFIELD_INITIALIZERS REGEX ": 1 =")
-  if(MSVC OR _FHELIUM_TORCH_REQUIRES_CXX20
+  if(MSVC
+     OR _FHELIUM_TORCH_REQUIRES_CXX20
      OR _FHELIUM_TORCH_BITFIELD_INITIALIZERS)
-    set(_FHELIUM_TORCH_MODULE_CXX_STANDARD 20)
+    set(_standard 20)
   endif()
+  set(${output}
+      ${_standard}
+      PARENT_SCOPE)
+endfunction()
 
-  file(GLOB_RECURSE SCHEMA_SOURCES CONFIGURE_DEPENDS "${src_dir}/*.cpp")
-  list(FILTER SCHEMA_SOURCES EXCLUDE REGEX "/(cpu|cuda|hip)/")
+# Compile definitions naming the backends compiled into libfhelium. Public
+# functions route to these backends, and the Torch registration module registers
+# kernels only for them.
+set(FHELIUM_BACKEND_DEFINITIONS "")
+if(FHELIUM_BUILD_CPU)
+  list(APPEND FHELIUM_BACKEND_DEFINITIONS FHELIUM_WITH_CPU)
+endif()
+if(FHELIUM_BUILD_CUDA)
+  list(APPEND FHELIUM_BACKEND_DEFINITIONS FHELIUM_WITH_CUDA)
+endif()
+if(FHELIUM_BUILD_HIP)
+  list(APPEND FHELIUM_BACKEND_DEFINITIONS FHELIUM_WITH_HIP)
+endif()
 
-  set(CPP_SOURCES ${SCHEMA_SOURCES})
+# The C++ SDK (libfhelium, public headers, and the FHElium CMake package) is
+# installed under one root. Wheels place it in the package's native/ directory.
+# Editable installs keep it in the ABI-specific build directory so that source
+# checkouts can hold builds for several Python ABIs.
+if(SKBUILD_STATE STREQUAL "editable")
+  set(FHELIUM_SDK_ROOT "${CMAKE_BINARY_DIR}/sdk")
+  set(FHELIUM_SDK_LIBRARY_RPATH "${FHELIUM_SDK_ROOT}/lib")
+else()
+  set(FHELIUM_SDK_ROOT "native")
+  if(APPLE)
+    set(FHELIUM_SDK_LIBRARY_RPATH "@loader_path/../lib")
+  else()
+    set(FHELIUM_SDK_LIBRARY_RPATH "$ORIGIN/../lib")
+  endif()
+endif()
+
+if(DEFINED SKBUILD_PROJECT_VERSION_FULL)
+  set(FHELIUM_VERSION_FULL "${SKBUILD_PROJECT_VERSION_FULL}")
+else()
+  execute_process(
+    COMMAND
+      ${Python3_EXECUTABLE} -c
+      "import sys, tomllib; print(tomllib.load(open(sys.argv[1], 'rb'))['project']['version'])"
+      "${CMAKE_SOURCE_DIR}/pyproject.toml"
+    OUTPUT_VARIABLE FHELIUM_VERSION_FULL
+    OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+endif()
+string(REGEX MATCH "^[0-9]+(\\.[0-9]+)*" FHELIUM_VERSION
+             "${FHELIUM_VERSION_FULL}")
+
+function(add_fhelium_library name src_dir include_dir)
+  _fhelium_torch_cxx_standard(_FHELIUM_CXX_STANDARD)
+
+  file(GLOB_RECURSE COMMON_SOURCES CONFIGURE_DEPENDS "${src_dir}/*.cpp")
+  list(FILTER COMMON_SOURCES EXCLUDE REGEX "/(cpu|cuda|hip)/")
+
+  set(CPP_SOURCES ${COMMON_SOURCES})
   set(CU_SOURCES "")
   set(HIP_SOURCES "")
   if(FHELIUM_BUILD_CPU)
@@ -88,23 +141,27 @@ function(add_fhelium_torch_module name src_dir out_subdir)
       set_property(
         SOURCE "${_FHELIUM_CUDA_SOURCE}"
         APPEND
-        PROPERTY COMPILE_OPTIONS "--frandom-seed=0x${_FHELIUM_CUDA_SOURCE_SEED}")
+        PROPERTY COMPILE_OPTIONS
+                 "--frandom-seed=0x${_FHELIUM_CUDA_SOURCE_SEED}")
     endforeach()
   endif()
-  message(STATUS "Torch module ${name} C++ sources: ${CPP_SOURCES}")
+  message(STATUS "Library ${name} C++ sources: ${CPP_SOURCES}")
   if(FHELIUM_BUILD_CUDA)
-    message(STATUS "Torch module ${name} CUDA sources: ${CU_SOURCES}")
+    message(STATUS "Library ${name} CUDA sources: ${CU_SOURCES}")
   endif()
 
   if(FHELIUM_BUILD_HIP)
-    message(STATUS "Torch module ${name} HIP sources: ${HIP_SOURCES}")
+    message(STATUS "Library ${name} HIP sources: ${HIP_SOURCES}")
   endif()
 
-  add_library(${name} MODULE ${CPP_SOURCES} ${CU_SOURCES} ${HIP_SOURCES})
+  add_library(${name} SHARED ${CPP_SOURCES} ${CU_SOURCES} ${HIP_SOURCES})
+  target_compile_definitions(${name} PRIVATE FHELIUM_BUILDING_LIBRARY
+                                             ${FHELIUM_BACKEND_DEFINITIONS})
   if(NOT MSVC)
     target_compile_definitions(
       ${name} PRIVATE _GLIBCXX_USE_CXX11_ABI=${FHELIUM_TORCH_CXX11_ABI})
   endif()
+  target_include_directories(${name} PUBLIC "$<BUILD_INTERFACE:${include_dir}>")
   _fhelium_map_msvc_build_paths(${name})
   if(MSVC
      AND FHELIUM_BUILD_CUDA
@@ -118,6 +175,8 @@ function(add_fhelium_torch_module name src_dir out_subdir)
   endif()
   target_link_libraries(${name} PRIVATE "${FHELIUM_TORCH_torch_cpu_LIBRARY}"
                                         "${FHELIUM_TORCH_c10_LIBRARY}")
+  # OpenMP runtime symbols bind to the runtime loaded with Torch, as for the
+  # Torch operator module.
   if(APPLE AND _FHELIUM_TORCH_OPENMP_CONFIG)
     target_link_options(${name} PRIVATE "LINKER:-undefined,dynamic_lookup")
   endif()
@@ -152,42 +211,111 @@ function(add_fhelium_torch_module name src_dir out_subdir)
                                  PRIVATE "${_CUDA_ROOT}/include/cccl")
     endif()
     # Every CUDA translation unit is self-contained. Non-RDC objects retain the
-    # configured virtual PTX image in the installed module on both Linux and
+    # configured virtual PTX image in the installed library on both Linux and
     # Windows.
     set_target_properties(
       ${name}
-      PROPERTIES CUDA_STANDARD ${_FHELIUM_TORCH_MODULE_CXX_STANDARD}
+      PROPERTIES CUDA_STANDARD ${_FHELIUM_CXX_STANDARD}
                  CUDA_STANDARD_REQUIRED ON
                  CUDA_EXTENSIONS OFF
                  CUDA_SEPARABLE_COMPILATION OFF
-                 CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
+                 CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+                 CUDA_VISIBILITY_PRESET hidden)
   endif()
 
   if(FHELIUM_BUILD_HIP)
-    target_link_libraries(${name} PRIVATE
-                          "${FHELIUM_TORCH_torch_LIBRARY}"
-                          "${FHELIUM_TORCH_torch_hip_LIBRARY}"
-                          "${FHELIUM_TORCH_c10_hip_LIBRARY}" hip::host)
+    target_link_libraries(
+      ${name}
+      PRIVATE "${FHELIUM_TORCH_torch_LIBRARY}"
+              "${FHELIUM_TORCH_torch_hip_LIBRARY}"
+              "${FHELIUM_TORCH_c10_hip_LIBRARY}" hip::host)
     # Runtime lookup is defined by INSTALL_RPATH, not the build SDK location.
-    target_link_options(${name} PRIVATE "$<$<LINK_LANGUAGE:HIP>:-fno-rtlib-add-rpath>")
-    target_compile_definitions(${name} PRIVATE USE_ROCM=1 HIPBLAS_V2
-      "$<$<COMPILE_LANGUAGE:HIP>:CUDA_HAS_FP16=1>"
-      "$<$<COMPILE_LANGUAGE:HIP>:__HIP_NO_HALF_OPERATORS__=1>"
-      "$<$<COMPILE_LANGUAGE:HIP>:__HIP_NO_HALF_CONVERSIONS__=1>"
-      "$<$<COMPILE_LANGUAGE:HIP>:HIP_ENABLE_WARP_SYNC_BUILTINS=1>")
-    set_target_properties(${name} PROPERTIES
-                          HIP_STANDARD ${_FHELIUM_TORCH_MODULE_CXX_STANDARD}
-                          HIP_STANDARD_REQUIRED ON HIP_EXTENSIONS OFF)
+    target_link_options(${name} PRIVATE
+                        "$<$<LINK_LANGUAGE:HIP>:-fno-rtlib-add-rpath>")
+    target_compile_definitions(
+      ${name}
+      PRIVATE USE_ROCM=1
+              HIPBLAS_V2
+              "$<$<COMPILE_LANGUAGE:HIP>:CUDA_HAS_FP16=1>"
+              "$<$<COMPILE_LANGUAGE:HIP>:__HIP_NO_HALF_OPERATORS__=1>"
+              "$<$<COMPILE_LANGUAGE:HIP>:__HIP_NO_HALF_CONVERSIONS__=1>"
+              "$<$<COMPILE_LANGUAGE:HIP>:HIP_ENABLE_WARP_SYNC_BUILTINS=1>")
+    set_target_properties(
+      ${name}
+      PROPERTIES HIP_STANDARD ${_FHELIUM_CXX_STANDARD}
+                 HIP_STANDARD_REQUIRED ON
+                 HIP_EXTENSIONS OFF
+                 HIP_VISIBILITY_PRESET hidden)
   endif()
 
   set_target_properties(
     ${name}
-    PROPERTIES PREFIX ""
-               CXX_STANDARD ${_FHELIUM_TORCH_MODULE_CXX_STANDARD}
+    PROPERTIES CXX_STANDARD ${_FHELIUM_CXX_STANDARD}
                CXX_STANDARD_REQUIRED ON
                CXX_EXTENSIONS OFF
+               CXX_VISIBILITY_PRESET hidden
                BUILD_RPATH "${TORCH_LIB_PATH}"
                INSTALL_RPATH "${FHELIUM_TORCH_INSTALL_RPATH}"
+               INSTALL_RPATH_USE_LINK_PATH FALSE
+               INSTALL_REMOVE_ENVIRONMENT_RPATH TRUE
+               OUTPUT_NAME fhelium)
+
+  install(
+    TARGETS ${name}
+    LIBRARY DESTINATION ${FHELIUM_SDK_ROOT}/lib
+    RUNTIME DESTINATION ${FHELIUM_SDK_ROOT}/lib
+    ARCHIVE DESTINATION ${FHELIUM_SDK_ROOT}/lib)
+  install(DIRECTORY "${include_dir}/" DESTINATION ${FHELIUM_SDK_ROOT}/include)
+
+  set(FHELIUM_LIBRARY_FILE
+      "${CMAKE_SHARED_LIBRARY_PREFIX}fhelium${CMAKE_SHARED_LIBRARY_SUFFIX}")
+  set(FHELIUM_IMPORT_LIBRARY_FILE "")
+  if(WIN32)
+    set(FHELIUM_IMPORT_LIBRARY_FILE
+        "${CMAKE_IMPORT_LIBRARY_PREFIX}fhelium${CMAKE_IMPORT_LIBRARY_SUFFIX}")
+  endif()
+  string(TOLOWER "${_FHELIUM_ENABLED_BACKENDS}" FHELIUM_PACKAGE_BACKENDS)
+  set(FHELIUM_PACKAGE_CXX_STANDARD ${_FHELIUM_CXX_STANDARD})
+  set(_package_dir "${CMAKE_CURRENT_BINARY_DIR}/FHEliumPackage")
+  configure_file("${CMAKE_SOURCE_DIR}/cmake/FHEliumConfig.cmake.in"
+                 "${_package_dir}/FHEliumConfig.cmake" @ONLY)
+  include(CMakePackageConfigHelpers)
+  write_basic_package_version_file(
+    "${_package_dir}/FHEliumConfigVersion.cmake"
+    VERSION ${FHELIUM_VERSION}
+    COMPATIBILITY ExactVersion)
+  install(FILES "${_package_dir}/FHEliumConfig.cmake"
+                "${_package_dir}/FHEliumConfigVersion.cmake"
+          DESTINATION ${FHELIUM_SDK_ROOT}/share/cmake/FHElium)
+endfunction()
+
+function(add_fhelium_torch_module name src_dir library out_subdir)
+  _fhelium_torch_cxx_standard(_FHELIUM_CXX_STANDARD)
+  file(GLOB REGISTRATION_SOURCES CONFIGURE_DEPENDS "${src_dir}/*.cpp")
+  list(SORT REGISTRATION_SOURCES)
+  message(STATUS "Torch module ${name} C++ sources: ${REGISTRATION_SOURCES}")
+
+  add_library(${name} MODULE ${REGISTRATION_SOURCES})
+  target_compile_definitions(${name} PRIVATE ${FHELIUM_BACKEND_DEFINITIONS})
+  if(NOT MSVC)
+    target_compile_definitions(
+      ${name} PRIVATE _GLIBCXX_USE_CXX11_ABI=${FHELIUM_TORCH_CXX11_ABI})
+  endif()
+  _fhelium_map_msvc_build_paths(${name})
+  target_link_libraries(
+    ${name} PRIVATE ${library} "${FHELIUM_TORCH_torch_cpu_LIBRARY}"
+                    "${FHELIUM_TORCH_c10_LIBRARY}")
+  target_link_directories(${name} PRIVATE "${TORCH_LIB_PATH}")
+  target_include_directories(${name} PRIVATE ${TORCH_INCLUDE_DIRS})
+  set_target_properties(
+    ${name}
+    PROPERTIES PREFIX ""
+               CXX_STANDARD ${_FHELIUM_CXX_STANDARD}
+               CXX_STANDARD_REQUIRED ON
+               CXX_EXTENSIONS OFF
+               BUILD_RPATH "$<TARGET_FILE_DIR:${library}>;${TORCH_LIB_PATH}"
+               INSTALL_RPATH
+               "${FHELIUM_SDK_LIBRARY_RPATH};${FHELIUM_TORCH_INSTALL_RPATH}"
                INSTALL_RPATH_USE_LINK_PATH FALSE
                INSTALL_REMOVE_ENVIRONMENT_RPATH TRUE
                OUTPUT_NAME "${name}"

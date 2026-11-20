@@ -29,6 +29,8 @@ graph TB
     WRAP[Generated typed wrappers]
     OPS[torch.ops.fhelium_*]
     DISP[PyTorch dispatcher<br/>operator schema + tensor dispatch key]
+    CXXAPP[C++ application]
+    LIB[libfhelium public functions<br/>fhelium::ckks, rns, ntt]
     CPU[C++ CPU implementation<br/>ATen + at::parallel_for]
     GPU[C++ CUDA adapter<br/>ATen + current CUDA stream]
     OMP[Torch intra-op CPU runtime<br/>OpenMP when selected by Torch]
@@ -39,13 +41,14 @@ graph TB
     APP --> CALLABLE
     EDISP --> IMPL
     EXEC --> IMPL
-    IMPL --> PYALG --> WRAP --> OPS --> DISP
+    IMPL --> PYALG --> WRAP --> OPS --> DISP --> LIB
     IMPL --> GENERATED[Backend-generated kernels<br/>pointwise and NTT regions]
-    DISP -->|CPU tensor| CPU --> OMP
-    DISP -->|CUDA tensor| GPU --> CUDA
+    CXXAPP --> LIB
+    LIB -->|CPU tensors| CPU --> OMP
+    LIB -->|CUDA tensor| GPU --> CUDA
 ```
 
-Eager direct dispatch and Compile Program execution are independent entry paths. Their common execution interface is the registered Backend implementation. Below that interface, the same `torch.ops` schema serves CPU and CUDA. Tensor placement is the dispatch input: ordinary operations do not copy an operand between CPU and CUDA to satisfy a call.
+Eager direct dispatch and Compile Program execution are independent entry paths. Their common execution interface is the registered Backend implementation. Below that interface, the same `torch.ops` schema serves CPU and CUDA. Each registered kernel is a public function of the native library `libfhelium`, which C++ applications call directly. Tensor placement is the dispatch input: ordinary operations do not copy an operand between CPU and CUDA to satisfy a call.
 
 ## Stack by layer
 
@@ -58,11 +61,12 @@ Eager direct dispatch and Compile Program execution are independent entry paths.
 | Shared Backend interface | `OperationBackend`, `OperationImplementationRegistry`, and `BackendWorkspace` | Own the implementation registry, named non-Tensor handles, and optional handle materialization; Compilation owns Tensor materials |
 | CKKS and arithmetic implementations | `fhelium.backend.ckks`, `fhelium.backend.rns`, `fhelium.backend.ntt` | Execute whole CKKS operations or lower-level RNS/NTT compositions with concrete parameter, table, key, and index resources |
 | Python/native bridge | Generated modules in `fhelium.native.wrapper` | Present typed Python call signatures and invoke registered `torch.ops.fhelium_*` operators |
-| Native operator ABI | `TORCH_LIBRARY_FRAGMENT` schemas in C++ | Define names, arguments, returns, mutation aliases, and the common CPU/CUDA operator surface |
-| Device dispatch | PyTorch dispatcher | Select the `CPU` or `CUDA` implementation from tensor dispatch keys |
+| Native operator ABI | `TORCH_LIBRARY_FRAGMENT` schemas in `csrc/torchops` | Define names, arguments, returns, mutation aliases, and the common CPU/CUDA operator surface; register the libfhelium function of the same name as the kernel |
+| Device dispatch | PyTorch dispatcher | Select the `CPU` or `CUDA` registration from tensor dispatch keys |
+| Native library | `libfhelium`, public headers in `csrc/include/fhelium` | Declare one `at::Tensor` function per operator under `fhelium::ckks`, `fhelium::rns`, `fhelium::ntt`, and `fhelium::ntt::diagnostic`; route each call to the CPU or GPU implementation from its Tensor devices |
 | CPU implementation | C++17, ATen, `AT_DISPATCH_INTEGRAL_TYPES`, `at::parallel_for` | Execute modular arithmetic and indexed radix-2 NTT through Torch's intra-op runtime |
 | CUDA implementation | C++17 adapters plus CUDA C++ kernels compiled by `nvcc` | Validate tensor inputs, select the active CUDA device/current stream, and launch RNS, NTT, and CKKS kernels |
-| Build and packaging | scikit-build-core, CMake, PyTorch C++ API, CUDA Toolkit | Build an ABI-specific `_ops` module with CPU, CUDA, or both backends |
+| Build and packaging | scikit-build-core, CMake, PyTorch C++ API, CUDA Toolkit | Build `libfhelium` with CPU, CUDA, or both backends, its C++ SDK, and an ABI-specific `_ops` registration module |
 
 ## Two Python execution models
 
@@ -115,7 +119,16 @@ The generated wrapper adds Python typing and the native-availability check. PyTo
 
 ## Schema registration and device dispatch
 
-Backend-neutral C++ translation units define each schema once. For example:
+Each operator has one public C++ function in `libfhelium` with the operator's name and schema. Tensor arguments are `const at::Tensor&`, schema-mutated arguments are `at::Tensor&`, and `Tensor[]`, `Tensor?`, and `str` arguments are `at::TensorList`, `std::optional<at::Tensor>`, and `c10::string_view`:
+
+```cpp
+namespace fhelium::rns {
+FHELIUM_API at::Tensor add_standard(const at::Tensor& lhs, const at::Tensor& rhs, const at::Tensor& rns_params);
+FHELIUM_API void add_standard_(at::Tensor& lhs, const at::Tensor& rhs, const at::Tensor& rns_params);
+}  // namespace fhelium::rns
+```
+
+The public function selects the implementation compiled from `cpu/` sources when every Tensor argument is on CPU and the implementation compiled from `cuda/` or `hip/` sources when a Tensor argument is on a CUDA device; these implementations live in the `cpu` and `gpu` child namespaces declared by each family's `backends.h`. A function without an implementation for the selected device raises `c10::NotImplementedError`. The `_ops` module in `csrc/torchops` defines each schema once and registers the public function under every dispatch key that the build supports:
 
 ```cpp
 TORCH_LIBRARY_FRAGMENT(fhelium_rns_ops, m) {
@@ -124,21 +137,17 @@ TORCH_LIBRARY_FRAGMENT(fhelium_rns_ops, m) {
   m.def(
       "add_standard_(Tensor(a!) lhs, Tensor rhs, Tensor rns_params) -> ()");
 }
-```
 
-Separate translation units attach implementations to PyTorch dispatch keys:
-
-```cpp
 TORCH_LIBRARY_IMPL(fhelium_rns_ops, CPU, m) {
-  m.impl("add_standard", &rns_add_standard_cpu);
+  m.impl("add_standard", &fhelium::rns::add_standard);
 }
 
 TORCH_LIBRARY_IMPL(fhelium_rns_ops, CUDA, m) {
-  m.impl("add_standard", &rns_add_standard_cuda);
+  m.impl("add_standard", &fhelium::rns::add_standard);
 }
 ```
 
-This organization gives functional and in-place forms one shared schema across backends. Alias annotations such as `Tensor(a!)` tell PyTorch which storage is mutated. C++ validation checks shape, dtype, device agreement, parameter-row counts, broadcasting rules, and prohibited overlap before executing the inner loop or launching a CUDA kernel.
+Python operator calls and C++ library calls therefore execute the same implementation. This organization gives functional and in-place forms one shared schema across backends. Alias annotations such as `Tensor(a!)` tell PyTorch which storage is mutated. C++ validation checks shape, dtype, device agreement, parameter-row counts, broadcasting rules, and prohibited overlap before executing the inner loop or launching a CUDA kernel.
 
 ```mermaid
 sequenceDiagram
@@ -146,18 +155,20 @@ sequenceDiagram
     participant W as Generated wrapper
     participant O as torch.ops
     participant D as PyTorch dispatcher
-    participant C as CPU registration
-    participant G as CUDA registration
+    participant L as libfhelium function
+    participant C as CPU implementation
+    participant G as CUDA implementation
 
     Py->>W: tensors + table and parameter tensors
     W->>W: require_native()
     W->>O: fhelium_* operator
     O->>D: schema and tensor dispatch keys
+    D->>L: registered kernel
     alt operands are CPU tensors
-        D->>C: TORCH_LIBRARY_IMPL(..., CPU, ...)
+        L->>C: fhelium::<family>::cpu
         C-->>Py: CPU tensor
     else operands are CUDA tensors
-        D->>G: TORCH_LIBRARY_IMPL(..., CUDA, ...)
+        L->>G: fhelium::<family>::gpu
         G-->>Py: CUDA tensor
     end
 ```
@@ -269,23 +280,27 @@ graph LR
     TH[Torch headers and libraries]
     CC[C++ compiler]
     NV[nvcc + CUDA Toolkit]
+    LIB[libfhelium + C++ SDK]
     SO[_ops SOABI module]
     MF[Native ABI manifest]
 
     P --> CM
     PY --> CM
     TH --> CM
-    CM --> CC --> SO
-    CM -->|CUDA selected| NV --> SO
+    CM --> CC --> LIB
+    CM -->|CUDA selected| NV --> LIB
+    LIB --> SO
     SO --> MF
 ```
 
 `FHELIUM_NATIVE_BACKENDS` accepts:
 
 - `AUTO`: follow the selected Torch package;
-- `CPU`: compile CPU registrations and exclude CUDA sources/toolkit discovery;
-- `CUDA`: compile CUDA registrations and the common schemas;
-- `CPU+CUDA`: compile both implementation sets into one `_ops` module.
+- `CPU`: compile CPU implementations and exclude CUDA sources/toolkit discovery;
+- `CUDA`: compile CUDA implementations and the common schemas;
+- `CPU+CUDA`: compile both implementation sets into one `libfhelium`.
+
+`libfhelium` contains every implementation and kernel; `_ops` contains only schemas and registrations and links `libfhelium`. A wheel installs the library, its public headers, and the `FHElium` CMake package under `fhelium/native/{lib,include,share/cmake}`. An editable install keeps the same layout in its ABI-specific build directory, `build/<wheel tag>/editable/sdk`, and records that location in the ABI manifest; `fhelium.native.cmake_prefix_path` reports the package directory in both cases. The CMake package accepts only its exact FHElium version and the Torch build that `libfhelium` was compiled against.
 
 CPU targets link `torch_cpu` and `c10`. CUDA-enabled targets additionally link the required Torch CUDA libraries and CUDA runtime while keeping Torch and CUDA runtime libraries external to the FHElium wheel. CUDA compilation uses the selected Toolkit and configured architecture list; configuration checks the Torch CUDA identity against that Toolkit before compilation.
 
@@ -293,7 +308,7 @@ CPU targets link `torch_cpu` and `c10`. CUDA-enabled targets additionally link t
 
 `fhelium.native.runtime` locates the `_ops` binary for the current CPython extension suffix and its adjacent build manifest before registering operators. The manifest is compared with the running environment, including project and Python identity, pinned Torch build, Torch CUDA variant, C++ ABI, and compiled backend set. A mismatch fails before Eager or a linked executable uses a native operator.
 
-After validation, `torch.ops.load_library` installs the schemas and backend registrations into the process. An Eager operation or `ProgramExecutable` then requires the matching native backend for its selected Tensor device. This separates two questions:
+After validation, `torch.ops.load_library` installs the schemas and backend registrations into the process. Loading `_ops` also loads `libfhelium` through the module's runtime search path on Linux and through the DLL directory that the loader adds on Windows. An Eager operation or `ProgramExecutable` then requires the matching native backend for its selected Tensor device. This separates two questions:
 
 1. whether this binary is ABI-compatible with the running Python and Torch;
 2. whether it contains an implementation for the requested tensor device.
@@ -307,7 +322,7 @@ The separate `fhelium.native.cuda.cuda_info` extension reports CUDA device and p
 - **PyTorch-owned parallel context:** CPU work uses Torch intra-op execution; CUDA work uses the current PyTorch CUDA stream.
 - **Arithmetic data:** modulus parameters, twiddles, schedules, indices, and key digits enter native execution as Tensor arguments.
 - **Use-model-owned CKKS semantics:** native operators return or mutate Tensors. Eager methods apply immediate metadata transitions; Compile passes represent and transform state in Program values. Backend execution consumes the resulting concrete operation and resources.
-- **Shared implementation interface:** Eager direct calls and linked Programs invoke the same registered Backend implementations. CPU/CUDA registrations implement one stable `torch.ops` schema.
+- **Shared implementation interface:** Eager direct calls and linked Programs invoke the same registered Backend implementations. CPU/CUDA registrations implement one stable `torch.ops` schema, and each registration is the `libfhelium` function that C++ applications call.
 
 ## Continue
 

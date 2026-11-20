@@ -1,6 +1,10 @@
 # API reference
 
-The API reference follows the non-private Python module tree. It is generated from the current checkout without importing FHElium or compiling CUDA code. Signatures, docstrings, source links, module pages, and sidebar entries all come from the same abstract-syntax-tree scan. Some pages document implementation modules for contributors; supported import surfaces are the package initializers and modules that publish interfaces through ``__all__``.
+The API reference covers the Python package and the C++ interface of `libfhelium`, the native library that ships inside it. The [C++ reference](cpp/index.md) documents the public headers.
+
+## Python
+
+The Python reference follows the non-private Python module tree. It is generated from the current checkout without importing FHElium or compiling CUDA code. Signatures, docstrings, source links, module pages, and sidebar entries all come from the same abstract-syntax-tree scan. Some pages document implementation modules for contributors; supported import surfaces are the package initializers and modules that publish interfaces through ``__all__``.
 
 ## Choose by task
 
@@ -27,6 +31,6 @@ The API reference follows the non-private Python module tree. It is generated fr
 
 For each discovered module, a defined `__all__` defines the members when it is present. Otherwise, the generator includes non-underscored classes, functions, and data definitions. Module-path components and page titles are kept as they occur in Python.
 
-Sidebar grouping is mechanical: modules are grouped by their first package segment, while every item retains its complete Python module name. Adding, removing, or renaming a source module changes the generated pages and sidebar on the next build. The API index is reached from the top navigation and is not repeated as an “Overview” sidebar item.
+The sidebar follows the package tree. Each entry shows the last component of its module name, and the page title shows the complete name. Within each package, public modules come first and modules whose name starts with an underscore are grouped under a collapsed “Internal” entry. Pages under `/api/cpp/` use a separate sidebar of C++ headers. Adding, removing, or renaming a source module changes the generated pages and sidebar on the next build. The API index is reached from the top navigation and is not repeated as an “Overview” sidebar item.
 
 The sole configured module-tree exclusion is `fhelium.native.wrapper`, which contains generated Torch-operator bindings.

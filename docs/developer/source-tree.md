@@ -34,12 +34,14 @@ fhelium/
   utils/           narrowly shared algorithms such as rotation decomposition
   _cli/            command-line entry points
 csrc/
-  ops/rns/         PyTorch schemas and CPU/CUDA/HIP residue arithmetic
-  ops/ntt/         PyTorch schemas and CPU/CUDA/HIP NTT implementations
-  ops/ckks/        PyTorch schemas and CPU/CUDA/HIP CKKS Tensor primitives
-  ops/common/      shared native validation, parameters, and arithmetic helpers
+  include/fhelium/ public libfhelium C++ headers
+  ops/rns/         libfhelium residue arithmetic: public-function routing and CPU/CUDA/HIP implementations
+  ops/ntt/         libfhelium NTT: public-function routing and CPU/CUDA/HIP implementations
+  ops/ckks/        libfhelium CKKS Tensor primitives: public-function routing and CPU/CUDA/HIP implementations
+  ops/common/      shared native validation, device routing, and arithmetic helpers
+  torchops/        PyTorch schemas and registrations of libfhelium functions (_ops module)
   runtime/         CUDA and HIP device/peer inspection implementations
-examples/          numbered Eager, Compile, execution, distributed, and research workflows
+examples/          numbered Eager, Compile, execution, distributed, and research workflows; cpp/ C++ library consumer
 tests/             focused tests organized by owning package
 packaging/         wheel, release, repository, and package-index tooling
 docs/              user, concept, how-to, benchmark, developer, and API documentation
@@ -161,12 +163,16 @@ A Program may retain unknown CKKS state until a selected pass requires and assig
 | --- | --- |
 | Torch operator loading and ABI checks | `fhelium/native/runtime.py`, `fhelium/native/_abi.py` |
 | Compiled Torch extension and build manifest | `fhelium/native/torchops/` |
+| Installed C++ SDK: libfhelium, headers, CMake package | `fhelium/native/{lib,include,share/cmake}/` (wheel); `build/<wheel tag>/editable/sdk/` (editable install) |
 | Generated typed wrappers | `fhelium/native/wrapper/{rns_ops,ntt_ops,ckks_ops}.py` |
 | Wrapper generator | `scripts/generate_native_wrappers.py` |
-| Backend-neutral PyTorch schemas | `csrc/ops/<family>/*.cpp` |
-| CPU dispatcher registrations and implementations | `csrc/ops/<family>/cpu/` |
-| CUDA dispatcher registrations and implementations | `csrc/ops/<family>/cuda/` |
-| HIP dispatcher registrations and implementations | `csrc/ops/<family>/hip/` |
+| Public C++ declarations | `csrc/include/fhelium/{ckks,rns,ntt,ntt_diagnostic,rns_parameters}.h` |
+| Public-function device routing | `csrc/ops/<family>/api.cpp`, `csrc/ops/common/backend_dispatch.h` |
+| Backend entry-point declarations | `csrc/ops/<family>/backends.h` |
+| PyTorch schemas and registrations | `csrc/torchops/{ckks,rns,ntt}_ops.cpp` |
+| CPU implementations | `csrc/ops/<family>/cpu/` |
+| CUDA implementations | `csrc/ops/<family>/cuda/` |
+| HIP implementations | `csrc/ops/<family>/hip/` |
 | Shared Tensor and RNS helpers | `csrc/ops/common/` |
 | GPU topology inspection | `fhelium/native/cuda/`, `csrc/runtime/{cuda_info,hip_info}.{h,cpp}` |
 
@@ -231,6 +237,6 @@ Read the focused tests beside each owner before changing an execution path. They
 
 ## Native GPU backends
 
-Each native operation family defines its Torch schemas independently of execution backends. Its `cpu/`, `cuda/`, and `hip/` directories own platform implementations. CUDA kernels and their launch schedules remain under `cuda/`; HIP kernels and their launch schedules live under `hip/`. The GPU implementations share word-level Montgomery arithmetic in `csrc/ops/common/montgomery.hpp`. Platform launch helpers, NTT stage scheduling, and runtime queries remain separately maintained.
+Each native operation family declares its public functions in `csrc/include/fhelium` and routes them to execution backends in its `api.cpp`; `csrc/torchops` defines the Torch schemas independently of execution backends. Its `cpu/`, `cuda/`, and `hip/` directories own platform implementations. CUDA kernels and their launch schedules remain under `cuda/`; HIP kernels and their launch schedules live under `hip/`. The GPU implementations share word-level Montgomery arithmetic in `csrc/ops/common/montgomery.hpp`. Platform launch helpers, NTT stage scheduling, and runtime queries remain separately maintained.
 
 CMake compiles CUDA `.cu` sources with NVCC or HIP `.hip` sources with HIP Clang according to `FHELIUM_NATIVE_BACKENDS` and the selected Torch environment. Both GPU builds register Torch's `CUDA` dispatch key because ROCm PyTorch uses the `cuda` Tensor device type. The native manifest distinguishes the CUDA and HIP binaries, records their Torch/runtime ABI identity, and records the HIP code-object targets. Eager and Compile continue dispatching Tensor operations through the same native schemas.

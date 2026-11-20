@@ -1,9 +1,9 @@
 #include <ATen/Dispatch.h>
 #include <ATen/Parallel.h>
-#include <torch/library.h>
 #include <torch/torch.h>
 
 #include "../../common/cpu/montgomery.h"
+#include "../backends.h"
 #include "../ciphertext_components.h"
 
 namespace {
@@ -86,6 +86,14 @@ torch::Tensor multiply_two_component_cpu(const torch::Tensor lhs,
 
 }  // namespace
 
-TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CPU, m) {
-  m.impl("multiply_two_component_ntt_montgomery", &multiply_two_component_cpu);
+namespace fhelium::ckks::cpu {
+
+at::Tensor multiply_two_component_ntt_montgomery(
+    const at::Tensor& lhs_components,
+    const at::Tensor& rhs_components,
+    const at::Tensor& rns_params) {
+  return ::multiply_two_component_cpu(
+      lhs_components, rhs_components, rns_params);
 }
+
+}  // namespace fhelium::ckks::cpu

@@ -1,10 +1,10 @@
-#include <torch/library.h>
 #include <torch/torch.h>
 
 #include "../../common/cuda/kernel_support.cuh"
 #include "../../common/montgomery.hpp"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
+#include "../backends.h"
 
 namespace {
 
@@ -43,10 +43,10 @@ __global__ void ckks_rescale_drop_leading_prime_kernel(
   scalar_t quotient = remaining[batch][row][coefficient] - dropped_value;
   quotient = montgomery_mul_split(quotient,
                                   inverse[row],
-                            modulus_lo,
-                            modulus_hi,
-                            neg_inv_modulus_lo,
-                            neg_inv_modulus_hi);
+                                  modulus_lo,
+                                  modulus_hi,
+                                  neg_inv_modulus_lo,
+                                  neg_inv_modulus_hi);
   if constexpr (nearest) {
     quotient += dropped_value > half_drop_prime ? 1 : 0;
   }
@@ -197,13 +197,51 @@ void ckks_rescale_drop_leading_prime_truncate_inplace_cuda(
 
 }  // namespace
 
-TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
-  m.impl("rescale_drop_leading_prime_nearest",
-         &ckks_rescale_drop_leading_prime_nearest_cuda);
-  m.impl("rescale_drop_leading_prime_nearest_",
-         &ckks_rescale_drop_leading_prime_nearest_inplace_cuda);
-  m.impl("rescale_drop_leading_prime_truncate",
-         &ckks_rescale_drop_leading_prime_truncate_cuda);
-  m.impl("rescale_drop_leading_prime_truncate_",
-         &ckks_rescale_drop_leading_prime_truncate_inplace_cuda);
+namespace fhelium::ckks::gpu {
+
+at::Tensor rescale_drop_leading_prime_nearest(
+    const at::Tensor& remaining_residues,
+    const at::Tensor& drop_prime_inverse_mont,
+    const at::Tensor& dropped_residue,
+    const at::Tensor& rns_params,
+    int64_t half_drop_prime) {
+  return ::ckks_rescale_drop_leading_prime_nearest_cuda(remaining_residues,
+                                                        drop_prime_inverse_mont,
+                                                        dropped_residue,
+                                                        rns_params,
+                                                        half_drop_prime);
 }
+
+void rescale_drop_leading_prime_nearest_(
+    at::Tensor& remaining_residues,
+    const at::Tensor& drop_prime_inverse_mont,
+    const at::Tensor& dropped_residue,
+    const at::Tensor& rns_params,
+    int64_t half_drop_prime) {
+  ::ckks_rescale_drop_leading_prime_nearest_inplace_cuda(
+      remaining_residues,
+      drop_prime_inverse_mont,
+      dropped_residue,
+      rns_params,
+      half_drop_prime);
+}
+
+at::Tensor rescale_drop_leading_prime_truncate(
+    const at::Tensor& remaining_residues,
+    const at::Tensor& drop_prime_inverse_mont,
+    const at::Tensor& dropped_residue,
+    const at::Tensor& rns_params) {
+  return ::ckks_rescale_drop_leading_prime_truncate_cuda(
+      remaining_residues, drop_prime_inverse_mont, dropped_residue, rns_params);
+}
+
+void rescale_drop_leading_prime_truncate_(
+    at::Tensor& remaining_residues,
+    const at::Tensor& drop_prime_inverse_mont,
+    const at::Tensor& dropped_residue,
+    const at::Tensor& rns_params) {
+  ::ckks_rescale_drop_leading_prime_truncate_inplace_cuda(
+      remaining_residues, drop_prime_inverse_mont, dropped_residue, rns_params);
+}
+
+}  // namespace fhelium::ckks::gpu

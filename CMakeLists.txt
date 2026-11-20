@@ -18,7 +18,10 @@ include(FHEliumNativeTargets)
 include(FHEliumNativeInstall)
 fhelium_prepare_native_install()
 
-add_fhelium_torch_module(_ops "${CMAKE_CURRENT_SOURCE_DIR}/csrc/ops" torchops)
+add_fhelium_library(fhelium "${CMAKE_CURRENT_SOURCE_DIR}/csrc/ops"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/csrc/include")
+add_fhelium_torch_module(_ops "${CMAKE_CURRENT_SOURCE_DIR}/csrc/torchops"
+                         fhelium torchops)
 if(FHELIUM_BUILD_CUDA)
   add_fhelium_runtime_info_module(
     cuda_info "${CMAKE_CURRENT_SOURCE_DIR}/csrc/runtime/cuda_info.cpp" cuda)

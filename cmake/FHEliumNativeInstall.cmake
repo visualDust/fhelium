@@ -42,7 +42,8 @@ macro(fhelium_finalize_native_install)
     native_wrappers_check
     COMMAND
       ${Python3_EXECUTABLE} ${WrapperGenScript} --path "$<TARGET_FILE_DIR:_ops>"
-      --output "${CMAKE_CURRENT_SOURCE_DIR}/fhelium/native/wrapper" --check
+      --library-dir "$<TARGET_FILE_DIR:fhelium>" --output
+      "${CMAKE_CURRENT_SOURCE_DIR}/fhelium/native/wrapper" --check
     DEPENDS _ops "${WrapperGenScript}"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Checking generated wrappers against the freshly built _ops target"
@@ -53,15 +54,18 @@ macro(fhelium_finalize_native_install)
         "${CMAKE_CURRENT_SOURCE_DIR}/fhelium/native/torchops")
     set(FHELIUM_WRAPPER_OUTPUT_DIR
         "${CMAKE_CURRENT_SOURCE_DIR}/fhelium/native/wrapper")
+    set(FHELIUM_INSTALLED_SDK_ROOT "${FHELIUM_SDK_ROOT}")
   else()
     set(FHELIUM_WRAPPER_LIBRARY_DIR "\${CMAKE_INSTALL_PREFIX}/native/torchops")
     set(FHELIUM_WRAPPER_OUTPUT_DIR "\${CMAKE_INSTALL_PREFIX}/native/wrapper")
+    set(FHELIUM_INSTALLED_SDK_ROOT "\${CMAKE_INSTALL_PREFIX}/native")
   endif()
   install(
     CODE "
     execute_process(
         COMMAND ${Python3_EXECUTABLE} ${WrapperGenScript}
                 --path \"${FHELIUM_WRAPPER_LIBRARY_DIR}\"
+                --library-dir \"${FHELIUM_INSTALLED_SDK_ROOT}/lib\"
                 --output \"${FHELIUM_WRAPPER_OUTPUT_DIR}\"
                 --no-format
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -72,10 +76,14 @@ macro(fhelium_finalize_native_install)
     endif()
   ")
 
+  # Wheels place the SDK at the package-relative native/ root, which the
+  # manifest leaves implicit. Editable manifests record the build-tree SDK.
   if(SKBUILD_STATE STREQUAL "editable")
     set(FHELIUM_FINAL_PACKAGE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/fhelium")
+    set(FHELIUM_FINAL_SDK_ROOT "${FHELIUM_SDK_ROOT}")
   else()
     set(FHELIUM_FINAL_PACKAGE_ROOT "\${CMAKE_INSTALL_PREFIX}")
+    set(FHELIUM_FINAL_SDK_ROOT "")
   endif()
   set(FHELIUM_FINALIZE_SCRIPT
       "${CMAKE_SOURCE_DIR}/scripts/finalize_native_build.py")
@@ -87,6 +95,7 @@ macro(fhelium_finalize_native_install)
                 --source-root \"${CMAKE_SOURCE_DIR}\"
                 --package-root \"${FHELIUM_FINAL_PACKAGE_ROOT}\"
                 --backends \"${FHELIUM_FINAL_BACKENDS}\"
+                --sdk-root \"${FHELIUM_FINAL_SDK_ROOT}\"
                 --hip-architectures \"${CMAKE_HIP_ARCHITECTURES}\"
                 --hip-compiler-id \"${CMAKE_HIP_COMPILER_ID}\"
                 --hip-compiler-version \"${CMAKE_HIP_COMPILER_VERSION}\"

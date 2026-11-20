@@ -1,11 +1,11 @@
-#include <torch/library.h>
 #include <torch/torch.h>
 
 #include "../../common/cuda/kernel_support.cuh"
-#include "../../common/montgomery.hpp"
 #include "../../common/cuda/repetition.cuh"
+#include "../../common/montgomery.hpp"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
+#include "../backends.h"
 
 namespace {
 
@@ -420,21 +420,70 @@ void ckks_add_strided_plaintext_component_inplace_cuda(
 
 }  // namespace
 
-TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
-  m.impl("add_prepared_plaintext_component",
-         &ckks_add_prepared_plaintext_component_cuda);
-  m.impl("add_prepared_plaintext_component_",
-         &ckks_add_prepared_plaintext_component_inplace_cuda);
-  m.impl("add_cyclic_compressed_plaintext_component",
-         &ckks_add_cyclic_compressed_plaintext_component_cuda);
-  m.impl("add_cyclic_compressed_plaintext_component_",
-         &ckks_add_cyclic_compressed_plaintext_component_inplace_cuda);
-  m.impl("add_contiguous_compressed_plaintext_component",
-         &ckks_add_contiguous_compressed_plaintext_component_cuda);
-  m.impl("add_contiguous_compressed_plaintext_component_",
-         &ckks_add_contiguous_compressed_plaintext_component_inplace_cuda);
-  m.impl("add_strided_plaintext_component",
-         &ckks_add_strided_plaintext_component_cuda);
-  m.impl("add_strided_plaintext_component_",
-         &ckks_add_strided_plaintext_component_inplace_cuda);
+namespace fhelium::ckks::gpu {
+
+at::Tensor add_prepared_plaintext_component(
+    const at::Tensor& ciphertext_component,
+    const at::Tensor& prepared_plaintext,
+    const at::Tensor& rns_params) {
+  return ::ckks_add_prepared_plaintext_component_cuda(
+      ciphertext_component, prepared_plaintext, rns_params);
 }
+
+void add_prepared_plaintext_component_(at::Tensor& ciphertext_component,
+                                       const at::Tensor& prepared_plaintext,
+                                       const at::Tensor& rns_params) {
+  ::ckks_add_prepared_plaintext_component_inplace_cuda(
+      ciphertext_component, prepared_plaintext, rns_params);
+}
+
+at::Tensor add_cyclic_compressed_plaintext_component(
+    const at::Tensor& ciphertext_component,
+    const at::Tensor& compressed_plaintext,
+    const at::Tensor& rns_params) {
+  return ::ckks_add_cyclic_compressed_plaintext_component_cuda(
+      ciphertext_component, compressed_plaintext, rns_params);
+}
+
+void add_cyclic_compressed_plaintext_component_(
+    at::Tensor& ciphertext_component,
+    const at::Tensor& compressed_plaintext,
+    const at::Tensor& rns_params) {
+  ::ckks_add_cyclic_compressed_plaintext_component_inplace_cuda(
+      ciphertext_component, compressed_plaintext, rns_params);
+}
+
+at::Tensor add_contiguous_compressed_plaintext_component(
+    const at::Tensor& ciphertext_component,
+    const at::Tensor& compressed_plaintext,
+    const at::Tensor& rns_params) {
+  return ::ckks_add_contiguous_compressed_plaintext_component_cuda(
+      ciphertext_component, compressed_plaintext, rns_params);
+}
+
+void add_contiguous_compressed_plaintext_component_(
+    at::Tensor& ciphertext_component,
+    const at::Tensor& compressed_plaintext,
+    const at::Tensor& rns_params) {
+  ::ckks_add_contiguous_compressed_plaintext_component_inplace_cuda(
+      ciphertext_component, compressed_plaintext, rns_params);
+}
+
+at::Tensor add_strided_plaintext_component(
+    const at::Tensor& ciphertext_component,
+    const at::Tensor& strided_plaintext,
+    const at::Tensor& implicit_plaintext,
+    const at::Tensor& rns_params) {
+  return ::ckks_add_strided_plaintext_component_cuda(
+      ciphertext_component, strided_plaintext, implicit_plaintext, rns_params);
+}
+
+void add_strided_plaintext_component_(at::Tensor& ciphertext_component,
+                                      const at::Tensor& strided_plaintext,
+                                      const at::Tensor& implicit_plaintext,
+                                      const at::Tensor& rns_params) {
+  ::ckks_add_strided_plaintext_component_inplace_cuda(
+      ciphertext_component, strided_plaintext, implicit_plaintext, rns_params);
+}
+
+}  // namespace fhelium::ckks::gpu

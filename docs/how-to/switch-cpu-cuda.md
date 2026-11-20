@@ -24,7 +24,7 @@ else:
     raise RuntimeError(status.reason)
 ```
 
-Backend inclusion is a source-build choice. A visible GPU does not add CUDA to a CPU-only `_ops` library. Rebuild according to the [installation guide](../tutorial/installation.md#select-native-backends) when the required backend is absent.
+Backend inclusion is a source-build choice. A visible GPU does not add CUDA to a CPU-only native library. Rebuild according to the [installation guide](../tutorial/installation.md#select-native-backends) when the required backend is absent.
 
 ## Select placement for created values
 

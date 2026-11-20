@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Union
 from urllib.parse import quote
 
+import generate_cpp_api_docs
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = REPOSITORY_ROOT / "fhelium"
 API_ROOT = REPOSITORY_ROOT / "docs" / "api"
@@ -1090,41 +1092,63 @@ def write_generated_module_pages(module_names: tuple[str, ...]) -> None:
 def render_api_sidebar(
     module_names: tuple[str, ...],
 ) -> list[dict[str, object]]:
-    root_name = PACKAGE_ROOT.name
-    group_names = sorted(
-        {
-            root_name
-            if len(module_name.split(".")) <= 2
-            else ".".join(module_name.split(".")[:2])
-            for module_name in module_names
-        },
-        key=lambda group: (group != root_name, group.casefold()),
-    )
-    sidebar: list[dict[str, object]] = []
-    for group in group_names:
-        group_modules = [
-            module_name
-            for module_name in module_names
-            if (
-                root_name
-                if len(module_name.split(".")) <= 2
-                else ".".join(module_name.split(".")[:2])
-            )
-            == group
-        ]
-        sidebar.append(
-            {
-                "text": group,
-                "items": [
-                    {
-                        "text": module_name,
-                        "link": generated_module_link(module_name),
-                    }
-                    for module_name in group_modules
-                ],
-            }
+    """Nest module pages along the package tree.
+
+    Each package lists its public modules first and collects modules whose
+    last component starts with an underscore under a collapsed ``Internal``
+    entry. Item text is the last module-path component.
+    """
+
+    documented = set(module_names)
+    children: dict[str, set[str]] = {}
+    for module_name in module_names:
+        # Packages without a page still appear as unlinked tree nodes.
+        while "." in module_name:
+            parent = module_name.rpartition(".")[0]
+            children.setdefault(parent, set()).add(module_name)
+            module_name = parent
+
+    def item(module_name: str) -> dict[str, object]:
+        entry: dict[str, object] = {"text": module_name.rpartition(".")[2]}
+        if module_name in documented:
+            entry["link"] = generated_module_link(module_name)
+        if module_name in children:
+            entry["collapsed"] = True
+            entry["items"] = items(module_name)
+        return entry
+
+    def items(package: str) -> list[dict[str, object]]:
+        names = sorted(
+            children[package],
+            key=lambda name: name.rpartition(".")[2].casefold(),
         )
-    return sidebar
+        public = [item(name) for name in names if not is_internal(name)]
+        internal = [item(name) for name in names if is_internal(name)]
+        if internal:
+            public.append(
+                {"text": "Internal", "collapsed": True, "items": internal}
+            )
+        return public
+
+    def is_internal(module_name: str) -> bool:
+        return module_name.rpartition(".")[2].startswith("_")
+
+    root_name = PACKAGE_ROOT.name
+    return [
+        {
+            "text": root_name,
+            "link": generated_module_link(root_name),
+            "items": items(root_name),
+        }
+    ]
+
+
+def python_sidebar_link() -> list[dict[str, object]]:
+    return [{"text": "Python (fhelium)", "link": "/api/fhelium"}]
+
+
+def cpp_sidebar_link() -> list[dict[str, object]]:
+    return [{"text": "C++ (libfhelium)", "link": "/api/cpp/"}]
 
 
 def generate(output: Path, sidebar_output: Path) -> None:
@@ -1141,7 +1165,12 @@ def generate(output: Path, sidebar_output: Path) -> None:
         json.dumps(rendered, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    sidebar = render_api_sidebar(module_names)
+    cpp_sidebar = generate_cpp_api_docs.generate()
+    python_sidebar = render_api_sidebar(module_names)
+    sidebar = {
+        "/api/cpp/": [*cpp_sidebar, *python_sidebar_link()],
+        "/api/": [*python_sidebar, *cpp_sidebar_link()],
+    }
     sidebar_output.parent.mkdir(parents=True, exist_ok=True)
     sidebar_output.write_text(
         json.dumps(sidebar, indent=2) + "\n",
@@ -1149,7 +1178,7 @@ def generate(output: Path, sidebar_output: Path) -> None:
     )
     print(f"Generated {len(rendered)} API references at {output}")
     print(f"Generated {len(module_names)} API module pages")
-    print(f"Generated {len(sidebar)} API package groups at {sidebar_output}")
+    print(f"Generated the Python and C++ API sidebars at {sidebar_output}")
 
 
 def main() -> None:

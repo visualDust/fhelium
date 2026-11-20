@@ -260,6 +260,7 @@ const howToSidebar = [
       { text: 'Bind and persist a compiled Program', link: '/how-to/persist-compiled-program' },
       { text: 'Manage named artifacts', link: '/how-to/manage-artifacts' },
       { text: 'Place computation on CPU or CUDA', link: '/how-to/switch-cpu-cuda' },
+      { text: 'Call the native library from C++', link: '/how-to/call-native-library-from-cpp' },
     ],
   },
   {
@@ -650,7 +651,7 @@ export default defineConfig({
       ],
       '/how-to/': howToSidebar,
       '/developer/': developerSidebar,
-      '/api/': apiSidebar,
+      ...apiSidebar,
       '/about/': aboutSidebar,
     },
     search: {

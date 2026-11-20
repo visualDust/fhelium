@@ -1,0 +1,63 @@
+# CMake package for libfhelium, the FHElium native C++ library.
+#
+# Defines the imported target FHElium::fhelium. The library exchanges at::Tensor
+# objects with its caller, so the package requires the Torch build that
+# libfhelium was compiled against; locate it through CMAKE_PREFIX_PATH or
+# Torch_DIR, for example with torch.utils.cmake_prefix_path.
+#
+# Variables: FHElium_VERSION_FULL     FHElium release version, including
+# pre-release tags FHElium_NATIVE_BACKENDS  compiled execution backends: cpu,
+# cuda, hip FHElium_TORCH_VERSION    Torch version that libfhelium was compiled
+# against
+
+include(CMakeFindDependencyMacro)
+
+get_filename_component(_FHELIUM_PREFIX "${CMAKE_CURRENT_LIST_DIR}/../../.."
+                       ABSOLUTE)
+
+set(FHElium_VERSION_FULL "@FHELIUM_VERSION_FULL@")
+set(FHElium_NATIVE_BACKENDS "@FHELIUM_PACKAGE_BACKENDS@")
+set(FHElium_TORCH_VERSION "@FHELIUM_TORCH_VERSION@")
+
+find_dependency(Torch)
+
+# Python Torch packages record their local build variant, such as +cu130, in
+# torch/version.py. Standalone LibTorch distributions provide only the release
+# number through Torch_VERSION.
+set(_FHELIUM_TORCH_VERSION_FILE "${Torch_DIR}/../../../version.py")
+if(EXISTS "${_FHELIUM_TORCH_VERSION_FILE}")
+  file(STRINGS "${_FHELIUM_TORCH_VERSION_FILE}" _FHELIUM_TORCH_VERSION_LINE
+       REGEX "^__version__ = ")
+  string(REGEX
+         REPLACE "^__version__ = '([^']*)'.*" "\\1"
+                 _FHELIUM_FOUND_TORCH_VERSION "${_FHELIUM_TORCH_VERSION_LINE}")
+  set(_FHELIUM_REQUIRED_TORCH_VERSION "${FHElium_TORCH_VERSION}")
+else()
+  set(_FHELIUM_FOUND_TORCH_VERSION "${Torch_VERSION}")
+  string(REGEX REPLACE "\\+.*$" "" _FHELIUM_REQUIRED_TORCH_VERSION
+                       "${FHElium_TORCH_VERSION}")
+endif()
+if(NOT _FHELIUM_FOUND_TORCH_VERSION STREQUAL _FHELIUM_REQUIRED_TORCH_VERSION)
+  set(FHElium_FOUND FALSE)
+  set(FHElium_NOT_FOUND_MESSAGE
+      "libfhelium was built against Torch ${FHElium_TORCH_VERSION}, but "
+      "Torch_DIR=${Torch_DIR} provides ${_FHELIUM_FOUND_TORCH_VERSION}")
+  return()
+endif()
+
+if(NOT TARGET FHElium::fhelium)
+  add_library(FHElium::fhelium SHARED IMPORTED)
+  set_target_properties(
+    FHElium::fhelium
+    PROPERTIES IMPORTED_LOCATION "${_FHELIUM_PREFIX}/lib/@FHELIUM_LIBRARY_FILE@"
+               INTERFACE_INCLUDE_DIRECTORIES "${_FHELIUM_PREFIX}/include"
+               INTERFACE_LINK_LIBRARIES torch
+               INTERFACE_COMPILE_FEATURES
+               cxx_std_@FHELIUM_PACKAGE_CXX_STANDARD@)
+  if(WIN32)
+    set_target_properties(
+      FHElium::fhelium
+      PROPERTIES IMPORTED_IMPLIB
+                 "${_FHELIUM_PREFIX}/lib/@FHELIUM_IMPORT_LIBRARY_FILE@")
+  endif()
+endif()

@@ -170,6 +170,8 @@ node_modules/
 /docs/.vitepress/api-sidebar.json
 /docs/api/fhelium.md
 /docs/api/fhelium/
+/docs/api/cpp/*.md
+!/docs/api/cpp/index.md
 /docs/.vitepress/cache/
 /docs/.vitepress/dist/
 /docs-publish/
