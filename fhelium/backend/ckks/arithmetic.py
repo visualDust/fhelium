@@ -14,6 +14,28 @@ from fhelium.native.wrapper import ckks_ops
 
 
 @dataclass(frozen=True)
+class NativeSelectBatchImplementation:
+    """Return row ``start`` of the leading batch axis as a view of the source payload."""
+
+    supports_in_place: bool = False
+    name: str = "native-select-batch"
+    operation_types: tuple[type[Operation], ...] = (ckks.SelectBatchOp,)
+
+    def resource_requirements(self, invocation):
+        return ()
+
+    def execute(self, invocation, inputs, resources, *, in_place):
+        del resources, in_place
+        components = invocation.operand_components
+        return (
+            inputs[0].select(
+                int(bool(components and components[0])),
+                cast(int, invocation.attributes["start"]),
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class NativeCiphertextMultiplyImplementation:
     """Execute whole two-component CKKS convolution in one native call."""
 
@@ -84,6 +106,26 @@ class NativeCompressedPlaintextImplementation:
         ckks.AddCompressedPlaintextOp,
         ckks.MultiplyCompressedPlaintextOp,
     )
+
+    @staticmethod
+    def tensor_requirements(operation, config):
+        from xdsl.dialects.builtin import ArrayAttr, IntegerAttr
+
+        layout = operation.attributes.get("compression_layout")
+        implicit_count = int(getattr(layout, "data", None) == "strided_sparse")
+        if len(operation.parameters) > implicit_count:
+            return {}, {}
+        ids = operation.ciphertext.type.state.data.get("prime_ids")
+        if not isinstance(ids, ArrayAttr) or not all(
+            isinstance(x, IntegerAttr) for x in ids
+        ):
+            return None
+        return {}, {
+            "rns_parameters": {
+                "kind": "rns_parameters",
+                "prime_ids": [int(x.value.data) for x in ids],
+            }
+        }
 
     def resource_requirements(self, invocation):
         return ()

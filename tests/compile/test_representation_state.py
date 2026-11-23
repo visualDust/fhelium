@@ -446,7 +446,6 @@ def test_rotation_hoisting_preserves_distinct_rounding_groups():
     value_type = _ciphertext_type("coefficient", "standard")
     key_types = [
         ckks.EvaluationKeyType().with_state(
-            rotation_step=IntegerAttr(step, 64),
             prime_ids=ArrayAttr(IntegerAttr(i, 64) for i in range(6)),
             digit_prime_ids=ArrayAttr(
                 ArrayAttr((IntegerAttr(i, 64),)) for i in range(5)
@@ -456,9 +455,11 @@ def test_rotation_hoisting_preserves_distinct_rounding_groups():
     ]
     block = Block(arg_types=(value_type, *key_types))
     rotations = [
-        ckks.RotateOp(block.args[0], key, moddown_rounding=rounding)
+        ckks.RotateOp(
+            block.args[0], key, rotation_step=step, moddown_rounding=rounding
+        )
         for rounding in ("floor", "nearest")
-        for key in block.args[1:]
+        for step, key in zip((1, 2), block.args[1:])
     ]
     block.add_ops((*rotations, ReturnOp(*(op.result for op in rotations))))
     program = ir.Program.from_function(block, (value_type,) * 4)

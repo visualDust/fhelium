@@ -56,6 +56,8 @@ def encode_literal(value: object) -> object:
         return {"kind": "torch.dtype", "value": str(value)}
     if isinstance(value, torch.device):
         return {"kind": "torch.device", "value": str(value)}
+    if isinstance(value, torch.memory_format):
+        return {"kind": "torch.memory_format", "value": str(value)}
     if isinstance(value, torch.layout):
         return {"kind": "torch.layout", "value": str(value)}
     value_type = type(value)

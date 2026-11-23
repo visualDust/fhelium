@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+import dataclasses
+from dataclasses import dataclass, replace
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, cast
 
@@ -19,8 +20,11 @@ from fhelium.ir.dialects import ckks
 from fhelium.ir.dialects._common import OpenStateType
 from fhelium.values import Ciphertext, CompressedPlaintext, Plaintext
 
-from ._compilation import Compilation
-from ._lower_and_fuse import default_lower_and_fuse_pipeline
+from ._compilation import Compilation, DeferredCompilation
+from ._lower_and_fuse import (
+    default_lower_and_fuse_pipeline,
+    instantiated_ckks_pipeline,
+)
 from ._pipeline import Pipeline
 from ._specialization import CallSignature, prepare_match
 from ._workspace import CompileWorkspace
@@ -32,20 +36,32 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class LinkArtifact:
+    """A persisted linked executable and the provider selections of its generated materials."""
+
+    payload: bytes
+    selections: Mapping[str, Mapping[str, object]]
+
+
+@dataclass(frozen=True)
 class _CompiledVariant:
     signature: CallSignature
-    source: Compilation
+    source: Compilation | Callable[[], Compilation]
     compilation: Compilation
     input_names: tuple[str, ...]
     output_structure: object | None
     argument_types: tuple[type, ...]
+    input_fields: Mapping[str, tuple[str, str]] = dataclasses.field(
+        default_factory=dict
+    )
+    artifact: LinkArtifact | None = None
 
 
 @dataclass(frozen=True)
 class Specialization:
     """Pair an input-specialized computation with its linked executable.
 
-    ``source`` records the computation before specialization. ``compilation`` contains the transformed Program and pass reports; ``backend`` and ``executable`` provide its linked execution. The executable retains its prepared bindings. Replacing a Program or binding requires preparing and linking a new specialization.
+    ``source`` records the computation before specialization. ``compilation`` contains the transformed Program and pass reports; ``backend`` and ``executable`` provide its linked execution. The executable retains its prepared bindings. A new plaintext-material generation reuses prepared dispatch and host bytecode while replacing material bindings; a changed Program requires preparation and linking.
     """
 
     _variant: _CompiledVariant
@@ -56,9 +72,10 @@ class Specialization:
     def signature(self) -> CallSignature:
         return self._variant.signature
 
-    @property
+    @cached_property
     def source(self) -> Compilation:
-        return self._variant.source
+        source = self._variant.source
+        return source() if callable(source) else source
 
     @property
     def compilation(self) -> Compilation:
@@ -66,7 +83,7 @@ class Specialization:
 
     @cached_property
     def _result_count(self) -> int:
-        return len(self.executable.program.function().function_type.outputs)
+        return len(self.executable.output_types)
 
     @cached_property
     def _matches(self):
@@ -88,11 +105,11 @@ class Specialization:
         }
         namespace: dict[str, Any] = {"invoke": self.executable._invoke}
         operands = []
-        fields = input_fields(self.compilation.program)
-        for ordinal, (name, argument, adapter) in enumerate(
+        fields = self._variant.input_fields
+        for ordinal, (name, value_type, adapter) in enumerate(
             zip(
                 self._variant.input_names,
-                self.executable._entry_block.args,
+                self.executable.input_types,
                 self.executable._input_adapters,
                 strict=True,
             )
@@ -100,11 +117,11 @@ class Specialization:
             source_name, field = fields.get(name, (name, None))
             position = positions[source_name]
             typ = self._variant.argument_types[position]
-            role = _boundary_kind(argument.type)
+            role = _boundary_kind(value_type)
             if field is not None:
                 pass
             elif isinstance(
-                argument.type, ckks.CompressedPlaintextType
+                value_type, ckks.CompressedPlaintextType
             ) and issubclass(typ, CompressedPlaintext):
                 adapter = attrgetter("data")
             elif role == "ciphertext" and issubclass(typ, Ciphertext):
@@ -116,9 +133,9 @@ class Specialization:
                 adapter = attrgetter(
                     "message" if representation == "slots" else "data"
                 )
-            elif isinstance(
-                argument.type, ckks.EvaluationKeyType
-            ) and issubclass(typ, KeySwitchKey):
+            elif isinstance(value_type, ckks.EvaluationKeyType) and issubclass(
+                typ, KeySwitchKey
+            ):
                 adapter = attrgetter("data")
             namespace[f"adapt{ordinal}"] = adapter
             namespace[f"field{ordinal}"] = field
@@ -171,14 +188,17 @@ class Specialization:
                 )
             raise ValueError(f"Unsupported callable output descriptor {kind!r}")
 
-        expression = (
-            "result"
-            if self._variant.output_structure is None
-            else output(self._variant.output_structure)
-        )
+        try:
+            expression = (
+                "result"
+                if self._variant.output_structure is None
+                else output(self._variant.output_structure)
+            )
+        finally:
+            output = None
         source = f"def execute(values):\n    result = invoke({', '.join(operands)})\n    return {expression}\n"
         exec(compile(source, "<fhelium-matched-call>", "exec"), namespace)
-        return namespace["execute"]
+        return namespace.pop("execute")
 
 
 def fresh_workspace(workspace: Mapping[object, object]) -> CompileWorkspace:
@@ -215,13 +235,20 @@ def input_fields(program: Program) -> dict[str, tuple[str, str]]:
     return json.loads(encoded.data) if isinstance(encoded, StringAttr) else {}
 
 
+def field_values(
+    fields: Mapping[str, tuple[str, str]], arguments: Mapping[str, object]
+) -> dict[str, object]:
+    """Add the storage-field Tensors named by ``fields`` to call arguments."""
+    values = dict(arguments)
+    for name, (source, attribute) in fields.items():
+        values[name] = getattr(arguments[source], attribute)
+    return values
+
+
 def input_values(
     program: Program, arguments: Mapping[str, object]
 ) -> dict[str, object]:
-    values = dict(arguments)
-    for name, (source, field) in input_fields(program).items():
-        values[name] = getattr(arguments[source], field)
-    return values
+    return field_values(input_fields(program), arguments)
 
 
 def _input_specialization(
@@ -267,9 +294,15 @@ def _input_specialization(
                 argument, represented.with_state(updates)
             )
     program.function().update_function_type()
+    workspace = fresh_workspace(compilation.workspace)
+    from ._origins import clone_origins
+
+    clone_origins(
+        compilation.program, program, compilation.workspace, workspace
+    )
     return Compilation(
         program,
-        fresh_workspace(compilation.workspace),
+        workspace,
         compilation.reports,
         dict(compilation.material_bindings),
     )
@@ -288,16 +321,23 @@ def prepare_variant(
 
     from fhelium.backend.implementation import OperationImplementationRegistry
 
+    # The specialization owns its Program copy and transfers it to the pipeline.
     request = _input_specialization(source, arguments)
     request.workspace[OperationImplementationRegistry] = backend.registry
     if keys:
         request.workspace["evaluation_keys"] = keys
     if pipeline is None:
-        optimized = default_lower_and_fuse_pipeline(backend).run(request)
+        selected = (
+            instantiated_ckks_pipeline(backend)
+            if request.workspace.get("structural_template_stage")
+            == "captured-ckks"
+            else default_lower_and_fuse_pipeline(backend)
+        )
+        optimized = selected.run(request, clone=False)
     else:
         if not isinstance(pipeline, Pipeline):
             pipeline = pipeline(signature)
-        optimized = pipeline.run(request)
+        optimized = pipeline.run(request, clone=False)
     input_names = runtime_names(optimized.program)
     if any(
         name not in input_values(optimized.program, arguments)
@@ -319,15 +359,63 @@ def prepare_variant(
                 type(arguments[argument.name])
                 for argument in signature.arguments
             ),
+            input_fields(optimized.program),
         ),
         backend,
     )
 
 
 def bind_variant(
-    variant: _CompiledVariant, backend: OperationBackend
+    variant: _CompiledVariant,
+    backend: OperationBackend,
+    *,
+    reload: Callable[[], Program] | None = None,
 ) -> Specialization:
-    return Specialization(variant, backend, backend.link(variant.compilation))
+    """Link a variant, or restore its persisted executable when one is attached.
+
+    With ``reload``, linking consumes the variant's Program in place and the returned Specialization obtains later Program requests from ``reload``.
+    """
+    compilation = variant.compilation
+    if variant.artifact is None:
+        if reload is None:
+            return Specialization(variant, backend, backend.link(compilation))
+        executable = backend.link(compilation, clone=False)
+        deferred = DeferredCompilation(
+            reload,
+            compilation.workspace,
+            compilation.reports,
+            compilation.material_bindings,
+        )
+        return Specialization(
+            replace(variant, compilation=deferred), backend, executable
+        )
+    from fhelium.backend._artifact import restore_executable
+
+    linked = []
+
+    def relink():
+        if not linked:
+            fresh = Compilation(
+                compilation.program.clone()
+                if not isinstance(compilation, DeferredCompilation)
+                else compilation._load(),
+                compilation.workspace,
+                compilation.reports,
+                compilation.material_bindings,
+            )
+            linked.append(backend.link(fresh, clone=False))
+        return linked[0]
+
+    return Specialization(
+        variant,
+        backend,
+        restore_executable(
+            variant.artifact.payload,
+            backend,
+            compilation.material_bindings,
+            relink=relink,
+        ),
+    )
 
 
 def _literal(value: Any) -> Any:

@@ -4,6 +4,18 @@
 
 This example captures a fixed packed CKKS matrix-vector evaluator $\mathbf{y}=A\mathbf{x}$ while keeping each request ciphertext as a dynamic input. The tutorial explains captured state, replay storage, and the steady-state measured region.
 
+## Callable-owned capture
+
+Run the same matrix-vector workload through the callable interface with:
+
+```bash
+python examples/18_runtime_cuda_graph.py --device cuda:0 --compile
+```
+
+This path uses `fc.compile(evaluator, graph="auto")`, which opts into Graph capture. Ordinary `fc.compile` retains prepared execution with `graph=False`. Its first call prepares and executes the specialization, and the next invocation attempts automatic capture. Changing ciphertexts reuse the prepared schedule. Statistics report the Graph state and any fallback reason. The timed compiled calls use owned output storage by default, including its copy cost. `clear()` releases Graph resources at the end.
+
+The remaining sections describe direct `CudaGraphProgram` use, which retains separate capture, replay and storage controls. Its replay outputs are borrowed by default.
+
 ## Run the example
 
 ```bash
@@ -141,7 +153,7 @@ Add `--shared-pool` to run the example's optional two-program demonstration:
 python examples/18_runtime_cuda_graph.py --device cuda:0 --shared-pool
 ```
 
-The same matrix-vector evaluator is captured for two input scales, $\Delta$ and $2\Delta$, using one `CudaGraphPool`. Each program keeps its own input signature and retained output. The example replays the second program before the first, checks that the second output survives the first replay unchanged, and compares both decrypted results with the clear matrix-vector product. Both programs close when the pool context ends.
+The same matrix-vector evaluator is captured for two input scales, $\Delta$ and $2\Delta$, using one `CudaGraphPool`. Each program keeps its own input signature and retained output. The example replays the second program before the first, reports any change in the retained second output, and compares both decrypted results with the clear matrix-vector product. Both programs close when the pool context ends.
 
 Pooled output leaves have independent cloned storage without autograd history or alias relationships to inputs or other output leaves. The [shared-storage guide](../how-to/capture-repeated-evaluator.md#share-temporary-storage-across-specializations) describes stream ordering and the lifetime of persistent resources. The single-program capture and benchmark remain the default example path.
 

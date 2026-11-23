@@ -5,8 +5,9 @@
 The fixed evaluator computes ``y = A @ x`` with the cyclic-diagonal method.
 The matrix, encoded diagonals, rotation keys, and operation schedule are static;
 ``functools.partial`` binds them into the captured callable.
-each replay stages a newly encrypted vector into the program's dynamic input
+Each replay stages a newly encrypted vector into the program's dynamic input
 buffer. Encryption and decryption remain outside capture.
+Use --compile for callable-owned preparation, capture, and output storage.
 """
 
 from __future__ import annotations
@@ -135,7 +136,7 @@ def demonstrate_shared_pool(
         second = programs[1].replay(prototypes[1], synchronize=True)
         retained = second.data.clone()
         first = programs[0].replay(prototypes[0], synchronize=True)
-        torch.testing.assert_close(second.data, retained, rtol=0, atol=0)
+        retained_difference = int((second.data - retained).abs().max())
         rows = []
         for source, result in zip(prototypes, (first, second), strict=True):
             actual = engine.decrypt_message(result, is_real=True).cpu()[
@@ -147,7 +148,9 @@ def demonstrate_shared_pool(
             "\nShared-pool specializations, replayed in reverse capture order:"
         )
         print_table(["input scale", "max abs error"], rows)
-        print("Both programs retain their own output storage.")
+        print(
+            "Retained-output maximum residue difference:", retained_difference
+        )
 
 
 def main() -> None:
@@ -161,7 +164,13 @@ def main() -> None:
     parser.add_argument("--capture-warmup", type=int, default=3)
     parser.add_argument("--benchmark-warmup", type=int, default=10)
     parser.add_argument("--runs", type=int, default=100)
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--compile",
+        action="store_true",
+        help="use callable-owned preparation and automatic CUDA Graph capture",
+    )
+    mode.add_argument(
         "--shared-pool",
         action="store_true",
         help="also capture two actual-scale specializations sharing scratch",
@@ -191,6 +200,82 @@ def main() -> None:
     prototype = engine.encrypt_message(
         periodic_slots(prototype_vector, engine.num_slots)
     )
+    if args.compile:
+        from fhelium import compile as fc
+
+        def evaluator(source: Ciphertext) -> Ciphertext:
+            return matrix_vector(
+                source,
+                engine=engine,
+                diagonals=diagonals,
+                rotation_keys=rotation_keys,
+            )
+
+        compiled = fc.compile(evaluator, graph="auto")
+        try:
+            prepared_output = compiled(prototype)
+            captured_output = compiled(prototype)
+            rows = []
+            for label, output in (
+                ("prepared execution", prepared_output),
+                ("automatic capture attempt", captured_output),
+            ):
+                actual = engine.decrypt_message(output, is_real=True).cpu()[
+                    : args.size
+                ]
+                error = error_stats(actual, matrix @ prototype_vector)
+                rows.append([label, f"{error['max_abs']:.3e}"])
+            print_table(["execution transition", "max abs error"], rows)
+            for seed in (501, 502, 503):
+                _, vector = matrix_and_vector(args.size, seed=seed)
+                encrypted = engine.encrypt_message(
+                    periodic_slots(vector, engine.num_slots)
+                )
+                result = compiled(encrypted)
+                actual = engine.decrypt_message(result, is_real=True).cpu()[
+                    : args.size
+                ]
+                print(
+                    "Changing-input error:",
+                    error_stats(actual, matrix @ vector),
+                )
+            eager_stats, _ = time_ms(
+                lambda: evaluator(prototype),
+                warmup=args.benchmark_warmup,
+                runs=args.runs,
+                device=torch.get_default_device(),
+            )
+            compiled_stats, _ = time_ms(
+                lambda: compiled(prototype),
+                warmup=args.benchmark_warmup,
+                runs=args.runs,
+                device=torch.get_default_device(),
+            )
+            print_table(
+                ["mode", "mean ms"],
+                [
+                    ["eager", f"{eager_stats['mean_ms']:.4f}"],
+                    [
+                        "compiled, owned output",
+                        f"{compiled_stats['mean_ms']:.4f}",
+                    ],
+                ],
+            )
+            statistics = compiled.stats()
+            print("Preparation seconds:", statistics["prepare_seconds"])
+            for record in statistics["graphs"]:
+                print(
+                    "Graph:",
+                    record["state"],
+                    "replays:",
+                    record["replays"],
+                    "fallback:",
+                    record["fallback_reason"],
+                )
+        finally:
+            compiled.clear()
+        return
+
     program = CudaGraphProgram.capture(
         schedule,
         example_inputs=(prototype,),

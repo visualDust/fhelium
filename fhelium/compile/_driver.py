@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar, overload
 
 from fhelium.ir import Program
@@ -40,6 +41,9 @@ def compile(
     workspace: CompileWorkspace | None = None,
     inputs: Mapping[str, InputSpec] | None = None,
     material_names: Mapping[str, object] | None = None,
+    cache: bool | str | Path = True,
+    graph: Literal["auto"] | bool = False,
+    copy_output: bool = True,
 ) -> CompiledCallable[_P, _R]: ...
 
 
@@ -57,6 +61,9 @@ def compile(
     on_miss: Literal["compile", "error"] = "compile",
     workspace: CompileWorkspace | None = None,
     inputs: Mapping[str, InputSpec] | None = None,
+    cache: bool | str | Path = True,
+    graph: Literal["auto"] | bool = False,
+    copy_output: bool = True,
 ) -> CompiledCallable[..., Any]: ...
 
 
@@ -75,6 +82,9 @@ def compile(
     workspace: CompileWorkspace | None = None,
     inputs: Mapping[str, InputSpec] | None = None,
     material_names: Mapping[str, object] | None = None,
+    cache: bool | str | Path = True,
+    graph: Literal["auto"] | bool = False,
+    copy_output: bool = True,
 ) -> Callable[[Callable[_P, _R]], CompiledCallable[_P, _R]]: ...
 
 
@@ -92,6 +102,9 @@ def compile(
     workspace: CompileWorkspace | None = None,
     inputs: Mapping[str, InputSpec] | None = None,
     material_names: Mapping[str, object] | None = None,
+    cache: bool | str | Path = True,
+    graph: Literal["auto"] | bool = False,
+    copy_output: bool = True,
 ) -> (
     CompiledCallable[_P, _R]
     | Callable[[Callable[_P, _R]], CompiledCallable[_P, _R]]
@@ -114,6 +127,9 @@ def compile(
             workspace=workspace,
             inputs=inputs,
             material_names=material_names,
+            cache=cache,
+            graph=graph,
+            copy_output=copy_output,
         )
 
     return wrap if source is None else wrap(source)

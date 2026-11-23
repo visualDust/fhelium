@@ -22,7 +22,7 @@ def capture_invocation(
     workspace: CompileWorkspace,
     material_names: Mapping[str, object] | None = None,
 ) -> Compilation:
-    """Select the declared frontend without attempting a fallback.
+    """Select the declared frontend and retain full capture for unsupported preparation recipes.
 
     Omitted ``inputs`` captures ordinary Tensor expressions and Engine calls
     together, using each actual value's role. Supplied input roles select FX;
@@ -32,12 +32,30 @@ def capture_invocation(
     """
 
     if inputs is None:
-        return capture_eager(
-            function,
-            arguments=arguments,
-            workspace=workspace,
-            material_names=material_names,
-        )
+        from .._errors import CaptureError
+
+        try:
+            return capture_eager(
+                function,
+                arguments=arguments,
+                workspace=workspace,
+                material_names=material_names,
+            )
+        except CaptureError as error:
+            if not workspace.get("binding_time_split", True) or not any(
+                isinstance(value, Ciphertext) for value in arguments.values()
+            ):
+                raise
+            fallback = CompileWorkspace(workspace)
+            fallback.pop("plaintext_preparation", None)
+            fallback["binding_time_split"] = False
+            fallback["binding_time_fallback"] = str(error)
+            return capture_eager(
+                function,
+                arguments=arguments,
+                workspace=fallback,
+                material_names=material_names,
+            )
     specs: dict[str, InputSpec] = {}
     for name, spec in inputs.items():
         value = arguments[name]

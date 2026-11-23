@@ -71,14 +71,126 @@ def test_ckks_rotation_output_domain_matches_represented_result() -> None:
         block.args[0],
         block.args[1],
         ntt,
+        rotation_step=1,
         attributes={"output_domain": StringAttr("ntt")},
     )
     invalid = ir.dialects.ckks.RotateOp(
         block.args[0],
         block.args[1],
         coefficient,
+        rotation_step=1,
         attributes={"output_domain": StringAttr("ntt")},
     )
     specification = ir.DEFAULT_OPERATION_SPECS.require(valid.name)
     assert specification.diagnostics(valid) == ()
     assert specification.diagnostics(invalid)
+
+
+def test_value_type_equality_includes_mathematical_state():
+    ciphertext = ir.dialects.ckks.CiphertextType()
+    first = ciphertext.with_state(depth=IntegerAttr(0, 64))
+    second = ciphertext.with_state(depth=IntegerAttr(1, 64))
+    assert first == ciphertext.with_state(depth=IntegerAttr(0, 64))
+    assert first != second
+    assert len({first, second}) == 2
+
+
+def test_late_material_facts_refine_fusion_interfaces():
+    import torch
+    from xdsl.dialects.func import ReturnOp
+    from xdsl.ir import Block
+    from fhelium.compile import Compilation, ResolveTensorPlaceholdersPass
+    from fhelium.ir import Program
+    from fhelium.ir.dialects import core, fusion
+
+    typ = core.MessageType()
+    material = core.MaterialRefOp(typ, symbol="table")
+    body = Block(arg_types=[typ])
+    body.add_op(fusion.YieldOp([body.args[0]]))
+    grouped = fusion.FusedOp([material.value], [typ], body)
+    entry = Block([material, grouped, ReturnOp(grouped.outputs[0])])
+    compilation = Compilation(
+        Program.from_function(entry, [typ]),
+        material_bindings={"table": torch.ones(4, 2)},
+    )
+    ResolveTensorPlaceholdersPass().run(compilation)
+    compilation.program.verify_structure()
+    assert grouped.body.block.args[0].type == material.value.type
+    assert grouped.outputs[0].type == material.value.type
+
+
+def test_generated_material_requests_reuse_references_after_program_restore():
+    from xdsl.dialects.func import ReturnOp
+
+    from fhelium import Preset
+    from fhelium.compile import Compilation
+    from fhelium.compile._materials import (
+        declare_material,
+        parameter_description,
+        parameter_request_identity,
+        rns_parameter_identity,
+    )
+    from fhelium.config import CkksConfig
+    from fhelium.ir import Program
+    from fhelium.ir.dialects import core
+
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    physical = {"dtype": StringAttr("torch.int64"), "device": StringAttr("cpu")}
+    typ = core.MessageType().with_state(physical)
+    rns_description = parameter_description(
+        config, "rns_parameters", prime_ids=[0, 1]
+    )
+    ntt_description = parameter_description(
+        config,
+        "ntt_table",
+        prime_ids=[0, 1],
+        direction="forward",
+        index=1,
+        ntt_backend="radix2_compact_group16_smem8",
+    )
+    for description, identity in (
+        (rns_description, rns_parameter_identity(config, (0, 1), physical)),
+        (
+            ntt_description,
+            parameter_request_identity(ntt_description, physical),
+        ),
+    ):
+        caller = core.MaterialRefOp(typ, symbol="caller")
+        block = Block([caller, ReturnOp(caller.value)])
+        program = Program.from_function(block, [typ])
+        program.set_material_description("caller", description)
+        compilation = Compilation(program)
+        created, value = declare_material(
+            compilation,
+            block.last_op,
+            "generated",
+            typ,
+            description,
+            identity=identity,
+        )
+        assert len(created) == 1
+        assert value is not caller.value
+        block.insert_op_before(created[0], block.last_op)
+
+        for restored in (
+            Compilation(program.clone(), compilation.workspace),
+            Compilation(Program.parse(program.to_text())),
+        ):
+            restored_block = restored.program.single_block()
+            refs = {
+                op.symbol.data: op
+                for op in restored_block.ops
+                if isinstance(op, core.MaterialRefOp)
+            }
+            created, value = declare_material(
+                restored,
+                restored_block.last_op,
+                "another_generated",
+                typ,
+                description,
+                identity=identity,
+            )
+            assert created == ()
+            assert value is refs["generated"].value
+            assert value is not refs["caller"].value
+            restored.program.verify_structure()

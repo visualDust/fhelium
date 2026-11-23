@@ -18,7 +18,6 @@ from dataclasses import dataclass, field
 
 from xdsl.dialects.builtin import IntegerAttr, StringAttr
 
-from fhelium.backend.ckks.rotation._galois import rotation_galois_element
 from fhelium.config import CkksConfig
 from fhelium.ir.dialects import ckks, core, logical
 
@@ -138,16 +137,7 @@ class ResolveRotationKeyOperandsPass:
             key_type = ckks.EvaluationKeyType().with_state(
                 {
                     "kind": StringAttr("rotation-key"),
-                    "rotation_step": IntegerAttr(normalized_step, 64),
                     "ring_dimension": IntegerAttr(2 * slot_count, 64),
-                    "galois_element": IntegerAttr(
-                        rotation_galois_element(
-                            2 * slot_count,
-                            normalized_step,
-                            config.galois_generator,
-                        ),
-                        64,
-                    ),
                 }
             )
             key = core.MaterialRefOp(
@@ -155,7 +145,9 @@ class ResolveRotationKeyOperandsPass:
                 symbol=symbol,
             )
             key.value.name_hint = f"rotation_key_{normalized_step}"
-            rotation = ckks.RotateOp(typed, key.value, typed.type)
+            rotation = ckks.RotateOp(
+                typed, key.value, typed.type, rotation_step=normalized_step
+            )
             rotation.result.name_hint = operation.result.name_hint
             _replace_with_result_cast(
                 operation,

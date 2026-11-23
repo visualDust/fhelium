@@ -47,6 +47,7 @@ TORCH_FUNCTIONS: dict[str, Callable[..., Any]] = {
     "torch.permute": torch.permute,
     "torch.clone": torch.clone,
     "torch.zeros_like": torch.zeros_like,
+    "torch.where": torch.where,
     "torch.stack": torch.stack,
     "torch.cat": torch.cat,
     "torch.getitem": operator.getitem,
@@ -124,7 +125,7 @@ def decode_literal(value: Any) -> Any:
         return Ellipsis
     if kind == "torch.device":
         return torch.device(value["value"])
-    if kind in {"torch.dtype", "torch.layout"}:
+    if kind in {"torch.dtype", "torch.layout", "torch.memory_format"}:
         return getattr(torch, value["value"].removeprefix("torch."))
     raise ValueError(f"Unsupported Torch literal {kind!r}")
 
@@ -177,11 +178,14 @@ def prepare_tensor_call(
 
     arguments = descriptor["args"]
     kwargs = descriptor["kwargs"]
-    positional = [expression(item) for item in arguments["items"]]
-    keyword = [
-        f"{decode_literal(key)}={expression(value)}"
-        for key, value in kwargs["entries"]
-    ]
+    try:
+        positional = [expression(item) for item in arguments["items"]]
+        keyword = [
+            f"{decode_literal(key)}={expression(value)}"
+            for key, value in kwargs["entries"]
+        ]
+    finally:
+        expression = None
     # Keyword names are validated Python identifiers, not executable source.
     import keyword as keywords
 
@@ -198,7 +202,11 @@ def prepare_tensor_call(
         + "),)\n"
     )
     exec(compile(source, "<fhelium-torch-call>", "exec"), namespace)
-    return namespace["call"]
+    from fhelium.backend._artifact import rebuild_with
+
+    return rebuild_with(
+        namespace.pop("call"), prepare_tensor_call, function, descriptor
+    )
 
 
 @dataclass(frozen=True)

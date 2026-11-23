@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from fhelium import ir
@@ -32,6 +34,8 @@ def test_program_round_trips_incomplete_mixed_dialect_graph() -> None:
 
     exported = program.to_text()
     assert ir.parse(exported).to_text() == exported
+    encoded = json.loads(json.dumps(program.encode()))
+    assert ir.Program.decode(encoded).to_text() == exported
 
 
 def test_program_rejects_malformed_registered_structure() -> None:

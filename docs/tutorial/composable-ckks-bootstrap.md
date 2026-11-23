@@ -165,26 +165,22 @@ Prepare the complete refresh once. Material discovery uses the example's state a
 
 ```python
 from fhelium import compile as fc
-from fhelium.runtime import CudaGraphProgram
 
 prepared = bootstrap.prepare(ciphertext, evaluation_keys=evaluation_keys)
-refreshed_eager = prepared(ciphertext)
 optimized = fc.compile(prepared)
-refreshed_compiled = optimized(ciphertext)
-
-graph = CudaGraphProgram.capture(
-    optimized, example_inputs=(ciphertext,), warmup=1
-)
 try:
-    refreshed = graph.replay(ciphertext, copy_output=True, synchronize=True)
+    refreshed_eager = optimized(ciphertext)
+    optimized.prepare(ciphertext)
+    refreshed = optimized(ciphertext)
+    print("Preparation seconds:", optimized.stats()["prepare_seconds"])
 finally:
-    graph.close()
+    optimized.clear()
     prepared.close()
 ```
 
 Eager and Compile use the same prepared Python computation. Compile represents it as ordinary CKKS, RNS, NTT and Tensor operations with live material operands. Adding or removing inventory entries after preparation leaves these bindings unchanged; prepare a new callable to select other keys. In-place writes to selected key Tensors remain visible under the prepared layout and synchronization contract. Compilation consumes existing keys and encoded samples.
 
-`copy_output=True` returns storage independent of Graph replay. Close a Graph before its prepared owner. A linked compiled executable retains its bound Tensors until that executable is released. Clearing the shared inventory releases only its own references.
+The first call uses the prepared Python reference while Compile preparation starts in the background. `.prepare()` waits for completion, and subsequent calls execute the linked function. Prepared execution is the default (`graph=False`). To opt into automatic capture, construct with `graph="auto"` or `graph=True`; a call after the first prepared execution attempts capture. Graph outputs are owned by default (`copy_output=True`), and statistics report capture or prepared fallback. Clear the compiled callable before closing its prepared owner. A linked executable retains its bound Tensors until released; clearing the shared inventory releases only its own references.
 
 The callable can also be source-inlined inside a larger `fc.compile` function. Select a custom Backend or caller-composed pipeline through the ordinary Compile arguments. For applications that manage normalized coordinates directly, `entry`, `prepare_core` and `finish` remain available; the full prepared callable is the common entry.
 

@@ -19,12 +19,14 @@ Retain the source calculation, representative input metadata, selected pipeline,
 
 Manual Programs skip Python capture. `capture` and `capture_eager` produce Compilations that can be inspected before execution. `fc.compile` performs capture where needed and then prepares the same kinds of Program facts and bindings behind a function interface.
 
+Preparation errors propagate from the call or from `compiled.prepare(*inputs)`. A successful CPU call does not establish Graph capture: `stats()["graphs"]` reports the prepared fallback and its reason. A disk-cache miss or ineligible source still permits ordinary compilation.
+
 ## 2. Inspect the Program and reports
 
 ```python
 print(compilation.program.to_text())
 for report in compilation.reports:
-    print(report.name, report.stats, report.diagnostics, report.decisions)
+    print(report.name, report.seconds, report.stats, report.diagnostics, report.decisions)
 print(compilation.program.material_descriptions)
 print(sorted(compilation.material_bindings))
 ```
@@ -46,6 +48,22 @@ Inventory `backend.registry.implementations` and match both operation class and 
 ## 5. Distinguish cache misses from changed captured state
 
 A callable can prepare a new specialization for changed shapes, value state, placement, or immutable scalar parameters. With `on_miss="error"`, call `prepare` for intended new conditions during setup. Changing ordinary input Tensor contents does not require a new specialization when metadata stays compatible.
+
+A new input signature can miss the resident and optimized-instance caches while reusing a source-family template. Inspect the specialization’s `structure` status and `structure_layer`: a template hit avoids recapture, while a guard miss means current metadata or material state no longer matches an observed capture condition. `unsupported` means the captured operations lack complete template rules and use ordinary compilation. Lowering and fusion plan misses can be local to changed key or digit layouts; they do not imply that every operation was reselected.
+
+Inspect `local_plans` when a structural hit still spends time in selection or fusion:
+
+```python
+for record in compiled.stats()["specializations"]:
+    local = record.get("local_plans", {})
+    print("Local recipe requests:", local.get("occurrences", 0))
+    print("Recipe hits:", local.get("recipe_hits", 0),
+          "misses:", local.get("recipe_misses", 0))
+    print("Window facts hits:", local.get("facts_hits", 0),
+          "misses:", local.get("facts_misses", 0))
+```
+
+The current local consumer covers one operation and its direct operand/result ports. `occurrences` counts recipe requests, including requests in different pass scopes. Recipe hits reuse a local structural recipe; facts hits reuse the current operation’s evaluated facts within one read-only analysis window. Repeated probes can produce many facts hits for one recipe request. Global scheduling and final fusion checks still run on this path. Use pass and preparation timings to judge its cost: hit counts measure reuse frequency, not elapsed-time savings. See [Prepared host execution](../developer/prepared-host-execution.md) for counter lifetimes.
 
 Changing a captured Python constant requires clearing the callable; changing its source Program or pass policy requires a new callable. Rebinding a material dictionary after linking is not a supported way to retarget a live executable. Prepare and link again with the intended assignments.
 

@@ -2,7 +2,7 @@
 
 **Example source:** [`examples/12_compile_pipeline.py`](https://github.com/VisualDust/fhelium/blob/main/examples/12_compile_pipeline.py)
 
-Example 12 is the ordinary end-to-end Compile workflow. It captures a supported PyTorch computation, composes existing FHElium passes, lowers the Program to operations covered by the Backend, links live keys and arithmetic resources, executes encrypted inputs, and checks the decrypted result.
+Example 12 exposes the individual stages of the Compile workflow. It captures a supported PyTorch computation, composes existing FHElium passes, lowers the Program to operations covered by the Backend, links live keys and arithmetic resources, executes encrypted inputs, and reports error against the clear result.
 
 ## Run the example
 
@@ -12,7 +12,9 @@ From the repository root:
 python examples/12_compile_pipeline.py
 ```
 
-The example runs on CPU and prints compact captured/backend-ready Program inventories, evaluation-key requirements, result state, numerical error, and pass reports.
+The example runs on CPU and prints compact captured/backend-ready Program inventories, evaluation-key requirements, result state, numerical error, and pass reports with host durations.
+
+For a managed function interface over the same compiler, use [callable compilation](compile-jit.md). Manual `Compilation`, `Pipeline` and Backend linking remain available when the application owns transformation order and material binding. Passing a Program or Compilation to `fc.compile` also uses synchronous preparation.
 
 ## Source computation
 
@@ -28,7 +30,7 @@ Capture assigns `x` the encrypted role and treats `rotation` as a compile-time i
 
 ## Caller-selected pipeline
 
-Pipelines express workload-specific choices. The example supplies the configuration and implementation registry through the capture workspace:
+Pipelines express workload-specific choices. `fh_compile.default_lower_and_fuse_pipeline(backend)` supplies an editable default recipe for manual Programs; inspect its `.names` or compose its passes when those defaults suit the workload. This example writes the pass sequence to show its relinearization, rescale and NTT choices, and reports each `PassReport.seconds` after execution. The example supplies the configuration and implementation registry through the capture workspace:
 
 ```python
 from fhelium.backend import OperationBackend, OperationImplementationRegistry

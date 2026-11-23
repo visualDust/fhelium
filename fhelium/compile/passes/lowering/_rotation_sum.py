@@ -150,6 +150,7 @@ def lower_rotation_sum(operation, config, compilation):
                 source,
                 key,
                 source.type,
+                rotation_step=step,
                 parameters=rotation_parameters,
                 attributes={
                     **key_fields,

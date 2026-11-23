@@ -15,6 +15,7 @@ import math
 import operator
 import types
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from operator import index as integer_index
 from types import MappingProxyType
 from typing import Any, cast
@@ -24,6 +25,7 @@ from xdsl.dialects.builtin import (
     ArrayAttr,
     DictionaryAttr,
     FloatAttr,
+    IndexType,
     IntegerAttr,
     StringAttr,
     UnrealizedConversionCastOp,
@@ -34,12 +36,13 @@ from xdsl.ir import Attribute, Block, Operation, SSAValue
 from xdsl.rewriter import Rewriter
 
 from fhelium.eager import Engine
-from fhelium.eager._engine import _KeySwitchAttributes
+from fhelium.eager._engine import _KeySwitchAttributes, weighted_sum_terms
 from fhelium.backend.ckks._key_switch_preparation import (
     key_switch_runtime_attributes,
 )
 from fhelium.ir import EXECUTION_IMPLEMENTATION_ATTRIBUTE, Program, value_role
 from fhelium.ir.ckks_state import (
+    allocation_state,
     depth_prime_ids,
     output_residues,
     product_scale,
@@ -68,7 +71,15 @@ from .._materials import (
 )
 from .._workspace import CompileWorkspace
 from ._captured_callable import CapturedCallable
-from ._eager_values import state_attribute, state_attributes, value_type
+from ._template_provenance import (
+    METADATA,
+    RECORDING,
+    TemplateProvenance,
+    json_value,
+)
+from fhelium.ir.dialects._common import state_attribute
+
+from ._eager_values import state_attributes, value_type
 from ._pytorch_encoding import encode_literal
 from ._specs import (
     InputSpec,
@@ -153,18 +164,25 @@ class _Value:
     def __getitem__(self, index):
         return self.capture.numeric_call(operator.getitem, (self, index), {})
 
+    def _python_class(self):
+        """Return the represented class for capture-controlled Python checks."""
+        typ = self.value.type
+        return (
+            Ciphertext
+            if isinstance(typ, ckks.CiphertextType)
+            else CompressedPlaintext
+            if isinstance(typ, ckks.CompressedPlaintextType)
+            else Plaintext
+            if isinstance(typ, ckks.PlaintextType)
+            else torch.Tensor
+        )
+
     def __getattribute__(self, name: str) -> Any:
         if name == '__class__':
-            typ = object.__getattribute__(self, 'value').type
-            return (
-                Ciphertext
-                if isinstance(typ, ckks.CiphertextType)
-                else CompressedPlaintext
-                if isinstance(typ, ckks.CompressedPlaintextType)
-                else Plaintext
-                if isinstance(typ, ckks.PlaintextType)
-                else torch.Tensor
-            )
+            cls = _Value._python_class(self)
+            # Native Tensor parsing must see the actual proxy type: this object
+            # has no TensorImpl and enters Torch through __torch_function__.
+            return type(self) if cls is torch.Tensor else cls
         return object.__getattribute__(self, name)
 
     def size(self, dim=None):
@@ -349,6 +367,33 @@ class _Value:
         )
 
     def __getattr__(self, name: str) -> Any:
+        capture = self.capture
+        if name == 'rotation_step':
+            step = capture.key_steps.get(self.value)
+            if step is None:
+                raise CaptureError(
+                    'Captured value does not represent a rotation key'
+                )
+            return step
+        if name in _VALUE_METADATA:
+            with capture.adapter_scope():
+                result = self._metadata(name)
+        else:
+            # Other fields depend only on the value type; repeated reads of one type share a result.
+            typ = self.value.type
+            found = capture.metadata.get((id(typ), name))
+            if found is None:
+                with capture.adapter_scope():
+                    found = capture.metadata[(id(typ), name)] = (
+                        typ,
+                        self._metadata(name),
+                    )
+            result = found[1]
+        if capture.provenance is not None:
+            capture.provenance.read(self.value, name, result)
+        return result
+
+    def _metadata(self, name: str) -> Any:
         if name == 'layout':
             return torch.strided
         if name == 'requires_grad':
@@ -392,6 +437,7 @@ class _Value:
                     "Tensor access requires an attached captured value"
                 )
             block.add_op(operation)
+            self.capture.template_options(operation, cast="tensor_data")
             return _Value(value, self.capture)
         field = {"modulus_basis": "basis", "component_count": "components"}.get(
             name, name
@@ -426,15 +472,14 @@ class _Value:
         )
 
 
+_VALUE_METADATA = frozenset({"data", "implicit_data", "_resident_tensors"})
+
+
 def _result_type(source: _Value, **updates: object) -> OpenStateType:
     typ = cast(OpenStateType, source.value.type)
     # Output allocation can change physical strides. Mathematical batch shape,
     # dtype, device, and ring metadata remain usable by later passes.
-    fields = {
-        name: value
-        for name, value in typ.state.data.items()
-        if name not in {"shape", "strides", "requires_grad"}
-    }
+    fields = allocation_state(dict(typ.state.data))
     for name, value in updates.items():
         attribute = (
             value if isinstance(value, Attribute) else state_attribute(value)
@@ -457,6 +502,10 @@ def _float(value: object) -> float:
         raise CaptureError("This operation requires a static real scalar")
     return float(cast(float, value))
 
+
+_WEIGHTED_SUMS = frozenset(
+    {"sum_plaintext_products", "sum_plaintext_product_groups"}
+)
 
 _METHODS = frozenset(
     {
@@ -503,10 +552,49 @@ _METHODS = frozenset(
 )
 
 
+# Engine methods whose emission is a function of operand types and static parameters.
+_PLANNED = frozenset(
+    {
+        "add",
+        "subtract",
+        "negate",
+        "multiply",
+        "add_plaintext",
+        "multiply_plaintext",
+        "sum_batch",
+        "coefficient_domain_to_ntt_domain",
+        "ntt_domain_to_coefficient_domain",
+        "standard_residues_to_montgomery_residues",
+        "montgomery_residues_to_standard_residues",
+        "reinterpret_at_scale",
+    }
+)
+_SIGNATURES: dict[str, inspect.Signature] = {}
+
+
+@dataclasses.dataclass(frozen=True)
+class _EmissionPlan:
+    """Operation, result type, attributes and generated operands decided by one emission."""
+
+    op_type: type[Operation]
+    result_type: Attribute
+    attributes: dict[str, Attribute]
+    properties: dict[str, Attribute]
+    generated: tuple[SSAValue, ...]
+    options: dict[str, object]
+
+
 class _EngineCalls:
     def __init__(self, engine: Engine, capture: _Capture) -> None:
         self.engine = engine
         self.capture = capture
+        self.plans: dict[tuple[object, ...], _EmissionPlan] = {}
+        self.config_attribute: StringAttr | None = None
+        # Key-switch operands and runtime attributes per input depth, device, key layout and options.
+        self.key_operands: dict[
+            tuple[object, ...],
+            tuple[tuple[SSAValue, ...], dict[str, Attribute]],
+        ] = {}
 
     def __hash__(self):
         return hash(self.engine)
@@ -524,7 +612,11 @@ class _EngineCalls:
             def validate(value):
                 from torch._subclasses.fake_tensor import FakeTensorMode
 
-                with FakeTensorMode():
+                recorder = self.capture.preparation
+                with (
+                    recorder.pause() if recorder is not None else nullcontext(),
+                    FakeTensorMode(),
+                ):
                     data = torch.empty(
                         value.shape, dtype=value.dtype, device=value.device
                     )
@@ -558,12 +650,59 @@ class _EngineCalls:
         method = getattr(Engine, name)
 
         def emit(*args: object, **kwargs: object) -> object:
-            bound = inspect.signature(method).bind(self.engine, *args, **kwargs)
+            provenance = self.capture.provenance
+            origin = (
+                provenance.emission(sys._getframe(1), f"Engine.{name}")
+                if provenance is not None and provenance.record_origins
+                else None
+            )
+            signature = _SIGNATURES.get(name)
+            if signature is None:
+                signature = _SIGNATURES[name] = inspect.signature(method)
+            bound = signature.bind(self.engine, *args, **kwargs)
             bound.apply_defaults()
             parameters = dict(bound.arguments)
             parameters.pop("self")
+            if name in _WEIGHTED_SUMS:
+                # Batched operands enumerate terms through views traced like select_batch.
+                parameters["ciphertexts"] = weighted_sum_terms(
+                    cast(Any, parameters["ciphertexts"])
+                )
+                if name == "sum_plaintext_product_groups":
+                    parameters["plaintext_groups"] = tuple(
+                        weighted_sum_terms(row)
+                        for row in cast(Any, parameters["plaintext_groups"])
+                    )
+                elif self._round_rows(parameters):
+                    # Row 0 initializes the sum; the loop reads later rows of
+                    # one batched operand by round index.
+                    batched = cast(Any, parameters["plaintexts"])
+                    parameters["plaintexts"] = (
+                        batched.select_batch(0),
+                        batched,
+                    )
+                    parameters["round_rows"] = True
+                else:
+                    parameters["plaintexts"] = weighted_sum_terms(
+                        cast(Any, parameters["plaintexts"])
+                    )
+            recorder = self.capture.preparation
+            if recorder is not None:
+                from ._preparation_capture import (
+                    PREPARATION_METHODS,
+                    contains_proxy,
+                )
+
+                if name in PREPARATION_METHODS and not contains_proxy(
+                    parameters
+                ):
+                    if parameters.get("inplace", False):
+                        raise CaptureError(
+                            "Plaintext preparation requires out-of-place Engine operations"
+                        )
+                    return recorder.engine(self.engine, name, parameters)
             parameters = {
-                key: self.capture.substitute(value)
+                key: self.capture.runtime(value)
                 for key, value in parameters.items()
             }
             if parameters.pop("inplace", False):
@@ -571,18 +710,36 @@ class _EngineCalls:
                     "Callable capture requires out-of-place Engine operations"
                 )
             before = self.capture.block.last_op
-            result = self._emit(name, parameters)
+            prior_config = self.capture.active_config
+            self.capture.active_config = self.engine.config
+            try:
+                with (
+                    self.capture.adapter_scope(),
+                    recorder.pause() if recorder is not None else nullcontext(),
+                ):
+                    result = self._emit(name, parameters)
+            finally:
+                self.capture.active_config = prior_config
             operation = (
                 self.capture.block.first_op
                 if before is None
                 else before.next_op
             )
-            configuration = StringAttr(
-                json.dumps(self.engine.config.dumps(), sort_keys=True)
-            )
+            if provenance is not None and provenance.record_origins:
+                provenance.record_emission(operation, origin)
+            configuration = self.config_attribute
+            if configuration is None:
+                configuration = self.config_attribute = StringAttr(
+                    json.dumps(self.engine.config.dumps(), sort_keys=True)
+                )
             while operation is not None:
-                if operation.name.startswith("fhelium_ckks."):
-                    operation.attributes["ckks_config"] = configuration
+                for item in (
+                    operation.walk() if operation.regions else (operation,)
+                ):
+                    if item.name.startswith("fhelium_ckks.") and not isinstance(
+                        item, (ckks.RepeatOp, ckks.RepeatYieldOp)
+                    ):
+                        item.attributes["ckks_config"] = configuration
                 operation = operation.next_op
             return result
 
@@ -621,7 +778,7 @@ class _EngineCalls:
         parameters = self.engine._dispatcher_for(
             source.device
         ).rns_context.rns_parameters_for_prime_ids(source.prime_ids)
-        parameter = c.material(
+        parameter = c.generated_material(
             parameters,
             rns.RnsParametersType(),
             parameter_description(
@@ -692,7 +849,245 @@ class _EngineCalls:
         )
         return c.emit(cast_op)
 
+    def _round_rows(self, parameters: dict[str, object]) -> bool:
+        """Accept one batched prepared plaintext whose rows a carried loop can index."""
+        plaintexts = parameters["plaintexts"]
+        return (
+            isinstance(plaintexts, (Plaintext, CompressedPlaintext))
+            and plaintexts.is_batched
+            and plaintexts.batch_shape[0] >= 3
+            and getattr(plaintexts, "implicit_data", None) is None
+            and parameters.get("implementation") is None
+            and parameters.get("term_chunk_size") is None
+            and self.capture.workspace.get("ckks_repeat") is not False
+            # Ciphertext terms are already enumerated by the caller.
+            and len(cast(Any, parameters["ciphertexts"]))
+            == plaintexts.batch_shape[0]
+        )
+
+    def _select_row(self, batched: _Value, row: int) -> _Value:
+        return self.capture.emit(ckks.SelectBatchOp(batched.value, start=row))
+
+    def _ordered_products(
+        self,
+        ciphertexts: Sequence[_Value],
+        plaintexts: Sequence[_Value],
+        batched: _Value | None = None,
+    ) -> object:
+        """Emit c_0 p_0 followed by one carried multiply-add loop over the remaining terms.
+
+        The loop has the form produced by folding the expanded sequence: table row t holds (c_t, p_t), the carry is the running sum, and only the final sum is a result. With ``batched``, plaintext row t is selected from that one shared operand by round index instead of occupying a table column. Terms with differing types, or emissions that need more than one product and one addition, remain expanded.
+        """
+        block = self.capture.block
+        result = self._emit(
+            "multiply_plaintext",
+            {"ciphertext": ciphertexts[0], "plaintext": plaintexts[0]},
+        )
+        count = len(ciphertexts) - 1
+
+        def row(term):
+            if batched is None:
+                return plaintexts[term]
+            return self._select_row(batched, term)
+
+        def expanded(total, first):
+            for term in range(first, count + 1):
+                product = self._emit(
+                    "multiply_plaintext",
+                    {"ciphertext": ciphertexts[term], "plaintext": row(term)},
+                )
+                total = self._emit("add", {"lhs": total, "rhs": product})
+            return total
+
+        if (
+            count < 2
+            or self.capture.workspace.get("ckks_repeat") is False
+            or type(result) is not _Value
+            or any(
+                type(x) is not _Value
+                or x.value.type != ciphertexts[1].value.type
+                for x in ciphertexts[1:]
+            )
+            or batched is None
+            and any(
+                type(y) is not _Value
+                or y.value.type != plaintexts[1].value.type
+                for y in plaintexts[1:]
+            )
+        ):
+            return expanded(result, 1)
+        x, y = ciphertexts[1], row(1)
+        remaining = (
+            tuple((value,) for value in ciphertexts[2:])
+            if batched is not None
+            else tuple(zip(ciphertexts[2:], plaintexts[2:], strict=True))
+        )
+        initial = cast(_Value, result)
+        product = self._emit(
+            "multiply_plaintext", {"ciphertext": x, "plaintext": y}
+        )
+        total = self._emit("add", {"lhs": initial, "rhs": product})
+        multiply = cast(_Value, product).value.owner
+        add = cast(_Value, total).value.owner
+        carried = (
+            type(total) is _Value
+            and isinstance(multiply, Operation)
+            and add is block.last_op
+            and multiply.next_op is add
+            and tuple(add.operands[:2]) == (initial.value, multiply.results[0])
+            and tuple(multiply.operands[:2]) == (x.value, y.value)
+            and add.results[0].type == initial.value.type
+        )
+        if not carried:
+            return expanded(total, 2)
+        shared = tuple(
+            dict.fromkeys(
+                (
+                    *(() if batched is None else (batched.value,)),
+                    *multiply.operands[2:],
+                    *add.operands[2:],
+                )
+            )
+        )
+        columns = (x.value,) if batched is not None else (x.value, y.value)
+        body = Block(
+            arg_types=(
+                IndexType(),
+                *(value.type for value in shared),
+                *(value.type for value in columns),
+                initial.value.type,
+            )
+        )
+        arguments = tuple(body.args)
+        ports = dict(zip(shared, arguments[1 : 1 + len(shared)], strict=True))
+        ports.update(zip(columns, arguments[1 + len(shared) : -1], strict=True))
+        ports[initial.value] = arguments[-1]
+        loop = ckks.RepeatOp(
+            shared,
+            tuple(
+                value.value
+                for term in (
+                    (x,) if batched is not None else (x, y),
+                    *remaining,
+                )
+                for value in term
+            ),
+            (initial.value,),
+            (add.results[0].type,),
+            body,
+            count=count,
+            yield_count=0,
+        )
+        block.insert_op_before(loop, multiply)
+        if batched is not None:
+            # The selected row moves into the body and follows the round index.
+            selection = cast(Operation, y.value.owner)
+            indexed = ckks.SelectBatchOp(
+                ports[batched.value], start=1, index=arguments[0]
+            )
+            indexed.attributes.update(selection.attributes)
+            body.add_op(indexed)
+            ports[y.value] = Rewriter.replace_value_with_new_type(
+                indexed.result, y.value.type
+            )
+        for operation in (multiply, add):
+            block.detach_op(operation)
+            operation.operands = tuple(
+                ports.get(value, value) for value in operation.operands
+            )
+            body.add_op(operation)
+        if batched is not None:
+            Rewriter.erase_op(selection)
+        body.add_op(ckks.RepeatYieldOp((add.results[0],)))
+        return _Value(loop.outputs[0], self.capture)
+
+    def _plan_key(
+        self, name: str, p: dict[str, object]
+    ) -> tuple[object, ...] | None:
+        if name not in _PLANNED:
+            return None
+        key: list[object] = [name]
+        for field, value in p.items():
+            if type(value) is _Value:
+                if value.__dict__.get("_implicit_value") is not None:
+                    return None
+                key.append((field, self.capture.type_key(value.value.type)))
+            elif value is None or type(value) in (bool, int, float, str):
+                key.append((field, type(value).__name__, repr(value)))
+            else:
+                return None
+        return tuple(key)
+
+    def _record_plan(
+        self,
+        p: dict[str, object],
+        result: object,
+        before: Operation | None,
+    ) -> _EmissionPlan | None:
+        """Describe an emission that added generated material references and one operation."""
+        block = self.capture.block
+        if type(result) is not _Value:
+            return None
+        operation = result.value.owner
+        if operation is not block.last_op or len(operation.results) != 1:
+            return None
+        added = block.first_op if before is None else before.next_op
+        while added is not operation:
+            if not isinstance(added, core.MaterialRefOp):
+                return None
+            added = added.next_op
+        values = [item.value for item in p.values() if type(item) is _Value]
+        operands = tuple(operation.operands)
+        if len(operands) < len(values) or any(
+            operand is not value for operand, value in zip(operands, values)
+        ):
+            return None
+        generated = operands[len(values) :]
+        if any(
+            not isinstance(value.owner, core.MaterialRefOp)
+            for value in generated
+        ):
+            return None
+        provenance = self.capture.provenance
+        return _EmissionPlan(
+            type(operation),
+            operation.results[0].type,
+            dict(operation.attributes),
+            dict(operation.properties),
+            generated,
+            dict(provenance.options.get(operation, {}))
+            if provenance is not None
+            else {},
+        )
+
     def _emit(self, name: str, p: dict[str, object]) -> object:
+        key = self._plan_key(name, p)
+        if key is None:
+            return self._emit_operation(name, p)
+        c = self.capture
+        plan = self.plans.get(key)
+        if plan is None:
+            before = c.block.last_op
+            result = self._emit_operation(name, p)
+            plan = self._record_plan(p, result, before)
+            if plan is not None:
+                self.plans[key] = plan
+            return result
+        operation = plan.op_type.create(
+            operands=(
+                *(item.value for item in p.values() if type(item) is _Value),
+                *plan.generated,
+            ),
+            result_types=(plan.result_type,),
+            attributes=dict(plan.attributes),
+            properties=dict(plan.properties),
+        )
+        if plan.options:
+            c.template_options(operation, **plan.options)
+        c.block.add_op(operation)
+        return _Value(operation.results[0], c)
+
+    def _emit_operation(self, name: str, p: dict[str, object]) -> object:
         c = self.capture
         if name == "plaintext_product_implementation":
             return self.engine.plaintext_product_implementation(
@@ -721,20 +1116,14 @@ class _EngineCalls:
         if name == "sum_plaintext_products":
             ciphertexts = cast(Sequence[_Value], p["ciphertexts"])
             plaintexts = cast(Sequence[_Value], p["plaintexts"])
+            if p.get("round_rows"):
+                first, batched = plaintexts
+                return self._ordered_products(ciphertexts, (first,), batched)
             if not ciphertexts or len(ciphertexts) != len(plaintexts):
                 raise CaptureError(
                     "Weighted sum requires matching nonempty operands"
                 )
-            products = [
-                self._emit(
-                    "multiply_plaintext", {"ciphertext": x, "plaintext": y}
-                )
-                for x, y in zip(ciphertexts, plaintexts, strict=True)
-            ]
-            result = products[0]
-            for item in products[1:]:
-                result = self._emit("add", {"lhs": result, "rhs": item})
-            return result
+            return self._ordered_products(ciphertexts, plaintexts)
         if name == "sum_plaintext_product_groups":
             groups = cast(Sequence[Sequence[_Value]], p["plaintext_groups"])
             if not groups:
@@ -805,7 +1194,7 @@ class _EngineCalls:
                 if to_montgomery
                 else rns.MontgomeryToStandardOp
             )
-            parameters = c.material(
+            parameters = c.generated_material(
                 self.engine._dispatcher_for(
                     torch.device(source.device)
                 ).rns_context.rns_parameters_for_prime_ids(source.prime_ids),
@@ -915,7 +1304,7 @@ class _EngineCalls:
             )
             tables = resources.periodic_encode_operands(period, depth, basis)
             parameters = [
-                c.material(
+                c.generated_material(
                     tensor,
                     core.MessageType(),
                     parameter_description(
@@ -1002,7 +1391,7 @@ class _EngineCalls:
                 else cast(float, p["scale"])
             )
             parameters = tuple(
-                c.material(
+                c.generated_material(
                     tensor,
                     core.MessageType(),
                     parameter_description(
@@ -1057,7 +1446,7 @@ class _EngineCalls:
             parameters = resources.rns_context.rns_parameters_for_prime_ids(
                 rows
             )
-            twice_modulus = c.material(
+            twice_modulus = c.generated_material(
                 parameters[0],
                 core.MessageType(),
                 parameter_description(
@@ -1205,8 +1594,9 @@ class _EngineCalls:
                 }.items()
                 if (attribute := state_attribute(value)) is not None
             }
+            c.generated_attributes(attributes)
             operands = tuple(
-                c.material(
+                c.generated_material(
                     tensor,
                     core.MessageType(),
                     parameter_description(
@@ -1312,7 +1702,7 @@ class _EngineCalls:
                                 source.device,
                             )
                 parameters += tuple(
-                    c.material(
+                    c.generated_material(
                         tensor,
                         core.MessageType(),
                         parameter_description(
@@ -1353,6 +1743,13 @@ class _EngineCalls:
                         ),
                     }
                 )
+            c.generated_attributes(
+                {
+                    name: value
+                    for name, value in attributes.items()
+                    if name.startswith("sum_") or name == "parameter_names"
+                }
+            )
             steps = tuple(
                 0 if key is None else int(key.rotation_step) for _, key in terms
             )
@@ -1424,7 +1821,7 @@ class _EngineCalls:
                 output_domain=domain,
                 attributes=attributes,
             )
-            c.block.add_op(operation)
+            c.emit(operation)
             return [_Value(value, c) for value in operation.results]
         if name == "sum_ciphertexts":
             values = cast(Sequence[object], p["ciphertexts"])
@@ -1503,7 +1900,7 @@ class _EngineCalls:
                     parameters=parameters,
                     attributes=attributes,
                 )
-                c.block.add_op(op)
+                c.emit(op)
                 outputs = [_Value(result, c) for result in op.results]
             results = iter(outputs)
             return [
@@ -1581,11 +1978,7 @@ class _EngineCalls:
                         str(rhs.compression_layout)
                     )
                     if rhs.implicit_data is not None:
-                        operands.append(
-                            rhs.implicit_data.reshape(
-                                *rhs.implicit_data.shape, 1
-                            )
-                        )
+                        operands.append(c.append_unit_axis(rhs.implicit_data))
                     attrs["polynomial_domain"] = StringAttr(
                         source.polynomial_domain
                     )
@@ -1605,11 +1998,7 @@ class _EngineCalls:
                 ):
                     op_type = ckks.MultiplyCompressedPlaintextOp
                     if rhs.implicit_data is not None:
-                        operands.append(
-                            rhs.implicit_data.reshape(
-                                *rhs.implicit_data.shape, 1
-                            )
-                        )
+                        operands.append(c.append_unit_axis(rhs.implicit_data))
                     attrs["compression_layout"] = StringAttr(
                         str(rhs.compression_layout)
                     )
@@ -1685,7 +2074,9 @@ class _EngineCalls:
                 if name == "mod_switch_to_depth"
                 else int(source.depth) + 1
             )
-            return self._mod_switch(source, target)
+            return self._mod_switch(
+                source, target, relative=name == "mod_switch_to_next_depth"
+            )
         elif name == "rescale_to_next_depth":
             config = self.engine.config
             depth = int(source.depth)
@@ -1717,12 +2108,13 @@ class _EngineCalls:
                 }.items()
                 if (attribute := state_attribute(value)) is not None
             }
+            c.generated_attributes(attrs)
             return c.emit(
                 ckks.RescaleOp(
                     source.value,
                     typ,
                     parameters=tuple(
-                        c.material(
+                        c.generated_material(
                             tensor,
                             core.MessageType(),
                             parameter_description(
@@ -1879,7 +2271,7 @@ class _EngineCalls:
             ).rns_context
             parameters = context.rns_parameters_for_prime_ids(source.prime_ids)
             tensor_operands.append(
-                c.material(
+                c.generated_material(
                     parameters,
                     rns.RnsParametersType(),
                     parameter_description(
@@ -1911,7 +2303,7 @@ class _EngineCalls:
                 None if integer else dispatcher.rng.seed,
             )
             tensor_operands.extend(
-                c.material(
+                c.generated_material(
                     tensor,
                     core.MessageType(),
                     parameter_description(
@@ -1933,13 +2325,13 @@ class _EngineCalls:
                 )
                 for index, tensor in enumerate(tensors)
             )
-            attrs.update(
-                {
-                    name: attribute
-                    for name, value in facts.items()
-                    if (attribute := state_attribute(value)) is not None
-                }
-            )
+            generated = {
+                name: attribute
+                for name, value in facts.items()
+                if (attribute := state_attribute(value)) is not None
+            }
+            c.generated_attributes(generated)
+            attrs.update(generated)
         elif op_type in {ckks.ToNttOp, ckks.FromNttOp}:
             source = operands[0]
             context = self.engine._dispatcher_for(
@@ -1949,7 +2341,7 @@ class _EngineCalls:
                 source.prime_ids, inverse=op_type is ckks.FromNttOp
             )
             tensor_operands.extend(
-                c.material(
+                c.generated_material(
                     table,
                     rns.RnsParametersType()
                     if index == 0
@@ -1980,13 +2372,20 @@ class _EngineCalls:
             )
             if self.engine._ntt_backend is not None:
                 attrs["ntt_backend"] = StringAttr(context.ntt_backend_name)
-        return c.emit(
-            op_type.create(
-                operands=tensor_operands,
-                result_types=[typ],
-                attributes=attrs,
-            )
+        operation = op_type.create(
+            operands=tensor_operands,
+            result_types=[typ],
+            attributes=attrs,
         )
+        if name in {"add_scalar", "multiply_scalar"}:
+            c.template_options(
+                operation, scalar_scale_from_input=p["scalar_scale"] is None
+            )
+        if name == "reinterpret_at_scale":
+            c.template_options(
+                operation, max_relative_change=p["max_relative_change"]
+            )
+        return c.emit(operation)
 
     @staticmethod
     def _matching_operands(
@@ -2007,20 +2406,25 @@ class _EngineCalls:
                     f"Operands disagree on {field}; capture does not insert alignment"
                 )
 
-    def _mod_switch(self, source: _Value, depth: int) -> _Value:
+    def _mod_switch(
+        self, source: _Value, depth: int, *, relative: bool = True
+    ) -> _Value:
         if depth < int(source.depth):
             raise CaptureError("ModSwitch cannot restore removed Q rows")
         rows = depth_prime_ids(
             self.engine.config, depth, cast(ModulusBasis, source.modulus_basis)
         )
         typ = _result_type(source, depth=depth, prime_ids=rows)
-        return self.capture.emit(
-            ckks.ModSwitchOp(
-                source.value,
-                typ,
-                attributes={"target_depth": IntegerAttr(depth, 64)},
-            )
+        operation = ckks.ModSwitchOp(
+            source.value,
+            typ,
+            attributes={"target_depth": IntegerAttr(depth, 64)},
         )
+        self.capture.template_options(
+            operation,
+            depth_offset=depth - int(source.depth) if relative else None,
+        )
+        return self.capture.emit(operation)
 
     def _key_layout(
         self, keys: Sequence[object]
@@ -2065,7 +2469,6 @@ class _EngineCalls:
     ) -> tuple[tuple[SSAValue, ...], dict[str, Attribute]]:
         if moddown_rounding not in {"floor", "nearest"}:
             raise CaptureError("moddown_rounding must be 'floor' or 'nearest'")
-        dispatcher = self.engine._dispatcher_for(torch.device(source.device))
         if modup_method not in {"exact", "crt", "normalized_crt"}:
             raise CaptureError(
                 "modup_method must be exact, crt, or normalized_crt"
@@ -2076,6 +2479,23 @@ class _EngineCalls:
                 "moddown_rounding": StringAttr(moddown_rounding),
                 "modup_method": StringAttr(modup_method),
             }
+        memo_key = (
+            str(source.device),
+            int(source.depth),
+            moddown_rounding,
+            modup_method,
+            rescale,
+            rescale_rounding,
+            output_domain,
+            None if layout is None else tuple(layout.items()),
+        )
+        found = self.key_operands.get(memo_key)
+        if found is not None:
+            # The mapping is extended by callers with per-operation attributes.
+            return found[0], dict(found[1])
+        dispatcher = self.engine._dispatcher_for(torch.device(source.device))
+        resources = dispatcher.device_resources
+        self.capture.resources[id(resources)] = resources
         tensors, facts = dispatcher.device_resources.key_switch_operands(
             int(source.depth),
             moddown_rounding=moddown_rounding,
@@ -2094,6 +2514,19 @@ class _EngineCalls:
             }.items()
             if (attribute := state_attribute(value)) is not None
         }
+        self.capture.generated_attributes(
+            {
+                name: value
+                for name, value in attributes.items()
+                if name
+                not in {
+                    "moddown_rounding",
+                    "modup_method",
+                    "ntt_backend",
+                    "galois_generator",
+                }
+            }
+        )
         from fhelium.backend.rns._preparation import (
             table_description,
         )
@@ -2105,7 +2538,7 @@ class _EngineCalls:
             )
             kind = cast(str, description.pop("kind"))
             operands.append(
-                self.capture.material(
+                self.capture.generated_material(
                     tensor,
                     core.MessageType(),
                     parameter_description(
@@ -2113,7 +2546,8 @@ class _EngineCalls:
                     ),
                 )
             )
-        return tuple(operands), attributes
+        self.key_operands[memo_key] = (tuple(operands), attributes)
+        return tuple(operands), dict(attributes)
 
     def _rotate(
         self,
@@ -2175,6 +2609,16 @@ class _Capture:
         material_names: Mapping[str, object] | None = None,
     ) -> None:
         self.workspace = workspace
+        self.active_config = None
+        self.preparation = None
+        self.runtime_inputs = {}
+        self.provenance = (
+            TemplateProvenance(
+                record_origins=workspace.get("local_plan_reuse") is not False
+            )
+            if workspace.get(RECORDING)
+            else None
+        )
         self.block = block
         self.engines: dict[int, _EngineCalls] = {}
         self.functions: dict[types.FunctionType, types.FunctionType] = {}
@@ -2183,16 +2627,60 @@ class _Capture:
         self.descriptions: dict[str, dict[str, object]] = {}
         self.names = named_material_tensors(material_names)
         self.tensor_symbols: dict[int, str] = {}
-        self.material_refs: dict[tuple[int, Attribute], SSAValue] = {}
+        self.material_refs: dict[
+            tuple[int, bool], list[tuple[Attribute, SSAValue]]
+        ] = {}
+        self.metadata: dict[tuple[int, str], tuple[Attribute, object]] = {}
+        # Rotation steps of captured key values; key types record only layout.
+        self.key_steps: dict[SSAValue, int] = {}
+        # Device resources of key-switching captures provide lowering tables.
+        self.resources: dict[int, object] = {}
+        self.type_keys: dict[int, tuple[Attribute, int]] = {}
+        self.type_values: dict[Attribute, int] = {}
+
+    def type_key(self, typ: Attribute) -> int:
+        """Number equal types alike; each type object is hashed by value once."""
+        found = self.type_keys.get(id(typ))
+        if found is None:
+            number = self.type_values.setdefault(typ, len(self.type_values))
+            # The entry retains the type so its identity is not reused.
+            found = self.type_keys[id(typ)] = (typ, number)
+        return found[1]
+
+    def adapter_scope(self):
+        return (
+            self.provenance.adapter()
+            if self.provenance is not None
+            else nullcontext()
+        )
+
+    def template_options(self, operation, **options):
+        if self.provenance is not None:
+            self.provenance.options.setdefault(operation, {}).update(options)
+
+    def generated_attributes(self, attributes):
+        if self.provenance is not None:
+            self.provenance.attributes(
+                {
+                    name: value
+                    for name, value in attributes.items()
+                    if name != "ntt_backend"
+                }
+            )
+
+    def generated_material(self, tensor, typ, description=None):
+        return self.material(tensor, typ, description, generated=True)
 
     def material(
         self,
         tensor: torch.Tensor,
         typ: OpenStateType,
         description: Mapping[str, object] | None = None,
+        *,
+        generated: bool = False,
     ) -> SSAValue:
         typ = typ.with_state(state_attributes(tensor))
-        identity = (id(tensor), typ)
+        references = self.material_refs.setdefault((id(tensor), generated), [])
         symbol = self.tensor_symbols.get(id(tensor))
         if symbol is None:
             symbol = self.names.get(id(tensor), f"tensor{len(self.materials)}")
@@ -2216,14 +2704,44 @@ class _Capture:
                     else {}
                 ),
             }
-        if identity in self.material_refs:
-            return self.material_refs[identity]
+        for prior_type, value in references:
+            if prior_type == typ:
+                return value
         reference = core.MaterialRefOp(typ, symbol=symbol)
         self.block.add_op(reference)
-        self.material_refs[identity] = reference.value
+        if self.preparation is not None and symbol in self.preparation.symbols:
+            self.template_options(reference, preparation_output=symbol)
+            view = self.preparation.views.get(
+                symbol,
+                {
+                    "owner": symbol,
+                    "offset": 0,
+                    "shape": list(tensor.shape),
+                    "strides": list(tensor.stride()),
+                },
+            )
+            reference.attributes["fhelium.material_view"] = StringAttr(
+                json.dumps(view)
+            )
+        references.append((typ, reference.value))
+        if generated and self.provenance is not None:
+            self.provenance.generated_values.add(reference.value)
         return reference.value
 
     def emit(self, operation: Operation) -> _Value:
+        if self.provenance is not None:
+            from .._template_rules import RULES, result_types
+            from fhelium.config import CkksConfig
+
+            if type(operation) in RULES:
+                record = {"options": self.provenance.options.get(operation, {})}
+                workspace = {CkksConfig: self.active_config}
+                for result, typ in zip(
+                    tuple(operation.results),
+                    result_types(operation, record, workspace),
+                    strict=True,
+                ):
+                    Rewriter.replace_value_with_new_type(result, typ)
         self.block.add_op(operation)
         return _Value(operation.results[0], self)
 
@@ -2243,8 +2761,6 @@ class _Capture:
         if key is not None:
             raise CaptureError(f"{role} requires an evaluation key")
         typ = ckks.EvaluationKeyType()
-        if step is not None:
-            typ = typ.with_state({"rotation_step": IntegerAttr(step, 64)})
         symbol = f"{role}_key_{len(tuple(self.block.ops))}"
         reference = core.MaterialRefOp(typ, symbol=symbol)
         self.block.add_op(reference)
@@ -2259,11 +2775,74 @@ class _Capture:
         }
         return reference.value
 
+    def unwrapped_key(self, value):
+        if isinstance(value, _EngineCalls):
+            return value.engine
+        if isinstance(value, tuple):
+            return tuple(self.unwrapped_key(item) for item in value)
+        return unwrap(value)
+
+    def external(self, value, getter):
+        if self.preparation is not None and isinstance(
+            value, (torch.Tensor, Plaintext, CompressedPlaintext)
+        ):
+            return self.preparation.leaf(value, getter)
+        return self.substitute(value)
+
+    def runtime(self, value):
+        """Export real preparation values when ciphertext dataflow consumes them."""
+        if self.preparation is not None and isinstance(
+            value, (torch.Tensor, Plaintext, CompressedPlaintext)
+        ):
+            original = self.runtime_inputs.get(id(value))
+            if original is not None:
+                return original
+            tensor = value if isinstance(value, torch.Tensor) else value.data
+            if tensor is None:
+                raise CaptureError(
+                    "Encode slot plaintexts before ciphertext consumption"
+                )
+            self.preparation.leaf(value)
+            if not self.preparation.placeholder(tensor):
+                self.preparation.export(tensor)
+            result = _Value(self.material(tensor, value_type(value)), self)
+            if (
+                isinstance(value, CompressedPlaintext)
+                and value.implicit_data is not None
+            ):
+                if not self.preparation.placeholder(value.implicit_data):
+                    self.preparation.export(value.implicit_data)
+                result._implicit_value = _Value(
+                    self.material(value.implicit_data, core.MessageType()), self
+                )
+                if self.provenance is not None:
+                    self.provenance.implicit_owners[
+                        result._implicit_value.value
+                    ] = result.value
+            return result
+        if isinstance(value, (tuple, list)):
+            return type(value)(self.runtime(item) for item in value)
+        if isinstance(value, dict):
+            return {key: self.runtime(item) for key, item in value.items()}
+        return self.substitute(value)
+
     def substitute(self, value: object) -> object:
         from .._callable import CompiledCallable
 
         if isinstance(value, (_Value, StaticObject, _EngineCalls)):
             return value
+        if self.preparation is not None:
+            if value is torch:
+                return self.preparation.torch
+            if value is torch.tensor or value is torch.as_tensor:
+                name = "tensor" if value is torch.tensor else "as_tensor"
+                return lambda *args, **kwargs: self.preparation.factory(
+                    name, args, kwargs
+                )
+            if isinstance(
+                value, (torch.Tensor, Plaintext, CompressedPlaintext)
+            ):
+                return self.preparation.leaf(value)
         if isinstance(value, CompiledCallable):
             if isinstance(value._source, Compilation):
                 raise CaptureError(
@@ -2296,6 +2875,10 @@ class _Capture:
                 result._implicit_value = _Value(
                     self.material(value.implicit_data, core.MessageType()), self
                 )
+                if self.provenance is not None:
+                    self.provenance.implicit_owners[
+                        result._implicit_value.value
+                    ] = result.value
             return result
         if isinstance(value, KeySwitchKey):
             return value
@@ -2315,13 +2898,25 @@ class _Capture:
             return lambda obj: id(
                 obj.engine if isinstance(obj, _EngineCalls) else unwrap(obj)
             )
+        if value is isinstance:
+
+            def static_isinstance(obj, classes):
+                obj = (
+                    obj.engine if isinstance(obj, _EngineCalls) else unwrap(obj)
+                )
+                return isinstance(obj, classes) or (
+                    isinstance(obj, _Value)
+                    and issubclass(obj._python_class(), classes)
+                )
+
+            return static_isinstance
         if value is type:
 
             def static_type(*args, **kwargs):
                 if len(args) == 1 and not kwargs:
                     obj = args[0]
                     if isinstance(obj, _Value):
-                        return obj.__class__
+                        return obj._python_class()
                     return type(
                         obj.engine
                         if isinstance(obj, _EngineCalls)
@@ -2381,7 +2976,52 @@ class _Capture:
     def numeric_call(self, function, args, kwargs):
         from ._tensor_capture import numeric_call
 
-        return numeric_call(self, function, args, kwargs)
+        origin = (
+            self.provenance.emission(sys._getframe(2), "TensorCall")
+            if self.provenance is not None
+            and self.provenance.record_origins
+            and not self.provenance.internal
+            else None
+        )
+        before = self.block.last_op
+        args, kwargs = self.runtime(args), self.runtime(kwargs)
+        with (
+            self.preparation.pause()
+            if self.preparation is not None
+            else nullcontext()
+        ):
+            result = numeric_call(self, function, args, kwargs)
+        if self.provenance is not None:
+            from fhelium.ir.dialects import semantic
+            from fhelium.ir.dialects.torch import TensorCallOp
+
+            operation = (
+                self.block.first_op if before is None else before.next_op
+            )
+            if self.provenance.record_origins:
+                self.provenance.record_emission(operation, origin)
+            while operation is not None:
+                if isinstance(
+                    operation, UnrealizedConversionCastOp
+                ) and isinstance(
+                    operation.results[0].type,
+                    (semantic.SecretType, semantic.PublicType),
+                ):
+                    self.template_options(operation, cast="semantic_role")
+                elif isinstance(operation, TensorCallOp):
+                    self.template_options(
+                        operation,
+                        tensor_call="internal_unclassified"
+                        if self.provenance.internal
+                        else "registered",
+                    )
+                operation = operation.next_op
+        return result
+
+    def append_unit_axis(self, value):
+        result = value.reshape(*value.shape, 1)
+        self.template_options(result.value.owner, view="append_unit_axis")
+        return result
 
     def function(self, function: types.FunctionType) -> types.FunctionType:
         if inspect.iscoroutinefunction(function) or inspect.isasyncgenfunction(
@@ -2392,6 +3032,10 @@ class _Capture:
             )
         if function in self.functions:
             return self.functions[function]
+        if self.provenance is not None and self.provenance.record_origins:
+            self.provenance.register_code(
+                function.__code__, function.__module__
+            )
         globals_ = dict(function.__globals__)
         closure = tuple(
             types.CellType(cell.cell_contents)
@@ -2432,13 +3076,21 @@ class _Capture:
 
         global_names = global_reads(function.__code__)
         for name in global_names:
-            if name in {'id', 'type'} and name not in globals_:
-                globals_[name] = self.substitute(id if name == 'id' else type)
+            if name in {'id', 'type', 'isinstance'} and name not in globals_:
+                globals_[name] = self.substitute(
+                    {'id': id, 'type': type, 'isinstance': isinstance}[name]
+                )
                 continue
             if name in globals_:
-                globals_[name] = self.substitute(globals_[name])
-        for cell in closure:
-            cell.cell_contents = self.substitute(cell.cell_contents)
+                globals_[name] = self.external(
+                    globals_[name], lambda name=name: function.__globals__[name]
+                )
+        for original, cell in zip(
+            function.__closure__ or (), closure, strict=True
+        ):
+            cell.cell_contents = self.external(
+                cell.cell_contents, lambda cell=original: cell.cell_contents
+            )
         return copied
 
 
@@ -2543,19 +3195,50 @@ def capture_eager(
     block = Block(arg_types=[value_type(value) for value in physical.values()])
     work = CompileWorkspace() if workspace is None else workspace
     capture = _Capture(work, block, material_names)
+    if work.get("binding_time_split", True) and any(
+        isinstance(value, Ciphertext) for value in ordered.values()
+    ):
+        from ._preparation_capture import PreparationRecorder
+
+        capture.preparation = PreparationRecorder(capture, ordered)
     symbolic = {}
     for name, argument in zip(physical, block.args, strict=True):
         argument.name_hint = name
         symbolic[name] = _Value(argument, capture)
+        if isinstance(physical[name], RotationKey):
+            capture.key_steps[argument] = physical[name].rotation_step
     for name in runtime:
         value = symbolic[name]
+        capture.runtime_inputs[id(runtime[name])] = value
         if name in implicit_names:
             value._implicit_value = symbolic[implicit_names[name]]
-        bound.arguments[name] = value
+            if capture.provenance is not None:
+                capture.provenance.implicit_owners[
+                    value._implicit_value.value
+                ] = value.value
+        if capture.preparation is None or not isinstance(
+            runtime[name], (torch.Tensor, Plaintext, CompressedPlaintext)
+        ):
+            bound.arguments[name] = value
     try:
-        output = cast(Callable[..., object], capture.substitute(function))(
-            *bound.args, **bound.kwargs
-        )
+        if capture.preparation is None:
+            output = cast(Callable[..., object], capture.substitute(function))(
+                *bound.args, **bound.kwargs
+            )
+        else:
+            output_holder = []
+
+            def evaluate():
+                output_holder.append(
+                    capture.runtime(
+                        cast(
+                            Callable[..., object], capture.substitute(function)
+                        )(*bound.args, **bound.kwargs)
+                    )
+                )
+
+            capture.preparation.run(evaluate)
+            output = output_holder[0]
     except CaptureError:
         raise
     except Exception as error:
@@ -2585,12 +3268,17 @@ def capture_eager(
                 }
                 data = describe(value.data)
                 implicit = describe(value.implicit_data)
-                return {
+                descriptor = {
                     "kind": "compressed_plaintext",
                     "data": data,
                     "implicit": implicit,
                     "fields": fields,
                 }
+                if capture.provenance is not None:
+                    capture.provenance.output_values.append(
+                        (descriptor, value.value)
+                    )
+                return descriptor
             results.append(value.value)
             return {"kind": "ssa", "result": len(results) - 1}
         if isinstance(value, (tuple, list)):
@@ -2612,7 +3300,26 @@ def capture_eager(
             "Captured outputs must be CKKS values, scalar literals, or tuple/list/dict containers"
         )
 
-    descriptor = describe(output)
+    if capture.preparation is not None:
+        first = block.first_op
+        declarations = {
+            *capture.preparation.symbols,
+            *(
+                source["symbol"]
+                for source in capture.preparation.inputs
+                if source["kind"] == "material"
+            ),
+        }
+        for operation in tuple(block.ops):
+            if (
+                isinstance(operation, core.MaterialRefOp)
+                and operation.symbol.data in declarations
+                and operation is not first
+            ):
+                block.detach_op(operation)
+                block.insert_op_before(operation, first)
+    with capture.adapter_scope():
+        descriptor = describe(output)
     block.add_op(ReturnOp(*results))
     program = Program.from_function(
         block,
@@ -2629,9 +3336,46 @@ def capture_eager(
     work[CapturedCallable] = CapturedCallable(
         function, signature, MappingProxyType(specs), ""
     )
-    for symbol, description in capture.descriptions.items():
-        program.set_material_description(symbol, description)
-    return Compilation(program, work, material_bindings=capture.materials)
+    if capture.descriptions:
+        program.set_material_descriptions(capture.descriptions)
+    if capture.provenance is not None:
+        work[METADATA] = capture.provenance.finish(program, physical)
+        work[METADATA]["static_arguments"] = {
+            name: json_value(value)
+            for name, value in ordered.items()
+            if name not in runtime
+        }
+        work[METADATA]["static_argument_types"] = {
+            name: type(value).__name__
+            for name, value in ordered.items()
+            if name not in runtime
+        }
+        from .._origins import OperationOrigins
+
+        if capture.provenance.record_origins:
+            work[OperationOrigins] = OperationOrigins(
+                program.module, capture.provenance.origins
+            )
+    if capture.resources:
+        work[CAPTURED_RESOURCES] = tuple(capture.resources.values())
+    compilation = Compilation(
+        program, work, material_bindings=capture.materials
+    )
+    # The Compilation owns the bindings. Capture adapters must not retain an
+    # earlier material generation through their Python closure cycles.
+    capture.materials = {}
+    capture.functions.clear()
+    capture.objects.clear()
+    capture.engines.clear()
+    capture.runtime_inputs.clear()
+    capture.preparation = None
+    from .._repeat_template import fold_capture
+
+    fold_capture(compilation)
+    return compilation
 
 
-__all__ = ["capture_eager"]
+CAPTURED_RESOURCES = "captured_resources"
+
+
+__all__ = ["CAPTURED_RESOURCES", "capture_eager"]

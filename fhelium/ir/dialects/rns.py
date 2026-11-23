@@ -1289,18 +1289,21 @@ class ModDownNttQpToQOp(IRDLOperation):
 class CoefficientAutomorphismOp(IRDLOperation):
     r"""Apply the negacyclic ring automorphism $\sigma_g$.
 
-    For odd ``galois_element`` $g$, $\sigma_g$ substitutes
-    $X\mapsto X^g$ in $R_q=\mathbb{Z}_q[X]/(X^N+1)$.  A coefficient
-    $a_jX^j$ moves to index $gj\bmod N$ and changes sign when reduction of
-    $gj$ modulo $2N$ crosses $N$.  The same permutation is applied to
-    every component and prime row.  Depth, scale, basis, and residue form remain
-    unchanged."""
+    For odd $g$, $\sigma_g$ substitutes $X\mapsto X^g$ in
+    $R_q=\mathbb{Z}_q[X]/(X^N+1)$.  A coefficient $a_jX^j$ moves to index
+    $gj\bmod N$ and changes sign when reduction of $gj$ modulo $2N$ crosses
+    $N$.  The permutation is data: destination coefficient $j$ reads
+    ``source_indices[j]`` (int32, length $N$) and multiplies it by
+    ``source_sign[j]`` (int8, $\pm1$); ``parameters`` holds $2q_i$ per row.
+    The same permutation is applied to every component and prime row.
+    Depth, scale, basis, and residue form remain unchanged."""
 
     name = "fhelium_rns.coefficient_automorphism"
     value = operand_def(RnsBundleType)
     parameters = operand_def()
+    source_indices = operand_def()
+    source_sign = operand_def()
     result = result_def(RnsBundleType)
-    galois_element = attr_def(IntegerAttr)
     traits = traits_def(Pure())
 
     def dependencies(self) -> OperationDependencies:
@@ -1321,25 +1324,14 @@ class CoefficientAutomorphismOp(IRDLOperation):
         self,
         value: SSAValue | Operation,
         parameters: SSAValue | Operation,
+        source_indices: SSAValue | Operation,
+        source_sign: SSAValue | Operation,
         result_type: Attribute,
-        *,
-        galois_element: int | IntegerAttr,
     ) -> None:
         super().__init__(
-            operands=[value, parameters],
+            operands=[value, parameters, source_indices, source_sign],
             result_types=[result_type],
-            attributes={
-                "galois_element": (
-                    IntegerAttr(galois_element, 64)
-                    if isinstance(galois_element, int)
-                    else galois_element
-                )
-            },
         )
-
-    def verify_(self) -> None:
-        if int(self.galois_element.value.data) % 2 == 0:
-            raise VerifyException("RNS Galois element must be odd")
 
 
 class _ResidueConversionOp(IRDLOperation):
@@ -1741,7 +1733,6 @@ _RNS_ATTRIBUTES: dict[type[Operation], tuple[str, ...]] = {
         "ntt_radix",
         "ntt_table_layout",
     ),
-    CoefficientAutomorphismOp: ("galois_element",),
     RestrictDepthOp: ("target_depth",),
     ReinterpretScaleOp: ("scale",),
 }
