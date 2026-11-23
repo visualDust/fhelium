@@ -972,7 +972,7 @@ def _provider_tensor(
         return parameters[0] if kind == "twice_modulus" else parameters
     if kind == "rounding_state":
         return (
-            provider.rng.rounding_state
+            provider.rng.seed
             if isinstance(provider, CkksDeviceResources)
             else None
         )

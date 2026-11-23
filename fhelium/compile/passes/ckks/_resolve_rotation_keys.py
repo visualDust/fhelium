@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 from xdsl.dialects.builtin import IntegerAttr, StringAttr
 
+from fhelium.backend.ckks.rotation._galois import rotation_galois_element
 from fhelium.config import CkksConfig
 from fhelium.ir.dialects import ckks, core, logical
 
@@ -140,15 +141,10 @@ class ResolveRotationKeyOperandsPass:
                     "rotation_step": IntegerAttr(normalized_step, 64),
                     "ring_dimension": IntegerAttr(2 * slot_count, 64),
                     "galois_element": IntegerAttr(
-                        pow(
+                        rotation_galois_element(
+                            2 * slot_count,
+                            normalized_step,
                             config.galois_generator,
-                            (
-                                -normalized_step
-                                if config.galois_generator == 5
-                                else normalized_step
-                            )
-                            % (2 * slot_count),
-                            4 * slot_count,
                         ),
                         64,
                     ),

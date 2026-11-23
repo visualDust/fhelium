@@ -1,26 +1,26 @@
 # Encoding, randomness, and key construction
 
-The CKKS codec maps ordered complex slots to scaled integer coefficients and reconstructs slots after decryption. Cryptographic data provision constructs secret, public, and evaluation keys, while execution consumes their Tensor payloads and live randomness. These mechanisms are implemented in `backend/ckks/codec/`, `backend/ckks/crypto/`, and `rng/`.
+The CKKS codec maps ordered complex slots to scaled integer coefficients and reconstructs slots after decryption. Cryptographic data provision constructs secret, public, and evaluation keys, while execution consumes their Tensor payloads and live randomness. These mechanisms are implemented by the libfhelium functions of `fhelium/ckks_operations.h`, called from `backend/ckks/codec/` and `backend/ckks/crypto/`, with randomness from `backend/random/`.
 
 ## How does the embedding become integer data?
 
-For ring dimension $N$, a dense message has a final slot axis of length at most $N/2$ and arbitrary leading batch axes. `_embedding.make_slot_tensor` forms the full slot axis. Generator-dependent permutation tables select generator-3 or generator-5 ordering and embed the slots into conjugate-symmetric length-$N$ data $z$.
+For ring dimension $N$, a dense message has a final slot axis of length at most $N/2$ and arbitrary leading batch axes. `fhelium::ckks::encode` pads the slot axis to $N/2$. Generator-dependent permutation tables select generator-3 or generator-5 ordering and embed the slots into conjugate-symmetric length-$N$ data $z$.
 
-`inverse_embed_slots` computes real coefficients using the supplied permutation and twister tables:
+Encoding computes real coefficients using the supplied permutation and twister tables:
 
 $$
 a_j=\operatorname{Re}\left(\operatorname{FFT}_{\mathrm{forward\ norm}}(z)_j e^{-\pi i j/N}\right).
 $$
 
-Encoding stochastically quantizes $\Delta a_j$ using a live rounding-state Tensor. For $|x|=k+f$ with integer $k$ and $0\le f<1$, the implementation adds one to $k$ when a 32-bit random word is below $\lfloor 2^{32}f\rfloor$, then restores the sign of $x$. The rounding stream advances during execution.
+Encoding stochastically quantizes $\Delta a_j$ using the device's random-stream seed Tensor as its rounding-state operand. For $|x|=k+f$ with integer $k$ and $0\le f<1$, the implementation adds one to $k$ when a 32-bit random word is below $\lfloor 2^{32}f\rfloor$, then restores the sign of $x$. Coefficient $j$ reads key-stream word $j$ of the current nonce, and the caller advances the nonce on the device after each call.
 
-`embed_coefficients` multiplies by the inverse twister, applies the corresponding inverse FFT, and restores slot order. `decode_slots` divides the resulting values by the actual scale $\Delta$. The codec's use of Torch FFT with `norm="forward"` is part of the implemented normalization; changing it requires compensating the embedding equations.
+`fhelium::ckks::decode` multiplies by the inverse twister, applies the corresponding inverse FFT, restores slot order, and divides the resulting values by the actual scale $\Delta$. The codec's use of Torch FFT with `norm="forward"` is part of the implemented normalization; changing it requires compensating the embedding equations.
 
-`_codec.py` composes these numerical functions, `_implementation.py` supplies registered encode/decode and integer-to-RNS operations, and `_periodic.py` handles compact periodic plaintext preparation. The permutation, twister, and rounding-state arrays are ordinary material operands.
+`_embedding.py` caches the permutation and twister tables, `_implementation.py` registers the encode, decode and integer-to-RNS operations, and `_periodic.py` registers compact periodic plaintext preparation. The permutation, twister, and rounding-state arrays are ordinary material operands.
 
 ## How do coefficients enter and leave the residue basis?
 
-Integer-to-RNS conversion reduces an integer coefficient into the ordered supplied prime rows. Centered lifting must retain the sign convention before reduction. After decryption, `_decryption.py` reconstructs the centered coefficient class modulo the full active Q product using mixed-radix data and half-product comparison. Multiple prime rows cannot generally be replaced by reading one convenient residue.
+Integer-to-RNS conversion (`fhelium::rns::lift_integer_coefficients`) reduces each signed int32 or int64 coefficient into the ordered supplied prime rows in one elementwise kernel: row $j$ receives $x+q_j$ when $-q_j\le x<q_j$ and $x \bmod q_j$ otherwise, a standard residue in $[0,2q_j)$ in both cases. The selection is made per element on the device, so encoding, encryption and scalar arithmetic do not read coefficient bounds back to the host. After decryption, `fhelium::ckks::decrypt` reconstructs the centered coefficient class modulo the full active Q product using mixed-radix data and half-product comparison. Multiple prime rows cannot generally be replaced by reading one convenient residue.
 
 The mathematical message must remain within the intended centered range modulo Q; otherwise modular wrap changes the recovered value. FFT approximation, stochastic quantization, encryption noise, key switching, and rescale contribute different errors. Decode with the ciphertext's actual scale rather than an assumed prime width or configuration default.
 
@@ -28,15 +28,15 @@ The [compressed plaintext article](compressed-plaintext-internals.md) explains e
 
 ## Which random streams are used?
 
-`rng.Csprng` configures CKKS sampling through the `triton-csprng` package's ChaCha20 generators and RNS stream interface. It supplies coefficient counts, channel counts, repeated channels, integral dtype, and discrete-Gaussian standard deviation for CPU/CUDA streams.
+`fhelium.backend.random.stream.RandomStream` holds one device's int64 seed Tensor of shape `[5]`: four ChaCha20 key words and the nonce. Its samplers call the libfhelium `fhelium_random_ops` operators, which read a stateless coordinate-addressed key stream: sample $i$ of a call uses words $i \cdot w$ through $i \cdot w + w - 1$ of the stream selected by the current nonce, and the stream then increments the nonce in place on the device. Residue outputs take a `[parameter, limb]` RNS parameter table and return `[*batch, limb, coefficient]` residues modulo every row; without the table, samplers return centered int64 coefficients. The stream is bound as the `ckks-random-stream` Backend resource, and its seed Tensor is the `rounding_state` material of captured Programs.
 
-Secret-key generation samples ternary coefficients. Public-key generation samples uniform components and Gaussian error. Encryption samples a zero-mean ZO(0.5) masking polynomial and Gaussian errors. Encoding consumes its mutable rounding-state Tensor. These uses have distinct distributions and must retain their intended stream advancement.
+Secret-key generation samples ternary coefficients with nonzero probability 2/3, or a fixed-weight support from the smallest 127-bit labels when a Hamming weight is supplied. Public-key generation samples Gaussian error and then uniform residues; each key-switching digit samples one such public key. Encryption samples $e_0$, the zero-mean ZO(0.5) mask $v$, and $e_1$ in this order: $e_0$ joins the integer plaintext before lifting, $v$ is sampled directly as residues, and $e_1$ is added to the second component in place. Encoding consumes the same stream through stochastic rounding. Each call advances the nonce once.
 
 Use fixed seeds and nonces for reproducible experiments. Cryptographic use requires suitable seed entropy and unique nonces for independent streams under the same key. Reusing a seed/nonce or restoring the same stream state can repeat samples. CKKS security estimates depend on ring dimension, modulus chain, secret distribution, and error parameters.
 
 ## What relation does each key represent?
 
-`KeyGenerationResource` groups supplied RNS/NTT contexts, sampler, and numerical construction tables. `CkksKeyGenerator` exposes key construction as data provision and returns public key value classes.
+libfhelium constructs every key (`fhelium/ckks_keys.h`): `create_secret_key`, `prepare_secret_key`, `create_public_key`, `create_key_switch_key`, `create_relinearization_key`, `create_galois_key` for rotation and conjugation keys, and `convert_secret_key` for the change of RNS basis that encapsulation keys use. Each function samples its components at consecutive nonces of the stream without modifying it, and the caller advances the stream by the number of sampled components. The default digit partition comes from `key_digit_sizes` (`fhelium/ckks_parameters.h`), which groups consecutive Q primes while their product stays below $P$. `KeyGenerationResource` groups the device's RNS/NTT contexts and random stream and provides the named tables of these functions. `CkksKeyGenerator` checks key states, selects the key rows and digits, calls the native function, and returns the public key value classes.
 
 | Value | Relation or purpose | Stored Tensor axes |
 | --- | --- | --- |

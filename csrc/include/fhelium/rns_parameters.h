@@ -6,7 +6,7 @@
 //! `rns_params` is an integral Tensor of shape `[RNS_PARAMETER_COUNT, limb]`
 //! with the residue dtype of its operands, on their device. Column $j$
 //! describes the prime $q_j$ of operand limb $j$. Every $q_j$ is odd and
-//! satisfies $4q_j < R$ for the Montgomery radix $R = 2^w$, where $w = 30$ for
+//! satisfies $4q_j < R$ for the Montgomery radix $R = 2^w$, where $w = 32$ for
 //! int32 residues and $w = 62$ for int64 residues. Rows that split a word use
 //! $h = w/2$.
 

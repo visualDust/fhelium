@@ -2,7 +2,7 @@
 
 FHElium provides several mathematically equivalent Number Theoretic Transform (NTT) implementations. Their relative latency depends on the GPU, ring dimension, number of active modulus primes, and surrounding CKKS operation. Use the default for a first evaluator. Compare alternatives only after a correct, representative workload exists on the target GPU.
 
-The current recommendation runner is an internal diagnostic path that uses the retained `fhelium.legacy.engine.CkksEngine` implementation. It can screen backend policies, but its measurements are not measurements of the current `fhelium.eager.Engine`. Confirm a selected backend with the current Eager evaluator and the production workload before deployment.
+The recommendation runner times NTT context transforms and `fhelium.eager.Engine` CKKS methods. Confirm a selected backend with the production workload before deployment.
 
 Apply an NTT policy through the Eager Engine option or Compile implementation-selection passes. It changes transform execution while preserving the mathematical NTT and CKKS parameter set; see [operation implementation selection](select-operation-implementation.md).
 
@@ -15,7 +15,7 @@ An **NTT backend** is one implementation of the same forward and inverse Number 
 The CLI calls each fixed list of measured operations a `suite`:
 
 - `--suite kernel` measures prepared forward NTT, inverse NTT, and an NTT round trip. Despite the CLI name, this test does not report one CUDA kernel launch. It reports complete NTT method calls while excluding engine and input construction. This page calls it the **NTT-only test**.
-- `--suite ckks-primitive` measures complete method calls in the retained legacy evaluator: encryption, decryption, multiplication followed by relinearization (reducing a three-component multiplication result to two components), one rotation, and four rotations that reuse one ciphertext decomposition (grouped hoisting). This page calls it the **complete-CKKS test**.
+- `--suite ckks-primitive` measures complete `fhelium.eager.Engine` method calls: encryption, decryption, multiplication followed by relinearization (reducing a three-component multiplication result to two components), one rotation, and four rotations that reuse one ciphertext decomposition (grouped hoisting). This page calls it the **complete-CKKS test**.
 
 The first test answers “which transform implementations are clearly slower?” The second answers “which backend gives the best result after NTT work is combined with the other work inside common CKKS operations?”
 

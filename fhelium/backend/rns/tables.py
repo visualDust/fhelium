@@ -3,13 +3,14 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from math import prod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fhelium.backend.ntt.context import NttContext
 from typing import Mapping
 import torch
+from fhelium.native.wrapper import rns_ops
+
 from .context import RnsContext
 
 
@@ -28,40 +29,14 @@ def centered_basis_extension_tables(
     """
     if source.dtype != target.dtype or source.device != target.device:
         raise ValueError("Basis-extension contexts must share dtype and device")
-    source_moduli = tuple(source.config.moduli[i] for i in source_prime_ids)
-    target_moduli = tuple(target.config.moduli[i] for i in target_prime_ids)
-    width = len(source_moduli)
-    if not width or not target_moduli:
+    source_moduli = [source.config.moduli[i] for i in source_prime_ids]
+    target_moduli = [target.config.moduli[i] for i in target_prime_ids]
+    if not source_moduli or not target_moduli:
         raise ValueError("Basis extension requires nonempty bases")
     dtype, device = source.dtype, source.device
-    radix = source.montgomery_parameters.R
-    normalizers, propagation, extension = [], [], []
-    prefix = 1
-    for row, modulus in enumerate(source_moduli[:-1]):
-        prefix *= modulus
-        normalizers.append(
-            pow(prefix, -1, source_moduli[row + 1])
-            * radix
-            % source_moduli[row + 1]
-        )
-        propagation.append(
-            [
-                prefix * radix % q if column >= row + 2 else 0
-                for column, q in enumerate(source_moduli)
-            ]
-        )
-        extension.append(
-            [
-                prefix * target.montgomery_parameters.montgomery_r2[i] % q
-                for i, q in zip(target_prime_ids, target_moduli, strict=True)
-            ]
-        )
-    product = prod(source_moduli)
-    remainder = product // 2
-    half_digits = []
-    for modulus in source_moduli:
-        remainder, digit = divmod(remainder, modulus)
-        half_digits.append(digit)
+    normalizers, propagation, extension = rns_ops.mixed_radix_tables(
+        source_moduli, target_moduli, dtype
+    )
     source_index = torch.tensor(
         source_prime_ids, dtype=torch.int64, device=device
     )
@@ -81,17 +56,15 @@ def centered_basis_extension_tables(
         "source_hi": hi,
         "source_neg_lo": neg_lo,
         "source_neg_hi": neg_hi,
-        "normalizers": torch.tensor(normalizers, dtype=dtype, device=device),
-        "propagation": torch.tensor(
-            propagation, dtype=dtype, device=device
-        ).reshape(width - 1, width),
-        "extension": torch.tensor(
-            extension, dtype=dtype, device=device
-        ).reshape(width - 1, len(target_moduli)),
-        "half_digits": torch.tensor(half_digits, dtype=dtype, device=device),
-        "source_product": torch.tensor(
-            [product % q for q in target_moduli], dtype=dtype, device=device
+        "normalizers": normalizers.to(device),
+        "propagation": propagation.to(device),
+        "extension": extension.to(device),
+        "half_digits": rns_ops.half_product_digits(source_moduli, dtype).to(
+            device
         ),
+        "source_product": rns_ops.product_residues(
+            source_moduli, target_moduli, 1, False, dtype
+        ).to(device),
         "target_moduli": torch.tensor(
             target_moduli, dtype=dtype, device=device
         ),
@@ -99,31 +72,16 @@ def centered_basis_extension_tables(
 
 
 def rescale_inverse_matrix(rns_context: RnsContext) -> torch.Tensor:
-    montgomery = rns_context.montgomery_parameters
-    rows = []
-    for dropped_id, dropped_prime in enumerate(montgomery.moduli):
-        rows.append(
-            [
-                0
-                if remaining_id == dropped_id
-                else (pow(dropped_prime, -1, remaining_prime) * montgomery.R)
-                % remaining_prime
-                for remaining_id, remaining_prime in enumerate(
-                    montgomery.moduli
-                )
-            ]
-        )
-    return torch.tensor(
-        rows,
-        dtype=rns_context.dtype,
-        device=rns_context.device,
-    )
+    r"""Return the ``[dropped, remaining]`` matrix of $q_d^{-1}R\bmod q_i$."""
+
+    return rns_ops.rescale_inverse_matrix(
+        list(rns_context.config.moduli), rns_context.dtype
+    ).to(rns_context.device)
 
 
 def trailing_quotient_inverses(
     moduli: tuple[int, ...],
     drop_count: int,
-    radix: int,
     *,
     dtype: torch.dtype,
     device: torch.device,
@@ -133,15 +91,9 @@ def trailing_quotient_inverses(
     Row j removes the j-th prime from the end. Only columns before that
     prime participate; unused columns are zero.
     """
-    rows = torch.zeros(
-        (drop_count, len(moduli) - 1), dtype=dtype, device=device
-    )
-    for j, prime in enumerate(reversed(moduli[-drop_count:])):
-        values = [pow(prime, -1, q) * radix % q for q in moduli[: -j - 1]]
-        rows[j, : len(values)] = torch.tensor(
-            values, dtype=dtype, device=device
-        )
-    return rows
+    return rns_ops.trailing_quotient_inverses(
+        list(moduli), drop_count, dtype
+    ).to(device)
 
 
 def moddown_inverse_tables(
@@ -153,7 +105,6 @@ def moddown_inverse_tables(
     base = trailing_quotient_inverses(
         tuple(montgomery.moduli[i] for i in depth0_prime_ids),
         config.num_p_primes,
-        montgomery.R,
         dtype=rns_context.dtype,
         device=rns_context.device,
     )
@@ -165,7 +116,7 @@ def moddown_inverse_tables(
     for depth in range(config.max_depth + 1):
         start = rns_context.basis_parameters(depth).parameter_row_start
         rows = [row[start:] for row in base_rows]
-        packed = torch.empty(
+        packed = torch.zeros(
             (len(rows), max(row.numel() for row in rows)),
             dtype=rns_context.dtype,
             device=rns_context.device,
@@ -254,16 +205,13 @@ class RescaleTables:
             stop = context.qp_row_stop if include_p else context.q_row_stop
             start = stop - row_count
             moduli = context.montgomery_parameters.moduli
-            divisor = prod(moduli[start : start + drop_count])
-            radix = context.montgomery_parameters.R
-            self._prefix_inverses[key] = torch.tensor(
-                [
-                    pow(divisor, -1, q) * radix % q
-                    for q in moduli[start + drop_count : stop]
-                ],
-                dtype=context.dtype,
-                device=context.device,
-            )
+            self._prefix_inverses[key] = rns_ops.product_residues(
+                moduli[start : start + drop_count],
+                moduli[start + drop_count : stop],
+                -1,
+                True,
+                context.dtype,
+            ).to(context.device)
         return self._prefix_inverses[key]
 
     def tensor_operands(
@@ -352,21 +300,32 @@ def moddown_rescale_tables(
     if not remaining:
         raise ValueError("Rescaling must retain Q rows")
     dropped, ordered = (*d, *p), (*remaining, *d, *p)
-    moduli, radix = context.config.moduli, context.montgomery_parameters.R
-    P, D = prod(moduli[i] for i in p), prod(moduli[i] for i in d)
-    H = ((P - 1) // 2 if moddown_rounding == "nearest" else 0) + P * (
-        (D - 1) // 2 if rescale_rounding == "nearest" else 0
-    )
+    moduli = context.config.moduli
+    P = [moduli[i] for i in p]
+    D = [moduli[i] for i in d]
+    dtype, device = context.dtype, context.device
 
     def tensor(values, dtype=None):
         return torch.tensor(
             values,
             dtype=context.dtype if dtype is None else dtype,
-            device=context.device,
+            device=device,
         )
 
-    def broadcast(values):
-        return tensor(values).view(-1, 1).expand(-1, context.config.N)
+    def offset(ids):
+        return (
+            rns_ops.quotient_offset_residues(
+                P,
+                D,
+                moddown_rounding == "nearest",
+                rescale_rounding == "nearest",
+                [moduli[i] for i in ids],
+                dtype,
+            )
+            .to(device)
+            .view(-1, 1)
+            .expand(-1, context.config.N)
+        )
 
     return {
         "joint_remaining_parameters": context.rns_parameters_for_prime_ids(
@@ -378,25 +337,20 @@ def moddown_rescale_tables(
         "joint_ordered_parameters": context.rns_parameters_for_prime_ids(
             ordered
         ),
-        "joint_p_times_base": tensor(tuple(P * radix % moduli[i] for i in q)),
+        "joint_p_times_base": rns_ops.product_residues(
+            P, [moduli[i] for i in q], 1, True, dtype
+        ).to(device),
         "joint_inverses": trailing_quotient_inverses(
             tuple(moduli[i] for i in ordered),
             len(dropped),
-            radix,
-            dtype=context.dtype,
-            device=context.device,
+            dtype=dtype,
+            device=device,
         ),
-        "joint_product_inverse": tensor(
-            tuple(
-                pow(P * D, -1, moduli[i]) * radix % moduli[i] for i in remaining
-            )
-        ),
-        "joint_dropped_offset": broadcast(
-            tuple(H % moduli[i] for i in dropped)
-        ),
-        "joint_remaining_offset": broadcast(
-            tuple(H % moduli[i] for i in remaining)
-        ),
+        "joint_product_inverse": rns_ops.product_residues(
+            P + D, [moduli[i] for i in remaining], -1, True, dtype
+        ).to(device),
+        "joint_dropped_offset": offset(dropped),
+        "joint_remaining_offset": offset(remaining),
         "joint_drop_positions": tensor(
             tuple(q.index(i) for i in d), torch.long
         ),

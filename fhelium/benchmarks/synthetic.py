@@ -1,14 +1,28 @@
-"""Deterministic synthetic inputs shared by benchmark workloads."""
+"""Deterministic synthetic inputs and device-placed engines for benchmark workloads."""
 
 from __future__ import annotations
 
-from fhelium.legacy.engine import CkksEngine
-
 import torch
 
+from fhelium.config import CkksConfig, Preset
+from fhelium.eager import Engine
 
-def ckks_message(engine: CkksEngine, *, phase: float = 0.0) -> torch.Tensor:
-    """Create a real message with magnitudes at most 0.02 in every CKKS slot."""
+
+def ckks_engine(
+    config: CkksConfig | Preset,
+    *,
+    device: torch.device | str,
+    ntt_backend: str | None = None,
+) -> Engine:
+    """Create an Eager Engine whose secret key, and therefore every automatically generated key, resides on ``device``."""
+
+    engine = Engine(config, ntt_backend=ntt_backend)
+    engine.set_secret_key(engine.create_secret_key(device=device))
+    return engine
+
+
+def ckks_message(engine: Engine, *, phase: float = 0.0) -> torch.Tensor:
+    """Create a real CPU message with magnitudes at most 0.02 in every CKKS slot."""
 
     slots = torch.linspace(
         -0.02,

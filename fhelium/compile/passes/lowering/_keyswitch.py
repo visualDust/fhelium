@@ -11,6 +11,7 @@ from xdsl.ir import Attribute, Operation, SSAValue
 from fhelium.config import CkksConfig
 from fhelium.backend.ckks._key_switch_preparation import operation_key_facts
 from fhelium.ir.dialects import ckks, core, ntt, rns
+from fhelium.backend.ckks.rotation._galois import rotation_galois_element
 from fhelium.backend.rns.crt import CRT_OPERANDS
 from fhelium.backend.rns._preparation import (
     rns_names,
@@ -523,18 +524,13 @@ class _KeySwitchLowering:
                     'rotation_step'
                 ],
             ).value.data
-            exponent = (
-                -int(step) if self.config.galois_generator == 5 else int(step)
-            )
             value = self.emit(
                 rns.CoefficientAutomorphismOp(
                     value,
                     self.tensors['q_parameters'],
                     self.polynomial(components=2),
-                    galois_element=pow(
-                        self.config.galois_generator,
-                        exponent % self.config.N,
-                        2 * self.config.N,
+                    galois_element=rotation_galois_element(
+                        self.config.N, int(step), self.config.galois_generator
                     ),
                 )
             )

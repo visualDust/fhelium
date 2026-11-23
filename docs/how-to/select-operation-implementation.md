@@ -59,7 +59,7 @@ engine = Engine(
 )
 ```
 
-This selects the Engine's NTT policy while the actual device is chosen by factories or operands. Keep key material on the operation device. For CUDA alternatives, [screen compatible NTT backends](screen-ntt-backends.md), then [interpret the timing evidence](choose-ntt-backend.md). The retained legacy screening runner measures its own evaluator, so confirm the result with the current execution path being deployed.
+This selects the Engine's NTT policy while the actual device is chosen by factories or operands. Keep key material on the operation device. For CUDA alternatives, [screen compatible NTT backends](screen-ntt-backends.md), then [interpret the timing evidence](choose-ntt-backend.md). Confirm the result with the execution path being deployed.
 
 ## 5. Validate and record the selected execution
 

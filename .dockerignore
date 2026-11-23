@@ -9,7 +9,6 @@ docs/.vitepress/dist
 docs/node_modules
 experiments
 node_modules
-third_party/triton-csprng
 **/__pycache__
 **/*.pyc
 **/*.so

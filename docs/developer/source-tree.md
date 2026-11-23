@@ -6,7 +6,7 @@ This map identifies the current implementation owners for common development tas
 
 ```text
 fhelium/
-  config/          CKKS parameters, prime catalogs, NTT policy, security assessment
+  config/          CKKS parameters and presets, NTT policy, security assessment
   values/          public CKKS values, keys, represented state, Tensor residency
   eager/           immediate Engine execution, key inventory, device-local dispatch
   ir/              xDSL Program, dialects, operation semantics, and analyses
@@ -17,19 +17,18 @@ fhelium/
   backend/         implementation registry, resources, linking, and Program execution
     ckks/           codec, cryptography, CKKS resources, and whole-operation algorithms
     rns/            modulus chains, layouts, parameters, resources, and RNS operations
-    ntt/            plans, tables, resources, and configured NTT executors
+    ntt/            device tables, resources, and configured NTT executors
+    random/         cryptographic random streams over the native samplers
     memory/         registered placement-transfer operations and resources
     distributed/    registered process-group operations and resources
     triton/         selected RNS kernels and fusion-region code generation
   native/          extension loading, ABI diagnostics, CUDA inspection, typed wrappers
   runtime/         topology/memory observation, buffers, signatures, and CUDA Graphs
   distributed/     process setup, typed transport, and public value collectives
-  rng/             cryptographic random-stream interface and implementations
   serialization/   versioned public-value and Compilation persistence
   artifacts/       logical artifact references, generations, and repository policy
   residency/       live-value ownership, accounting, admission, plans, and lifetimes
   experimental/    opt-in bootstrap and multiparty CKKS
-  legacy/          handwritten reference implementations used for differential work
   benchmarks/      benchmark definitions, evidence schemas, and built-in runners
   utils/           narrowly shared algorithms such as rotation decomposition
   _cli/            command-line entry points
@@ -38,7 +37,12 @@ csrc/
   ops/rns/         libfhelium residue arithmetic: public-function routing and CPU/CUDA/HIP implementations
   ops/ntt/         libfhelium NTT: public-function routing and CPU/CUDA/HIP implementations
   ops/ckks/        libfhelium CKKS Tensor primitives: public-function routing and CPU/CUDA/HIP implementations
+  ops/random/      libfhelium ChaCha20 key streams and samplers: public-function routing and CPU/CUDA/HIP implementations
+  ops/operations/  libfhelium whole RNS, NTT, and CKKS operations composed from the primitives
   ops/common/      shared native validation, device routing, and arithmetic helpers
+  parameters/      libfhelium CKKS presets, prime catalog, security table, and key-digit partition
+  tables/          libfhelium host construction of RNS, NTT, and CKKS tables
+  keys/            libfhelium CKKS key generation composed from the primitives
   torchops/        PyTorch schemas and registrations of libfhelium functions (_ops module)
   runtime/         CUDA and HIP device/peer inspection implementations
 examples/          numbered Eager, Compile, execution, distributed, and research workflows; cpp/ C++ library consumer

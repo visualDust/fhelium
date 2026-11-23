@@ -1,11 +1,13 @@
-// Calls libfhelium RNS and CKKS functions from C++ and checks every result
-// against 128-bit integer arithmetic.
+// Calls libfhelium RNS, CKKS, and random functions from C++ and checks every
+// result against host modular arithmetic or a published test vector.
 //
-// Residues use int64 storage with Montgomery radix R = 2^62. The program
+// Residues use int64 storage with Montgomery radix R = 2^62, and
+// fhelium::rns::parameter_table builds the parameter table. The program
 // converts standard residues a and b to Montgomery form, multiplies them,
 // converts the product back, adds two standard residue Tensors, and evaluates
 // the three-component product of two ciphertext-shaped NTT/Montgomery
-// payloads. It runs on CPU and, when available, on the first CUDA device.
+// payloads. A ChaCha20 key-stream block is checked against RFC 8439,
+// Section 2.3.2. It runs on CPU and, when available, on the first CUDA device.
 
 #include <fhelium/fhelium.h>
 #include <torch/torch.h>
@@ -17,62 +19,16 @@
 
 namespace {
 
-using u128 = unsigned __int128;
-
-constexpr int kRadixBits = 62;
-constexpr int kHalfRadixBits = kRadixBits / 2;
-constexpr uint64_t kRadixMask = (uint64_t{1} << kRadixBits) - 1;
-constexpr uint64_t kHalfMask = (uint64_t{1} << kHalfRadixBits) - 1;
-
+// a * b mod q for q < 2^63 by double-and-add.
 uint64_t mul_mod(uint64_t a, uint64_t b, uint64_t q) {
-  return static_cast<uint64_t>(static_cast<u128>(a) * b % q);
-}
-
-uint64_t pow_mod(uint64_t base, uint64_t exponent, uint64_t q) {
-  uint64_t result = 1 % q;
-  for (base %= q; exponent != 0; exponent >>= 1) {
-    if (exponent & 1) {
-      result = mul_mod(result, base, q);
+  uint64_t result = 0;
+  for (a %= q; b != 0; b >>= 1) {
+    if (b & 1) {
+      result = (result + a) % q;
     }
-    base = mul_mod(base, base, q);
+    a = (a + a) % q;
   }
   return result;
-}
-
-// -q^{-1} mod 2^62 by Newton iteration on odd q.
-uint64_t neg_inverse_mod_radix(uint64_t q) {
-  uint64_t inverse = q;
-  for (int i = 0; i < 6; ++i) {
-    inverse *= 2 - q * inverse;
-  }
-  return (0 - inverse) & kRadixMask;
-}
-
-// [RNS_PARAMETER_COUNT, limb] table for odd moduli q_j < 2^60.
-torch::Tensor rns_parameters(const std::vector<uint64_t>& moduli,
-                             int64_t ring_dimension) {
-  using namespace fhelium::rns;
-  const auto limbs = static_cast<int64_t>(moduli.size());
-  auto table = torch::zeros({RNS_PARAMETER_COUNT, limbs}, torch::kInt64);
-  auto rows = table.accessor<int64_t, 2>();
-  for (int64_t j = 0; j < limbs; ++j) {
-    const uint64_t q = moduli[j];
-    const uint64_t r_mod_q = static_cast<uint64_t>((u128{1} << kRadixBits) % q);
-    const uint64_t neg_inverse = neg_inverse_mod_radix(q);
-    const uint64_t n_inverse = pow_mod(ring_dimension % q, q - 2, q);
-    rows[RNS_PARAM_TWICE_MODULUS][j] = static_cast<int64_t>(2 * q);
-    rows[RNS_PARAM_MODULUS_LO][j] = static_cast<int64_t>(q & kHalfMask);
-    rows[RNS_PARAM_MODULUS_HI][j] = static_cast<int64_t>(q >> kHalfRadixBits);
-    rows[RNS_PARAM_NEG_INV_MODULUS_LO][j] =
-        static_cast<int64_t>(neg_inverse & kHalfMask);
-    rows[RNS_PARAM_NEG_INV_MODULUS_HI][j] =
-        static_cast<int64_t>(neg_inverse >> kHalfRadixBits);
-    rows[RNS_PARAM_R2][j] = static_cast<int64_t>(mul_mod(r_mod_q, r_mod_q, q));
-    rows[RNS_PARAM_SCALED_R2][j] = rows[RNS_PARAM_R2][j];
-    rows[RNS_PARAM_N_INV_MONTGOMERY][j] =
-        static_cast<int64_t>(mul_mod(n_inverse, r_mod_q, q));
-  }
-  return table;
 }
 
 torch::Tensor random_residues(at::IntArrayRef shape,
@@ -117,7 +73,11 @@ bool run(const torch::Device& device) {
   const auto limbs = static_cast<int64_t>(moduli.size());
   std::mt19937_64 rng(7);
 
-  const auto params = rns_parameters(moduli, n).to(device);
+  const auto params =
+      fhelium::rns::parameter_table(
+          std::vector<int64_t>(moduli.begin(), moduli.end()), 4, 1.0,
+          torch::kInt64)
+          .to(device);
   const auto a_cpu = random_residues({3, limbs, n}, moduli, rng);
   const auto b_cpu = random_residues({3, limbs, n}, moduli, rng);
 
@@ -181,6 +141,29 @@ bool run(const torch::Device& device) {
   ok &= check("ckks::multiply_two_component_ntt_montgomery",
               reduce(tensor_product, moduli),
               expected_tensor_product);
+
+  // Key bytes 00..1f, block counter 1, and nonce
+  // 00:00:00:09:00:00:00:4a:00:00:00:00.
+  const auto seed = torch::tensor({int64_t{0x0706050403020100},
+                                   int64_t{0x0f0e0d0c0b0a0908},
+                                   int64_t{0x1716151413121110},
+                                   int64_t{0x1f1e1d1c1b1a1918},
+                                   int64_t{0x4a000000}},
+                                  torch::kInt64)
+                        .to(device);
+  const auto block = fhelium::random::chacha20_keystream(
+                         seed, 1 | (int64_t{0x09000000} << 32), 1)
+                         .to(torch::kInt64)
+                         .cpu();
+  // clang-format off
+  const std::vector<int64_t> rfc8439_block = {
+      0xe4e7f110, 0x15593bd1, 0x1fdd0f50, 0xc47120a3,
+      0xc7f4d1c7, 0x0368c033, 0x9aaa2204, 0x4e6cd4c3,
+      0x466482d2, 0x09aa9f07, 0x05d7c214, 0xa2028bd9,
+      0xd19c12b5, 0xb94e16de, 0xe883d0cb, 0x4e3c50a2};
+  // clang-format on
+  const auto expected_block = torch::tensor(rfc8439_block).view({1, 16});
+  ok &= check("random::chacha20_keystream", block, expected_block);
   return ok;
 }
 

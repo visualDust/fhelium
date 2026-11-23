@@ -16,6 +16,7 @@ import torch
 from fhelium.backend.rns.context import RnsContext
 from fhelium.backend.rns.decomposition import key_decomposition_facts
 from fhelium.backend.rns.crt import crt_basis_extension_tables
+from fhelium.native.wrapper import rns_ops
 from ._key_switch_preparation import key_switch_runtime_attributes
 
 if TYPE_CHECKING:
@@ -130,17 +131,13 @@ def prepare_encapsulated_raise_operands(
     tensors["quotient_inverses"] = trailing_quotient_inverses(
         moduli,
         drop_count,
-        high_rns.montgomery_parameters.R,
         dtype=rns_context.dtype,
         device=rns_context.device,
     )
     if rounding == "nearest":
-        half = (return_prime * prod(return_p_moduli) - 1) // 2
-        tensors["quotient_half"] = torch.tensor(
-            [half % q for q in moduli],
-            dtype=rns_context.dtype,
-            device=rns_context.device,
-        )
+        tensors["quotient_half"] = rns_ops.half_product_residues(
+            [return_prime, *return_p_moduli], list(moduli), rns_context.dtype
+        ).to(rns_context.device)
     target_ids = rns_context.rns_layout.prime_ids(target_depth)
     tensors["target_parameters"] = rns_context.rns_parameters_for_prime_ids(
         target_ids
@@ -188,19 +185,16 @@ class KeySwitchTables:
         """Prepare the P-only inverse vector when that quotient is selected."""
         if self._p_inverse_montgomery is None:
             config = self.rns_context.config
-            p_product = prod(config.p_moduli)
-            radix = self.rns_context.montgomery_parameters.R
             object.__setattr__(
                 self,
                 "_p_inverse_montgomery",
-                torch.tensor(
-                    [
-                        pow(p_product, -1, q) * radix % q
-                        for q in config.q_moduli
-                    ],
-                    dtype=self.rns_context.dtype,
-                    device=self.rns_context.device,
-                ),
+                rns_ops.product_residues(
+                    list(config.p_moduli),
+                    list(config.q_moduli),
+                    -1,
+                    True,
+                    self.rns_context.dtype,
+                ).to(self.rns_context.device),
             )
         return cast(torch.Tensor, self._p_inverse_montgomery)
 
@@ -235,8 +229,7 @@ class KeySwitchTables:
         rns = self.rns_context
         qp_ids = (*q_ids, *p_ids)
         moduli = tuple(rns.config.moduli[i] for i in qp_ids)
-        product = prod(rns.config.moduli[i] for i in p_ids)
-        radix = rns.montgomery_parameters.R
+        p_moduli = [rns.config.moduli[i] for i in p_ids]
         default_p = (
             depth is not None
             and p_ids == rns.rns_chain.p_prime_ids
@@ -251,7 +244,6 @@ class KeySwitchTables:
                 else trailing_quotient_inverses(
                     moduli,
                     len(p_ids),
-                    radix,
                     dtype=rns.dtype,
                     device=rns.device,
                 )
@@ -259,23 +251,19 @@ class KeySwitchTables:
             "p_inverse": (
                 self.p_inverse_montgomery[q_ids[0] :]
                 if default_p
-                else torch.tensor(
-                    [
-                        pow(product, -1, rns.config.moduli[i])
-                        * radix
-                        % rns.config.moduli[i]
-                        for i in q_ids
-                    ],
-                    dtype=rns.dtype,
-                    device=rns.device,
-                )
+                else rns_ops.product_residues(
+                    p_moduli,
+                    [rns.config.moduli[i] for i in q_ids],
+                    -1,
+                    True,
+                    rns.dtype,
+                ).to(rns.device)
             ),
         }
         if rounding == "nearest":
-            half = (product - 1) // 2
-            tensors["moddown_half"] = torch.tensor(
-                [half % q for q in moduli], dtype=rns.dtype, device=rns.device
-            )
+            tensors["moddown_half"] = rns_ops.half_product_residues(
+                p_moduli, list(moduli), rns.dtype
+            ).to(rns.device)
         self._tensor_views[token] = (tensors, {})
         return tensors
 
@@ -536,31 +524,26 @@ def prepare_rotation_sum_tables(
         raise ValueError(
             "Rotation-sum quotient rounding must be floor or nearest"
         )
-    p_product = prod(config.moduli[i] for i in p_ids)
-    m_product = prod(config.moduli[i] for i in q_ids[:drop])
-    radix = rns.montgomery_parameters.R
-    p_montgomery = torch.tensor(
-        [p_product * radix % config.moduli[i] for i in q_ids],
-        dtype=rns.dtype,
-        device=rns.device,
-    )
+    p_moduli = [config.moduli[i] for i in p_ids]
+    m_moduli = [config.moduli[i] for i in q_ids[:drop]]
+    m_product = prod(m_moduli)
+    divisor = prod(p_moduli) * m_product
+    p_montgomery = rns_ops.product_residues(
+        p_moduli, [config.moduli[i] for i in q_ids], 1, True, rns.dtype
+    ).to(rns.device)
     quotient_ids = (*next_ids, *q_ids[:drop], *p_ids)
     moduli = tuple(config.moduli[i] for i in quotient_ids)
     aux_count = len(p_ids) + drop
     rows = trailing_quotient_inverses(
         moduli,
         aux_count,
-        radix,
         dtype=rns.dtype,
         device=rns.device,
     )
-    divisor = p_product * m_product
     half = (
-        torch.tensor(
-            [((divisor - 1) // 2) % q for q in moduli],
-            dtype=rns.dtype,
-            device=rns.device,
-        )
+        rns_ops.half_product_residues(
+            p_moduli + m_moduli, list(moduli), rns.dtype
+        ).to(rns.device)
         if rounding == "nearest"
         else None
     )

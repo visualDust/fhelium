@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from fhelium.legacy.engine import CkksEngine
-
 import gc
 from typing import Any
 
@@ -20,7 +18,8 @@ from fhelium.benchmarks.model import (
     ProgressCallback,
 )
 from fhelium.benchmarks.registry import register_benchmark
-from fhelium.benchmarks.synthetic import ckks_message
+from fhelium.benchmarks.synthetic import ckks_engine, ckks_message
+from fhelium.eager import Engine
 from fhelium.benchmarks.timing import (
     measure,
     measure_paired,
@@ -42,12 +41,14 @@ def _preset(name: str) -> Preset:
         ) from error
 
 
-def _engine(parameters: Any) -> CkksEngine:
-    return CkksEngine(
+def _engine(parameters: Any) -> tuple[Engine, torch.device]:
+    device = torch.device(str(parameters.get("device", "cuda:0")))
+    engine = ckks_engine(
         _preset(str(parameters["preset"])),
-        device=str(parameters.get("device", "cuda:0")),
+        device=device,
         ntt_backend=str(parameters.get("ntt_backend") or DEFAULT_NTT_BACKEND),
     )
+    return engine, device
 
 
 def _error_stats(
@@ -101,12 +102,11 @@ def _operator_latency(
         raise ValueError("rotation_steps must not contain duplicates")
 
     progress("Creating engine and materializing keys")
-    engine = _engine(parameters)
-    device = engine.device
+    engine, device = _engine(parameters)
     x = ckks_message(engine)
     y = ckks_message(engine, phase=0.3)
-    ct_x = engine.encrypt_message(x)
-    ct_y = engine.encrypt_message(y)
+    ct_x = engine.encrypt_message(x, device=device)
+    ct_y = engine.encrypt_message(y, device=device)
     ct_x_ntt = engine.coefficient_domain_to_ntt_domain(ct_x)
     ct_y_ntt = engine.coefficient_domain_to_ntt_domain(ct_y)
     engine.relinearization_key
@@ -114,8 +114,8 @@ def _operator_latency(
         engine.rotation_key(rotation_step)
 
     operations = {
-        "encrypt_message": lambda: engine.encrypt_message(x),
-        "decrypt_message": lambda: engine.decrypt_message(ct_x),
+        "encrypt_message": lambda: engine.encrypt_message(x, device=device),
+        "decrypt_message": lambda: engine.decrypt_message(ct_x, device="cpu"),
         "add": lambda: engine.add(ct_x, ct_y),
         "multiply": lambda: engine.multiply(ct_x_ntt, ct_y_ntt),
         "rotate_with_key": lambda: engine.rotate_with_key(
@@ -204,25 +204,31 @@ def _operator_latency(
     progress("Checking decrypted outputs")
     correctness: dict[str, dict[str, float]] = {}
     correctness["encrypt_decrypt"] = _error_stats(
-        engine.decrypt_message(engine.encrypt_message(x)), x
+        engine.decrypt_message(
+            engine.encrypt_message(x, device=device), device="cpu"
+        ),
+        x,
     )
     correctness["add"] = _error_stats(
-        engine.decrypt_message(engine.add(ct_x, ct_y)), x + y
+        engine.decrypt_message(engine.add(ct_x, ct_y), device="cpu"), x + y
     )
     product = engine.relinearize(engine.multiply(ct_x_ntt, ct_y_ntt))
     correctness["multiply_relinearize"] = _error_stats(
-        engine.decrypt_message(product), x * y
+        engine.decrypt_message(product, device="cpu"), x * y
     )
     rotated = engine.rotate_with_key(
         ct_x, engine.rotation_key(rotation_steps[0])
     )
     correctness["rotate_with_key"] = _error_stats(
-        engine.decrypt_message(rotated),
+        engine.decrypt_message(rotated, device="cpu"),
         torch.roll(x, shifts=rotation_steps[0]),
     )
     many = engine.rotate_many_by_steps(ct_x, rotation_steps)
     many_errors = [
-        _error_stats(engine.decrypt_message(value), torch.roll(x, shifts=step))
+        _error_stats(
+            engine.decrypt_message(value, device="cpu"),
+            torch.roll(x, shifts=step),
+        )
         for step, value in zip(rotation_steps, many, strict=True)
     ]
     correctness["rotate_many_by_steps"] = {
@@ -236,7 +242,7 @@ def _operator_latency(
     resolved_parameters = {
         "preset": parameters["preset"],
         "device": str(device),
-        "ntt_backend": engine.ntt_backend_name,
+        "ntt_backend": engine.ntt_backend_name(device),
         "rotation_steps": list(rotation_steps),
         "runs": runs,
         "warmup": warmup,
@@ -297,7 +303,7 @@ def _operator_latency(
             "workload_id": "ckks-operator-latency",
             "preset": parameters["preset"],
             "device": str(device),
-            "ntt_backend": engine.ntt_backend_name,
+            "ntt_backend": engine.ntt_backend_name(device),
             "runs": runs,
             "warmup": warmup,
             "effective_parameters": effective_parameters,
@@ -330,10 +336,9 @@ def _rotation_workload(
         raise ValueError("counts must not contain duplicates")
 
     progress("Creating engine and rotation keys")
-    engine = _engine(parameters)
-    device = engine.device
+    engine, device = _engine(parameters)
     message = ckks_message(engine)
-    ct = engine.encrypt_message(message)
+    ct = engine.encrypt_message(message, device=device)
     max_count = max(counts)
     rotation_steps = tuple(range(1, max_count + 1))
     for rotation_step in rotation_steps:
@@ -459,10 +464,11 @@ def _rotation_workload(
         ):
             expected = torch.roll(message, shifts=step)
             independent_error = _error_stats(
-                engine.decrypt_message(independent_value), expected
+                engine.decrypt_message(independent_value, device="cpu"),
+                expected,
             )
             hoisted_error = _error_stats(
-                engine.decrypt_message(hoisted_value), expected
+                engine.decrypt_message(hoisted_value, device="cpu"), expected
             )
             _enforce_correctness("independent rotation", independent_error)
             _enforce_correctness("hoisted rotation", hoisted_error)
@@ -483,7 +489,7 @@ def _rotation_workload(
     resolved_parameters = {
         "preset": parameters["preset"],
         "device": str(device),
-        "ntt_backend": engine.ntt_backend_name,
+        "ntt_backend": engine.ntt_backend_name(device),
         "counts": list(counts),
         "rotation_steps": list(rotation_steps),
         "runs_per_repetition": runs,
@@ -543,7 +549,7 @@ def _rotation_workload(
             "workload_id": "rotation-hoisting-workload",
             "preset": parameters["preset"],
             "device": str(device),
-            "ntt_backend": engine.ntt_backend_name,
+            "ntt_backend": engine.ntt_backend_name(device),
             "runs": runs,
             "warmup": warmup,
             "effective_parameters": effective_parameters,

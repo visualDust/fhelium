@@ -7,7 +7,7 @@ from typing import cast, TYPE_CHECKING
 import torch
 
 from fhelium.config import CkksConfig
-from fhelium.rng import Csprng
+from fhelium.backend.random.stream import RandomStream
 
 from ..ntt.context import NttContext
 from ..resources import (
@@ -71,7 +71,7 @@ class CkksDeviceResources:
         ] = {}
         self._rns_context: RnsContext | None = None
         self._ntt_context: NttContext | None = None
-        self._rng: Csprng | None = None
+        self._rng: RandomStream | None = None
         self._key_generation: KeyGenerationResource | None = None
         self._rescale: RescaleTables | None = None
         self._key_switch: KeySwitchTables | None = None
@@ -115,33 +115,24 @@ class CkksDeviceResources:
         return context
 
     @property
-    def rng(self) -> Csprng:
+    def rng(self) -> RandomStream:
         """Return the stateful random stream assigned to this device."""
 
         rng = self._rng
-        if rng is not None:
-            return rng
-        stream_id = (
-            0
-            if self.device.type == "cpu"
-            else 1 + int(cast(int, self.device.index))
-        )
-        stream_nonce = (
-            None
-            if self.rng_nonce is None
-            else (self.rng_nonce + stream_id) & ((1 << 64) - 1)
-        )
-        rng = Csprng(
-            num_coefs=self.config.N,
-            num_channels=[len(self.rns_layout.prime_ids(0))],
-            num_repeating_channels=max(self.config.num_p_primes, 2),
-            sigma=self.config.sigma,
-            devices=[str(self.device)],
-            torch_dtype=self.rns_context.dtype,
-            seed=self.rng_seed,
-            nonce=stream_nonce,
-        )
-        self._rng = rng
+        if rng is None:
+            stream_id = (
+                0
+                if self.device.type == "cpu"
+                else 1 + int(cast(int, self.device.index))
+            )
+            rng = RandomStream(
+                self.device,
+                sigma=self.config.sigma,
+                seed=self.rng_seed,
+                nonce=self.rng_nonce,
+                stream_id=stream_id,
+            )
+            self._rng = rng
         return rng
 
     @property
@@ -172,7 +163,7 @@ class CkksDeviceResources:
                 period,
                 depth,
                 basis,
-                self.rng.rounding_state,
+                self.rng.seed,
             )
         return cache[identity]
 
@@ -188,7 +179,7 @@ class CkksDeviceResources:
         return (
             pre,
             _embedding._twister(self.config.N, str(self.device)),
-            self.rng.rounding_state,
+            self.rng.seed,
         )
 
     def decode_operands(self) -> tuple[torch.Tensor, torch.Tensor]:

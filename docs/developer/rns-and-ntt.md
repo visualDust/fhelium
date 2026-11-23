@@ -57,9 +57,9 @@ A caller or lowering supplies the physical basis role and any internal digit-row
 
 ## Hybrid-digit extension
 
-`modup_digit` extends one coefficient-domain digit into QP Montgomery residues using its supplied Garner and basis-extension tensors. For source primes $q_0,\ldots,q_{w-1}$, Garner decomposition produces mixed-radix digits $d_j$, and each destination row evaluates $R_p\sum_j d_j\prod_{i<j}q_i\pmod p$. The operation preserves the ordered modular arithmetic and lazy-residue representation of the separate native decomposition and extension operations.
+`fhelium::rns::hybrid_modup_digit` extends one coefficient-domain digit into QP Montgomery residues using the Garner and basis-extension tensors of that digit in its table. For source primes $q_0,\ldots,q_{w-1}$, Garner decomposition produces mixed-radix digits $d_j$, and each destination row evaluates $R_p\sum_j d_j\prod_{i<j}q_i\pmod p$. The operation preserves the ordered modular arithmetic and lazy-residue representation of the separate native decomposition and extension operations.
 
-CUDA multi-prime digits use a coefficient tile that retains the Garner digits in shared memory while destination rows consume them. The shared-memory extent must fit 48 KiB. Single-prime digits, CPU/HIP execution, larger extents, and calls that supply decomposition scratch retain the separate operations. Allocating and caller-owned output forms share the tiled kernel; caller-supplied scratch remains populated with the decomposition. The same Backend entry serves whole CKKS implementations and lowered `HybridModUpDigitOp` operations.
+CUDA multi-prime digits use a coefficient tile that retains the Garner digits in shared memory while destination rows consume them. The shared-memory extent must fit 48 KiB. Single-prime digits, CPU/HIP execution and larger extents use the separate decomposition and extension operations. The same native function serves whole CKKS implementations and lowered `HybridModUpDigitOp` operations.
 
 ## Linear CRT lifts
 
@@ -295,7 +295,7 @@ Do not promote the fastest depth-zero transform automatically to every depth or 
 | RNS chain, layout, and hybrid digit identity | `fhelium/backend/rns/{chain,layout,decomposition}.py` |
 | Parameter materialization and aligned views | `fhelium/backend/rns/{montgomery,parameters,runtime}.py` |
 | NTT policy definitions | `fhelium/config/ntt.py` |
-| Host plans and typed device tables | `fhelium/backend/ntt/plans/`, `fhelium/backend/ntt/tables.py` |
+| Host table construction and typed device tables | `csrc/tables/`, `fhelium/backend/ntt/tables.py` |
 | Python NTT executors | `fhelium/backend/ntt/executors/` |
 | RNS schemas and CPU/CUDA implementations | `csrc/ops/rns/` |
 | NTT schemas and CPU/CUDA implementations | `csrc/ops/ntt/` |

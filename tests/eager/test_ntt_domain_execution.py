@@ -119,6 +119,17 @@ def test_ntt_domain_ckks_operations_match_coefficient_results(
             engine.ntt_domain_to_coefficient_domain(ntt_rotated).data,
             depth=source.depth,
         )
+        for output_domain in ("coefficient", "ntt"):
+            expected, hoisted = (
+                engine.rotate_many_with_keys(
+                    value, (rotation,), output_domain=output_domain
+                )[0]
+                for value in (source, source_ntt)
+            )
+            assert hoisted.polynomial_domain == output_domain
+            _assert_congruent(
+                engine, expected.data, hoisted.data, depth=source.depth
+            )
 
         addend = engine.encode(
             torch.full_like(message, 0.002), scale=source.scale
@@ -274,19 +285,44 @@ def test_group_rescale_matches_integer_quotients(device: str) -> None:
     )
     engine = Engine(config)
     divisor = config.rescale_divisor(0)
-    x = (torch.arange(config.N, dtype=torch.int64, device=device) - config.N // 2) * 2**40
+    x = (
+        torch.arange(config.N, dtype=torch.int64, device=device) - config.N // 2
+    ) * 2**40
     coefficients = torch.stack((x, -x - 1))
     for basis in ("Q", "QP"):
         moduli = q + (config.p_moduli if basis == "QP" else ())
-        modulus_tensor = torch.tensor(moduli, dtype=torch.int64, device=device).view(1, -1, 1)
-        data = torch.remainder(coefficients.unsqueeze(-2), modulus_tensor).to(engine.dtype)
-        source = Ciphertext(data=data, depth=0, scale=2.0**100, prime_ids=tuple(range(len(moduli))), modulus_basis=basis)
+        modulus_tensor = torch.tensor(
+            moduli, dtype=torch.int64, device=device
+        ).view(1, -1, 1)
+        data = torch.remainder(coefficients.unsqueeze(-2), modulus_tensor).to(
+            engine.dtype
+        )
+        source = Ciphertext(
+            data=data,
+            depth=0,
+            scale=2.0**100,
+            prime_ids=tuple(range(len(moduli))),
+            modulus_basis=basis,
+        )
         for rounding in ("floor", "nearest"):
-            quotient = torch.div(coefficients + (divisor // 2 if rounding == "nearest" else 0), divisor, rounding_mode="floor")
-            expected = torch.remainder(quotient.unsqueeze(-2), modulus_tensor[:, 2:, :]).to(engine.dtype)
-            for value in (source, engine.coefficient_domain_to_ntt_domain(source)):
+            quotient = torch.div(
+                coefficients + (divisor // 2 if rounding == "nearest" else 0),
+                divisor,
+                rounding_mode="floor",
+            )
+            expected = torch.remainder(
+                quotient.unsqueeze(-2), modulus_tensor[:, 2:, :]
+            ).to(engine.dtype)
+            for value in (
+                source,
+                engine.coefficient_domain_to_ntt_domain(source),
+            ):
                 result = engine.rescale_to_next_depth(value, rounding=rounding)
-                coefficient_result = result if result.polynomial_domain == "coefficient" else engine.ntt_domain_to_coefficient_domain(result)
+                coefficient_result = (
+                    result
+                    if result.polynomial_domain == "coefficient"
+                    else engine.ntt_domain_to_coefficient_domain(result)
+                )
                 assert torch.equal(coefficient_result.data, expected)
                 assert result.depth == 1
                 assert result.scale == source.scale / divisor

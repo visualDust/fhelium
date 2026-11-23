@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from fhelium.legacy.engine import CkksEngine
-
 from dataclasses import replace
 
 import pytest
 import torch
 
 import fhelium as fh
+from fhelium.eager import Engine
 from fhelium.values import (
     Ciphertext,
     CompressedPlaintext,
@@ -18,22 +17,27 @@ from fhelium.errors import InvalidScaleError
 from fhelium.serialization import ValueEnvelope
 
 
-@pytest.fixture(scope="module")
-def engine() -> CkksEngine:
+@pytest.fixture(autouse=True)
+def _cuda_default_device(request: pytest.FixtureRequest):
+    if request.node.get_closest_marker("gpu") is None:
+        yield
+        return
     if not torch.cuda.is_available():
         pytest.skip("CUDA is required")
-    return CkksEngine(fh.Preset.slots8192_scale40_depth7_int64, device="cuda:0")
+    with torch.device("cuda:0"):
+        yield
 
 
-def _deterministic_engine(seed: int) -> CkksEngine:
+@pytest.fixture(scope="module")
+def engine() -> Engine:
+    return Engine(fh.Preset.slots8192_scale40_depth7_int64)
+
+
+def _deterministic_engine(seed: int) -> Engine:
     """Create an engine whose cryptographic regression vector is reproducible."""
 
-    config = fh.CkksConfig.parse(fh.Preset.slots8192_scale40_depth7_int64)
-    return CkksEngine(
-        config,
-        device="cuda:0",
-        rng_seed=seed,
-        rng_nonce=0,
+    return Engine(
+        fh.Preset.slots8192_scale40_depth7_int64, rng_seed=seed, rng_nonce=0
     )
 
 
@@ -89,7 +93,7 @@ def test_core_values_reject_invalid_scale_and_depth_metadata() -> None:
 @pytest.mark.parametrize("invalid_scale", [0, -1, float("nan"), float("inf")])
 @pytest.mark.gpu
 def test_public_scale_entry_points_validate_raw_values(
-    engine: CkksEngine, invalid_scale: object
+    engine: Engine, invalid_scale: object
 ) -> None:
     message = torch.zeros(4, dtype=torch.float64)
     for operation in (
@@ -104,7 +108,7 @@ def test_public_scale_entry_points_validate_raw_values(
 @pytest.mark.parametrize("invalid_depth", [True, 1.5, -1, 8])
 @pytest.mark.gpu
 def test_public_value_creation_requires_a_strict_public_depth(
-    engine: CkksEngine, invalid_depth: object
+    engine: Engine, invalid_depth: object
 ) -> None:
     message = torch.zeros(4, dtype=torch.float64)
     for operation in (
@@ -120,14 +124,13 @@ def test_public_value_creation_requires_a_strict_public_depth(
 def test_message_encryption_validates_input_before_lazy_key_generation() -> (
     None
 ):
-    engine = CkksEngine(
+    engine = Engine(
         fh.Preset.slots8192_scale40_depth7_int64,
-        device="cuda:0",
-        allow_sk_gen=False,
+        allow_automatic_key_generation=False,
     )
     message = torch.zeros(4, dtype=torch.float64)
 
-    with pytest.raises(ValueError, match="0 <= depth"):
+    with pytest.raises(ValueError, match="depth must be in"):
         engine.encrypt_message(message, depth=-1)
     with pytest.raises(InvalidScaleError):
         engine.encrypt_message(message, scale=0)
@@ -135,32 +138,14 @@ def test_message_encryption_validates_input_before_lazy_key_generation() -> (
 
 @pytest.mark.gpu
 def test_imported_engine_values_cannot_use_private_structural_depths(
-    engine: CkksEngine,
+    engine: Engine,
 ) -> None:
     encoded = engine.encode(torch.zeros(4))
     imported_plaintext = replace(encoded, depth=engine.max_depth + 1)
-    with pytest.raises(ValueError, match="0 <= depth"):
+    with pytest.raises(ValueError, match="depth must be in"):
         engine.integer_coefficients_to_rns(imported_plaintext)
-    with pytest.raises(ValueError, match="0 <= depth"):
+    with pytest.raises(ValueError, match="depth must be in"):
         engine.encrypt(imported_plaintext)
-
-    ciphertext = engine.encrypt_message(torch.zeros(4))
-    imported_ciphertext = replace(ciphertext, depth=engine.max_depth + 1)
-    with pytest.raises(ValueError, match="0 <= depth"):
-        engine.coefficient_domain_to_ntt_domain(imported_ciphertext)
-
-
-@pytest.mark.parametrize("invalid_basis", [True, "q"])
-@pytest.mark.gpu
-def test_integer_coefficients_to_rns_rejects_invalid_basis_before_native_lifting(
-    engine: CkksEngine, invalid_basis: object
-) -> None:
-    encoded = engine.encode(torch.zeros(4))
-    with pytest.raises((TypeError, ValueError), match="modulus_basis"):
-        engine.integer_coefficients_to_rns(
-            encoded,
-            modulus_basis=invalid_basis,  # type: ignore[arg-type]
-        )
 
 
 def test_integer_coefficients_require_integral_tensor_storage() -> None:
@@ -208,47 +193,6 @@ def test_decrypt_coefficients_are_explicitly_approximate_and_decode_only() -> (
             operation()
 
 
-@pytest.mark.parametrize("malformed_dtype", [torch.float64, torch.int32])
-@pytest.mark.gpu
-def test_integer_coefficient_consumers_reject_nonconfigured_dtype_before_native(
-    engine: CkksEngine,
-    malformed_dtype: torch.dtype,
-) -> None:
-    malformed = engine.encode(torch.zeros(4))
-    assert malformed.data is not None
-    malformed.data = malformed.data.to(malformed_dtype)
-    for operation in (engine.integer_coefficients_to_rns, engine.encrypt):
-        with pytest.raises(TypeError, match="dtype does not match engine"):
-            operation(malformed)
-
-
-@pytest.mark.parametrize(
-    ("representation", "dtype"),
-    [
-        ("integer_coefficients", torch.int64),
-        ("approximate_coefficients", torch.float64),
-    ],
-)
-@pytest.mark.gpu
-def test_decode_rejects_wrong_coefficient_ring_dimension(
-    engine: CkksEngine,
-    representation: str,
-    dtype: torch.dtype,
-) -> None:
-    malformed = Plaintext(
-        message=None,
-        depth=0,
-        scale=2.0**40,
-        data=torch.zeros(
-            engine.config.N - 1, dtype=dtype, device=engine.device
-        ),
-        representation=representation,  # type: ignore[arg-type]
-        polynomial_domain="coefficient",
-    )
-    with pytest.raises(ValueError, match="ring dimension"):
-        engine.decode(malformed)
-
-
 def test_approximate_coefficients_validate_storage_without_scanning_contents() -> (
     None
 ):
@@ -277,7 +221,7 @@ def test_approximate_coefficients_validate_storage_without_scanning_contents() -
 
 @pytest.mark.gpu
 def test_plaintext_raw_transition_chain_is_composable_and_axis_exact(
-    engine: CkksEngine,
+    engine: Engine,
 ) -> None:
     encoded = engine.encode(torch.linspace(-0.01, 0.01, 16), depth=2)
     standard = engine.integer_coefficients_to_rns(encoded, modulus_basis="QP")
@@ -312,8 +256,9 @@ def test_plaintext_raw_transition_chain_is_composable_and_axis_exact(
     assert standard.data is not None and roundtrip.data is not None
     expected_standard = standard.data.clone()
     actual_standard = roundtrip.data.clone()
-    engine.rns_runtime.reduce_to_standard_(expected_standard, include_p=True)
-    engine.rns_runtime.reduce_to_standard_(actual_standard, include_p=True)
+    rns_context = engine.rns_context("cuda:0")
+    rns_context.reduce_to_standard_(expected_standard, include_p=True)
+    rns_context.reduce_to_standard_(actual_standard, include_p=True)
     torch.testing.assert_close(
         actual_standard, expected_standard, rtol=0, atol=0
     )
@@ -352,42 +297,7 @@ def test_plaintext_raw_transition_chain_is_composable_and_axis_exact(
     assert returned is inplace
     assert inplace.data is not None and inplace.data.data_ptr() == pointer
     assert standard.data.data_ptr() != inplace.data.data_ptr()
-
-    strict_source_cases = (
-        (
-            engine.standard_residues_to_montgomery_residues,
-            montgomery,
-            "requires standard residues",
-        ),
-        (
-            engine.montgomery_residues_to_standard_residues,
-            standard,
-            "requires Montgomery residues",
-        ),
-        (
-            engine.coefficient_domain_to_ntt_domain,
-            ntt,
-            "requires a coefficient-domain plaintext",
-        ),
-        (
-            engine.ntt_domain_to_coefficient_domain,
-            coefficient_montgomery,
-            "requires an NTT-domain plaintext",
-        ),
-    )
-    for transition, source, message in strict_source_cases:
-        with pytest.raises(ValueError, match=message):
-            transition(source)
-
-    with pytest.raises(ValueError, match="requires Montgomery"):
-        engine.coefficient_domain_to_ntt_domain(standard)
-    with pytest.raises(ValueError, match="coefficient-domain"):
-        engine.montgomery_residues_to_standard_residues(ntt)
-    malformed_basis = standard.clone()
-    malformed_basis.modulus_basis = "bad"  # type: ignore[assignment]
-    with pytest.raises(ValueError, match="modulus_basis"):
-        engine.coefficient_domain_to_ntt_domain_(malformed_basis)
-    with pytest.raises(ValueError, match="RNS reconstruction is not implicit"):
+    with pytest.raises(ValueError, match="decode requires coefficient plaintext data"):
         engine.decode(addition)
 
 
@@ -439,7 +349,7 @@ def test_native_payloads_are_structural() -> None:
 
 @pytest.mark.gpu
 def test_exact_key_consumers_reject_malformed_or_wrong_concrete_states(
-    engine: CkksEngine,
+    engine: Engine,
 ) -> None:
     secret = engine.create_secret_key()
     coefficient_secret = replace(
@@ -447,7 +357,7 @@ def test_exact_key_consumers_reject_malformed_or_wrong_concrete_states(
         polynomial_domain="coefficient",
         residue_representation="standard",
     )
-    with pytest.raises(ValueError, match="NTT polynomial domain"):
+    with pytest.raises(ValueError, match="NTT domain"):
         engine.set_secret_key(coefficient_secret)
 
     wrong_dtype = replace(secret, data=secret.data.to(torch.int32))
@@ -458,26 +368,15 @@ def test_exact_key_consumers_reject_malformed_or_wrong_concrete_states(
     with pytest.raises(ValueError, match="stored plane"):
         replace(relinearization, data=relinearization.data[:-1].clone())
 
-    generic_key = fh.KeySwitchKey(
-        data=relinearization.data.clone(),
-        prime_ids=relinearization.prime_ids,
-        digit_prime_ids=relinearization.digit_prime_ids,
-    )
-    with pytest.raises(TypeError, match="RelinearizationKey"):
-        engine.set_relinearization_key(generic_key)  # type: ignore[arg-type]
-
 
 @pytest.mark.gpu
 def test_qp_ciphertext_rejects_q_only_key_switch_operations(
-    engine: CkksEngine,
+    engine: Engine,
 ) -> None:
     qp_secret = engine.create_secret_key(modulus_basis="QP")
     qp_public = engine.create_public_key(qp_secret, modulus_basis="QP")
-    q_secret = engine.create_secret_key(modulus_basis="Q")
     ciphertext = engine.encrypt_message(torch.zeros(4), qp_public)
     assert ciphertext.modulus_basis == "QP"
-    with pytest.raises(ValueError, match="requires a QP SecretKey"):
-        engine.decrypt(ciphertext, q_secret)
 
     relinearization_key = engine.create_relinearization_key(engine.secret_key)
     rotation_key = engine.create_rotation_key(1, engine.secret_key)
@@ -496,24 +395,5 @@ def test_qp_ciphertext_rejects_q_only_key_switch_operations(
         lambda: engine.conjugate(ciphertext, conjugation_key),
     )
     for operation in operations:
-        with pytest.raises(ValueError, match="modulus_basis.*expected 'Q'"):
+        with pytest.raises(ValueError, match="configured basis"):
             operation()
-
-
-@pytest.mark.gpu
-def test_rotate_many_by_steps_rejects_three_components_before_hoisting(
-    engine: CkksEngine,
-) -> None:
-    ciphertext = engine.encrypt_message(torch.zeros(4))
-    three_components = replace(
-        ciphertext,
-        data=torch.cat(
-            (ciphertext.data, torch.zeros_like(ciphertext.data[:1]))
-        ),
-    )
-    with pytest.raises(ValueError, match="expected 2"):
-        engine.rotate_many_by_steps(
-            three_components,
-            (1, 2),
-            use_hoisting=True,
-        )

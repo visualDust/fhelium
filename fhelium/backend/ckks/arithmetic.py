@@ -10,7 +10,7 @@ from xdsl.ir import Operation
 from fhelium.backend.implementation import OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.ir.dialects import ckks
-from fhelium.native.wrapper import ckks_ops, rns_ops
+from fhelium.native.wrapper import ckks_ops
 
 
 @dataclass(frozen=True)
@@ -89,75 +89,28 @@ class NativeCompressedPlaintextImplementation:
         return ()
 
     def execute(self, invocation, inputs, resources, *, in_place):
+        del resources
         parameters = inputs[-1]
         ciphertext, compressed = inputs[:2]
-        layout = invocation.attributes["compression_layout"]
+        layout = str(invocation.attributes["compression_layout"])
         implicit = inputs[2] if layout == "strided_sparse" else None
         if invocation.operation_type is ckks.AddCompressedPlaintextOp:
-            if (
+            domain = str(
                 invocation.attributes.get("polynomial_domain", "coefficient")
-                == "ntt"
-            ):
-                compressed = compressed.clone()
-                rns_ops.to_montgomery_(compressed, parameters)
-                if implicit is not None:
-                    implicit = implicit.clone()
-                    rns_ops.to_montgomery_(implicit, parameters)
-            output = ciphertext if in_place else ciphertext.clone()
-            if layout == "cyclic":
-                ckks_ops.add_cyclic_compressed_plaintext_component_(
-                    output[0], compressed, parameters
-                )
-            elif layout == "contiguous":
-                ckks_ops.add_contiguous_compressed_plaintext_component_(
-                    output[0], compressed, parameters
-                )
-            elif layout == "strided_sparse" and implicit is not None:
-                implicit = implicit.squeeze(-1)
-                if implicit.device.type == "cpu":
-                    implicit = implicit.reshape(
-                        -1, implicit.size(-1)
-                    ).contiguous()
-                ckks_ops.add_strided_plaintext_component_(
-                    output[0], compressed, implicit, parameters
-                )
-            else:
-                raise ValueError(
-                    "Compressed addition requires a supported layout and its implicit rows"
-                )
-            return (output,)
-
-        def multiply(component):
-            if layout == "cyclic":
-                return rns_ops.montgomery_mul_cyclic_compressed(
-                    component, compressed, parameters
-                )
-            if layout == "contiguous":
-                return rns_ops.montgomery_mul_contiguous_compressed(
-                    component, compressed, parameters
-                )
-            if layout == "strided_sparse" and implicit is not None:
-                result = rns_ops.montgomery_mul_cyclic_compressed(
-                    component, implicit, parameters
-                )
-                repeat = component.size(-1) // compressed.size(-1)
-                result[..., ::repeat].copy_(
-                    rns_ops.montgomery_mul(
-                        component[..., ::repeat], compressed, parameters
-                    )
-                )
-                return result
-            raise ValueError(
-                "Compressed multiplication requires a supported layout and its implicit rows"
             )
-
-        if compressed.shape[:-2].numel() == 1:
-            product = multiply(ciphertext)
-        else:
-            product = torch.stack(
-                tuple(multiply(component) for component in ciphertext)
+            add = (
+                ckks_ops.add_compressed_plaintext_
+                if in_place
+                else ckks_ops.add_compressed_plaintext
             )
-        if in_place:
-            ciphertext.copy_(product)
-            return (ciphertext,)
-        return (product,)
+            return (
+                add(
+                    ciphertext, compressed, implicit, parameters, layout, domain
+                ),
+            )
+        multiply = (
+            ckks_ops.multiply_compressed_plaintext_
+            if in_place
+            else ckks_ops.multiply_compressed_plaintext
+        )
+        return (multiply(ciphertext, compressed, implicit, parameters, layout),)

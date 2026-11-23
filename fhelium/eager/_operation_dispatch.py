@@ -27,7 +27,7 @@ from fhelium.backend.resources import (
 )
 from fhelium.backend.rns.context import RnsContext
 from fhelium.ir.dialects import ckks, ntt, rns
-from fhelium.rng import Csprng
+from fhelium.backend.random.stream import RandomStream
 
 
 class _EagerOperationDispatcher:
@@ -57,7 +57,7 @@ class _EagerOperationDispatcher:
         return self.device_resources.ntt_context
 
     @property
-    def rng(self) -> Csprng:
+    def rng(self) -> RandomStream:
         return self.device_resources.rng
 
     @property
@@ -207,7 +207,6 @@ class _EagerOperationDispatcher:
                     "parameter_names": tuple(tensors),
                     "key_row_start": ids[0],
                     "ntt_backend": self.ntt_context.ntt_backend_name,
-                    "min_modulus": min(context.config.moduli[i] for i in ids),
                 },
             )
             if operation_type is ckks.DecryptOp:
@@ -220,13 +219,7 @@ class _EagerOperationDispatcher:
             )
             inputs = (*inputs, context.rns_parameters_for_prime_ids(ids)[0])
             invocation = OperationInvocation._from_eager(
-                operation_type,
-                len(inputs),
-                result_count,
-                {
-                    **invocation.attributes,
-                    "min_modulus": min(context.config.moduli[i] for i in ids),
-                },
+                operation_type, len(inputs), result_count, invocation.attributes
             )
             prepared_resources = ()
         elif operation_type is ckks.PrepareCompressedPlaintextOp:
@@ -261,7 +254,7 @@ class _EagerOperationDispatcher:
                 None
                 if integer
                 else cast(float, invocation.attributes["scalar_scale"]),
-                None if integer else self.rng.rounding_state,
+                None if integer else self.rng.seed,
             )
             inputs = (*inputs, *tensors)
             invocation = OperationInvocation._from_eager(

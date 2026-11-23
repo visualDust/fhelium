@@ -30,7 +30,6 @@ DEFAULT_SIDEBAR_OUTPUT = (
 SOURCE_ROOT = "https://github.com/VisualDust/fhelium/blob"
 EXCLUDED_API_MODULE_PREFIXES = (
     "fhelium.native.wrapper",
-    "fhelium.legacy",
     "fhelium.benchmarks.synthetic",
     "fhelium.benchmarks.standalone.ckks_operator_latency_and_rotation_hoisting",
     "fhelium.benchmarks.standalone.ntt_backend_single_operation_latency",

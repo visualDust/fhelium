@@ -136,4 +136,4 @@ Preparation supplies `moddown_half`, a standard-residue Tensor containing $H\bmo
 
 CPU, CUDA, and HIP dispatch to separate compile-time floor and nearest specializations of the shared ModDown implementation. Nearest adds the supplied offset while loading Q and P residues, eliminating separate shifted-input arrays. In the NTT route, the coefficient correction applies the same offset to its zero-Q input before the forward transform; this preserves equivalence with coefficient-domain ModDown followed by NTT.
 
-Select `floor` when reproducing earlier floor-based results. The handwritten legacy evaluator retains its floor reference semantics.
+Select `floor` when reproducing earlier floor-based results.

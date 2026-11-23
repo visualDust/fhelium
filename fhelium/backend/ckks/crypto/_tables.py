@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import torch
 from fhelium.backend.rns.context import RnsContext
+from fhelium.native.wrapper import rns_ops
 
 
 @dataclass(frozen=True)
@@ -45,54 +46,16 @@ class DecryptReconstructionTables:
                 int(context.montgomery_parameters.moduli[index])
                 for index in source_prime_ids
             ]
-            import math
-
-            half = math.prod(source_moduli) // 2
-            half_digits = []
-            for modulus in source_moduli:
-                half, digit = divmod(half, modulus)
-                half_digits.append(digit)
+            normalizers, propagation, _ = rns_ops.mixed_radix_tables(
+                source_moduli, [], context.dtype
+            )
             half_digits_by_depth.append(
-                torch.tensor(
-                    half_digits, dtype=context.dtype, device=context.device
+                rns_ops.half_product_digits(source_moduli, context.dtype).to(
+                    context.device
                 )
             )
-            prefix_products = []
-            product = source_moduli[0]
-            for index in range(len(source_moduli) - 1):
-                if index:
-                    product *= source_moduli[index]
-                prefix_products.append(product)
-            normalizers = []
-            propagation = torch.zeros(
-                (len(source_moduli) - 1, len(source_moduli)),
-                dtype=context.dtype,
-                device=context.device,
-            )
-            for component_index, prefix in enumerate(prefix_products):
-                next_modulus = source_moduli[component_index + 1]
-                normalizers.append(
-                    (
-                        pow(prefix, -1, next_modulus)
-                        * context.montgomery_parameters.R
-                    )
-                    % next_modulus
-                )
-                for target_index in range(
-                    component_index + 2,
-                    len(source_moduli),
-                ):
-                    propagation[component_index, target_index] = (
-                        prefix * context.montgomery_parameters.R
-                    ) % source_moduli[target_index]
-            normalizers_by_depth.append(
-                torch.tensor(
-                    normalizers,
-                    dtype=context.dtype,
-                    device=context.device,
-                )
-            )
-            propagation_by_depth.append(propagation)
+            normalizers_by_depth.append(normalizers.to(context.device))
+            propagation_by_depth.append(propagation.to(context.device))
         return cls(
             tuple(source_prime_ids_by_depth),
             tuple(normalizers_by_depth),

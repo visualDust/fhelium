@@ -7,13 +7,11 @@ import os
 from collections.abc import Mapping
 
 
-# The supported triton-csprng 0.1 series publishes platform-neutral wheels.
-# Its base metadata does not request the `triton` distribution; that
-# requirement belongs only to its optional cuda/dev extras. On Windows,
-# triton-windows supplies the importable `triton` implementation under a
-# different distribution name. The pinned 3.7.1.post27 release publishes both
-# cp312 and cp313 win_amd64 wheels and is the identity validated by the Windows
-# release/install checks.
+# FHElium's Triton backend imports `triton`. Linux CUDA Torch wheels already
+# request it; on Windows, triton-windows supplies the importable `triton`
+# implementation under a different distribution name. The pinned
+# 3.7.1.post27 release publishes both cp312 and cp313 win_amd64 wheels and is
+# the identity validated by the Windows release/install checks.
 DEPENDENCIES = [
     "click>=8.4.2",
     "mpmath>=1.3.0,<1.4",
@@ -24,7 +22,6 @@ DEPENDENCIES = [
     "safetensors>=0.8.0",
     "textual>=8.2.8",
     "torch>=2.10,<2.15",
-    "triton-csprng>=0.1.4,<0.2",
     "triton-windows==3.7.1.post27; sys_platform == 'win32'",
     "xdsl>=0.68,<0.69",
 ]

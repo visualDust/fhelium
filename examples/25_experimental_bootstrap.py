@@ -284,7 +284,7 @@ def main() -> None:
     )
     print(f'output actual scale: {refreshed.scale:.6g}')
     print(f'rotation keys: {len(evaluation_keys.rotation_keys)}')
-    if not args.core_graph:
+    if args.execution != "core-graph":
         print(f'bootstrap seconds: {elapsed:.3f}')
     print(f'max error: {error.max().item():.6g}')
     print(f'mean error: {error.mean().item():.6g}')

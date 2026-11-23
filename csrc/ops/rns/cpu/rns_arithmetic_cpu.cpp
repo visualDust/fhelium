@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "../../common/cpu/montgomery.h"
+#include "../../common/integer_lift.h"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
 #include "../backends.h"
@@ -501,61 +502,90 @@ torch::Tensor add_lazy_twice_modulus_cpu(const torch::Tensor lhs,
   return out;
 }
 
-torch::Tensor lift_centered_cpu(const torch::Tensor coefficients,
-                                const torch::Tensor twice_modulus) {
-  constexpr const char* operation = "rns_lift_centered_coefficients";
-  check_cpu_peer(coefficients, twice_modulus, operation, "twice_modulus");
+template <typename residue_t, typename integer_t>
+void lift_integer_rows_typed(const torch::Tensor& input,
+                             const torch::Tensor& twice_modulus,
+                             torch::Tensor& output) {
+  residue_t* values = output.data_ptr<residue_t>();
+  const integer_t* source = input.data_ptr<integer_t>();
+  const residue_t* twice = twice_modulus.data_ptr<residue_t>();
+  const int64_t twice_stride = twice_modulus.stride(0);
+  const int64_t batch_count = output.size(0);
+  const int64_t limbs = output.size(1);
+  const int64_t coefficient_count = output.size(2);
+  const int64_t source_stride0 = input.stride(0);
+  const int64_t source_stride1 = input.stride(1);
+  const int64_t out_stride0 = output.stride(0);
+  const int64_t out_stride1 = output.stride(1);
+  const int64_t out_stride2 = output.stride(2);
+  const int64_t elements = batch_count * limbs * coefficient_count;
+  at::parallel_for(
+      0,
+      elements,
+      fhelium::cpu::adaptive_grain(elements),
+      [&](int64_t begin, int64_t end) {
+        int64_t index = begin;
+        while (index < end) {
+          const int64_t batch_limb = index / coefficient_count;
+          const int64_t limb = batch_limb % limbs;
+          const int64_t batch = batch_limb / limbs;
+          const int64_t coefficient_begin =
+              index - batch_limb * coefficient_count;
+          const int64_t coefficient_end = std::min<int64_t>(
+              coefficient_count, end - batch_limb * coefficient_count);
+          const residue_t twice_modulus_value = twice[limb * twice_stride];
+          const integer_t* source_row = source + batch * source_stride0;
+          residue_t* output_row =
+              values + batch * out_stride0 + limb * out_stride1;
+          for (int64_t coefficient = coefficient_begin;
+               coefficient < coefficient_end;
+               ++coefficient) {
+            output_row[coefficient * out_stride2] =
+                fhelium::lift_integer_residue(
+                    source_row[coefficient * source_stride1],
+                    twice_modulus_value);
+          }
+          index = batch_limb * coefficient_count + coefficient_end;
+        }
+      });
+}
+
+template <typename residue_t>
+void lift_integer_rows(const torch::Tensor& input,
+                       const torch::Tensor& twice_modulus,
+                       torch::Tensor& output) {
+  AT_DISPATCH_SWITCH(input.scalar_type(),
+                     "rns_lift_integer_coefficients",
+                     AT_DISPATCH_CASE(at::kInt, [&] {
+                       lift_integer_rows_typed<residue_t, scalar_t>(
+                           input, twice_modulus, output);
+                     }) AT_DISPATCH_CASE(at::kLong, [&] {
+                       lift_integer_rows_typed<residue_t, scalar_t>(
+                           input, twice_modulus, output);
+                     }));
+}
+
+torch::Tensor lift_integer_cpu(const torch::Tensor coefficients,
+                               const torch::Tensor twice_modulus) {
+  constexpr const char* operation = "rns_lift_integer_coefficients";
+  TORCH_CHECK(
+      coefficients.device().is_cpu(), operation, " requires CPU tensors");
+  TORCH_CHECK(twice_modulus.device() == coefficients.device(),
+              operation,
+              " requires twice_modulus on the operand CPU device");
   const auto input = view_coefficient_batch_2d(coefficients, "coefficients");
   check_rns_row_vector(
       twice_modulus, twice_modulus.size(0), operation, "twice_modulus");
   auto shape = coefficients.sizes().vec();
   shape.insert(shape.end() - 1, twice_modulus.size(0));
-  auto out = coefficients.new_empty(shape);
+  auto out = twice_modulus.new_empty(shape);
   auto output = view_rns_batch_3d(out, "out");
-  AT_DISPATCH_INTEGRAL_TYPES(coefficients.scalar_type(), operation, [&] {
-    scalar_t* values = output.data_ptr<scalar_t>();
-    const scalar_t* source = input.data_ptr<scalar_t>();
-    const scalar_t* twice = twice_modulus.data_ptr<scalar_t>();
-    const int64_t twice_stride = twice_modulus.stride(0);
-    const int64_t batch_count = output.size(0);
-    const int64_t limbs = output.size(1);
-    const int64_t coefficient_count = output.size(2);
-    const int64_t source_stride0 = input.stride(0);
-    const int64_t source_stride1 = input.stride(1);
-    const int64_t out_stride0 = output.stride(0);
-    const int64_t out_stride1 = output.stride(1);
-    const int64_t out_stride2 = output.stride(2);
-    const int64_t elements = batch_count * limbs * coefficient_count;
-    at::parallel_for(
-        0,
-        elements,
-        fhelium::cpu::adaptive_grain(elements),
-        [&](int64_t begin, int64_t end) {
-          int64_t index = begin;
-          while (index < end) {
-            const int64_t batch_limb = index / coefficient_count;
-            const int64_t limb = batch_limb % limbs;
-            const int64_t batch = batch_limb / limbs;
-            const int64_t coefficient_begin =
-                index - batch_limb * coefficient_count;
-            const int64_t coefficient_end = std::min<int64_t>(
-                coefficient_count, end - batch_limb * coefficient_count);
-            const scalar_t twice_modulus_value = twice[limb * twice_stride];
-            const scalar_t* source_row = source + batch * source_stride0;
-            scalar_t* output_row =
-                values + batch * out_stride0 + limb * out_stride1;
-            for (int64_t coefficient = coefficient_begin;
-                 coefficient < coefficient_end;
-                 ++coefficient) {
-              output_row[coefficient * out_stride2] =
-                  fhelium::cpu::shift_positive(
-                      source_row[coefficient * source_stride1],
-                      twice_modulus_value);
-            }
-            index = batch_limb * coefficient_count + coefficient_end;
-          }
-        });
-  });
+  AT_DISPATCH_SWITCH(
+      twice_modulus.scalar_type(), operation, AT_DISPATCH_CASE(at::kInt, [&] {
+        lift_integer_rows<scalar_t>(input, twice_modulus, output);
+      }) AT_DISPATCH_CASE(at::kLong, [&] {
+        lift_integer_rows<scalar_t>(input, twice_modulus, output);
+      }));
   return out;
 }
 
@@ -958,9 +988,9 @@ void shift_residues_positive_(at::Tensor& a, const at::Tensor& p) {
   unary_cpu<UnaryOperation::kShiftPositive>(a, p, "rns_shift_positive");
 }
 
-at::Tensor lift_centered_coefficients(const at::Tensor& centered_coefficients,
-                                      const at::Tensor& twice_modulus) {
-  return ::lift_centered_cpu(centered_coefficients, twice_modulus);
+at::Tensor lift_integer_coefficients(const at::Tensor& coefficients,
+                                     const at::Tensor& twice_modulus) {
+  return ::lift_integer_cpu(coefficients, twice_modulus);
 }
 
 at::Tensor mixed_radix_decompose(

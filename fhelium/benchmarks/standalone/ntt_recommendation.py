@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from fhelium.legacy.engine import CkksEngine
-
 import gc
 import math
 import statistics
@@ -28,7 +26,10 @@ from fhelium.benchmarks.standalone.ntt_kernel import (
     measure_ntt_operation,
     prepare_ntt_operation_inputs,
 )
-from fhelium.benchmarks.synthetic import ckks_message
+from fhelium.backend.ntt.context import NttContext
+from fhelium.backend.rns.context import RnsContext
+from fhelium.benchmarks.synthetic import ckks_engine, ckks_message
+from fhelium.eager import Engine
 from fhelium.benchmarks.timing import measure
 from fhelium.config import CkksConfig
 from fhelium.config.ntt import compatible_ntt_backends
@@ -116,7 +117,10 @@ def _kernel_measurements(
                 f"Kernel suite repetition {repetition + 1}/{repetitions}: "
                 f"{backend}"
             )
-            engine = CkksEngine(preset, device=device, ntt_backend=backend)
+            engine = NttContext(
+                RnsContext(CkksConfig.parse(preset), device=device),
+                ntt_backend=backend,
+            )
             standard_rows = make_residue_rows(engine, seed=seed + repetition)
             operation_inputs = prepare_ntt_operation_inputs(
                 engine, standard_rows
@@ -148,15 +152,16 @@ def _kernel_measurements(
 
 
 def _primitive_setup(
-    engine: CkksEngine,
+    engine: Engine,
+    device: str,
 ) -> tuple[
     dict[str, Callable[[], object]],
     dict[str, float],
 ]:
     message_x = ckks_message(engine)
     message_y = ckks_message(engine, phase=0.3)
-    ciphertext_x = engine.encrypt_message(message_x)
-    ciphertext_y = engine.encrypt_message(message_y)
+    ciphertext_x = engine.encrypt_message(message_x, device=device)
+    ciphertext_y = engine.encrypt_message(message_y, device=device)
     ciphertext_x_ntt = engine.coefficient_domain_to_ntt_domain(ciphertext_x)
     ciphertext_y_ntt = engine.coefficient_domain_to_ntt_domain(ciphertext_y)
     relinearization_key = engine.relinearization_key
@@ -164,8 +169,12 @@ def _primitive_setup(
     rotation_keys = tuple(engine.rotation_key(step) for step in rotation_steps)
 
     operations: dict[str, Callable[[], object]] = {
-        "encrypt_message": lambda: engine.encrypt_message(message_x),
-        "decrypt_message": lambda: engine.decrypt_message(ciphertext_x),
+        "encrypt_message": lambda: engine.encrypt_message(
+            message_x, device=device
+        ),
+        "decrypt_message": lambda: engine.decrypt_message(
+            ciphertext_x, device="cpu"
+        ),
         "multiply_relinearize": lambda: engine.relinearize(
             engine.multiply(ciphertext_x_ntt, ciphertext_y_ntt),
             relinearization_key,
@@ -178,7 +187,7 @@ def _primitive_setup(
         ),
     }
 
-    decrypted = engine.decrypt_message(ciphertext_x)
+    decrypted = engine.decrypt_message(ciphertext_x, device="cpu")
     decrypt_error = float(torch.max(torch.abs(decrypted - message_x)).item())
     multiplied = engine.relinearize(
         engine.multiply(ciphertext_x_ntt, ciphertext_y_ntt),
@@ -187,7 +196,8 @@ def _primitive_setup(
     multiply_error = float(
         torch.max(
             torch.abs(
-                engine.decrypt_message(multiplied) - message_x * message_y
+                engine.decrypt_message(multiplied, device="cpu")
+                - message_x * message_y
             )
         ).item()
     )
@@ -195,7 +205,7 @@ def _primitive_setup(
     rotate_error = float(
         torch.max(
             torch.abs(
-                engine.decrypt_message(rotated)
+                engine.decrypt_message(rotated, device="cpu")
                 - torch.roll(message_x, shifts=rotation_steps[0])
             )
         ).item()
@@ -205,7 +215,7 @@ def _primitive_setup(
         float(
             torch.max(
                 torch.abs(
-                    engine.decrypt_message(value)
+                    engine.decrypt_message(value, device="cpu")
                     - torch.roll(message_x, shifts=step)
                 )
             ).item()
@@ -221,7 +231,7 @@ def _primitive_setup(
     maximum_error = max(errors.values())
     if maximum_error > _CORRECTNESS_ATOL:
         raise RuntimeError(
-            f"CKKS primitive correctness failed for {engine.ntt_backend_name}: "
+            f"CKKS primitive correctness failed for {engine.ntt_backend_name(device)}: "
             f"max error {maximum_error:.6g} exceeds {_CORRECTNESS_ATOL:.6g}"
         )
     return operations, errors
@@ -247,8 +257,8 @@ def _primitive_measurements(
                 f"CKKS primitive suite repetition {repetition + 1}/{repetitions}: "
                 f"{backend}; preparing keys"
             )
-            engine = CkksEngine(preset, device=device, ntt_backend=backend)
-            operations, errors = _primitive_setup(engine)
+            engine = ckks_engine(preset, device=device, ntt_backend=backend)
+            operations, errors = _primitive_setup(engine, device)
             maximum_error = max(errors.values())
             for operation_name in _PRIMITIVE_OPERATIONS:
                 progress(f"Measuring {backend}: {operation_name}")
@@ -256,7 +266,7 @@ def _primitive_measurements(
                     operations[operation_name],
                     warmup=warmup,
                     runs=runs,
-                    device=engine.device,
+                    device=torch.device(device),
                     include_samples=True,
                 )
                 measurements.append(
@@ -620,8 +630,7 @@ def recommend_ntt_backend(
         scalars={
             **summary,
             "apply": (
-                f'CkksEngine(Preset.{preset.name}, device="{device}", '
-                f'ntt_backend="{recommended}")'
+                f'Engine(Preset.{preset.name}, ntt_backend="{recommended}")'
             ),
         },
         metadata={

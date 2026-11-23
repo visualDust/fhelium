@@ -973,9 +973,6 @@ class _EngineCalls:
                     "polynomial_domain": StringAttr(domain),
                     "scale": FloatAttr(scale, f64),
                     "ring_dimension": IntegerAttr(self.engine.config.N, 64),
-                    "min_modulus": IntegerAttr(
-                        min(self.engine.config.moduli[i] for i in ids), 64
-                    ),
                 },
             )
             c.block.add_op(operation)
@@ -1091,9 +1088,6 @@ class _EngineCalls:
                     attributes={
                         "depth": IntegerAttr(int(source.depth), 64),
                         "modulus_basis": StringAttr(basis),
-                        "min_modulus": IntegerAttr(
-                            min(self.engine.config.moduli[i] for i in rows), 64
-                        ),
                     },
                 )
             )
@@ -1914,7 +1908,7 @@ class _EngineCalls:
                 None
                 if integer
                 else cast(FloatAttr, attrs["scalar_scale"]).value.data,
-                None if integer else dispatcher.rng.rounding_state,
+                None if integer else dispatcher.rng.seed,
             )
             tensor_operands.extend(
                 c.material(

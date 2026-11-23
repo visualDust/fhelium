@@ -8,6 +8,7 @@ import torch
 
 from fhelium.backend.rns.montgomery import MontgomeryParameters
 from fhelium.backend.rns.layout import RnsLayout
+from fhelium.native.wrapper import rns_ops
 
 
 @dataclass(frozen=True)
@@ -205,80 +206,29 @@ class RnsParameterStore:
             or row_parameters.mixed_radix_normalizers is not None
         ):
             return
-        source_prime_ids = row_parameters.prime_ids
-        destination_prime_ids = self.rns_layout.prime_ids(0, include_p=True)
-        destination_moduli = [
-            self.montgomery_parameters.moduli[index]
-            for index in destination_prime_ids
-        ]
-        destination_r2 = [
-            self.montgomery_parameters.montgomery_r2[index]
-            for index in destination_prime_ids
-        ]
-
-        digit_width = len(source_prime_ids)
         source_moduli = [
             self.montgomery_parameters.moduli[index]
-            for index in source_prime_ids
+            for index in row_parameters.prime_ids
         ]
-        basis_products = [source_moduli[0]]
-        for index in range(1, digit_width - 1):
-            basis_products.append(basis_products[-1] * source_moduli[index])
-
-        normalizers = []
-        propagation = torch.zeros(
-            (max(digit_width - 1, 0), digit_width),
-            dtype=self.torch_dtype,
-            device=self.device,
+        destination_moduli = [
+            self.montgomery_parameters.moduli[index]
+            for index in self.rns_layout.prime_ids(0, include_p=True)
+        ]
+        normalizers, propagation, extension = rns_ops.mixed_radix_tables(
+            source_moduli, destination_moduli, self.torch_dtype
         )
-        for component_index in range(digit_width - 1):
-            inverse = pow(
-                basis_products[component_index],
-                -1,
-                source_moduli[component_index + 1],
-            )
-            normalizers.append(
-                (inverse * self.montgomery_parameters.R)
-                % source_moduli[component_index + 1]
-            )
-            for target_index in range(component_index + 2, digit_width):
-                propagation[component_index, target_index] = (
-                    basis_products[component_index]
-                    * self.montgomery_parameters.R
-                ) % source_moduli[target_index]
-
-        if not normalizers:
-            return
         object.__setattr__(
             row_parameters,
             "mixed_radix_normalizers",
-            torch.tensor(
-                normalizers,
-                dtype=self.torch_dtype,
-                device=self.device,
-            ),
+            normalizers.to(self.device),
         )
         object.__setattr__(
             row_parameters,
             "mixed_radix_propagation_coefficients",
-            propagation,
+            propagation.to(self.device),
         )
         object.__setattr__(
             row_parameters,
             "basis_extension_coefficients",
-            torch.tensor(
-                [
-                    [
-                        (basis_product * r2) % modulus
-                        for r2, modulus in zip(
-                            destination_r2,
-                            destination_moduli,
-                            strict=True,
-                        )
-                    ]
-                    for basis_product in basis_products[: digit_width - 1]
-                ],
-                dtype=self.torch_dtype,
-                device=self.device,
-            ),
+            extension.to(self.device),
         )

@@ -1,9 +1,9 @@
-from fhelium.legacy.engine import CkksEngine
 import pytest
 import torch
 
 import fhelium.native  # noqa: F401 - loads native torch operator libraries
 from fhelium import Preset
+from fhelium.eager import Engine
 from fhelium.native.wrapper import ckks_ops, ntt_ops, rns_ops
 
 
@@ -47,9 +47,14 @@ def test_ciphertext_add_inplace_reuses_storage_without_mutating_inputs() -> (
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
 
-    engine = CkksEngine(Preset.slots8192_scale40_depth7_int64, device="cuda:0")
-    left = engine.encrypt_message(torch.randn(32, dtype=torch.float64) * 0.01)
-    right = engine.encrypt_message(torch.randn(32, dtype=torch.float64) * 0.01)
+    engine = Engine(Preset.slots8192_scale40_depth7_int64)
+    with torch.device("cuda:0"):
+        left = engine.encrypt_message(
+            torch.randn(32, dtype=torch.float64) * 0.01
+        )
+        right = engine.encrypt_message(
+            torch.randn(32, dtype=torch.float64) * 0.01
+        )
     left_before = left.data.clone()
     right_before = right.data.clone()
 
