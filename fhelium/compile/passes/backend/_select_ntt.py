@@ -8,7 +8,6 @@ if TYPE_CHECKING:
     from fhelium.compile._compilation import Compilation
 
 
-import json
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -21,6 +20,7 @@ from fhelium.backend.implementation import (
     requested_implementation,
 )
 from fhelium.config import CkksConfig
+from fhelium.config._derived import config_from_text
 from fhelium.ir.dialects import ckks, core, ntt
 
 from ..._materials import material_symbol, parameter_description
@@ -188,7 +188,7 @@ class SelectNttImplementationsPass:
                     )
                 config_attr = operation.attributes.get("ckks_config")
                 config = (
-                    CkksConfig.parse(json.loads(config_attr.data))
+                    config_from_text(config_attr.data)
                     if isinstance(config_attr, StringAttr)
                     else workspace.get(CkksConfig)
                 )

@@ -19,7 +19,12 @@ from fhelium.config.ntt import (
 )
 
 from ....ir.dialects import ckks, core, ntt, rns
-from ..._materials import material_symbol, parameter_description
+from ..._materials import (
+    declare_material,
+    material_symbol,
+    parameter_description,
+    parameter_request_identity,
+)
 from ._arithmetic import _parameter_descriptions, _parameters
 from ._core import (
     CkksLoweringDefinition,
@@ -96,17 +101,11 @@ def _lower_ntt(
         )
         count = _ntt_table_count(policy_name)
         rns_operations, parameter = _parameters(operation, config, compilation)
-        refs = tuple(
-            core.MaterialRefOp(
-                core.MessageType(),
-                symbol=material_symbol(
-                    operation, f"ntt/{basis}/{depth}/{direction}/{i}"
-                ),
-            )
-            for i in range(1, count)
-        )
-        parameter_ops = (*rns_operations, *refs)
-        parameters = (parameter, *(ref.value for ref in refs))
+        parameter_ops = rns_operations
+        table_values = []
+        physical = {
+            name: state[name] for name in ("dtype", "device") if name in state
+        }
         descriptions.update(
             _parameter_descriptions(rns_operations, operation, config)
         )
@@ -117,18 +116,37 @@ def _lower_ntt(
             and all(isinstance(item, IntegerAttr) for item in prime_ids)
             else []
         )
-        for index, reference in enumerate(refs, 1):
+        for index in range(1, count):
             fields = dict(
                 prime_ids=ids,
                 direction=direction,
                 index=index,
                 ntt_backend=policy_name,
             )
-            descriptions[cast(StringAttr, reference.symbol).data] = (
+            description = (
                 {"kind": "ntt_table", **fields}
                 if config is None
                 else parameter_description(config, "ntt_table", **fields)
             )
+            created, table = declare_material(
+                compilation,
+                operation,
+                f"ntt/{basis}/{depth}/{direction}/{index}",
+                core.MessageType().with_state(physical),
+                description,
+                identity=(
+                    parameter_request_identity(description, physical)
+                    if config is not None
+                    else None
+                ),
+            )
+            parameter_ops = (*parameter_ops, *created)
+            table_values.append(table)
+            for reference in created:
+                descriptions[cast(StringAttr, reference.symbol).data] = (
+                    description
+                )
+        parameters = (parameter, *table_values)
 
     value_kind = (
         "ciphertext"

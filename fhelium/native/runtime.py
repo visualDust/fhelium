@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -26,6 +28,8 @@ class NativeStatus:
     ``available`` is true only after binary discovery, ABI-manifest validation,
     PyTorch loading, and FakeTensor registration succeed. ``reason`` and
     ``details`` explain the recorded result without triggering a new load.
+    ``sdk_root`` contains libfhelium under ``lib``, its public headers under
+    ``include``, and the FHElium CMake package under ``share/cmake``.
     """
 
     available: bool
@@ -34,6 +38,7 @@ class NativeStatus:
     binary_path: Path
     manifest_path: Path
     backends: tuple[str, ...]
+    sdk_root: Path
 
 
 class NativeExtensionError(ImportError):
@@ -101,6 +106,7 @@ def _unavailable(reason: str, *details: str) -> NativeStatus:
         binary_path=_OPS_PATH,
         manifest_path=_MANIFEST_PATH,
         backends=(),
+        sdk_root=_NATIVE_DIR,
     )
     if not _IS_SOURCE_CHECKOUT:
         raise NativeExtensionError(_diagnostic(status))
@@ -140,7 +146,14 @@ def _initialize_native() -> NativeStatus:
             "the native ABI manifest has invalid backend metadata", str(error)
         )
 
+    # Wheels install the libfhelium SDK under native/; editable manifests
+    # record their ABI-specific build-tree SDK.
+    sdk_root = Path(manifest.get("sdk_root") or _NATIVE_DIR)
     try:
+        # _ops links libfhelium. Windows resolves it through the DLL search
+        # path; other platforms use the module's runtime search path.
+        if sys.platform == "win32":
+            os.add_dll_directory(str(sdk_root / "lib"))
         torch.ops.load_library(str(_OPS_PATH))
     except Exception as error:
         return _unavailable(
@@ -155,6 +168,7 @@ def _initialize_native() -> NativeStatus:
         binary_path=_OPS_PATH,
         manifest_path=_MANIFEST_PATH,
         backends=backends,
+        sdk_root=sdk_root,
     )
 
 
@@ -229,9 +243,17 @@ if _NATIVE_STATUS.available:
         )
 
 
+# CMake prefix containing the FHElium C++ package. Add it and
+# ``torch.utils.cmake_prefix_path`` to ``CMAKE_PREFIX_PATH`` so that
+# ``find_package(FHElium)`` locates libfhelium, its public headers, and the
+# Torch build it was compiled against.
+cmake_prefix_path = str(_NATIVE_STATUS.sdk_root / "share" / "cmake")
+
+
 __all__ = [
     "NativeExtensionError",
     "NativeStatus",
+    "cmake_prefix_path",
     "native_available",
     "native_backend_available",
     "native_status",

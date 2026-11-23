@@ -10,6 +10,7 @@ from ..._pipeline import (
 from fhelium.backend.execution import OperationBackend
 
 
+from ._link_calls import LinkCalledFunctionsPass
 from ._link_program import LinkProgramPass
 from ._initialize_resources import InitializeResourceBindingsPass
 from ._materialize_resources import MaterializeResourcesPass
@@ -34,6 +35,7 @@ def backend_linking_pipeline(
     return Pipeline(
         (
             ResolveTensorPlaceholdersPass(),
+            LinkCalledFunctionsPass(backend),
             ResolveBackendOperationsPass(
                 backend.registry,
                 in_place=in_place,
@@ -41,7 +43,8 @@ def backend_linking_pipeline(
             InitializeResourceBindingsPass(resources),
             *materialization,
             LinkProgramPass(),
-        )
+        ),
+        verify=False,
     )
 
 

@@ -45,6 +45,7 @@ class CallSignature:
     """Collect the conditions for one flat callable or Program invocation."""
 
     arguments: tuple[ArgumentSignature, ...]
+    context: tuple[object, ...] = ()
 
     def argument(self, name: str) -> ArgumentSignature:
         """Return a named argument description."""
@@ -210,4 +211,4 @@ def prepare_match(
         + "\n"
     )
     exec(compile(source, "<fhelium-specialization-match>", "exec"), namespace)
-    return cast(Callable[[tuple[object, ...]], bool], namespace["matches"])
+    return cast(Callable[[tuple[object, ...]], bool], namespace.pop("matches"))

@@ -2,22 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import torch
 
-from fhelium.config import CkksConfig
 from fhelium.config.ntt import (
     CompactFixedRadixPolicy,
     CompactRadix2Policy,
     IndexedRadix2Policy,
     NttBackendPolicy,
-)
-from fhelium.backend.ntt.plans import (
-    CompactPowerOfTwoRadixNttPlan,
-    CompactRadix2NttPlan,
-    IndexedRadix2NttPlan,
 )
 from fhelium.native.wrapper import ntt_ops, rns_ops
 
@@ -70,34 +64,25 @@ class CompactPowerOfTwoRadixTables:
 NttTables = (
     IndexedRadix2Tables | CompactRadix2Tables | CompactPowerOfTwoRadixTables
 )
-MaterializeParameterRows = Callable[[torch.Tensor], torch.Tensor]
-
-
-def _copy_indices_to_device(
-    indices: torch.Tensor, *, device: torch.device
-) -> torch.Tensor:
-    if indices.dtype != torch.int32:
-        raise TypeError(
-            f"Indexed NTT schedules require torch.int32, got {indices.dtype}"
-        )
-    return indices.detach().clone().to(device=device)
 
 
 def prepare_ntt_tables(
     policy: NttBackendPolicy,
-    ckks_config: CkksConfig,
+    moduli: Sequence[int],
+    log_n: int,
     *,
-    materialize_parameter_rows: MaterializeParameterRows,
     device: torch.device,
     rns_params: torch.Tensor,
     dtype: torch.dtype,
 ) -> NttTables:
     """Build execution-ready Tensor tables in the selected numerical layout.
 
-    Prime rows follow depth-zero QP order. Montgomery tables are converted
-    during preparation using the supplied RNS parameters. Shoup32 pairs retain
-    their standard roots and quotient words without Montgomery conversion.
+    libfhelium builds the standard-residue tables on the host with prime rows
+    in ``moduli`` order, which matches the columns of ``rns_params``.
+    Montgomery tables are converted on ``device`` with those parameters.
+    Shoup32 pairs retain their standard roots and quotient words.
     """
+    moduli = list(moduli)
     shoup32 = (
         isinstance(policy, CompactRadix2Policy)
         and policy.twiddle_encoding == "shoup32"
@@ -108,63 +93,48 @@ def prepare_ntt_tables(
         )
 
     def materialize_twiddles(table: torch.Tensor) -> torch.Tensor:
-        result = materialize_parameter_rows(table)
+        result = table.to(device)
         if not shoup32:
             rns_ops.to_montgomery_(result.view(result.size(0), -1), rns_params)
         return result
 
     if isinstance(policy, CompactRadix2Policy):
-        plan = CompactRadix2NttPlan(
-            ckks_config,
-            device="cpu",
-            dtype=dtype,
-            twiddle_encoding=policy.twiddle_encoding,
+        forward, inverse = ntt_ops.compact_twiddles(
+            moduli, log_n, dtype, shoup32
         )
         return CompactRadix2Tables(
-            forward_twiddles=materialize_twiddles(plan.forward_twiddles),
-            inverse_twiddles=materialize_twiddles(plan.inverse_twiddles),
+            forward_twiddles=materialize_twiddles(forward),
+            inverse_twiddles=materialize_twiddles(inverse),
         )
 
     if isinstance(policy, IndexedRadix2Policy):
-        plan = IndexedRadix2NttPlan(ckks_config, device="cpu", dtype=dtype)
-        for indices in (plan.forward_indices, plan.inverse_indices):
+        (
+            forward_indices,
+            forward_twiddles,
+            inverse_indices,
+            inverse_twiddles,
+        ) = ntt_ops.indexed_radix2_plan(moduli, log_n, dtype)
+        for indices in (forward_indices, inverse_indices):
             ntt_ops.validate_indexed_schedule(
-                indices[0], indices[1], ckks_config.N
+                indices[0], indices[1], 1 << log_n
             )
+        forward_indices = forward_indices.to(device)
+        inverse_indices = inverse_indices.to(device)
         return IndexedRadix2Tables(
-            forward_even_indices=_copy_indices_to_device(
-                plan.forward_indices[0], device=device
-            ),
-            forward_odd_indices=_copy_indices_to_device(
-                plan.forward_indices[1], device=device
-            ),
-            forward_twiddles=materialize_twiddles(plan.forward_twiddles),
-            inverse_even_indices=_copy_indices_to_device(
-                plan.inverse_indices[0], device=device
-            ),
-            inverse_odd_indices=_copy_indices_to_device(
-                plan.inverse_indices[1], device=device
-            ),
-            inverse_twiddles=materialize_twiddles(plan.inverse_twiddles),
+            forward_even_indices=forward_indices[0],
+            forward_odd_indices=forward_indices[1],
+            forward_twiddles=materialize_twiddles(forward_twiddles),
+            inverse_even_indices=inverse_indices[0],
+            inverse_odd_indices=inverse_indices[1],
+            inverse_twiddles=materialize_twiddles(inverse_twiddles),
         )
 
     if isinstance(policy, CompactFixedRadixPolicy):
-        plan = CompactPowerOfTwoRadixNttPlan(
-            ckks_config, policy, device="cpu", dtype=dtype
+        tables = ntt_ops.power_of_two_radix_twiddles(
+            moduli, log_n, policy.radix, dtype
         )
         return CompactPowerOfTwoRadixTables(
-            forward_outer_twiddles=materialize_twiddles(
-                plan.forward_outer_twiddles
-            ),
-            inverse_outer_twiddles=materialize_twiddles(
-                plan.inverse_outer_twiddles
-            ),
-            forward_radix_root_powers=materialize_twiddles(
-                plan.forward_radix_root_powers
-            ),
-            inverse_radix_root_powers=materialize_twiddles(
-                plan.inverse_radix_root_powers
-            ),
+            *(materialize_twiddles(table) for table in tables)
         )
 
     raise AssertionError(f"Unhandled NTT policy {policy}")

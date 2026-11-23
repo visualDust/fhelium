@@ -25,7 +25,9 @@ authors:
 version: 0.40.1rc2
 repository-code: "https://github.com/VisualDust/fhelium"
 url: "https://fhelium.550w.host"
-license: MIT
+license:
+  - MIT
+  - Apache-2.0
 keywords:
   - CKKS
   - fully homomorphic encryption

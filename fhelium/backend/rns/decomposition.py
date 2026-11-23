@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import prod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fhelium.config import CkksConfig
 
 from fhelium.backend.rns.chain import RnsChain
+from fhelium.native.wrapper import ckks_ops
 
 
 def _partition_q_digits(
@@ -18,19 +18,11 @@ def _partition_q_digits(
     p_moduli: tuple[int, ...],
 ) -> tuple[tuple[int, ...], ...]:
     """Partition aligned Q rows below product(P), retaining oversized singletons."""
-    p_product = prod(p_moduli)
     digits: list[tuple[int, ...]] = []
     start = 0
-    while start < len(q_moduli):
-        stop = start
-        product = 1
-        while stop < len(q_moduli) and product * q_moduli[stop] < p_product:
-            product *= q_moduli[stop]
-            stop += 1
-        if stop == start:
-            stop += 1
-        digits.append(tuple(q_prime_ids[start:stop]))
-        start = stop
+    for size in ckks_ops.key_digit_sizes(list(q_moduli), list(p_moduli)):
+        digits.append(tuple(q_prime_ids[start : start + size]))
+        start += size
     return tuple(digits)
 
 

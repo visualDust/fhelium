@@ -224,13 +224,23 @@ def main() -> None:
         from fhelium import compile as fc
 
         prepared = bootstrap.prepare(depleted, evaluation_keys=evaluation_keys)
+        optimized = fc.compile(prepared, graph=False)
         try:
-            optimized = fc.compile(prepared)
             refreshed = optimized(depleted)
             torch.cuda.synchronize()
             elapsed = time.perf_counter() - started
             print(f"prepared complete Compile seconds: {elapsed:.6f}")
+            statistics = optimized.stats()
+            print("Compile preparation seconds:", statistics["prepare_seconds"])
+            for record in statistics["specializations"]:
+                print(
+                    "Program cache:",
+                    record["cache"],
+                    "kernel warm seconds:",
+                    record.get("warm_seconds", 0.0),
+                )
         finally:
+            optimized.clear()
             prepared.close()
     elif args.execution == "core-graph":
         coordinate, ratio = bootstrap.entry(depleted)
@@ -284,7 +294,7 @@ def main() -> None:
     )
     print(f'output actual scale: {refreshed.scale:.6g}')
     print(f'rotation keys: {len(evaluation_keys.rotation_keys)}')
-    if not args.core_graph:
+    if args.execution != "core-graph":
         print(f'bootstrap seconds: {elapsed:.3f}')
     print(f'max error: {error.max().item():.6g}')
     print(f'mean error: {error.mean().item():.6g}')

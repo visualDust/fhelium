@@ -8,7 +8,9 @@ from xdsl.dialects.builtin import ArrayAttr, IntegerAttr, StringAttr
 from xdsl.ir import Attribute, Operation
 from fhelium.backend.rns.decomposition import key_decomposition_facts
 from fhelium.config import CkksConfig
+from fhelium.config._derived import derived_fact
 from fhelium.ir.dialects import ckks
+from fhelium.ir.dialects._common import state_attribute
 from fhelium.backend.ntt._selection import select_operation_policy, table_count
 from fhelium.backend.rns._preparation import (
     hybrid_decomposition_facts,
@@ -77,6 +79,11 @@ def operation_key_facts(operation: Operation, config: CkksConfig, depth: int):
     return key_decomposition_facts(config, depth, *layouts[0])
 
 
+_UNKEYED_ATTRIBUTES = frozenset(
+    {"rotation_step", "parameter_names", "ckks_config"}
+)
+
+
 def native_key_switch_requirements(
     operation: Operation, config: CkksConfig
 ) -> tuple[dict[str, Attribute], dict[str, dict[str, object]]] | None:
@@ -85,7 +92,54 @@ def native_key_switch_requirements(
     Existing numerical operands are retained by Compile. Internal NTT choices
     belong to this native whole implementation; logical NTT operations exposed
     by a lowering use the ordinary NTT implementation selector instead.
+
+    The requirements depend on the operation name, the input depth and device, the key row and digit layouts, and the operation's other attributes and properties. They are derived once per such key and configuration; the rotation step selects only Galois tables and is copied onto each result.
     """
+    state = getattr(
+        getattr(operation.operands[0].type, "state", None), "data", {}
+    )
+    keys = (
+        tuple(getattr(operation, "keys"))
+        if hasattr(operation, "keys")
+        else (getattr(operation, "key"),)
+    )
+    layouts = []
+    for key in keys:
+        key_state = getattr(getattr(key.type, "state", None), "data", {})
+        layouts.append(
+            (key_state.get("prime_ids"), key_state.get("digit_prime_ids"))
+        )
+    requirements = derived_fact(
+        config,
+        "native_key_switch_requirements",
+        (
+            operation.name,
+            state.get("depth"),
+            state.get("device"),
+            tuple(layouts),
+            tuple(
+                sorted(
+                    item
+                    for item in operation.attributes.items()
+                    if item[0] not in _UNKEYED_ATTRIBUTES
+                )
+            ),
+            tuple(sorted(operation.properties.items())),
+        ),
+        lambda: _native_key_switch_requirements(operation, config),
+    )
+    if requirements is None:
+        return None
+    attributes, descriptions = requirements
+    attributes = dict(attributes)
+    if isinstance(operation, ckks.RotateOp):
+        attributes["rotation_step"] = operation.rotation_step
+    return attributes, dict(descriptions)
+
+
+def _native_key_switch_requirements(
+    operation: Operation, config: CkksConfig
+) -> tuple[dict[str, Attribute], dict[str, dict[str, object]]] | None:
     rounding = cast(
         StringAttr,
         operation.attributes.get("moddown_rounding", StringAttr("nearest")),
@@ -187,18 +241,18 @@ def native_key_switch_requirements(
                 IntegerAttr(i, 64) for i in drop_ids
             ),
         )
-    if isinstance(operation, ckks.RotateOp):
-        step = cast(ckks.EvaluationKeyType, operation.key.type).state.data.get(
-            "rotation_step"
-        )
-        if not isinstance(step, IntegerAttr):
-            return None
-        attributes["rotation_step"] = step
     for name in ("q_count", "p_count", "key_row_start"):
-        attributes[name] = IntegerAttr(cast(int, facts[name]), 64)
-    attributes["digits"] = ArrayAttr(
-        ArrayAttr(IntegerAttr(x, 64) for x in span)
-        for span in cast(tuple[tuple[int, ...], ...], facts["digits"])
+        attributes[name] = cast(
+            Attribute, state_attribute(cast(int, facts[name]))
+        )
+    attributes["digits"] = cast(
+        Attribute,
+        state_attribute(
+            tuple(
+                tuple(span)
+                for span in cast(tuple[tuple[int, ...], ...], facts["digits"])
+            )
+        ),
     )
     return attributes, {
         name: table_description(config, int(depth.value.data), name, facts)

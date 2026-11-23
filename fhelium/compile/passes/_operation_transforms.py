@@ -19,15 +19,16 @@ _KNOWN_REGION_OPERATION_NAMES = frozenset(
     {
         scf.ForOp.name,
         scf.IfOp.name,
+        ckks.RepeatOp.name,
         "fhelium_dist.all_reduce",
     }
 )
 
 
 def _is_terminator(operation: Operation) -> bool:
-    return isinstance(operation, (ReturnOp, scf.YieldOp)) or operation.name == (
-        "fhelium_dist.yield"
-    )
+    return isinstance(
+        operation, (ReturnOp, scf.YieldOp, ckks.RepeatYieldOp)
+    ) or operation.name == ("fhelium_dist.yield")
 
 
 def _known_region_blocks(operation: Operation) -> tuple[Block, ...]:

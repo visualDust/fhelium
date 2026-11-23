@@ -4,6 +4,8 @@ FHElium builds its native extension against the PyTorch installation in the acti
 
 <InstallCommand :show-details-link="false" />
 
+The `fhelium` package also contains the C++ library `libfhelium`, its headers, and the `FHElium` CMake package. Selecting C++ in the installer selects a source build and appends the commands that configure a CMake project against the installed package; [Call the native library from C++](../how-to/call-native-library-from-cpp.md) describes linking and the C++ interface.
+
 Binary compatibility includes the Python ABI, pinned Torch version, Torch CUDA or HIP version, C++ ABI, and compiled GPU architectures. Published prebuilt wheels cover CPU and NVIDIA CUDA configurations. AMD ROCm builds currently use the source-checkout procedure below. Prebuilt Linux wheels are complete `fhelium` wheels served by FHElium's static release store. The installer above selects the configuration-specific wheel index corresponding to the chosen Torch and compute platform. PyPI provides the source distribution for supported source-build environments.
 
 The following command builds from the PyPI source distribution against the preinstalled target Torch environment:

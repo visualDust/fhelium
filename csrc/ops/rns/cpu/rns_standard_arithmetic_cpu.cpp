@@ -1,12 +1,12 @@
 #include <ATen/Dispatch.h>
 #include <ATen/Parallel.h>
-#include <torch/library.h>
 #include <torch/torch.h>
 #include <algorithm>
 
 #include "../../common/cpu/montgomery.h"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
+#include "../backends.h"
 #include "rns_standard_arithmetic_cpu.h"
 
 namespace {
@@ -264,9 +264,8 @@ torch::Tensor rns_sum_standard_batch_cpu(const torch::Tensor source,
   TORCH_CHECK(dim >= 0 && dim <= source.dim() - 3,
               operation,
               " dim must select a leading batch axis");
-  TORCH_CHECK(source.size(dim) > 0,
-              operation,
-              " cannot reduce an empty batch axis");
+  TORCH_CHECK(
+      source.size(dim) > 0, operation, " cannot reduce an empty batch axis");
   const auto input = view_rns_batch_3d(source, "source");
   check_rns_parameter_rows(input, rns_params, operation);
   auto sizes = source.sizes().vec();
@@ -300,22 +299,18 @@ torch::Tensor rns_sum_standard_batch_cpu(const torch::Tensor source,
     const int64_t threads = std::max<int64_t>(at::get_num_threads(), 1);
     constexpr int64_t preferred_block = 512;
     int64_t coefficient_block = preferred_block;
-    if (row_count * ((coefficient_count + coefficient_block - 1) /
-                     coefficient_block) <
+    if (row_count *
+            ((coefficient_count + coefficient_block - 1) / coefficient_block) <
         threads * 2) {
-      const int64_t blocks =
-          (threads * 2 + row_count - 1) / row_count;
-      coefficient_block = std::max<int64_t>(
-          64, (coefficient_count + blocks - 1) / blocks);
+      const int64_t blocks = (threads * 2 + row_count - 1) / row_count;
+      coefficient_block =
+          std::max<int64_t>(64, (coefficient_count + blocks - 1) / blocks);
       coefficient_block = ((coefficient_block + 63) / 64) * 64;
     }
     const int64_t block_count =
         (coefficient_count + coefficient_block - 1) / coefficient_block;
     at::parallel_for(
-        0,
-        row_count * block_count,
-        1,
-        [&](int64_t begin, int64_t end) {
+        0, row_count * block_count, 1, [&](int64_t begin, int64_t end) {
           for (int64_t task = begin; task < end; ++task) {
             const int64_t row_index = task / block_count;
             const int64_t block_index = task % block_count;
@@ -329,20 +324,20 @@ torch::Tensor rns_sum_standard_batch_cpu(const torch::Tensor source,
             const scalar_t* source_row =
                 values + (outer * count * inner + inner_index) * value_stride0 +
                 limb * value_stride1;
-            scalar_t* result_row = result + plane * result_stride0 +
-                                   limb * result_stride1;
+            scalar_t* result_row =
+                result + plane * result_stride0 + limb * result_stride1;
             const int64_t step = inner * value_stride0;
-            const int64_t coefficient_begin =
-                block_index * coefficient_block;
-            const int64_t coefficient_end =
-                std::min(coefficient_count,
-                         coefficient_begin + coefficient_block);
+            const int64_t coefficient_begin = block_index * coefficient_block;
+            const int64_t coefficient_end = std::min(
+                coefficient_count, coefficient_begin + coefficient_block);
             for (int64_t coefficient = coefficient_begin;
-                 coefficient < coefficient_end; ++coefficient) {
+                 coefficient < coefficient_end;
+                 ++coefficient) {
               const int64_t offset = coefficient * value_stride2;
               int64_t value = static_cast<int64_t>(source_row[offset]);
               for (int64_t index = 1; index < count; ++index) {
-                value += static_cast<int64_t>(source_row[offset + index * step]);
+                value +=
+                    static_cast<int64_t>(source_row[offset + index * step]);
                 if (value >= twice_modulus) value -= twice_modulus;
               }
               const int64_t modulus = twice_modulus >> 1;
@@ -361,12 +356,43 @@ torch::Tensor rns_add_standard_cpu(const torch::Tensor lhs,
   return rns_add_standard_cpu_impl(lhs, rhs, rns_params);
 }
 
-TORCH_LIBRARY_IMPL(fhelium_rns_ops, CPU, m) {
-  m.impl("add_standard", &rns_add_standard_cpu);
-  m.impl("add_standard_", &rns_add_standard_inplace_cpu);
-  m.impl("sub_standard", &rns_sub_standard_cpu);
-  m.impl("sub_standard_", &rns_sub_standard_inplace_cpu);
-  m.impl("montgomery_mul_row_scalars_standard",
-         &rns_montgomery_mul_row_scalars_standard_cpu);
-  m.impl("sum_standard_batch", &rns_sum_standard_batch_cpu);
+namespace fhelium::rns::cpu {
+
+at::Tensor add_standard(const at::Tensor& lhs,
+                        const at::Tensor& rhs,
+                        const at::Tensor& rns_params) {
+  return ::rns_add_standard_cpu(lhs, rhs, rns_params);
 }
+
+void add_standard_(at::Tensor& lhs,
+                   const at::Tensor& rhs,
+                   const at::Tensor& rns_params) {
+  ::rns_add_standard_inplace_cpu(lhs, rhs, rns_params);
+}
+
+at::Tensor sub_standard(const at::Tensor& lhs,
+                        const at::Tensor& rhs,
+                        const at::Tensor& rns_params) {
+  return ::rns_sub_standard_cpu(lhs, rhs, rns_params);
+}
+
+void sub_standard_(at::Tensor& lhs,
+                   const at::Tensor& rhs,
+                   const at::Tensor& rns_params) {
+  ::rns_sub_standard_inplace_cpu(lhs, rhs, rns_params);
+}
+
+at::Tensor montgomery_mul_row_scalars_standard(const at::Tensor& residues,
+                                               const at::Tensor& row_scalars,
+                                               const at::Tensor& rns_params) {
+  return ::rns_montgomery_mul_row_scalars_standard_cpu(
+      residues, row_scalars, rns_params);
+}
+
+at::Tensor sum_standard_batch(const at::Tensor& source,
+                              int64_t dim,
+                              const at::Tensor& rns_params) {
+  return ::rns_sum_standard_batch_cpu(source, dim, rns_params);
+}
+
+}  // namespace fhelium::rns::cpu

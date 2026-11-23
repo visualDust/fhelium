@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -120,12 +121,13 @@ class PassResult:
 
 @dataclass(frozen=True)
 class PassReport:
-    """Record one pass's activity, diagnostics, and choices."""
+    """Record one pass's activity, diagnostics, choices, and wall time."""
 
     name: str
     stats: PassStats
     diagnostics: tuple[str, ...] = ()
     decisions: tuple[DecisionRecord, ...] = ()
+    seconds: float = 0.0
 
 
 @runtime_checkable
@@ -150,9 +152,13 @@ class Pass(Protocol):
 
 @dataclass(frozen=True)
 class Pipeline:
-    """Run a tuple of transformations in caller-specified order."""
+    """Run a tuple of transformations in caller-specified order.
+
+    ``verify`` checks IR structure after every pass; ``False`` checks once after the last pass, which removes a full-Program verification per pass from large pipelines.
+    """
 
     passes: tuple[Pass, ...] = ()
+    verify: bool = True
 
     def __post_init__(self) -> None:
         passes = tuple(self.passes)
@@ -174,35 +180,65 @@ class Pipeline:
     def run(
         self,
         compilation: Compilation,
+        *,
+        clone: bool = True,
     ) -> Compilation:
-        """Clone and transform one Compilation while retaining its workspace."""
+        """Transform one Compilation while retaining its workspace.
+
+        By default the passes transform a copy and the input Program is unchanged. ``clone=False`` transfers the input Program to the pipeline, which transforms it in place; the caller must not use that Program afterwards.
+        """
 
         from ._compilation import Compilation
 
         if not isinstance(compilation, Compilation):
             raise TypeError("Pipeline input must be a Compilation")
-        current = compilation._with_pipeline_result(
-            compilation.program.clone(), ()
+        if clone:
+            current = compilation._with_pipeline_result(
+                compilation.program.clone(), ()
+            )
+            from ._origins import clone_origins
+
+            clone_origins(
+                compilation.program,
+                current.program,
+                compilation.workspace,
+                current.workspace,
+            )
+        else:
+            current = compilation._with_pipeline_result(compilation.program, ())
+        from ._repeat import (
+            finish_repeat_pass,
+            prepare_repeat_pass,
+            repeat_loops,
         )
+
+        loops = repeat_loops(current.program)
         for program_pass in self.passes:
+            started = perf_counter()
+            if loops:
+                prepare_repeat_pass(current, program_pass, loops)
             result = program_pass.run(current)
+            if loops:
+                loops = finish_repeat_pass(current)
             if not isinstance(result, PassResult):
                 raise TransformError(
                     f"Pass {program_pass.name!r} returned "
                     f"{type(result).__name__}, expected PassResult"
                 )
-            try:
-                result.program.verify_structure()
-            except Exception as error:
-                raise TransformError(
-                    f"Pass {program_pass.name!r} returned structurally "
-                    f"invalid IR: {error}"
-                ) from error
+            if self.verify or program_pass is self.passes[-1]:
+                try:
+                    result.program.verify_structure()
+                except Exception as error:
+                    raise TransformError(
+                        f"Pass {program_pass.name!r} returned structurally "
+                        f"invalid IR: {error}"
+                    ) from error
             report = PassReport(
                 program_pass.name,
                 result.stats,
                 tuple(result.diagnostics),
                 tuple(result.decisions),
+                perf_counter() - started,
             )
             current = current._with_pipeline_result(result.program, (report,))
         return current
@@ -210,26 +246,31 @@ class Pipeline:
     def then(self, *passes: Pass) -> Pipeline:
         """Append passes in order."""
 
-        return Pipeline((*self.passes, *passes))
+        return Pipeline((*self.passes, *passes), self.verify)
 
     def before(self, target: str, *passes: Pass) -> Pipeline:
         """Insert passes before one uniquely named pass."""
 
         index = self._unique_index(target)
-        return Pipeline((*self.passes[:index], *passes, *self.passes[index:]))
+        return Pipeline(
+            (*self.passes[:index], *passes, *self.passes[index:]), self.verify
+        )
 
     def after(self, target: str, *passes: Pass) -> Pipeline:
         """Insert passes after one uniquely named pass."""
 
         index = self._unique_index(target) + 1
-        return Pipeline((*self.passes[:index], *passes, *self.passes[index:]))
+        return Pipeline(
+            (*self.passes[:index], *passes, *self.passes[index:]), self.verify
+        )
 
     def replace(self, target: str, *passes: Pass) -> Pipeline:
         """Replace one uniquely named pass."""
 
         index = self._unique_index(target)
         return Pipeline(
-            (*self.passes[:index], *passes, *self.passes[index + 1 :])
+            (*self.passes[:index], *passes, *self.passes[index + 1 :]),
+            self.verify,
         )
 
     def _unique_index(self, target: str) -> int:

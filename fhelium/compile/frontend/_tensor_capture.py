@@ -80,59 +80,72 @@ def numeric_call(capture: _Capture, function, args, kwargs) -> _Value:
 
     descriptor = {"args": encode(args), "kwargs": encode(kwargs)}
 
-    # FakeTensor propagation runs metadata kernels only. No payload is read,
-    # transferred, or cached, and an unknown device is never filled in here.
-    def fake(item):
-        if isinstance(item, _Value):
-            state = cast(OpenStateType, item.value.type).state.data
-            shape, strides = state.get("shape"), state.get("strides")
-            dtype, device = state.get("dtype"), state.get("device")
-            if (
-                not isinstance(shape, ArrayAttr)
-                or not isinstance(dtype, StringAttr)
-                or not isinstance(device, StringAttr)
-                or device.data == "unknown"
-            ):
-                raise LookupError("incomplete physical Tensor facts")
-            if any(
-                not isinstance(n, IntegerAttr) or n.value.data < 0
-                for n in shape
-            ):
-                raise LookupError("symbolic shape")
-            sizes = tuple(int(cast(IntegerAttr, n).value.data) for n in shape)
-            requires_grad = state.get("requires_grad")
-            options = dict(
-                dtype=getattr(torch, dtype.data.removeprefix("torch.")),
-                device=torch.device(device.data),
-                requires_grad=isinstance(requires_grad, IntegerAttr)
-                and bool(requires_grad.value.data),
-            )
-            if isinstance(strides, ArrayAttr) and all(
-                isinstance(n, IntegerAttr) and n.value.data >= 0
-                for n in strides
-            ):
-                return torch.empty_strided(
-                    sizes,
-                    tuple(
-                        int(cast(IntegerAttr, n).value.data) for n in strides
-                    ),
-                    **options,
-                )
-            return torch.empty(sizes, **options)
-        if isinstance(item, torch.Tensor):
-            return fake(capture.substitute(item))
-        if isinstance(item, tuple):
-            return tuple(fake(child) for child in item)
-        if isinstance(item, list):
-            return [fake(child) for child in item]
-        if isinstance(item, dict):
-            return {key: fake(child) for key, child in item.items()}
-        return item
+    operation = torch_dialect.TensorCallOp(
+        operands,
+        core.MessageType(),
+        kind="function",
+        target=symbol,
+        argument_descriptor=json.dumps(descriptor),
+        role="message",
+    )
+    from xdsl.rewriter import Rewriter
 
-    result_type = core.MessageType()
+    Rewriter.replace_value_with_new_type(
+        operation.result, tensor_call_result_type(operation)
+    )
+    return capture.emit(operation)
+
+
+def tensor_call_result_type(operation):
+    """Propagate registered Tensor-call metadata through FakeTensor kernels.
+
+    Operands supply physical facts and the neutral argument descriptor supplies literals. Unknown producer strides remain unknown for view and copy operations whose output layout depends on them.
+    """
+    from fhelium.backend.torch import decode_argument
+
+    function = TORCH_FUNCTIONS[operation.target.data]
+    descriptor = json.loads(operation.argument_descriptor.data)
+
+    def fake(value):
+        state = cast(OpenStateType, value.type).state.data
+        shape, strides = state.get("shape"), state.get("strides")
+        dtype, device = state.get("dtype"), state.get("device")
+        if (
+            not isinstance(shape, ArrayAttr)
+            or not isinstance(dtype, StringAttr)
+            or not isinstance(device, StringAttr)
+            or device.data == "unknown"
+        ):
+            raise LookupError("incomplete physical Tensor facts")
+        if any(
+            not isinstance(n, IntegerAttr) or n.value.data < 0 for n in shape
+        ):
+            raise LookupError("symbolic shape")
+        sizes = tuple(int(cast(IntegerAttr, n).value.data) for n in shape)
+        requires_grad = state.get("requires_grad")
+        options = dict(
+            dtype=getattr(torch, dtype.data.removeprefix("torch.")),
+            device=torch.device(device.data),
+            requires_grad=isinstance(requires_grad, IntegerAttr)
+            and bool(requires_grad.value.data),
+        )
+        if isinstance(strides, ArrayAttr) and all(
+            isinstance(n, IntegerAttr) and n.value.data >= 0 for n in strides
+        ):
+            return torch.empty_strided(
+                sizes,
+                tuple(int(cast(IntegerAttr, n).value.data) for n in strides),
+                **options,
+            )
+        return torch.empty(sizes, **options)
+
     try:
         with FakeTensorMode():
-            result = function(*fake(args), **fake(kwargs))
+            operands = tuple(fake(value) for value in operation.operands)
+            result = function(
+                *decode_argument(descriptor["args"], operands),
+                **decode_argument(descriptor["kwargs"], operands),
+            )
             if not isinstance(result, torch.Tensor):
                 raise CaptureError(
                     "This Tensor-call frontend requires a Tensor result"
@@ -149,22 +162,13 @@ def numeric_call(capture: _Capture, function, args, kwargs) -> _Value:
                 torch.clone,
                 torch.Tensor.to,
             } and any(
-                "strides" not in cast(OpenStateType, item.value.type).state.data
-                for item in symbolic
+                "strides" not in cast(OpenStateType, value.type).state.data
+                for value in operation.operands
             ):
                 facts.pop("strides", None)
-            result_type = result_type.with_state(facts)
+            return core.MessageType().with_state(facts)
     except LookupError:
-        pass
-    operation = torch_dialect.TensorCallOp(
-        operands,
-        result_type,
-        kind="function",
-        target=symbol,
-        argument_descriptor=json.dumps(descriptor),
-        role="message",
-    )
-    return capture.emit(operation)
+        return core.MessageType()
 
 
 def _encrypted_call(capture: _Capture, function, args, kwargs) -> _Value:

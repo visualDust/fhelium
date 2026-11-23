@@ -260,6 +260,7 @@ const howToSidebar = [
       { text: 'Bind and persist a compiled Program', link: '/how-to/persist-compiled-program' },
       { text: 'Manage named artifacts', link: '/how-to/manage-artifacts' },
       { text: 'Place computation on CPU or CUDA', link: '/how-to/switch-cpu-cuda' },
+      { text: 'Call the native library from C++', link: '/how-to/call-native-library-from-cpp' },
     ],
   },
   {
@@ -650,7 +651,7 @@ export default defineConfig({
       ],
       '/how-to/': howToSidebar,
       '/developer/': developerSidebar,
-      '/api/': apiSidebar,
+      ...apiSidebar,
       '/about/': aboutSidebar,
     },
     search: {
@@ -682,7 +683,7 @@ export default defineConfig({
     darkModeSwitchLabel: 'Appearance',
     footer: {
       message: 'Towards full-stack encrypted execution infrastructures',
-      copyright: 'Released under the MIT License. Copyright <a href="https://github.com/VisualDust" target="_blank" rel="noopener noreferrer">VisualDust</a> and <a href="https://github.com/VisualDust/fhelium/graphs/contributors" target="_blank" rel="noopener noreferrer">FHElium contributors</a>',
+      copyright: 'Released under the MIT License or the Apache License 2.0. Copyright <a href="https://github.com/VisualDust" target="_blank" rel="noopener noreferrer">VisualDust</a> and <a href="https://github.com/VisualDust/fhelium/graphs/contributors" target="_blank" rel="noopener noreferrer">FHElium contributors</a>',
     },
   },
 })

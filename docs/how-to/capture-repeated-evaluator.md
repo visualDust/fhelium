@@ -6,6 +6,28 @@ CUDA Graph capture records a fixed rank-local CUDA execution schedule for repeat
 
 Have a CUDA-capable build, a CUDA prototype ciphertext, and a verified callable with stable state. The callable can execute Eager operations or a prepared linked calculation. A Compile Program is a calculation representation; `CudaGraphProgram` owns CUDA capture and replay storage for its execution. Complete callable specialization, linking, and first-use numerical setup before capture.
 
+## Automatic capture through a compiled callable
+
+For an ordinary repeated function interface, let Compile manage specialization and Graph lifetime:
+
+```python
+from fhelium import compile as fc
+
+def evaluator(source):
+    return engine.negate(source)
+
+compiled = fc.compile(evaluator, graph="auto")
+first = compiled(prototype_ciphertext)
+compiled.prepare(prototype_ciphertext)
+prepared_result = compiled(prototype_ciphertext)
+result = compiled(prototype_ciphertext)
+print(compiled.stats()["graphs"])
+```
+
+This example opts into Graph capture; ordinary `fc.compile` defaults to `graph=False`. The first call prepares the specialization and runs the linked function; the next call attempts capture. The default `copy_output=True` returns owned Graph results. CPU inputs, autograd outputs or capture failures retain prepared execution, with a reason in statistics. Call `compiled.clear()` when finished; it releases Graphs before shared pools. Example 18 exposes this path with `--compile`.
+
+Use the following direct `CudaGraphProgram` workflow when the application needs capture timing, replay streams, split input staging or pool ownership controls.
+
 ## 1. Establish a synchronized execution baseline
 
 Write an ordinary callable and verify it across multiple inputs. This small schedule computes $-x$ using the configured Engine; `prototype_ciphertext` must already be on CUDA:
@@ -28,7 +50,7 @@ Bind fixed operation-ready weights, keys, and other schedule parameters in a clo
 schedule = executable.run
 ```
 
-For a compiled callable, run `prepare(prototype_ciphertext)` and validate an ordinary execution before passing the callable as the schedule. Keep static numerical materials and Backend resources alive for all captures and replays that use them. Changing a fixed key, weight assignment, or operation schedule requires a new capture.
+For a compiled callable inside a manually owned Graph, construct it with `graph=False`, run `prepare(prototype_ciphertext)` and validate an ordinary execution before passing it as the schedule. This keeps capture ownership with the outer `CudaGraphProgram`. Keep static numerical materials and Backend resources alive for all captures and replays that use them. Changing a fixed key, weight assignment, or operation schedule requires a new capture.
 
 ## 3. Exclude unsafe or dynamic work
 

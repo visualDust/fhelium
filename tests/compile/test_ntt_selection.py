@@ -177,7 +177,7 @@ def test_ntt_fusion_preserves_surrounding_arithmetic_and_escaping_results(
         restored = engine.ntt_domain_to_coefficient_domain(doubled)
         return engine.add(restored, x), transformed
 
-    compiled = fc.compile(source)
+    compiled = fc.compile(source, cache=False, graph=False)
     prepared = compiled.prepare(value)
     regions = [
         op

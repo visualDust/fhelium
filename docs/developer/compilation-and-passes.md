@@ -29,7 +29,7 @@ class InspectOperations:
 inspection = fc.Pipeline((InspectOperations(),))
 ```
 
-`PassResult` records counts, diagnostics, and optional `DecisionRecord` values. Pipeline runs passes in the supplied order and verifies the returned Program's structure after each pass.
+`PassResult` records counts, diagnostics, and optional `DecisionRecord` values. Pipeline runs passes in the supplied order. The default `verify=True` checks the returned Program's structure after each pass; `verify=False` checks after the final pass. Each `PassReport.seconds` records host wall time for the pass and its configured verification; device completion and numerical execution have separate timing scopes.
 
 ## Where do configuration and intermediate products live?
 
@@ -49,6 +49,7 @@ Reports accumulate across Pipeline invocations. They describe what passes observ
 4. Prepare actual key facts before hoisting, hoist compatible rotations, and prepare operands of newly introduced semantic operations before probing their lowerings.
 5. Select per-operation whole execution or a lowering, prepare newly exposed low-level operands, reuse intermediates, and form supported fusion regions.
 6. Remove values made dead by the transformations.
+7. Identify independent repeated groups in Triton fusion regions for runtime-loop generation.
 
 The baseline preserves caller-inserted numerical transitions. It does not insert rescale or relinearization. Applications requesting those schedules can insert the relevant CKKS passes before dependent depth and scale assignment.
 
@@ -69,9 +70,21 @@ A measured cost is specific to the executed implementation, parameter state and 
 
 Lowering and implementation selection complete material declarations for their affected operations using the registry in the workspace. `ResolveMaterialRequirementsPass` exposes the same logic for an explicit whole-Program resolution. The default recipe uses the operation-local integration.
 
+## Runtime loops for repeated Triton groups
+
+Triton repeat generation shares one generated body across independent groups with matching operation structure, types and attributes. `IdentifyTritonRepeatsPass` runs after fusion and the final dead-value elimination, before Triton source generation. This placement exposes the surviving uses of each intermediate result. The pass records repeat plans on Triton fusion regions; the existing NTT scheduler then maps each plan to its endpoint code.
+
+A group is eligible when at least four copies are independent and folding them is expected to remove at least 256 static Montgomery multiplication call sites, representing at least 25% of the fusion region’s estimated sites. A call site is one multiplication expression in generated code, rather than its runtime execution count. Each group contains one inverse NTT endpoint, and its intermediate results stay within that iteration. Shared inputs retain their existing storage; the transformation requires no extra storage to retain each iteration’s intermediates.
+
+Code generation folds groups only within one existing NTT endpoint partition and checks the corresponding generated bodies and savings. It preserves arithmetic and store order, masks, indices, and NTT stage synchronization. The loop selects each iteration’s pointers and scalar inputs uniformly across the thread block (CTA). Each folded group family adds one non-specialized `int64` count argument to the kernel signature; preparation and execution bind it through the existing runtime-scalar path. Groups outside these conditions retain expanded generation.
+
+`workspace["triton_repeat"]` defaults to `True`. Set it to `False` before running the pipeline to retain expanded generation. The `identify-triton-repeats` pass report records analysis time and identified groups. Loop-source projection occurs during Backend preparation and reuses a source-signature cache described in [Compilation persistence](compilation-persistence.md#generated-triton-loop-source).
+
 ## How are passes customized?
 
 `then`, `before`, `after`, and `replace` return new Pipelines. Named insertion and replacement require one matching pass name. The default recipe repeats some fact-resolution and cleanup passes, so inspect `pipeline.names` and construct a tuple directly when the desired location is ambiguous.
+
+Callable template instantiation chooses the default recipe according to the template’s abstraction level. An instantiated CKKS Program already represents its numerical transitions and derived state, so it omits resolved source-lowering phases. A semantic template still needs full instance scheduling. Common-subexpression elimination and dead-value elimination remain instance passes. Guarded built-in lowering and fusion plans can reuse decisions while rebuilding operations on the current Program; [prepared host execution](prepared-host-execution.md) describes their scope.
 
 A caller-supplied callable pipeline replaces the default recipe. It may also be selected by a function of `CallSignature`. A supplied linking pipeline separately replaces the standard linking sequence. Optimization and linking are independently composable because the former transforms computation while the latter binds execution.
 

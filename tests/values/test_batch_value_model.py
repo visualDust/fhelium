@@ -6,6 +6,7 @@ import torch
 from fhelium import Ciphertext, CompressedPlaintext, Plaintext, Preset
 from fhelium.eager import Engine
 from fhelium.backend.ckks.codec import _embedding as slot_embedding
+from fhelium.native.wrapper import ckks_ops
 
 
 def _ciphertext(value: int = 0, *, batch_shape=()) -> Ciphertext:
@@ -325,25 +326,27 @@ def test_zero_sized_batch_dimensions_are_rejected():
 
 def test_slot_embedding_preserves_leading_batch_dimensions():
     messages = torch.randn(3, 2, 4, dtype=torch.float64)
-    slots = slot_embedding.make_slot_tensor(messages, num_slots=8, device="cpu")
-
-    assert slots.shape == (3, 2, 8)
-    assert torch.equal(slots[..., :4], messages)
-    assert torch.count_nonzero(slots[..., 4:]) == 0
-
     pre, post = slot_embedding._permutations(16, "cpu", 3)
-    encoded = slot_embedding.inverse_embed_slots(
-        slots,
-        pre=pre,
-        twister=slot_embedding._twister(16, "cpu"),
+    seed = torch.zeros(5, dtype=torch.int64)
+    encoded = ckks_ops.encode(
+        messages, pre, slot_embedding._twister(16, "cpu"), seed, 2.0**20
     )
-    decoded = slot_embedding.embed_coefficients(
-        encoded,
-        post=post,
-        skewer=slot_embedding._skewer(16, "cpu"),
+    decoded = ckks_ops.decode(
+        encoded.to(torch.float64),
+        post,
+        slot_embedding._skewer(16, "cpu"),
+        2.0**20,
+        True,
     )
     assert encoded.shape == (3, 2, 16)
-    assert decoded.shape == (3, 2, 16)
+    assert decoded.shape == (3, 2, 8)
+    torch.testing.assert_close(decoded[..., :4], messages, rtol=0, atol=1e-5)
+    torch.testing.assert_close(
+        decoded[..., 4:],
+        torch.zeros(3, 2, 4, dtype=torch.float64),
+        rtol=0,
+        atol=1e-5,
+    )
 
 
 @pytest.fixture(scope="module")

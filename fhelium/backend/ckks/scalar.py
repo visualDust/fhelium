@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 from typing import cast
 
 import torch
@@ -13,8 +12,8 @@ from fhelium.backend.implementation import OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.backend.rns.context import RnsContext
 from fhelium.ir.dialects import ckks
-from fhelium.native.wrapper import rns_ops
-from fhelium.rng.csprng import stochastic_round_
+from fhelium.native.wrapper import ckks_ops, rns_ops
+from fhelium.backend.random.stream import advance_
 
 
 def scalar_operands(
@@ -35,15 +34,19 @@ def scalar_operands(
         raise ValueError(
             "Real-scalar preparation requires a rounding-state Tensor"
         )
-    centered = int(math.ceil(abs(float(scalar) * scalar_scale))) + 1 < min(
-        context.config.moduli[i] for i in prime_ids
-    )
-    return (parameters, rounding_state), {"centered_lift": centered}
+    return (parameters, rounding_state), {}
 
 
 @dataclass(frozen=True)
 class NativeScalarArithmeticImplementation:
-    """Execute scalar multiplication and addition using shared RNS primitives."""
+    r"""Add or multiply CKKS ciphertexts by scalars.
+
+    Integer scalars multiply every component by their row residues. A real
+    scalar $a$ at scale $\Delta$ is rounded stochastically to
+    $\lfloor a\Delta \rceil$ with the rounding state, which then advances;
+    addition adds it to the constant coefficient of component zero, and
+    multiplication multiplies every component by it.
+    """
 
     name: str = "native-ckks-scalar-arithmetic"
     supports_in_place: bool = False
@@ -52,6 +55,35 @@ class NativeScalarArithmeticImplementation:
         ckks.MultiplyScalarOp,
         ckks.MultiplyIntegerScalarOp,
     )
+
+    @staticmethod
+    def tensor_requirements(operation, config):
+        from xdsl.dialects.builtin import ArrayAttr, IntegerAttr
+
+        if operation.parameters:
+            return {}, {}
+        ids = operation.ciphertext.type.state.data.get("prime_ids")
+        if not isinstance(ids, ArrayAttr) or not all(
+            isinstance(item, IntegerAttr) for item in ids
+        ):
+            return None
+        prime_ids = tuple(int(item.value.data) for item in ids)
+        scalar = operation.scalar.value.data
+        descriptions = {
+            "rns_parameters": {
+                "kind": "rns_parameters",
+                "prime_ids": list(prime_ids),
+            }
+        }
+        if isinstance(operation, ckks.MultiplyIntegerScalarOp):
+            descriptions["integer_scalar"] = {
+                "kind": "integer_scalar",
+                "prime_ids": list(prime_ids),
+                "scalar": scalar,
+            }
+            return {}, descriptions
+        descriptions["rounding_state"] = {"kind": "rounding_state"}
+        return {}, descriptions
 
     def resource_requirements(
         self, invocation: OperationInvocation
@@ -74,33 +106,16 @@ class NativeScalarArithmeticImplementation:
                     ciphertext, auxiliary, parameters
                 ),
             )
-        scaled = float(cast(float, invocation.attributes["scalar"])) * float(
-            cast(float, invocation.attributes["scalar_scale"])
-        )
-        coefficient = stochastic_round_(
-            torch.tensor(
-                [scaled], dtype=torch.float64, device=ciphertext.device
-            ),
+        output = ckks_ops.scalar_arithmetic(
+            ciphertext,
+            parameters,
             auxiliary,
+            float(cast(float, invocation.attributes["scalar"])),
+            float(cast(float, invocation.attributes["scalar_scale"])),
+            invocation.operation_type is ckks.AddScalarOp,
         )
-        if invocation.attributes["centered_lift"]:
-            residues = rns_ops.lift_centered_coefficients(
-                coefficient.to(parameters.dtype), parameters[0]
-            )
-        else:
-            residues = torch.remainder(
-                coefficient.unsqueeze(-2), (parameters[0] // 2).view(-1, 1)
-            ).to(parameters.dtype)
-        if invocation.operation_type is ckks.AddScalarOp:
-            output = ciphertext.clone()
-            rns_ops.add_standard_(output[0, ..., :1], residues, parameters)
-            return (output,)
-        rns_ops.to_montgomery_(residues, parameters)
-        return (
-            rns_ops.montgomery_mul_row_scalars_standard(
-                ciphertext, residues.squeeze(-1), parameters
-            ),
-        )
+        advance_(auxiliary)
+        return (output,)
 
 
 __all__ = ["NativeScalarArithmeticImplementation"]

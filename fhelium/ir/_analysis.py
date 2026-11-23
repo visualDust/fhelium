@@ -13,7 +13,7 @@ from xdsl.ir import Attribute, Operation, SSAValue
 from fhelium.values import EvaluationKeyRequirements
 
 from ._dialect import operation_name, value_role
-from .dialects import ckks, logical, rns
+from .dialects import ckks, core, logical, rns
 from ._program import Program
 
 
@@ -99,19 +99,16 @@ def _integer_attribute(operation: Operation, name: str) -> int | None:
     return None
 
 
-def _rotation_key_step(value: SSAValue) -> int | None:
-    """Return the normalized step represented by one rotation-key operand."""
+def _rotation_key_step(program: Program, value: SSAValue) -> int | None:
+    """Return the step described for a lowered rotation-key material."""
 
-    state = getattr(value.type, "state", None)
-    data = getattr(state, "data", None)
-    if not isinstance(data, Mapping):
+    owner = value.owner
+    if not isinstance(owner, core.MaterialRefOp) or owner.symbol is None:
         return None
-    represented = data.get("rotation_step")
-    if isinstance(represented, IntegerAttr):
-        return int(represented.value.data)
-    if isinstance(represented, IntAttr):
-        return int(represented.data)
-    return None
+    step = (program.material_description(owner.symbol.data) or {}).get(
+        "rotation_step"
+    )
+    return step if type(step) is int else None
 
 
 def analyze_evaluation_key_requirements(
@@ -126,8 +123,9 @@ def analyze_evaluation_key_requirements(
     symbolic requirements only; it does not generate, load, bind, or validate
     key objects. Re-run it after any transformation that may add or remove
     those operations. Unresolved logical rolls contribute their integer
-    ``shift``; resolved rotation operations contribute the
-    normalized step represented by their key operand. ``entry`` must name one
+    ``shift``; resolved rotation operations contribute their
+    ``rotation_step``/``rotation_steps``/``baby_steps`` attributes, and lowered
+    key products the step described for their key material. ``entry`` must name one
     single-block function. Generic key switching remains caller-named and is
     not representable by EvaluationKeyRequirements.
     """
@@ -142,13 +140,7 @@ def analyze_evaluation_key_requirements(
     requires_conjugation = False
     for operation in program.single_block(entry).walk():
         if isinstance(operation, ckks.RotateOp):
-            step = _rotation_key_step(operation.key)
-            if step is None:
-                raise ValueError(
-                    "fhelium_ckks.rotate requires a key operand with a "
-                    "represented rotation step before evaluation-key "
-                    "requirements can be derived"
-                )
+            step = int(operation.rotation_step.value.data)
             if step:
                 rotation_steps.add(step)
         elif isinstance(operation, ckks.RotationSumOp):
@@ -158,25 +150,17 @@ def analyze_evaluation_key_requirements(
                 if step.value.data
             )
         elif isinstance(operation, ckks.RotateManyOp):
-            for key in operation.keys:
-                step = _rotation_key_step(key)
-                if step is None:
-                    raise ValueError(
-                        "fhelium_ckks.hoisted_rotate_many requires key "
-                        "operands with represented rotation steps"
-                    )
-                if step:
-                    rotation_steps.add(step)
+            rotation_steps.update(
+                int(step.value.data)
+                for step in operation.attributes["rotation_steps"].data
+                if step.value.data
+            )
         elif isinstance(operation, ckks.GroupedRotationWeightedSumOp):
-            for key in operation.keys:
-                step = _rotation_key_step(key)
-                if step is None:
-                    raise ValueError(
-                        "fhelium_ckks.grouped_rotation_weighted_sum requires "
-                        "key operands with represented rotation steps"
-                    )
-                if step:
-                    rotation_steps.add(step)
+            rotation_steps.update(
+                int(step.value.data)
+                for step in operation.baby_steps
+                if step.value.data
+            )
         elif isinstance(operation, logical.RollEncryptedOp):
             step = _integer_attribute(operation, "shift")
             if step is None:
@@ -197,10 +181,10 @@ def analyze_evaluation_key_requirements(
             elif role == StringAttr("conjugation"):
                 requires_conjugation = True
             elif role == StringAttr("rotation"):
-                step = _rotation_key_step(operation.key)
+                step = _rotation_key_step(program, operation.key)
                 if step is None:
                     raise ValueError(
-                        "Lowered rotation key operand needs its represented step"
+                        "Lowered rotation key operand needs a described step"
                     )
                 if step:
                     rotation_steps.add(step)

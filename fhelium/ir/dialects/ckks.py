@@ -14,8 +14,14 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import ClassVar, Literal, cast
 
-from xdsl.dialects.builtin import ArrayAttr, FloatAttr, IntegerAttr, StringAttr
-from xdsl.ir import Attribute, Dialect, Operation, SSAValue
+from xdsl.dialects.builtin import (
+    ArrayAttr,
+    FloatAttr,
+    IndexType,
+    IntegerAttr,
+    StringAttr,
+)
+from xdsl.ir import Attribute, Dialect, Operation, Region, SSAValue
 from xdsl.irdl import (
     AttrSizedOperandSegments,
     IRDLOperation,
@@ -24,12 +30,14 @@ from xdsl.irdl import (
     irdl_op_definition,
     operand_def,
     opt_attr_def,
+    opt_operand_def,
     result_def,
+    region_def,
     traits_def,
     var_operand_def,
     var_result_def,
 )
-from xdsl.traits import Pure
+from xdsl.traits import IsTerminator, Pure
 from xdsl.utils.exceptions import VerifyException
 
 from .._operation_catalog import (
@@ -42,7 +50,7 @@ from .._operation_catalog import (
     unsupported_attributes,
 )
 from ..ckks_state import output_residues, transform_state
-from ._common import OpenStateType, ValueRole
+from ._common import OpenStateType, ValueRole, state_attribute
 from .core import MessageType
 from .._dependencies import (
     DependencyKind,
@@ -84,6 +92,171 @@ class CompressedPlaintextType(OpenStateType):
     name = "fhelium_ckks.compressed_plaintext"
 
     ROLE: ClassVar[ValueRole] = "plaintext"
+
+
+@irdl_op_definition
+class RepeatYieldOp(IRDLOperation):
+    """Yield one round's ordered outputs followed by updated carry values."""
+
+    name = "fhelium_ckks.repeat_yield"
+    values = var_operand_def()
+    traits = traits_def(IsTerminator())
+
+    def __init__(self, values: Sequence[SSAValue]) -> None:
+        super().__init__(operands=[values])
+
+
+@irdl_op_definition
+class RepeatOp(IRDLOperation):
+    r"""Apply one mathematical body to an ordered table of operand tuples.
+
+    For round i, (y_i, c_{i+1}) = body(i, shared, table_i, c_i). Results are the round-major y_i values followed by c_count. The body argument order is iteration index, shared operands, current table row, then carried values. All table entries remain ordinary SSA operands, including material references. Nested repeats have the same semantics.
+    """
+
+    name = "fhelium_ckks.repeat"
+    inputs = var_operand_def()
+    outputs = var_result_def()
+    body = region_def("single_block")
+    count = attr_def(IntegerAttr)
+    shared_count = attr_def(IntegerAttr)
+    table_width = attr_def(IntegerAttr)
+    yield_count = attr_def(IntegerAttr)
+    carry_count = attr_def(IntegerAttr)
+    traits = traits_def(Pure())
+
+    def __init__(
+        self, shared, tables, carried, result_types, body, *, count, yield_count
+    ):
+        width = len(tables) // count
+        super().__init__(
+            operands=[(*shared, *tables, *carried)],
+            result_types=[result_types],
+            regions=[Region(body)],
+            attributes={
+                "count": IntegerAttr(count, 64),
+                "shared_count": IntegerAttr(len(shared), 64),
+                "table_width": IntegerAttr(width, 64),
+                "yield_count": IntegerAttr(yield_count, 64),
+                "carry_count": IntegerAttr(len(carried), 64),
+            },
+        )
+
+    @property
+    def shared(self):
+        return tuple(self.inputs[: self.shared_count.value.data])
+
+    def row(self, index):
+        start = (
+            self.shared_count.value.data + index * self.table_width.value.data
+        )
+        return tuple(self.inputs[start : start + self.table_width.value.data])
+
+    @property
+    def carried(self):
+        start = (
+            self.shared_count.value.data
+            + self.count.value.data * self.table_width.value.data
+        )
+        return tuple(self.inputs[start:])
+
+    def verify_(self):
+        count, shared, width, outputs, carried = (
+            attribute.value.data
+            for attribute in (
+                self.count,
+                self.shared_count,
+                self.table_width,
+                self.yield_count,
+                self.carry_count,
+            )
+        )
+        if count < 1 or min(shared, width, outputs, carried) < 0:
+            raise VerifyException(
+                "Repeat counts must define a nonempty iteration space"
+            )
+        if (
+            len(self.inputs) != shared + count * width + carried
+            or len(self.outputs) != count * outputs + carried
+        ):
+            raise VerifyException("Repeat operand/result table extent mismatch")
+        block = self.body.block
+        if len(block.args) != 1 + shared + width + carried:
+            raise VerifyException("Repeat body argument extent mismatch")
+        if (
+            not isinstance(block.last_op, RepeatYieldOp)
+            or len(block.last_op.values) != outputs + carried
+        ):
+            raise VerifyException("Repeat body yield extent mismatch")
+
+
+@irdl_op_definition
+class RepeatIterationOp(IRDLOperation):
+    """Expose a repeat round's results at its original SSA placement.
+
+    The operation preserves its input values and types. Compile expansion inserts the corresponding body at this location, retaining the original order of surrounding computations.
+    """
+
+    name = "fhelium_ckks.repeat_iteration"
+    inputs = var_operand_def()
+    outputs = var_result_def()
+    iteration = attr_def(IntegerAttr)
+    traits = traits_def(Pure())
+
+    def __init__(self, inputs, *, iteration):
+        super().__init__(
+            operands=[inputs],
+            result_types=[[value.type for value in inputs]],
+            attributes={
+                "iteration": cast(Attribute, state_attribute(iteration))
+            },
+        )
+
+    def verify_(self):
+        if tuple(value.type for value in self.inputs) != tuple(
+            value.type for value in self.outputs
+        ):
+            raise VerifyException("Repeat placement must preserve value types")
+
+
+def select_batch_type(value_type: OpenStateType) -> OpenStateType:
+    """Remove the leading batch axis from logical and physical value state."""
+    state = value_type.state.data
+    batch = cast(ArrayAttr, state["batch_shape"]).data
+    updates: dict[str, Attribute | None] = {"batch_shape": ArrayAttr(batch[1:])}
+    shape = state.get("shape")
+    if isinstance(shape, ArrayAttr):
+        axis = len(shape.data) - 2 - len(batch)
+        for name in ("shape", "strides"):
+            field = state.get(name)
+            if isinstance(field, ArrayAttr):
+                updates[name] = ArrayAttr(
+                    field.data[:axis] + field.data[axis + 1 :]
+                )
+    return value_type.with_state(updates)
+
+
+@irdl_op_definition
+class SelectBatchOp(IRDLOperation):
+    r"""Select row $r$ of the leading batch axis of a plaintext or ciphertext.
+
+    With batch shape $(B,b_1,\ldots)$ the result has batch shape $(b_1,\ldots)$ and holds row $r=\mathrm{start}+i$ for $0\le r<B$, where $i$ is the optional ``index`` operand and $i=0$ without it. The row is a view of the source storage; depth, actual scale, prime rows, components, polynomial domain, residue representation, and compression layout are unchanged. In a repeat body ``index`` is the round index, so one batched operand supplies a different row to every round.
+    """
+
+    name = "fhelium_ckks.select_batch"
+    value = operand_def()
+    index = opt_operand_def(IndexType)
+    result = result_def()
+    start = attr_def(IntegerAttr)
+    traits = traits_def(Pure())
+
+    def __init__(
+        self, value: SSAValue, *, start: int, index: SSAValue | None = None
+    ):
+        super().__init__(
+            operands=[value, [] if index is None else [index]],
+            result_types=[select_batch_type(cast(OpenStateType, value.type))],
+            attributes={"start": IntegerAttr(start, 64)},
+        )
 
 
 @irdl_op_definition
@@ -355,8 +528,10 @@ class RotateOp(IRDLOperation):
     r"""Rotate CKKS slots through a Galois automorphism and key switch.
 
     The input is a CT2 ciphertext in coefficient/standard or NTT/Montgomery
-    Q state. A rotation key records a signed slot displacement $r$ and its odd
-    Galois element $g$.
+    Q state. ``rotation_step`` records the signed slot displacement $r$,
+    following ``torch.roll(slots, shifts=r)``; it determines the odd Galois
+    element $g$. The key operand carries the key-switching material for
+    $\sigma_g(s)$ and its type records only the key layout.
     Applying $\sigma_g:X\mapsto X^g$ rotates the encoded slots and changes the
     secret relation from $s$ to $\sigma_g(s)$; the key-switch stage returns
     that relation to $s$.  The result is a CT2 ciphertext
@@ -373,6 +548,7 @@ class RotateOp(IRDLOperation):
     key = operand_def(EvaluationKeyType)
     parameters = var_operand_def()
     result = result_def(CiphertextType)
+    rotation_step = attr_def(IntegerAttr)
     output_domain = attr_def(
         StringAttr, default_value=StringAttr("coefficient")
     )
@@ -409,12 +585,19 @@ class RotateOp(IRDLOperation):
         key: SSAValue | Operation,
         result_type: Attribute | None = None,
         *,
+        rotation_step: int | IntegerAttr | None = None,
         moddown_rounding: str = "nearest",
         modup_method: str = "exact",
         parameters: Sequence[SSAValue | Operation] = (),
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         attrs = dict(attributes or {})
+        if rotation_step is not None:
+            attrs["rotation_step"] = (
+                IntegerAttr(rotation_step, 64)
+                if isinstance(rotation_step, int)
+                else rotation_step
+            )
         attrs.setdefault("moddown_rounding", StringAttr(moddown_rounding))
         attrs.setdefault("modup_method", StringAttr(modup_method))
         if "input_domain" not in attrs:
@@ -2317,6 +2500,9 @@ def _decrypt_specification(operation: Operation) -> tuple[str, ...]:
 
 
 OPERATION_SPECS: tuple[OperationSpec, ...] = (
+    registered_operation_spec(RepeatOp, "ckks"),
+    registered_operation_spec(RepeatYieldOp, "ckks"),
+    registered_operation_spec(RepeatIterationOp, "ckks"),
     registered_operation_spec(
         PrepareCompressedPlaintextOp,
         "ckks",
@@ -2325,7 +2511,6 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
             "depth",
             "scale",
             "ring_dimension",
-            "min_modulus",
             "polynomial_domain",
         ),
     ),
@@ -2364,6 +2549,7 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         "ckks",
         validator=flat_with_attributes("axis"),
     ),
+    registered_operation_spec(SelectBatchOp, "ckks"),
     *(
         registered_operation_spec(op, "ckks", validator=flat_operation)
         for op in (
@@ -2554,6 +2740,10 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
 FHEliumCkks = Dialect(
     "fhelium_ckks",
     [
+        RepeatOp,
+        RepeatYieldOp,
+        RepeatIterationOp,
+        SelectBatchOp,
         PrepareCompressedPlaintextOp,
         EncodeOp,
         DecodeOp,
@@ -2606,6 +2796,11 @@ FHEliumCkks = Dialect(
 
 
 __all__ = [
+    "RepeatOp",
+    "RepeatYieldOp",
+    "RepeatIterationOp",
+    "SelectBatchOp",
+    "select_batch_type",
     "AddOp",
     "SumBatchOp",
     "AddScalarOp",

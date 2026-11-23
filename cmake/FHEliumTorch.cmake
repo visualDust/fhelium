@@ -69,6 +69,11 @@ if(NOT FHELIUM_TORCH_QUERY_RESULT EQUAL 0)
 endif()
 
 execute_process(
+  COMMAND ${Python3_EXECUTABLE} -c "import torch; print(torch.__version__)"
+  OUTPUT_VARIABLE FHELIUM_TORCH_VERSION
+  OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+
+execute_process(
   COMMAND ${Python3_EXECUTABLE} -c
           "import torch; print(torch.version.cuda or '')"
   OUTPUT_VARIABLE FHELIUM_TORCH_CUDA_VERSION

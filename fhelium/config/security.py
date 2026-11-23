@@ -7,7 +7,9 @@ Cryptology 2025. The source data was generated with lattice-estimator and the
 classical RC.MATZOV cost model measured in ring operations. Its attack set
 includes ``primal_usvp``, ``primal_bdd``, ``hybrid_bdd`` (for
 ``N <= 2^14``), and ``hybrid_dual``. These values are estimator outputs rather
-than security proofs. The functions perform no interpolation or extrapolation.
+than security proofs. libfhelium holds the table
+(``fhelium::ckks::maximum_modulus_bits``), and the functions perform no
+interpolation or extrapolation.
 """
 
 from __future__ import annotations
@@ -17,6 +19,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from fhelium.native.wrapper import ckks_ops
+
 if TYPE_CHECKING:
     from fhelium.config import CkksConfig
 
@@ -24,57 +28,6 @@ if TYPE_CHECKING:
 _TABLE_ERROR_STANDARD_DEVIATION = 3.19
 _TABLE_TARGET_BITS = frozenset({128, 192, 256})
 _TABLE_SECRET_DISTRIBUTIONS = frozenset({"gaussian", "ternary"})
-
-# Keys are (secret distribution, classical target bits, ring dimension N);
-# values are the maximum base-two bit widths of the complete modulus q.
-_TABLE_MAXIMUM_MODULUS_BITS: dict[tuple[str, int, int], int] = {
-    # Uniform ternary secret.
-    ("ternary", 128, 1024): 26,
-    ("ternary", 128, 2048): 53,
-    ("ternary", 128, 4096): 106,
-    ("ternary", 128, 8192): 214,
-    ("ternary", 128, 16384): 430,
-    ("ternary", 128, 32768): 868,
-    ("ternary", 128, 65536): 1747,
-    ("ternary", 128, 131072): 3523,
-    ("ternary", 192, 2048): 36,
-    ("ternary", 192, 4096): 73,
-    ("ternary", 192, 8192): 147,
-    ("ternary", 192, 16384): 297,
-    ("ternary", 192, 32768): 597,
-    ("ternary", 192, 65536): 1199,
-    ("ternary", 192, 131072): 2411,
-    ("ternary", 256, 2048): 27,
-    ("ternary", 256, 4096): 56,
-    ("ternary", 256, 8192): 114,
-    ("ternary", 256, 16384): 230,
-    ("ternary", 256, 32768): 462,
-    ("ternary", 256, 65536): 929,
-    ("ternary", 256, 131072): 1866,
-    # Discrete-Gaussian secret with the table's parameters.
-    ("gaussian", 128, 1024): 28,
-    ("gaussian", 128, 2048): 55,
-    ("gaussian", 128, 4096): 108,
-    ("gaussian", 128, 8192): 216,
-    ("gaussian", 128, 16384): 432,
-    ("gaussian", 128, 32768): 870,
-    ("gaussian", 128, 65536): 1749,
-    ("gaussian", 128, 131072): 3525,
-    ("gaussian", 192, 2048): 38,
-    ("gaussian", 192, 4096): 75,
-    ("gaussian", 192, 8192): 149,
-    ("gaussian", 192, 16384): 299,
-    ("gaussian", 192, 32768): 599,
-    ("gaussian", 192, 65536): 1201,
-    ("gaussian", 192, 131072): 2413,
-    ("gaussian", 256, 2048): 30,
-    ("gaussian", 256, 4096): 58,
-    ("gaussian", 256, 8192): 116,
-    ("gaussian", 256, 16384): 232,
-    ("gaussian", 256, 32768): 464,
-    ("gaussian", 256, 65536): 931,
-    ("gaussian", 256, 131072): 1868,
-}
 
 
 def _lookup_maximum_modulus_bits(
@@ -86,10 +39,8 @@ def _lookup_maximum_modulus_bits(
 ) -> int | None:
     """Return the matching table entry, or ``None`` when none matches."""
 
-    if error_stddev != _TABLE_ERROR_STANDARD_DEVIATION:
-        return None
-    return _TABLE_MAXIMUM_MODULUS_BITS.get(
-        (secret_distribution, target_bits, ring_dimension)
+    return ckks_ops.maximum_modulus_bits(
+        ring_dimension, target_bits, secret_distribution, error_stddev
     )
 
 

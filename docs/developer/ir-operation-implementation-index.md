@@ -4,6 +4,8 @@ This index maps operation families to their Compile transformations and Backend 
 
 The operation definitions specify operands, attributes, equations, and state transitions: [CKKS](/api/fhelium/ir/dialects/ckks), [RNS](/api/fhelium/ir/dialects/rns), [NTT](/api/fhelium/ir/dialects/ntt), and [core data references](/api/fhelium/ir/dialects/core). Numerical parameters, tables, and keys enter execution as Tensor operands. Non-Tensor execution handles use resource references.
 
+A Python implementation module listed as an owner binds its operands to a libfhelium function: whole CKKS, RNS and NTT operations are declared in `csrc/include/fhelium/ckks_operations.h`, `rns_operations.h` and `ntt_operations.h`, implemented in `csrc/ops/operations/`, and called through `fhelium.native.wrapper`. They receive their prepared tables as one name-to-Tensor table ([C++ API](/api/cpp/tensor-table)).
+
 ## Program structure, binding, and interoperability
 
 | Operation | Responsibility | Direct owner |
@@ -45,14 +47,14 @@ The shared construction helpers preserve value identity through transparent type
 
 | Operation | Responsibility | Direct owner |
 |---|---|---|
-| `fhelium_ckks.encode` | Embed message slots and quantize scaled coefficients | `backend/ckks/codec/_implementation.py`, `_codec.py`, `_embedding.py` |
-| `fhelium_ckks.decode` | Reconstruct message slots from scaled coefficients | `backend/ckks/codec/_implementation.py`, `_codec.py`, `_embedding.py` |
+| `fhelium_ckks.encode` | Embed message slots and quantize scaled coefficients | `backend/ckks/codec/_implementation.py`, `_embedding.py` |
+| `fhelium_ckks.decode` | Reconstruct message slots from scaled coefficients | `backend/ckks/codec/_implementation.py`, `_embedding.py` |
 | `fhelium_ckks.integer_coefficients_to_rns` | Reduce integer coefficients into supplied prime rows | `backend/ckks/codec/_implementation.py`, `backend/rns/context.py` |
 | `fhelium_ckks.prepare_compressed_plaintext` | Prepare periodic compact plaintexts | `backend/ckks/codec/_periodic.py` |
 | `fhelium_ckks.encrypt` | Sample and assemble ciphertext components | `backend/ckks/crypto/_encryption.py` |
 | `fhelium_ckks.decrypt` | Evaluate the ciphertext phase and reconstruct coefficients | `backend/ckks/crypto/_decryption.py` |
 
-Key generation is a data-provision API in `backend/ckks/crypto/_key_generation.py`. Decryption's numerical reconstruction tables live in `crypto/_tables.py`; `crypto/_resources.py` defines the encryption sampler's execution-resource names.
+Key generation is a data-provision API without an IR operation: `backend/ckks/crypto/_key_generation.py` selects key layouts and calls the libfhelium functions of `csrc/keys/`. Decryption's numerical reconstruction tables live in `crypto/_tables.py`; `crypto/_resources.py` defines the encryption sampler's execution-resource names.
 
 ## Ciphertext arithmetic and component composition
 
@@ -108,7 +110,7 @@ Key generation is a data-provision API in `backend/ckks/crypto/_key_generation.p
 | `fhelium_ntt.ntt_montgomery_to_coefficient_standard` | Normalized inverse NTT with standard output | `backend/ntt/operations.py`, `backend/ntt/executors/` |
 | `fhelium_ntt.ntt_montgomery_to_coefficient_montgomery` | Normalized inverse NTT retaining Montgomery output | `backend/ntt/operations.py`, `backend/ntt/executors/` |
 
-`backend/ntt/plans/` constructs twiddle and index tables; `backend/ntt/tables.py` materializes their device-specific views. Native transitions execute through `backend/ntt/operations.py`. Generated NTT regions use `backend/triton/_ntt.py` and `_ntt_codegen.py`.
+libfhelium table functions (`csrc/tables/`) construct twiddle and index tables; `backend/ntt/tables.py` materializes their device-specific views. Native transitions execute through `backend/ntt/operations.py`. Generated NTT regions use `backend/triton/_ntt.py` and `_ntt_codegen.py`.
 
 ## Modulus-chain and scale transitions
 

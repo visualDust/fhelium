@@ -291,8 +291,6 @@ def unsupported_attributes(
                 "rotation_step",
                 "rotation_steps",
                 "half_primes",
-                "centered_lift",
-                "min_modulus",
                 "joint_drop_count",
                 "joint_drop_is_prefix",
                 "joint_drop_prime_ids",

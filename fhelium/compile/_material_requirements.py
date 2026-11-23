@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, cast
 
 from xdsl.dialects.builtin import ArrayAttr, DenseArrayBase, StringAttr, i32
@@ -15,9 +15,11 @@ from fhelium.backend.implementation import (
     requested_implementation,
 )
 from fhelium.config import CkksConfig
+from fhelium.config._derived import config_from_text
 from fhelium.ir.dialects import ckks, core, rns
 
 from ._materials import (
+    _collect_key_references,
     _resolve_key_layouts,
     declare_material,
     rns_parameter_identity,
@@ -27,7 +29,54 @@ from ._materials import (
 from ._pipeline import DecisionRecord, PassResult, PassStats
 
 if TYPE_CHECKING:
+    from fhelium.ir import Program
+
     from ._compilation import Compilation
+
+
+class _KeyReferenceIndex:
+    """Track aliases during a pass whose rewrites report new key references."""
+
+    def __init__(self, program: Program) -> None:
+        self.program = program
+        self.refresh()
+
+    def refresh(self) -> None:
+        self.references = _collect_key_references(self.program)
+        self.known = {
+            reference
+            for aliases in self.references.values()
+            for reference in aliases
+        }
+
+    def observe(self, references: Iterable[core.MaterialRefOp]) -> None:
+        if any(reference not in self.known for reference in references):
+            # New declarations may precede existing aliases. Recollect once to
+            # retain traversal order, including other aliases from the rewrite.
+            self.refresh()
+
+
+@contextmanager
+def key_reference_scope(
+    compilation: Compilation, *, enabled: bool = True
+) -> Iterator[None]:
+    """Index key references for one controlled pass, retaining live metadata.
+
+    New key references supplied to material resolution refresh the index. Custom lowerings use the ordinary traversal path with ``enabled=False``. Workspace copies for other Programs cannot use this Program's index.
+    """
+    workspace = compilation.workspace
+    previous = workspace.get(_KeyReferenceIndex)
+    if enabled:
+        workspace[_KeyReferenceIndex] = _KeyReferenceIndex(compilation.program)
+    else:
+        workspace.pop(_KeyReferenceIndex, None)
+    try:
+        yield
+    finally:
+        if previous is None:
+            workspace.pop(_KeyReferenceIndex, None)
+        else:
+            workspace[_KeyReferenceIndex] = previous
 
 
 def implementation_registry(
@@ -53,6 +102,7 @@ def resolve_key_layouts(
 ) -> int:
     """Resolve layouts for material symbols consumed by these operations."""
     symbols = set()
+    observed: list[core.MaterialRefOp] = []
     for operation in operations:
         if (
             isinstance(operation, core.MaterialRefOp)
@@ -60,6 +110,7 @@ def resolve_key_layouts(
             and operation.symbol is not None
         ):
             symbols.add(operation.symbol.data)
+            observed.append(operation)
         for value in operation.operands:
             owner = value.owner
             if (
@@ -68,8 +119,17 @@ def resolve_key_layouts(
                 and owner.symbol is not None
             ):
                 symbols.add(owner.symbol.data)
+                observed.append(owner)
     if not symbols:
         return 0
+    index = compilation.workspace.get(_KeyReferenceIndex)
+    references = None
+    if (
+        isinstance(index, _KeyReferenceIndex)
+        and index.program.module is compilation.program.module
+    ):
+        index.observe(observed)
+        references = index.references
     return _resolve_key_layouts(
         compilation,
         cast(
@@ -77,6 +137,7 @@ def resolve_key_layouts(
             compilation.workspace.get("key_layouts", {}),
         ),
         symbols=symbols,
+        references=references,
     )
 
 
@@ -106,7 +167,7 @@ def resolve_material_requirements(
         matched += 1
         config_attr = operation.attributes.get("ckks_config")
         config = (
-            CkksConfig.parse(json.loads(config_attr.data))
+            config_from_text(config_attr.data)
             if isinstance(config_attr, StringAttr)
             else workspace.get(CkksConfig)
         )

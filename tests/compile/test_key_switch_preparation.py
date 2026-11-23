@@ -53,7 +53,10 @@ def test_compound_relinearization_consumes_a_complete_group(device, domain):
     moduli = torch.tensor(
         config.q_moduli[2:], dtype=torch.int64, device=device
     ).view(-1, 1)
-    for operation in (compound, fc.compile(compound)):
+    for operation in (
+        compound,
+        fc.compile(compound, cache=False, graph=False),
+    ):
         result = operation(product)
         assert torch.equal(result.data % moduli, reference.data % moduli)
         assert (result.depth, result.scale, result.prime_ids) == (
@@ -213,6 +216,8 @@ def test_frontends_share_one_pipeline_and_request_local_materials(device):
         keys=keys,
         pipeline=recipe,
         workspace=fc.CompileWorkspace({type(config): config}),
+        cache=False,
+        graph=False,
     )
     operator_call = fc.compile(
         operators,
@@ -221,6 +226,8 @@ def test_frontends_share_one_pipeline_and_request_local_materials(device):
         keys=keys,
         pipeline=recipe,
         workspace=fc.CompileWorkspace({type(config): config}),
+        cache=False,
+        graph=False,
     )
     for _ in range(2):
         actual = operator_call(x, y)
@@ -285,7 +292,13 @@ def test_lowered_ntt_switch_keeps_live_coefficient_input_and_key(
     pipeline = fc.default_lower_and_fuse_pipeline(backend).before(
         "select-execution-lowerings", fc.LowerCkksToRnsNttPass()
     )
-    compiled = fc.compile(source, backend=backend, pipeline=pipeline)
+    compiled = fc.compile(
+        source,
+        backend=backend,
+        pipeline=pipeline,
+        cache=False,
+        graph=False,
+    )
     for rounding in ("nearest", "floor"):
         for _ in range(2):
             expected = source(value, key, rounding)
@@ -503,3 +516,58 @@ def test_material_free_program_rebinds_independent_keys(
     with pytest.raises(ValueError, match="conflicts with declared"):
         fc.prepare_material_bindings(rejected, keys={symbol: incompatible})
     assert rejected.material_bindings == {}
+
+
+def test_key_layout_scope_updates_live_aliases_and_new_programs():
+    from xdsl.dialects.builtin import ArrayAttr, IntegerAttr, StringAttr
+    from xdsl.rewriter import Rewriter
+
+    from fhelium.compile._material_requirements import (
+        key_reference_scope,
+        resolve_key_layouts,
+    )
+    from fhelium.ir import Program
+    from fhelium.ir.dialects import core
+
+    def reference():
+        return core.MaterialRefOp(ckks.EvaluationKeyType(), symbol="shared")
+
+    first, alias = reference(), reference()
+    program = Program.empty((first, alias))
+    layout = {"prime_ids": (0, 1), "digit_prime_ids": ((0,),)}
+    compilation = fc.Compilation(
+        program, fc.CompileWorkspace({"key_layouts": {"shared": layout}})
+    )
+    with key_reference_scope(compilation):
+        resolve_key_layouts(compilation, (first,))
+        assert first.value.type == alias.value.type
+        added = reference()
+        program.module.body.block.insert_op_before(added, first)
+        layout["device"] = "cpu"
+        resolve_key_layouts(compilation, (added,))
+        assert added.value.type == first.value.type == alias.value.type
+        assert first.value.type.state.data["device"] == StringAttr("cpu")
+
+        # A removed alias no longer constrains the current Program.
+        program.module.body.block.detach_op(alias)
+        Rewriter.replace_value_with_new_type(
+            alias.value,
+            ckks.EvaluationKeyType().with_state(
+                {"prime_ids": ArrayAttr((IntegerAttr(9, 64),))}
+            ),
+        )
+        resolve_key_layouts(compilation, (first,))
+
+        other, other_alias = reference(), reference()
+        independent = fc.Compilation(
+            Program.empty((other, other_alias)),
+            fc.CompileWorkspace(compilation.workspace),
+        )
+        resolve_key_layouts(independent, (other,))
+        assert other.value.type == other_alias.value.type == first.value.type
+
+    # Later passes must discover aliases without an observation from this scope.
+    later = reference()
+    program.module.body.block.insert_op_before(later, first)
+    resolve_key_layouts(compilation, (first,))
+    assert later.value.type == first.value.type

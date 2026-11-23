@@ -432,8 +432,16 @@ def check_wheel(
             if Path(name).name.startswith("_build_manifest.")
             and name.endswith(".json")
         ]
+        sdk_files = (
+            "fhelium/native/lib/fhelium.dll",
+            "fhelium/native/lib/fhelium.lib",
+            "fhelium/native/include/fhelium/fhelium.h",
+            "fhelium/native/share/cmake/FHElium/FHEliumConfig.cmake",
+            "fhelium/native/share/cmake/FHElium/FHEliumConfigVersion.cmake",
+        )
         if (
             len(ops_binaries) != 1
+            or not all(name in names for name in sdk_files)
             or len(cuda_info_binaries) != int(configuration.has_cuda)
             or len(manifests) != 1
             or not all(
@@ -475,20 +483,27 @@ def check_wheel(
         with tempfile.TemporaryDirectory(
             prefix="fhelium-wheel-", dir=work_root
         ) as temporary:
-            binary = Path(temporary) / Path(ops_binaries[0]).name
-            binary.write_bytes(archive.read(ops_binaries[0]))
-            text = run(
-                str(dumpbin),
-                "/dependents",
-                str(binary),
-                cwd=source,
-                capture=True,
-            ).stdout.casefold()
+            ops_binary = Path(temporary) / Path(ops_binaries[0]).name
+            ops_binary.write_bytes(archive.read(ops_binaries[0]))
+            binary = Path(temporary) / "fhelium.dll"
+            binary.write_bytes(archive.read("fhelium/native/lib/fhelium.dll"))
+
+            def dependents(path: Path) -> str:
+                return run(
+                    str(dumpbin),
+                    "/dependents",
+                    str(path),
+                    cwd=source,
+                    capture=True,
+                ).stdout.casefold()
+
+            if "fhelium.dll" not in dependents(ops_binary):
+                raise RuntimeError("_ops must link fhelium.dll")
+            text = dependents(binary)
             if "libiomp5md.dll" not in text or "vcomp" in text:
                 raise RuntimeError(
                     "wheel must use Torch's OpenMP runtime without VCOMP"
                 )
-            raw = binary.read_bytes()
             forbidden = list(
                 dict.fromkeys(
                     (source, source.resolve(), work_root, work_root.resolve())
@@ -496,13 +511,17 @@ def check_wheel(
             )
             if toolkit is not None:
                 forbidden.extend((toolkit, cuda_compiler_root(toolkit)))
-            for path in forbidden:
-                for encoded in (
-                    str(path).encode().lower(),
-                    str(path).encode("utf-16le").lower(),
-                ):
-                    if encoded in raw.lower():
-                        raise RuntimeError(f"wheel contains local path: {path}")
+            for native_binary in (ops_binary, binary):
+                raw = native_binary.read_bytes().lower()
+                for path in forbidden:
+                    for encoded in (
+                        str(path).encode().lower(),
+                        str(path).encode("utf-16le").lower(),
+                    ):
+                        if encoded in raw:
+                            raise RuntimeError(
+                                f"wheel contains local path: {path}"
+                            )
             if toolkit is not None:
                 cuobjdump = toolkit / "bin" / "cuobjdump.exe"
                 sass = run(

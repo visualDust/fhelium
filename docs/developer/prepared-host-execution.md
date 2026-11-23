@@ -8,11 +8,14 @@ Backend linking converts a transformed Compilation into a `ProgramExecutable` wi
 
 The standard linking pipeline in `compile/passes/backend/_pipeline.py` runs:
 
-1. `ResolveTensorPlaceholdersPass` to record available Tensor facts.
-2. `ResolveBackendOperationsPass` to resolve implementations and produce a `ProgramDispatchTable`.
-3. `InitializeResourceBindingsPass` to initialize named non-Tensor handles.
-4. `MaterializeResourcesPass`, when a Backend materializer is supplied, to construct missing handles.
-5. `LinkProgramPass` to resolve every external reference and construct `ProgramExecutable`.
+1. `ResolveTensorPlaceholdersPass` to record available Tensor facts, including the arguments and results of called functions.
+2. `LinkCalledFunctionsPass` to link each function called from `main` once as its own `ProgramExecutable`.
+3. `ResolveBackendOperationsPass` to resolve implementations and produce a `ProgramDispatchTable`; a `func.call` dispatches to its callee's executable.
+4. `InitializeResourceBindingsPass` to initialize named non-Tensor handles.
+5. `MaterializeResourcesPass`, when a Backend materializer is supplied, to construct missing handles.
+6. `LinkProgramPass` to resolve every external reference and construct `ProgramExecutable`.
+
+Called functions arise when the lowering pipeline places key switches that differ only in their Galois element into one shared function body. Each call passes its own automorphism gather and sign tables, so the callee's dispatch, kernel preparation and host code are constructed once for all of its calls.
 
 Resolution consumes the Program's selected operations and assignments. Numerical lowering and key/table preparation belong in the preceding transformation pipeline. A missing or ambiguous implementation stops resolution; unresolved material symbols, absent required handles, or handle-kind mismatches stop linking.
 
@@ -61,15 +64,53 @@ A material reference binds a live Tensor object. Compatible in-place numerical c
 
 A compiled variant retains input conditions, source and transformed Compilations, and interface mapping. A linked `Specialization` pairs that variant with a Backend and executable. The matcher compares represented argument metadata and static scalar values. Ciphertext contents and storage addresses do not form the specialization key.
 
-`prepare(*args, **kwargs)` establishes the matching specialization. `on_miss="error"` makes subsequent unprepared input conditions an error; the default miss policy permits preparation. An omitted pipeline uses `default_lower_and_fuse_pipeline`; a supplied Pipeline or signature-to-Pipeline function replaces it. Programs and Compilations skip Python source capture.
+A call whose signature has no resident specialization prepares one in the calling thread and then executes it. Preparation captures or loads the Program, transforms it when needed, binds materials, links and warms supported CUDA kernels; the Triton kernels of one executable compile concurrently in a shared thread pool. Preparation errors propagate to the caller.
 
-`with_backend` relinks the existing transformed variants to another Backend and snapshots that set of variants. Later variants are prepared independently. Relinking does not retune an already transformed Program for different implementation coverage or hardware.
+`prepare(*args, **kwargs)` establishes the matching specialization without executing it. `on_miss="error"` requires a prior matching `prepare`. An omitted pipeline uses the default recipe, with source-lowering passes omitted for state-instantiated CKKS templates. Semantic templates retain full instance scheduling. A supplied Pipeline or signature-to-Pipeline function replaces the recipe.
 
-## Which compilation costs remain lazy?
+`with_backend` snapshots existing transformed variants into a new callable, which links them with the selected Backend when prepared. Later variants are prepared independently. Relinking does not retune an already transformed Program for different implementation coverage or hardware.
 
-Host preparation can create Triton functions before their GPU binaries have compiled. Generated implementations may prepare a dynamic layout when physical facts first become available. First execution can therefore incur device-code compilation or launch-plan preparation even for an already prepared callable specialization.
+## Structural instantiation and guarded selection plans
 
-Prepare and execute the intended startup workload before steady-state timing or CUDA Graph capture. Report cold preparation separately from warmed execution. Host source generation, Backend kernel generation, and CUDA Graph capture are distinct mechanisms with different products.
+A new call signature first checks the optimized-instance cache. On a miss, preparation looks for a compatible source-family template in process memory or the structural disk cache. `compile/_template.py` clones its high-level Program and applies registered operation-state rules to current inputs and material owners. The accompanying provenance description classifies facts as `Known`, `InputField`, `Derived` and `Unknown`. Python metadata reads are guarded against their capture-time values. A guard miss or uncovered operation returns to ordinary capture; it does not make the underlying callable unsupported.
+
+Templates cover CKKS arithmetic and scalar operations, NTT and residue transitions, depth operations, key operations and modulus raising, along with supported static Python loops and helper calls. Registered Tensor calls and encrypted semantic arithmetic and rotation also participate. Codec-specific paths, grouped-RNS operations and arbitrary replacements need ordinary capture when their state rules are unavailable. Source identity eligibility remains narrower than frontend capture support.
+
+A CKKS instance uses `instantiated_ckks_pipeline`, which removes source semantic/logical lowering and transition insertion already represented by template state evaluation. Semantic templates use the full default recipe. Current material requirements, state checks, common-subexpression elimination, dead-value elimination and implementation selection remain instance work.
+
+`compile/_selection_plan.py` stores decisions rather than prior operation objects. Built-in lowering selection uses per-operation guards; fusion uses a guard over the complete lowered block, including order, edges, escaping values, effects and matcher-visible facts. Applying a plan reconstructs the chosen lowering or fusion region from the current graph and current types. Custom policies outside these guard contracts use ordinary selection.
+
+Arithmetic and NTT guards permit supported prime-row variation; topology-sensitive key operations retain the concrete facts their lowerings consume. A changed key or digit layout can miss locally while neighboring arithmetic decisions still hit. Selection and fusion hit/miss counts and a reason are retained in specialization statistics. [Compilation persistence](compilation-persistence.md) defines the source-family storage and material-rebinding scope.
+
+### Local recipe and current-window facts reuse
+
+`stats()["specializations"][i]["local_plans"]` reports local matcher analysis performed during that specialization’s preparation. The current consumer describes one operation and its directly connected operand/result ports, including operand sharing. It reuses a matcher recipe for that local structure and fixed facts, then evaluates the recipe against current values. Python capture and lowering origins can identify candidates; they do not establish semantic equivalence by themselves.
+
+| Counter | Counting unit |
+| --- | --- |
+| `occurrences` | Requests for a local recipe over one operation and its direct ports, accumulated across participating pass scopes; an operation can contribute more than once |
+| `recipe_hits` / `recipe_misses` | Recipe lookups satisfied by the pass-local or source-family store, versus lookups requiring a new recipe |
+| `facts_hits` / `facts_misses` | Repeated queries satisfied by current-operation facts, versus first evaluations in a read-only graph-analysis window |
+
+Facts include the result of analyzing an unsupported operation. Multiple probes or matchers can query the same operation in one window, so facts counts can exceed recipe counts. A new window evaluates its own current facts; evaluated SSA values and layouts are discarded before graph rewriting. `guard_bypasses` records recipe requests that use ordinary analysis outside the local guard contract.
+
+Global candidate scheduling and final fusion eligibility checks continue when using local hits. The whole-block fusion plan remains a separate reuse decision. Local counters describe work reused at their respective granularities; compare preparation-stage timings and `PassReport.seconds` to establish a time saving. A resident invocation retains its specialization’s preparation record rather than performing those analyses again.
+
+## Kernel warming and automatic Graph capture
+
+Callable preparation warms supported Triton kernels from the linked executable and physical input facts. A warmup failure is retained in stage statistics; operations outside the warming coverage can still initialize during execution. Manually linking a Program prepares its host function and leaves device-kernel initialization to the caller’s execution workflow.
+
+Callable execution defaults to `graph=False`. `compile/_graph.py` manages capture when the caller selects `graph="auto"` or `graph=True`. One prepared invocation establishes the result structure and eligibility. The next compatible invocation attempts capture on the caller’s thread and execution context. CPU inputs, autograd outputs and capture failures continue as prepared calls; `stats()["graphs"]` records state, execution counts, capture costs and fallback reasons. `graph=False` keeps the prepared route.
+
+Each callable owns device-local shared Graph pools. Replays return owned copies by default; `copy_output=False` exposes storage valid until the corresponding Graph replays or the callable is cleared. Clearing closes Graphs, then closes pools and releases resident specializations. Persistent cache files remain intact.
+
+## Preparation and execution statistics
+
+`stats()` reports per-specialization host durations for source capture, pipeline execution, material binding, linking, cache load/store and kernel warming where those stages ran. `PassReport.seconds` measures individual pass invocations and their configured structural verification. Instance-cache status distinguishes hits, stored entries, misses, disabled persistence and source/material ineligibility. Structural observations separately report hit, guard miss or unsupported capture, the memory/disk lookup layer, and template instantiation cost. `resident_cache_hits` counts reuse of linked specializations; selection-plan observations count lowering and fusion reuse.
+
+Execution timing separates host dispatch from completed work. CPU calls complete on return. For inputs identifying one CUDA device, events measure the caller’s CUDA stream, including work joined onto that stream; completed events are collected without a device synchronization. Independent streams and devices reachable only through closures lie outside that scope. Unsupported multi-device completion remains unavailable rather than being estimated from launch time. Use synchronized external timing for application-wide latency.
+
+`timing` separates compiled and steady compiled observations. The steady group excludes each specialization’s first two compiled calls, covering initial prepared execution and, when enabled, the automatic-capture transition. `prepare_seconds` includes source identity, capture, template construction and instantiation, pipeline, binding, linking, cache read/write and kernel warming; `graph_capture_seconds` records the additional Graph construction cost.
 
 `EmitEagerPythonPass` exports public Eager calls; `EmitBackendPythonPass` exports Backend-oriented Python. Backend export and linked execution share host control-flow emission. [Generated kernels and fusion](compiled-execution-and-kernels.md) describes device code, while [Compilation persistence](compilation-persistence.md) describes portable Program and data storage.
 

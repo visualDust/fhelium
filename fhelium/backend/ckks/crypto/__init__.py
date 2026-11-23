@@ -1,11 +1,7 @@
 """CKKS key material and registered encryption/decryption implementations."""
 
-from ._decryption import (
-    NativeDecryptImplementation,
-    decrypt_tensor,
-    reconstruct_q_coefficients_tensor,
-)
-from ._encryption import NativeEncryptImplementation, encrypt_tensor
+from ._decryption import NativeDecryptImplementation
+from ._encryption import NativeEncryptImplementation
 from ._key_generation import CkksKeyGenerator, KeyGenerationResource
 from ._tables import DecryptReconstructionTables
 from ._resources import (
@@ -21,7 +17,4 @@ __all__ = [
     "NativeEncryptImplementation",
     "CkksKeyGenerator",
     "KeyGenerationResource",
-    "decrypt_tensor",
-    "encrypt_tensor",
-    "reconstruct_q_coefficients_tensor",
 ]

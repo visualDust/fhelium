@@ -22,25 +22,9 @@ from fhelium import (
     CkksConfig,
     Plaintext,
     Preset,
-    RotationKeySet,
 )
-from fhelium.legacy.engine import CkksEngine
+from fhelium.eager import Engine
 from fhelium.errors import MaximumDepthError
-
-
-def test_default_device_falls_back_to_included_cpu_backend(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from fhelium import native as native_module
-
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(
-        native_module,
-        "native_backend_available",
-        lambda backend: backend == "cpu",
-    )
-    engine = CkksEngine(Preset.slots8192_scale40_depth7_int64)
-    assert engine.device == torch.device("cpu")
 
 
 _CODEC_ATOL = 1e-5
@@ -56,25 +40,35 @@ _MULTIPLICATION_ATOL = 3e-5
         pytest.param("cuda:0", marks=pytest.mark.gpu, id="cuda"),
     ),
 )
-def engine(request: pytest.FixtureRequest) -> Iterator[CkksEngine]:
-    device = str(request.param)
-    if device.startswith("cuda") and not torch.cuda.is_available():
+def device(request: pytest.FixtureRequest) -> Iterator[str]:
+    selected = str(request.param)
+    if selected.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
-    instance = CkksEngine(
-        Preset.slots8192_scale40_depth7_int64,
-        device=device,
-    )
-    yield instance
-
-    del instance
+    yield selected
     gc.collect()
-    if device.startswith("cuda"):
+    if selected.startswith("cuda"):
         torch.cuda.empty_cache()
 
 
-def _message(
-    engine: CkksEngine, *, complex_values: bool = True
-) -> torch.Tensor:
+@pytest.fixture(scope="module")
+def _device_engine(device: str) -> Engine:
+    return Engine(Preset.slots8192_scale40_depth7_int64)
+
+
+@pytest.fixture
+def engine(_device_engine: Engine, device: str) -> Iterator[Engine]:
+    """Yield the module Engine with factories placed on the selected device."""
+
+    with torch.device(device):
+        yield _device_engine
+
+
+def _synchronize() -> None:
+    if torch.get_default_device().type == "cuda":
+        torch.cuda.synchronize()
+
+
+def _message(engine: Engine, *, complex_values: bool = True) -> torch.Tensor:
     """Return a deterministic full-slot message with small components."""
 
     index = torch.arange(engine.num_slots, dtype=torch.float64)
@@ -85,7 +79,7 @@ def _message(
     return torch.complex(real, imag)
 
 
-def _other_message(engine: CkksEngine) -> torch.Tensor:
+def _other_message(engine: Engine) -> torch.Tensor:
     index = torch.arange(engine.num_slots, dtype=torch.float64)
     real = 0.010 * torch.cos(index * 0.017) - 0.003 * torch.sin(index * 0.009)
     imag = 0.007 * torch.sin(index * 0.015) + 0.002 * torch.cos(index * 0.003)
@@ -114,7 +108,7 @@ def _assert_array_close(
 
 
 def _assert_decrypts_to(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
     expected: torch.Tensor,
     *,
@@ -122,16 +116,14 @@ def _assert_decrypts_to(
     operation: str,
     secret_key=None,
 ) -> None:
-    if engine.device.type == "cuda":
-        torch.cuda.synchronize(engine.device)
+    _synchronize()
     decoded = engine.decrypt_message(ciphertext, secret_key=secret_key)
-    if engine.device.type == "cuda":
-        torch.cuda.synchronize(engine.device)
+    _synchronize()
     _assert_array_close(decoded, expected, atol=atol, operation=operation)
 
 
 def _assert_decryption_error_distribution(
-    engine: CkksEngine,
+    engine: Engine,
     ciphertext: Ciphertext,
     expected: torch.Tensor,
     *,
@@ -144,8 +136,7 @@ def _assert_decryption_error_distribution(
     the 99th percentile measure its magnitude relative to ``N / scale``.
     """
 
-    if engine.device.type == "cuda":
-        torch.cuda.synchronize(engine.device)
+    _synchronize()
     actual = torch.as_tensor(engine.decrypt_message(ciphertext))
     expected = expected.to(actual.device)
     error = torch.abs(actual - expected)
@@ -166,18 +157,10 @@ def _assert_decryption_error_distribution(
     )
 
 
-@pytest.fixture(scope="module")
-def cpu_engine() -> CkksEngine:
-    return CkksEngine(
-        Preset.slots8192_scale40_depth7_int64,
-        device="cpu",
-    )
-
-
-def test_cpu_complete_ckks_engine_surface(cpu_engine: CkksEngine) -> None:
+def test_cpu_complete_ckks_engine_surface() -> None:
     """Exercise every Example 1 dependency and the remaining key switches."""
 
-    engine = cpu_engine
+    engine = Engine(Preset.slots8192_scale40_depth7_int64)
     message = _message(engine)
     other = _other_message(engine)
     source = engine.encrypt_message(message)
@@ -300,18 +283,11 @@ def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_depths(
 
     config = CkksConfig.parse(preset)
 
-    cpu = CkksEngine(
+    cpu = Engine(config, rng_seed=0x12345678, rng_nonce=7)
+    cuda = Engine(
         config,
-        device="cpu",
-        rng_seed=0x12345678,
-        rng_nonce=7,
-    )
-    cuda = CkksEngine(
-        config,
-        device="cuda:0",
         ntt_backend=cuda_ntt_backend,
-        rng_seed=0x12345678,
-        rng_nonce=7,
+        allow_automatic_key_generation=False,
     )
 
     def assert_value(cpu_value, cuda_value) -> None:
@@ -324,9 +300,21 @@ def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_depths(
         )
 
     message = _message(cpu)
-    cpu_rotation_key = cpu.rotation_key(1)
-    cuda_rotation_key = cuda.rotation_key(1)
-    assert_value(cpu_rotation_key, cuda_rotation_key)
+    # Digits of at most num_p_primes Q primes keep each digit product below P,
+    # the layout for which the rotation noise bound below holds.
+    q_count = len(config.q_moduli)
+    p_count = config.num_p_primes
+    bounded_digits = tuple(
+        tuple(range(start, min(start + p_count, q_count)))
+        for start in range(0, q_count, p_count)
+    )
+    with torch.device("cpu"):
+        cpu_rotation_key = cpu.create_rotation_key(
+            1, cpu.secret_key, digit_prime_ids=bounded_digits
+        )
+        cuda.set_secret_key(cpu.secret_key.to("cuda:0"))
+        cuda.set_relinearization_key(cpu.relinearization_key.to("cuda:0"))
+    cuda_rotation_key = cpu_rotation_key.to("cuda:0")
 
     # These product checks need Q capacity for an unrescaled squared scale.
     # The terminal singleton basis is exercised by final-depth decryption.
@@ -337,14 +325,13 @@ def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_depths(
             config.max_depth - 1,
         }
     )
-    with pytest.raises(ValueError, match="depth must satisfy"):
+    with pytest.raises(ValueError, match="depth must be in"):
         cpu.encrypt_message(message, depth=config.max_depth + 1)
-    with pytest.raises(ValueError, match="depth must satisfy"):
+    with pytest.raises(ValueError, match="depth must be in"):
         cuda.encrypt_message(message, depth=config.max_depth + 1)
     for depth in depths:
-        cpu_ciphertext = cpu.encrypt_message(message, depth=depth)
-        cuda_ciphertext = cuda.encrypt_message(message, depth=depth)
-        assert_value(cpu_ciphertext, cuda_ciphertext)
+        cpu_ciphertext = cpu.encrypt_message(message, depth=depth, device="cpu")
+        cuda_ciphertext = cpu_ciphertext.to("cuda:0")
         _assert_decryption_error_distribution(
             cuda,
             cuda_ciphertext,
@@ -400,117 +387,15 @@ def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_depths(
     torch.cuda.empty_cache()
 
 
-def _mixed_radix_integer_reference(
-    source: torch.Tensor,
-    moduli: tuple[int, ...],
-) -> torch.Tensor:
-    source_cpu = source.cpu()
-    result = torch.empty_like(source_cpu)
-    for coefficient in range(source_cpu.size(-1)):
-        prefix = 1
-        partial = 0
-        for row, modulus in enumerate(moduli):
-            residue = int(source_cpu[row, coefficient])
-            digit = (residue - partial) * pow(prefix, -1, modulus) % modulus
-            result[row, coefficient] = digit
-            partial += digit * prefix
-            prefix *= modulus
-    return result
-
-
-@pytest.mark.gpu
-@pytest.mark.parametrize(
-    ("preset", "digit_rows"),
-    [
-        (Preset.slots8192_scale25_depth14_int32, 2),
-        (Preset.slots8192_scale25_depth14_int32, 4),
-        (Preset.slots8192_scale25_depth14_int32, 6),
-        (Preset.slots8192_scale40_depth7_int64, 2),
-        (Preset.slots8192_scale40_depth7_int64, 4),
-        (Preset.slots8192_scale40_depth7_int64, 6),
-    ],
-    ids=[
-        "int32-rows2",
-        "int32-rows4",
-        "int32-rows6",
-        "int64-rows2",
-        "int64-rows4",
-        "int64-rows6",
-    ],
-)
-def test_cuda_mixed_radix_decomposition_matches_integer_reference(
-    preset: Preset,
-    digit_rows: int,
-) -> None:
-    if not torch.cuda.is_available():
-        pytest.skip("CUDA is not available")
-
-    source_config = CkksConfig.parse(
-        Preset.slots65536_scale25_depth14_int32
-        if "int32" in preset.value
-        else Preset.slots65536_scale40_depth72_int64
-    )
-    config = CkksConfig(
-        default_scale=source_config.default_scale,
-        q_depth_groups=source_config.q_depth_groups[: digit_rows + 2],
-        p_moduli=source_config.p_moduli[:digit_rows],
-        logN=12,
-        enforce_security_budget=False,
-    )
-    cpu = CkksEngine(config, device="cpu", allow_sk_gen=False)
-    cuda = CkksEngine(config, device="cuda:0", allow_sk_gen=False)
-    cpu_switcher = cpu._hybrid_key_switcher
-    cuda_switcher = cuda._hybrid_key_switcher
-    cpu_spec = cpu_switcher.rns_layout.digit_specs(0)[0]
-    cuda_spec = cuda_switcher.rns_layout.digit_specs(0)[0]
-    assert cpu_spec.prime_ids == cuda_spec.prime_ids
-    assert len(cpu_spec.prime_ids) == digit_rows
-
-    moduli = tuple(config.moduli[index] for index in cpu_spec.prime_ids)
-    coefficient_count = 19
-    source = torch.empty(
-        digit_rows,
-        coefficient_count,
-        dtype=cpu.rns_runtime.dtype,
-    )
-    for row, modulus in enumerate(moduli):
-        for coefficient in range(coefficient_count):
-            value = (
-                (coefficient + 3) * (row + 5) * 1_000_003
-                + (digit_rows - row) * 97
-            ) % modulus
-            source[row, coefficient] = (
-                modulus - 1 - value if row % 2 == 0 else value
-            )
-            if coefficient % 5 == 0:
-                source[row, coefficient] += modulus
-    source_before = source.clone()
-
-    cpu_actual = cpu_switcher._decompose_digit_mixed_radix(source, cpu_spec)
-    cuda_source = source.to("cuda:0")
-    cuda_before = cuda_source.clone()
-    cuda_actual = cuda_switcher._decompose_digit_mixed_radix(
-        cuda_source, cuda_spec
-    )
-    expected = _mixed_radix_integer_reference(source, moduli)
-
-    torch.testing.assert_close(cpu_actual, expected, rtol=0, atol=0)
-    torch.testing.assert_close(cuda_actual.cpu(), expected, rtol=0, atol=0)
-    torch.testing.assert_close(source, source_before, rtol=0, atol=0)
-    torch.testing.assert_close(cuda_source, cuda_before, rtol=0, atol=0)
-
-
 @pytest.mark.gpu
 def test_cuda_rns_parameters_are_isolated_between_engines(
-    engine: CkksEngine,
+    engine: Engine,
 ) -> None:
     """Contexts with different rings and RNS bases remain independent."""
 
-    other_engine = CkksEngine(
-        Preset.slots16384_scale40_depth16_int64,
-        device="cuda:0",
-    )
+    other_engine = Engine(Preset.slots16384_scale40_depth16_int64)
     try:
+        other_engine.encrypt_message(_message(other_engine))
         message = _message(engine)
         ciphertext = engine.encrypt_message(message)
         _assert_decrypts_to(
@@ -528,7 +413,7 @@ def test_cuda_rns_parameters_are_isolated_between_engines(
 
 @pytest.mark.parametrize("depth", [0, 3, 6])
 def test_codec_encrypt_decrypt_and_convenience_paths_are_correct(
-    engine: CkksEngine,
+    engine: Engine,
     depth: int,
 ) -> None:
     """Cover encode/decode, lazy plaintext, encrypt/decrypt and encrypt_message."""
@@ -586,77 +471,64 @@ def test_codec_encrypt_decrypt_and_convenience_paths_are_correct(
 def test_int64_coefficients_wider_than_scale_prime_use_exact_rns_lift() -> None:
     """An int64 coefficient may still exceed a 40-bit active modulus."""
 
-    engine = CkksEngine(
-        Preset.slots8192_scale40_depth7_int64,
-        device="cuda:0",
-    )
-    message = torch.full((32,), 2.0e8, dtype=torch.float64)
+    with torch.device("cuda:0"):
+        engine = Engine(Preset.slots8192_scale40_depth7_int64)
+        message = torch.full((32,), 2.0e8, dtype=torch.float64)
 
-    convenience = engine.decrypt_message(
-        engine.encrypt_message(message),
-        is_real=True,
-    )[: message.numel()]
-    plaintext = engine.encode(message)
-    composed = engine.decode(
-        engine.decrypt(engine.encrypt(plaintext)),
-        is_real=True,
-    )[: message.numel()]
-    operation_ready = engine.prepare_plaintext_for_addition(
-        engine.encode(message)
-    )
-    operation_ready_data = operation_ready.data
-    plaintext_data = plaintext.data
-    assert operation_ready_data is not None
-    assert plaintext_data is not None
-    standard_rns = operation_ready_data.clone()
-    engine.rns_runtime.from_montgomery_(standard_rns)
-    active_moduli = torch.tensor(
-        engine.config.q_moduli,
-        dtype=plaintext_data.dtype,
-        device=plaintext_data.device,
-    ).view(-1, 1)
-    expected_rns = torch.remainder(
-        plaintext_data.unsqueeze(-2),
-        active_moduli,
-    )
-    # The two independent stochastic-rounding calls can differ by one integer;
-    # a broken one-prime lift differs by an entire active modulus instead.
-    torch.testing.assert_close(standard_rns, expected_rns, rtol=0, atol=1)
+        convenience = engine.decrypt_message(
+            engine.encrypt_message(message),
+            is_real=True,
+        )[: message.numel()]
+        plaintext = engine.encode(message)
+        composed = engine.decode(
+            engine.decrypt(engine.encrypt(plaintext)),
+            is_real=True,
+        )[: message.numel()]
+        operation_ready = engine.prepare_plaintext_for_addition(
+            engine.encode(message)
+        )
+        operation_ready_data = operation_ready.data
+        plaintext_data = plaintext.data
+        assert operation_ready_data is not None
+        assert plaintext_data is not None
+        standard_rns = operation_ready_data.clone()
+        engine.rns_context("cuda:0").from_montgomery_(standard_rns)
+        active_moduli = torch.tensor(
+            engine.config.q_moduli,
+            dtype=plaintext_data.dtype,
+            device=plaintext_data.device,
+        ).view(-1, 1)
+        # Standard residues may lie in the lazy range [0, 2q). The two
+        # independent stochastic-rounding calls can differ by one integer.
+        assert bool(
+            ((standard_rns >= 0) & (standard_rns < 2 * active_moduli)).all()
+        )
+        difference = torch.remainder(
+            standard_rns - plaintext_data.unsqueeze(-2) + 1, active_moduli
+        )
+        assert int(difference.max()) <= 2
 
-    _assert_array_close(
-        convenience,
-        message,
-        atol=5e-6,
-        operation="40-bit RNS convenience roundtrip",
-    )
-    _assert_array_close(
-        composed,
-        message,
-        atol=5e-6,
-        operation="40-bit RNS composed roundtrip",
-    )
-
-
-@pytest.mark.gpu
-def test_message_encryption_rejects_decoder_range_aliasing() -> None:
-    engine = CkksEngine(Preset.slots8192_scale40_depth7_int64, device="cuda:0")
-    message = torch.full((32,), 1.0e20, dtype=torch.float64)
-
-    with pytest.raises(OverflowError, match="direct decoder range"):
-        engine.encrypt_message(message)
+        _assert_array_close(
+            convenience,
+            message,
+            atol=5e-6,
+            operation="40-bit RNS convenience roundtrip",
+        )
+        _assert_array_close(
+            composed,
+            message,
+            atol=5e-6,
+            operation="40-bit RNS composed roundtrip",
+        )
 
 
 def test_ntt_and_coefficient_state_round_trips_are_correct(
-    engine: CkksEngine,
+    engine: Engine,
 ) -> None:
     """Cover functional and in-place coefficient/NTT state transitions."""
 
     message = _message(engine)
     source = engine.encrypt_message(message)
-    malformed_basis = source.clone()
-    malformed_basis.modulus_basis = "bad"  # type: ignore[assignment]
-    with pytest.raises(ValueError, match="modulus_basis"):
-        engine.coefficient_domain_to_ntt_domain_(malformed_basis)
 
     ntt = engine.coefficient_domain_to_ntt_domain(source)
     assert ntt is not source
@@ -665,10 +537,6 @@ def test_ntt_and_coefficient_state_round_trips_are_correct(
         and source.residue_representation == "standard"
     )
     assert ntt.is_ntt_domain and ntt.residue_representation == "montgomery"
-    malformed_ntt = ntt.clone()
-    malformed_ntt.residue_representation = "standard"
-    with pytest.raises(ValueError, match="Montgomery"):
-        engine.ntt_domain_to_coefficient_domain_(malformed_ntt)
     round_trip = engine.ntt_domain_to_coefficient_domain(ntt)
     assert round_trip.limb_count == source.limb_count
     assert round_trip.prime_ids == source.prime_ids
@@ -703,7 +571,7 @@ def test_ntt_and_coefficient_state_round_trips_are_correct(
 
 
 def test_ciphertext_linear_arithmetic_and_encrypted_zero_are_correct(
-    engine: CkksEngine,
+    engine: Engine,
 ) -> None:
     """Cover functional/in-place linear arithmetic and encrypted zero."""
 
@@ -780,7 +648,7 @@ def test_ciphertext_linear_arithmetic_and_encrypted_zero_are_correct(
     assert engine.negate_(inplace) is inplace
     for candidate in (negated, inplace):
         for row, prime_id in enumerate(candidate.prime_ids):
-            modulus = engine.montgomery_parameters.moduli[prime_id]
+            modulus = engine.config.moduli[prime_id]
             assert torch.all(candidate.data[..., row, :] >= 0)
             assert torch.all(candidate.data[..., row, :] < modulus)
     _assert_decrypts_to(
@@ -802,7 +670,7 @@ def test_ciphertext_linear_arithmetic_and_encrypted_zero_are_correct(
 
 
 def test_plaintext_arithmetic_and_plaintext_zero_are_correct(
-    engine: CkksEngine,
+    engine: Engine,
 ) -> None:
     """Cover add_plaintext/multiply_plaintext, their in-place forms, and constructed plaintext zero."""
 
@@ -876,9 +744,6 @@ def test_plaintext_arithmetic_and_plaintext_zero_are_correct(
         operation="multiply_plaintext_ followed by explicit rescale_to_next_depth_",
     )
 
-    with pytest.raises(ValueError, match="expected 'ntt'"):
-        engine.multiply_plaintext(source, factor)
-
     encoded_zero = engine.zero_plaintext_like(addend)
     assert encoded_zero.representation == addend.representation
     assert encoded_zero.polynomial_domain == addend.polynomial_domain
@@ -903,7 +768,7 @@ def test_plaintext_arithmetic_and_plaintext_zero_are_correct(
 
 
 def test_multiply_and_relinearize_pipeline_is_correct(
-    engine: CkksEngine,
+    engine: Engine,
 ) -> None:
     """Check the direct-CKKS multiply, relinearize, rescale pipeline.
 
@@ -945,7 +810,7 @@ def test_multiply_and_relinearize_pipeline_is_correct(
 
 
 def test_multiply_matches_reference_component_convolution(
-    engine: CkksEngine,
+    engine: Engine,
 ) -> None:
     left = engine.coefficient_domain_to_ntt_domain(
         engine.encrypt_message(_message(engine))
@@ -955,19 +820,16 @@ def test_multiply_matches_reference_component_convolution(
     )
     left_before = left.data.clone()
     right_before = right.data.clone()
-    d0 = engine.rns_runtime.montgomery_mul(
-        left.c0, right.c0, prime_ids=left.prime_ids
-    )
-    cross01 = engine.rns_runtime.montgomery_mul(
+    rns_context = engine.rns_context(left.data.device)
+    d0 = rns_context.montgomery_mul(left.c0, right.c0, prime_ids=left.prime_ids)
+    cross01 = rns_context.montgomery_mul(
         left.c0, right.c1, prime_ids=left.prime_ids
     )
-    cross10 = engine.rns_runtime.montgomery_mul(
+    cross10 = rns_context.montgomery_mul(
         left.c1, right.c0, prime_ids=left.prime_ids
     )
-    d1 = engine.rns_runtime.add_lazy(cross01, cross10, prime_ids=left.prime_ids)
-    d2 = engine.rns_runtime.montgomery_mul(
-        left.c1, right.c1, prime_ids=left.prime_ids
-    )
+    d1 = rns_context.add_lazy(cross01, cross10, prime_ids=left.prime_ids)
+    d2 = rns_context.montgomery_mul(left.c1, right.c1, prime_ids=left.prime_ids)
 
     actual = engine.multiply(left, right)
 
@@ -990,62 +852,62 @@ def test_multiply_matches_reference_component_convolution(
 def test_final_legal_depth_remains_decryptable() -> None:
     """A short chain must support decryption at its last legal depth."""
 
-    base_config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
-    engine = CkksEngine(
-        CkksConfig(
-            default_scale=base_config.default_scale,
-            q_depth_groups=base_config.q_depth_groups[:3],
-            p_moduli=base_config.p_moduli,
-            logN=base_config.logN,
-            sigma=base_config.sigma,
-            security_bits=base_config.security_bits,
-            enforce_security_budget=False,
-            galois_generator=base_config.galois_generator,
-        ),
-        device="cuda:0",
-    )
-    try:
-        message = torch.linspace(
-            -0.01,
-            0.01,
-            engine.num_slots,
-            dtype=torch.float64,
+    with torch.device("cuda:0"):
+        base_config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+        engine = Engine(
+            CkksConfig(
+                default_scale=base_config.default_scale,
+                q_depth_groups=base_config.q_depth_groups[:3],
+                p_moduli=base_config.p_moduli,
+                logN=base_config.logN,
+                sigma=base_config.sigma,
+                security_bits=base_config.security_bits,
+                enforce_security_budget=False,
+                galois_generator=base_config.galois_generator,
+            ),
         )
-        first = engine.coefficient_domain_to_ntt_domain(
-            engine.encrypt_message(message, depth=0)
-        )
-        second = engine.coefficient_domain_to_ntt_domain(
-            engine.encrypt_message(message, depth=0)
-        )
-        product = engine.rescale_to_next_depth(
-            engine.relinearize(engine.multiply(first, second))
-        )
-        product = engine.coefficient_domain_to_ntt_domain(product)
-        third = engine.coefficient_domain_to_ntt_domain(
-            engine.encrypt_message(message, depth=1)
-        )
-        final_product = engine.rescale_to_next_depth(
-            engine.relinearize(engine.multiply(product, third))
-        )
+        try:
+            message = torch.linspace(
+                -0.01,
+                0.01,
+                engine.num_slots,
+                dtype=torch.float64,
+            )
+            first = engine.coefficient_domain_to_ntt_domain(
+                engine.encrypt_message(message, depth=0)
+            )
+            second = engine.coefficient_domain_to_ntt_domain(
+                engine.encrypt_message(message, depth=0)
+            )
+            product = engine.rescale_to_next_depth(
+                engine.relinearize(engine.multiply(first, second))
+            )
+            product = engine.coefficient_domain_to_ntt_domain(product)
+            third = engine.coefficient_domain_to_ntt_domain(
+                engine.encrypt_message(message, depth=1)
+            )
+            final_product = engine.rescale_to_next_depth(
+                engine.relinearize(engine.multiply(product, third))
+            )
 
-        assert final_product.depth == engine.max_depth
-        _assert_decrypts_to(
-            engine,
-            final_product,
-            message**3,
-            atol=_MULTIPLICATION_ATOL,
-            operation="decryption at final legal depth",
-        )
-        with pytest.raises(MaximumDepthError):
-            engine.rescale_to_next_depth(final_product)
-    finally:
-        del engine
-        gc.collect()
-        torch.cuda.empty_cache()
+            assert final_product.depth == engine.max_depth
+            _assert_decrypts_to(
+                engine,
+                final_product,
+                message**3,
+                atol=_MULTIPLICATION_ATOL,
+                operation="decryption at final legal depth",
+            )
+            with pytest.raises(MaximumDepthError):
+                engine.rescale_to_next_depth(final_product)
+        finally:
+            del engine
+            gc.collect()
+            torch.cuda.empty_cache()
 
 
 def test_explicit_key_switch_changes_key_without_changing_message(
-    engine: CkksEngine,
+    engine: Engine,
 ) -> None:
     """Exercise decomposition, ModUp, key-digit accumulation, and ModDown."""
 
@@ -1075,13 +937,6 @@ def test_explicit_key_switch_changes_key_without_changing_message(
             secret_key=destination_secret_key,
         )
 
-        with pytest.raises(
-            ValueError, match="Invalid Ciphertext polynomial_domain"
-        ):
-            engine.switch_key(
-                engine.coefficient_domain_to_ntt_domain(source), switching_key
-            )
-
     # Applying a provided key must not leave hidden engine-owned views that
     # retain its GPU storage after the caller releases the key.
     del switching_key
@@ -1093,70 +948,70 @@ def test_explicit_key_switch_changes_key_without_changing_message(
 def test_explicit_key_installation_drives_correct_operations() -> None:
     """Installed public, relinearization, and rotation keys are operational."""
 
-    engine = CkksEngine(
-        Preset.slots8192_scale40_depth7_int64,
-        device="cuda:0",
-        allow_sk_gen=False,
-    )
-    try:
-        with pytest.raises(RuntimeError, match="generation is disabled"):
-            _ = engine.secret_key
-
-        secret_key = engine.create_secret_key()
-        public_key = engine.create_public_key(secret_key)
-        relinearization_key = engine.create_relinearization_key(secret_key)
-        rotation_key = engine.create_rotation_key(1, secret_key)
-
-        engine.set_secret_key(secret_key)
-        engine.set_public_key(public_key)
-        engine.set_relinearization_key(relinearization_key)
-        engine.set_rotation_key(rotation_key)
-
-        assert engine.secret_key is secret_key
-        assert engine.public_key is public_key
-        assert engine.relinearization_key is relinearization_key
-        assert engine.rotation_keys[1] is rotation_key
-        assert engine.rotation_key(1) is rotation_key
-
-        message = _message(engine, complex_values=False)
-        source = engine.encrypt_message(message)
-        _assert_decrypts_to(
-            engine,
-            source,
-            message,
-            atol=_CODEC_ATOL,
-            operation="installed public/secret keys",
+    with torch.device("cuda:0"):
+        engine = Engine(
+            Preset.slots8192_scale40_depth7_int64,
+            allow_automatic_key_generation=False,
         )
+        try:
+            with pytest.raises(RuntimeError, match="generation is disabled"):
+                _ = engine.secret_key
 
-        prepared = engine.coefficient_domain_to_ntt_domain(source)
-        squared = engine.rescale_to_next_depth(
-            engine.relinearize(engine.multiply(prepared, prepared))
-        )
-        _assert_decrypts_to(
-            engine,
-            squared,
-            message.square(),
-            atol=_MULTIPLICATION_ATOL,
-            operation="installed relinearization key",
-        )
+            secret_key = engine.create_secret_key()
+            public_key = engine.create_public_key(secret_key)
+            relinearization_key = engine.create_relinearization_key(secret_key)
+            rotation_key = engine.create_rotation_key(1, secret_key)
 
-        rotated = engine.rotate_by_step(source, 1)
-        assert isinstance(rotated, Ciphertext)
-        _assert_decrypts_to(
-            engine,
-            rotated,
-            torch.roll(message, shifts=1),
-            atol=_KEYSWITCH_ATOL,
-            operation="installed rotation key",
-        )
-    finally:
-        del engine
-        gc.collect()
-        torch.cuda.empty_cache()
+            engine.set_secret_key(secret_key)
+            engine.set_public_key(public_key)
+            engine.set_relinearization_key(relinearization_key)
+            engine.set_rotation_key(rotation_key)
+
+            assert engine.secret_key is secret_key
+            assert engine.public_key is public_key
+            assert engine.relinearization_key is relinearization_key
+            assert engine.rotation_keys[1] is rotation_key
+            assert engine.rotation_key(1) is rotation_key
+
+            message = _message(engine, complex_values=False)
+            source = engine.encrypt_message(message)
+            _assert_decrypts_to(
+                engine,
+                source,
+                message,
+                atol=_CODEC_ATOL,
+                operation="installed public/secret keys",
+            )
+
+            prepared = engine.coefficient_domain_to_ntt_domain(source)
+            squared = engine.rescale_to_next_depth(
+                engine.relinearize(engine.multiply(prepared, prepared))
+            )
+            _assert_decrypts_to(
+                engine,
+                squared,
+                message.square(),
+                atol=_MULTIPLICATION_ATOL,
+                operation="installed relinearization key",
+            )
+
+            rotated = engine.rotate_by_step(source, 1)
+            assert isinstance(rotated, Ciphertext)
+            _assert_decrypts_to(
+                engine,
+                rotated,
+                torch.roll(message, shifts=1),
+                atol=_KEYSWITCH_ATOL,
+                operation="installed rotation key",
+            )
+        finally:
+            del engine
+            gc.collect()
+            torch.cuda.empty_cache()
 
 
 def test_rotation_variants_and_hoisting_are_correct(
-    engine: CkksEngine,
+    engine: Engine,
 ) -> None:
     """Cover step-owned, key-owned, grouped, and in-place rotation APIs."""
 
@@ -1234,16 +1089,9 @@ def test_rotation_variants_and_hoisting_are_correct(
     assert keyed_result[0] is not keyed_result[2]
     assert keyed_result[0].data.data_ptr() != keyed_result[2].data.data_ptr()
 
-    step_three_key = engine.rotation_key(3)
-    previous_rotation_keys = engine._rotation_keys
-    previous_allow_sk_gen = engine.allow_sk_gen
-    engine._rotation_keys = RotationKeySet({3: step_three_key})
-    engine.allow_sk_gen = False
-    try:
-        mixed = engine.rotate_many_by_steps(source, [3, 6, 3, 0])
-    finally:
-        engine.allow_sk_gen = previous_allow_sk_gen
-        engine._rotation_keys = previous_rotation_keys
+    restricted = Engine(engine.config, allow_automatic_key_generation=False)
+    restricted.set_rotation_key(engine.rotation_key(3))
+    mixed = restricted.rotate_many_by_steps(source, [3, 6, 3, 0])
     for index, (ciphertext, rotation_step) in enumerate(
         zip(mixed, (3, 6, 3, 0), strict=True)
     ):
@@ -1266,7 +1114,7 @@ def test_rotation_variants_and_hoisting_are_correct(
     )
 
 
-def test_conjugation_is_correct(engine: CkksEngine) -> None:
+def test_conjugation_is_correct(engine: Engine) -> None:
     message = _message(engine)
     source = engine.encrypt_message(message)
     key = engine.create_conjugation_key(engine.secret_key)

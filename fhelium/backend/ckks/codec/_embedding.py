@@ -1,140 +1,17 @@
-"""CKKS slot and coefficient embeddings for fixed-context codecs.
+"""CKKS slot-embedding tables for the generator-3 and generator-5 slot orders.
 
-The functions in this module implement the generator-3 and generator-5 slot
-orders, the conjugate-symmetric negacyclic FFT embedding, and stochastic
-coefficient quantization. They operate on tensors and store no runtime state.
+``_permutations`` returns the slot permutations ``pre`` and ``post`` and
+``_twister`` and ``_skewer`` the negacyclic twists consumed by the libfhelium
+``encode`` and ``decode`` operations, cached per ring dimension and device.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from functools import cache
 
 import torch
 
-from fhelium.rng.csprng import stochastic_round_
-
-_FFT_NORM = "forward"
-
-
-def make_slot_tensor(
-    message: Sequence[object] | torch.Tensor | complex | float | int,
-    num_slots: int,
-    device: torch.device,
-) -> torch.Tensor:
-    """Return a dense ``[*batch, slot]`` tensor with a full slot axis."""
-
-    if type(num_slots) is not int:
-        raise TypeError("num_slots must be an integer")
-    if num_slots <= 0 or num_slots & (num_slots - 1):
-        raise ValueError("num_slots must be a positive power of two")
-    if isinstance(message, (int, float, complex)):
-        value = torch.full((num_slots,), message, device=device)
-    elif isinstance(message, torch.Tensor):
-        value = message
-    else:
-        value = torch.as_tensor(message, device=device)
-    if value.ndim == 0:
-        value = torch.full(
-            (num_slots,),
-            value.item(),
-            dtype=value.dtype,
-            device=device,
-        )
-    if value.size(-1) > num_slots:
-        raise ValueError(
-            f"Message slot extent {value.size(-1)} exceeds {num_slots}"
-        )
-    if value.size(-1) < num_slots:
-        value = torch.nn.functional.pad(
-            value,
-            (0, num_slots - value.size(-1)),
-            "constant",
-            0,
-        )
-    return value
-
-
-@cache
-def _forward_generator_positions(
-    ring_dimension: int,
-    generator: int,
-) -> tuple[int, ...]:
-    if ring_dimension <= 0 or ring_dimension & (ring_dimension - 1):
-        raise ValueError("ring_dimension must be a positive power of two")
-    if generator not in {3, 5}:
-        raise ValueError("generator must be 3 or 5")
-    modulus = 2 * ring_dimension
-    value = 1
-    positions = []
-    for _ in range(ring_dimension // 2):
-        positions.append((value - 1) // 2)
-        value = (value * generator) % modulus
-    return tuple(positions)
-
-
-def _circular_shift_permutation(N: int, shift: int = 1) -> torch.Tensor:
-    half = torch.arange(N // 2, dtype=torch.int64)
-    return torch.cat(
-        (
-            torch.roll(half, shifts=shift),
-            torch.roll(half, shifts=-shift) + N // 2,
-        )
-    )
-
-
-def _generator_permutation(N: int, generator: int) -> torch.Tensor:
-    modulus = 2 * N
-    values = torch.arange(modulus, dtype=torch.int64)
-    return (generator * values) % modulus
-
-
-def _fold_permutation(permutation: torch.Tensor) -> torch.Tensor:
-    return (permutation[1::2] - 1) // 2
-
-
-def _cycles(permutation: torch.Tensor) -> list[list[int]]:
-    remaining = {
-        index: value for index, value in enumerate(permutation.tolist())
-    }
-    cycles: list[list[int]] = []
-    while remaining:
-        first = next(iter(remaining))
-        current = remaining[first]
-        following = remaining[current]
-        cycle = []
-        while True:
-            cycle.append(current)
-            del remaining[current]
-            current = following
-            if following not in remaining:
-                break
-            following = remaining[following]
-        cycles.append(cycle)
-    return cycles
-
-
-def _conjugate_permutation(
-    first: torch.Tensor,
-    second: torch.Tensor,
-) -> torch.Tensor:
-    first_cycles = _cycles(first)
-    second_cycles = _cycles(second)
-    if [len(cycle) for cycle in first_cycles] != [
-        len(cycle) for cycle in second_cycles
-    ]:
-        raise ValueError("Permutation cycle structures differ")
-    first_expanded = torch.tensor(
-        [value for cycle in first_cycles for value in cycle],
-        dtype=torch.int64,
-    )
-    second_expanded = torch.tensor(
-        [value for cycle in second_cycles for value in cycle],
-        dtype=torch.int64,
-    )
-    result = torch.zeros_like(first)
-    result[second_expanded] = first_expanded
-    return result
+from fhelium.native.wrapper import ckks_ops
 
 
 @cache
@@ -143,99 +20,17 @@ def _permutations(
     device: str,
     generator: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    if generator == 5:
-        pre = torch.tensor(
-            _forward_generator_positions(ring_dimension, generator),
-            dtype=torch.int64,
-        )
-        post = torch.empty(ring_dimension, dtype=torch.int64)
-        user = torch.arange(ring_dimension // 2, dtype=torch.int64)
-        post[pre] = user
-        post[ring_dimension - 1 - pre] = ring_dimension - 1 - user
-        return pre.to(device), post.to(device)
-    if generator != 3:
-        raise ValueError("generator must be 3 or 5")
-    circular = _circular_shift_permutation(ring_dimension)
-    generated = _generator_permutation(ring_dimension, generator)
-    folded = _fold_permutation(generated)
-    post = _conjugate_permutation(circular, folded)
-    pre = torch.argsort(post)[: ring_dimension // 2]
+    pre, post = ckks_ops.slot_permutations(
+        ring_dimension.bit_length() - 1, generator
+    )
     return pre.to(device), post.to(device)
 
 
 @cache
 def _twister(ring_dimension: int, device: str) -> torch.Tensor:
-    indices = torch.arange(ring_dimension, device=device, dtype=torch.float64)
-    return torch.exp(-1j * torch.pi * indices / ring_dimension)
+    return ckks_ops.slot_twist(ring_dimension, False, torch.device(device))
 
 
 @cache
 def _skewer(ring_dimension: int, device: str) -> torch.Tensor:
-    indices = torch.arange(ring_dimension, device=device, dtype=torch.float64)
-    return torch.exp(1j * torch.pi * indices / ring_dimension)
-
-
-def inverse_embed_slots(
-    message: torch.Tensor,
-    *,
-    pre: torch.Tensor,
-    twister: torch.Tensor,
-) -> torch.Tensor:
-    """Map ordered slots to real coefficients using supplied embedding tables."""
-
-    ring_dimension = message.size(-1) * 2
-    local = message
-    device = message.device
-    permuted = torch.zeros(
-        (*local.shape[:-1], ring_dimension),
-        dtype=local.dtype,
-        device=device,
-    )
-    permuted[..., pre] = local
-    conjugate_symmetric = permuted + permuted.conj().flip(-1)
-    transformed = torch.fft.fft(conjugate_symmetric, norm=_FFT_NORM)
-    return (transformed * twister).real
-
-
-def embed_coefficients(
-    coefficients: torch.Tensor,
-    *,
-    post: torch.Tensor,
-    skewer: torch.Tensor,
-) -> torch.Tensor:
-    """Map real coefficients to the selected complex CKKS slot order."""
-
-    ring_dimension = coefficients.size(-1)
-    recovered = torch.fft.ifft(
-        coefficients * skewer,
-        norm=_FFT_NORM,
-    )
-    result = torch.zeros_like(recovered)
-    result[..., post] = recovered
-    return result
-
-
-def encode_slots(
-    message: torch.Tensor,
-    *,
-    pre: torch.Tensor,
-    twister: torch.Tensor,
-    rounding_state: torch.Tensor,
-    scale: float,
-) -> torch.Tensor:
-    """Stochastically quantize the inverse slot embedding with a live stream."""
-    coefficients = inverse_embed_slots(message, pre=pre, twister=twister)
-    return stochastic_round_(coefficients * float(scale), rounding_state)
-
-
-def decode_slots(
-    coefficients: torch.Tensor,
-    *,
-    post: torch.Tensor,
-    skewer: torch.Tensor,
-    scale: float,
-) -> torch.Tensor:
-    """Recover ordered complex slots from scaled coefficients."""
-    return embed_coefficients(coefficients, post=post, skewer=skewer) / float(
-        scale
-    )
+    return ckks_ops.slot_twist(ring_dimension, True, torch.device(device))

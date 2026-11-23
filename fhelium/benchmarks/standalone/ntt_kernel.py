@@ -2,66 +2,65 @@
 
 from __future__ import annotations
 
-from fhelium.legacy.engine import CkksEngine
-
 import statistics
 import time
 
 import torch
 
+from fhelium.backend.ntt.context import NttContext
 from fhelium.benchmarks.timing import synchronize
 
 NTT_OPERATIONS = ("forward_ntt", "inverse_ntt", "roundtrip")
 
 
-def make_residue_rows(engine: CkksEngine, *, seed: int) -> torch.Tensor:
-    """Create deterministic standard-residue QP rows for one engine."""
+def make_residue_rows(ntt: NttContext, *, seed: int) -> torch.Tensor:
+    """Create deterministic standard-residue QP rows for one NTT context."""
 
     generator = torch.Generator(device="cpu")
     generator.manual_seed(seed)
     rows = []
-    moduli = [int(value) for value in engine.rns_runtime.moduli.cpu().tolist()]
+    moduli = [int(value) for value in ntt.rns_context.moduli.cpu().tolist()]
     for modulus in moduli:
         row = torch.randint(
             0,
             modulus,
-            (engine.config.N,),
+            (ntt.config.N,),
             dtype=torch.int64,
             generator=generator,
             device="cpu",
         )
-        rows.append(row.to(device=engine.device, non_blocking=False))
+        rows.append(row.to(device=ntt.device, non_blocking=False))
     return torch.stack(rows, dim=0).contiguous()
 
 
 def run_ntt_operation(
-    engine: CkksEngine,
+    ntt: NttContext,
     data: torch.Tensor,
     operation: str,
 ) -> None:
     """Run one in-place semantic NTT operation on a prepared operand."""
 
     if operation == "forward_ntt":
-        engine.rns_runtime.forward_montgomery_(data, include_p=True)
+        ntt.forward_montgomery_(data, include_p=True)
     elif operation == "inverse_ntt":
-        engine.rns_runtime.inverse_montgomery_(data, include_p=True)
+        ntt.inverse_montgomery_(data, include_p=True)
     elif operation == "roundtrip":
-        engine.rns_runtime.forward_montgomery_(data, include_p=True)
-        engine.rns_runtime.inverse_montgomery_(data, include_p=True)
+        ntt.forward_montgomery_(data, include_p=True)
+        ntt.inverse_montgomery_(data, include_p=True)
     else:
         raise ValueError(f"Unsupported NTT operation: {operation}")
 
 
 def prepare_ntt_operation_inputs(
-    engine: CkksEngine,
+    ntt: NttContext,
     standard_rows: torch.Tensor,
 ) -> dict[str, torch.Tensor]:
     """Build valid representation-specific inputs outside timed regions."""
 
     coefficient_montgomery = standard_rows.clone()
-    engine.rns_runtime.to_montgomery_(coefficient_montgomery, include_p=True)
+    ntt.rns_context.to_montgomery_(coefficient_montgomery, include_p=True)
     ntt_montgomery = coefficient_montgomery.clone()
-    engine.rns_runtime.forward_montgomery_(ntt_montgomery, include_p=True)
+    ntt.forward_montgomery_(ntt_montgomery, include_p=True)
     return {
         "forward_ntt": coefficient_montgomery,
         "inverse_ntt": ntt_montgomery,
@@ -70,7 +69,7 @@ def prepare_ntt_operation_inputs(
 
 
 def measure_ntt_operation(
-    engine: CkksEngine,
+    ntt: NttContext,
     base_data: torch.Tensor,
     operation: str,
     *,
@@ -86,7 +85,7 @@ def measure_ntt_operation(
     data = base_data.clone()
     for _ in range(warmup):
         data.copy_(base_data)
-        run_ntt_operation(engine, data, operation)
+        run_ntt_operation(ntt, data, operation)
     synchronize()
 
     samples = []
@@ -94,7 +93,7 @@ def measure_ntt_operation(
         data.copy_(base_data)
         synchronize()
         start = time.perf_counter()
-        run_ntt_operation(engine, data, operation)
+        run_ntt_operation(ntt, data, operation)
         synchronize()
         samples.append((time.perf_counter() - start) * 1e3)
     return {
@@ -107,18 +106,18 @@ def measure_ntt_operation(
 
 
 def assert_ntt_roundtrip(
-    engine: CkksEngine,
+    ntt: NttContext,
     base_data: torch.Tensor,
 ) -> None:
     """Require residue equality modulo each active QP prime after a roundtrip."""
 
     result = base_data.clone()
-    run_ntt_operation(engine, result, "roundtrip")
+    run_ntt_operation(ntt, result, "roundtrip")
     if not torch.equal(result, base_data):
         difference = torch.remainder(
-            result - base_data, engine.rns_runtime.moduli[:, None]
+            result - base_data, ntt.rns_context.moduli[:, None]
         )
         if not bool(torch.all(difference == 0).item()):
             raise RuntimeError(
-                f"NTT roundtrip validation failed for {engine.ntt_backend_name}"
+                f"NTT roundtrip validation failed for {ntt.ntt_backend_name}"
             )

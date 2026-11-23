@@ -1,6 +1,6 @@
 # Native operator workflow
 
-Add or modify a native operator from the public mathematical specification outward. One operator uses a backend-neutral schema and device-specific registrations; its Python semantics, dispatcher mutation rules, row mapping, CPU implementation, CUDA implementation, generated wrappers, and tests must agree wherever those backends are supported.
+Add or modify a native operator from the public mathematical specification outward. One operator has one public `libfhelium` function, one backend-neutral schema registered with that function, and device-specific implementations; its Python semantics, dispatcher mutation rules, row mapping, CPU implementation, CUDA implementation, generated wrappers, and tests must agree wherever those backends are supported.
 
 ## 1. Define the operation requirements first
 
@@ -34,15 +34,26 @@ Before editing CUDA, create a minimal test/harness that:
 
 For a chained bug, add checkpoints after every legal materialization step.
 
-## 3. Define or update the dispatcher schema
+## 3. Define or update the public function and dispatcher schema
 
-The C++ registration layer owns:
+One operator touches these native files:
+
+| File | Content |
+| --- | --- |
+| `csrc/include/fhelium/<family>.h` | Public `FHELIUM_API` declaration with the operator name and its schema arguments, preceded by a `///` comment that states the computed equations, operand shapes, domains, representations, and ranges; the [C++ reference](../api/cpp/index.md) is generated from these comments |
+| `csrc/ops/<family>/backends.h` | `cpu` and `gpu` backend entry-point declarations of the same signature |
+| `csrc/ops/<family>/api.cpp` | Public definition that routes with `FHELIUM_DISPATCH_CPU_GPU`, `FHELIUM_DISPATCH_GPU`, or `FHELIUM_DISPATCH_CUDA` |
+| `csrc/torchops/<family>_ops.cpp` | `m.def` schema and an `m.impl` of the public function for each supported dispatch key |
+| `csrc/ops/<family>/{cpu,cuda,hip}/` | Backend entry-point definitions, validation, and kernels |
+
+The schema and registration layer owns:
 
 - operator namespace and name;
 - argument and return schema;
 - device implementation registration;
-- mutation and alias annotations;
-- pre-launch shape/dtype/device checks.
+- mutation and alias annotations.
+
+Backend entry points own the pre-launch shape/dtype/device checks, so C++ library callers receive the same validation as Python callers.
 
 Use a trailing underscore and correct alias schema for mutating operators. Do not make a functional name mutate storage silently.
 
@@ -52,9 +63,9 @@ Names should describe mathematical/state transitions; backend execution policy s
 
 Pass operand, table, and parameter tensors. Avoid hidden device-global context whose state cannot be represented in the dispatcher schema.
 
-For CPU support, register the schema under the `CPU` dispatch key and use ATen tensor accessors, integral dtype dispatch, and `at::parallel_for` where the work size justifies intra-op parallelism. Compile against the parallel backend selected by the installed Torch package; do not introduce an independent FHElium thread pool or link a second OpenMP runtime.
+For CPU support, define the `fhelium::<family>::cpu` entry point, register the public function under the `CPU` dispatch key, and use ATen tensor accessors, integral dtype dispatch, and `at::parallel_for` where the work size justifies intra-op parallelism. Compile against the parallel backend selected by the installed Torch package; do not introduce an independent FHElium thread pool or link a second OpenMP runtime.
 
-For CUDA support, register the same schema under the `CUDA` dispatch key. The C++ adapter validates the tensors before launch; the CUDA implementation uses the operand device and PyTorch's current CUDA stream. Do not add a hidden host copy or a device fallback to make a schema appear portable.
+For CUDA support, define the `fhelium::<family>::gpu` entry point and register the public function under the `CUDA` dispatch key. The C++ adapter validates the tensors before launch; the CUDA implementation uses the operand device and PyTorch's current CUDA stream. Do not add a hidden host copy or a device fallback to make a schema appear portable.
 
 Audit:
 
@@ -108,7 +119,7 @@ python scripts/generate_native_wrappers.py \
   --check
 ```
 
-The direct script discovers operator schemas without importing the partially initialized `fhelium.native.wrapper` package. Callable wrappers retain `require_native()` guards, resolved lazily at call time. The generated FakeTensor registration module omits that import and is loaded by `fhelium.native` only after `_ops` has registered its schemas.
+On Windows, a direct invocation also passes `--library-dir` with the directory that contains `fhelium.dll`, because `_ops` resolves the library through the DLL search path. The direct script discovers operator schemas without importing the partially initialized `fhelium.native.wrapper` package. Callable wrappers retain `require_native()` guards, resolved lazily at call time. The generated FakeTensor registration module omits that import and is loaded by `fhelium.native` only after `_ops` has registered its schemas.
 
 For a configured CMake tree, prefer its fresh-target check:
 

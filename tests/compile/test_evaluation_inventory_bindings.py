@@ -82,6 +82,7 @@ def test_rotation_selection_uses_actual_rows_and_unknowns_not_depth_identity():
                 block.args[i],
                 reference.value if key_operand else block.args[-1],
                 typ,
+                rotation_step=1,
                 parameters=() if key_operand else (reference.value,),
             )
             block.add_ops((reference, operation))
@@ -249,7 +250,9 @@ def test_declared_layouts_constrain_inventory_and_propagate_to_symbol_aliases():
 
     block = Block(arg_types=(value_type(1),))
     ref = core.MaterialRefOp(ckks.EvaluationKeyType(), symbol="key")
-    rotation = ckks.RotateOp(block.args[0], ref.value, block.args[0].type)
+    rotation = ckks.RotateOp(
+        block.args[0], ref.value, block.args[0].type, rotation_step=1
+    )
     block.add_ops((ref, rotation))
     state = compilation(
         block,
@@ -299,7 +302,9 @@ def test_material_resolution_requires_registry_and_retains_partial_layout():
     source_type = value_type(0).with_state({"components": IntegerAttr(2, 64)})
     block = Block(arg_types=(source_type,))
     ref = core.MaterialRefOp(ckks.EvaluationKeyType(), symbol="key")
-    rotation = ckks.RotateOp(block.args[0], ref.value, block.args[0].type)
+    rotation = ckks.RotateOp(
+        block.args[0], ref.value, block.args[0].type, rotation_step=1
+    )
     block.add_ops((ref, rotation))
     state = compilation(
         block,

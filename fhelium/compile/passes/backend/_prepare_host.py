@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 def prepare_host_call(executable: ProgramExecutable):
     """Resolve references, resource operands and callable targets before execution."""
+    from fhelium.backend._artifact import Material, Resources
     from fhelium.backend.execution import _index_value, _tensor_region_results
 
     block = executable.program.single_block("main")
@@ -40,18 +41,29 @@ def prepare_host_call(executable: ProgramExecutable):
         ):
             resource_values.add(operation.outputs[0])
     ordinal = 0
+    material_globals = {}
+    # Each global's persistent description: materials and resources are recorded by reference.
+    bound = {}
+    positions = {id(r): i for i, r in enumerate(executable.resources)}
 
-    def bind(value: object) -> str:
+    def bind(value: object, recorded: object = None) -> str:
         nonlocal ordinal
         symbol = f"__fhelium_codegen_bound_{ordinal}"
         ordinal += 1
         namespace[symbol] = value
+        bound[symbol] = value if recorded is None else recorded
         return symbol
 
     def reference(operation: Operation) -> str:
         if isinstance(operation, core.MaterialRefOp):
-            return bind(executable.bound_materials[operation])
-        return bind(executable.bound_resources[operation])
+            material = operation.symbol.data
+            symbol = bind(
+                executable.bound_materials[operation], Material(material)
+            )
+            material_globals[symbol] = material
+            return symbol
+        resource = executable.bound_resources[operation]
+        return bind(resource, Resources((positions[id(resource)],), True))
 
     def call(operation: Operation, regions: tuple[str, ...]) -> str:
         dispatch = executable.dispatch_table.operations[operation]
@@ -66,14 +78,12 @@ def prepare_host_call(executable: ProgramExecutable):
             for value in operation.operands
             if value in resource_values
         )
-        required = tuple(
-            executable.resources[index]
-            for index in executable.resource_indices[operation]
-        )
+        indices = tuple(executable.resource_indices[operation])
+        required = tuple(executable.resources[index] for index in indices)
         resources = (
-            f"{tuple_source(operand_resources)} + {bind(required)}"
+            f"{tuple_source(operand_resources)} + {bind(required, Resources(indices))}"
             if operand_resources
-            else bind(required)
+            else bind(required, Resources(indices))
         )
         if regions:
             if not isinstance(implementation, RegionOperationImplementation):
@@ -99,4 +109,6 @@ def prepare_host_call(executable: ProgramExecutable):
         + "\n"
     )
     exec(compile(source, "<fhelium-prepared-program>", "exec"), namespace)
-    return namespace["__fhelium_codegen_execute"], source
+    object.__setattr__(executable, "_material_globals", material_globals)
+    object.__setattr__(executable, "_bound", bound)
+    return namespace.pop("__fhelium_codegen_execute"), source

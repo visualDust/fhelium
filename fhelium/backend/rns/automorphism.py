@@ -3,7 +3,6 @@ r"""Coefficient indexing and RNS execution of polynomial automorphisms."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
 
 import torch
 from xdsl.ir import Operation
@@ -31,25 +30,10 @@ def coefficient_galois_gather_indices(
     both without mutation.
     """
 
-    modulus = 2 * ring_dimension
-    galois_element %= modulus
-    if galois_element % 2 == 0:
-        raise ValueError("galois_element must be odd")
-    source = torch.arange(ring_dimension, device=device, dtype=torch.int64)
-    mapped = (galois_element * source) % modulus
-    destination = mapped % ring_dimension
-    sign = torch.where(
-        ((mapped // ring_dimension) & 1) != 0,
-        torch.tensor(-1, dtype=torch.int8, device=device),
-        torch.tensor(1, dtype=torch.int8, device=device),
+    indices, signs = ckks_ops.coefficient_galois_indices(
+        ring_dimension.bit_length() - 1, galois_element
     )
-    source_indices = torch.empty(
-        ring_dimension, dtype=torch.int32, device=device
-    )
-    source_indices[destination] = source.to(torch.int32)
-    source_sign = torch.empty(ring_dimension, dtype=torch.int8, device=device)
-    source_sign[destination] = sign
-    return source_indices, source_sign
+    return indices.to(device), signs.to(device)
 
 
 def apply_coefficient_galois_automorphism(
@@ -113,24 +97,13 @@ class NativeCoefficientAutomorphismImplementation:
         *,
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
-        del in_place
-        if len(values) != 2:
-            raise ValueError(
-                "Coefficient automorphism requires a value and parameter Tensor"
-            )
-        source = values[0]
-        parameters = values[1]
-        gather, source_sign = coefficient_galois_gather_indices(
-            source.size(-1),
-            cast(int, invocation.attributes["galois_element"]),
-            source.device,
-        )
-        twice_modulus = parameters[0]
+        del invocation, resources, in_place
+        source, parameters, source_indices, source_sign = values
         return (
             ckks_ops.apply_coefficient_galois_automorphism(
                 source,
-                gather,
+                source_indices,
                 source_sign,
-                twice_modulus,
+                parameters[0],
             ),
         )

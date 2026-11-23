@@ -1,7 +1,6 @@
 #include <ATen/Dispatch.h>
 #include <ATen/MemoryOverlap.h>
 #include <ATen/Parallel.h>
-#include <torch/library.h>
 #include <torch/torch.h>
 
 #include <algorithm>
@@ -9,8 +8,10 @@
 #include <vector>
 
 #include "../../common/cpu/montgomery.h"
+#include "../../common/integer_lift.h"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
+#include "../backends.h"
 #include "rns_standard_arithmetic_cpu.h"
 
 namespace {
@@ -152,10 +153,9 @@ void unary_cpu(torch::Tensor residues,
                const torch::Tensor params,
                const char* operation_name);
 
-torch::Tensor montgomery_weighted_sum_cpu(
-    const at::TensorList ciphertexts,
-    const at::TensorList plaintexts,
-    const torch::Tensor rns_params) {
+torch::Tensor montgomery_weighted_sum_cpu(const at::TensorList ciphertexts,
+                                          const at::TensorList plaintexts,
+                                          const torch::Tensor rns_params) {
   constexpr const char* operation = "rns_montgomery_weighted_sum";
   TORCH_CHECK(!ciphertexts.empty(), operation, " requires at least one term");
   TORCH_CHECK(ciphertexts.size() == plaintexts.size(),
@@ -201,11 +201,10 @@ torch::Tensor montgomery_weighted_sum_cpu(
   return out;
 }
 
-torch::Tensor montgomery_weighted_sums_cpu(
-    const at::TensorList ciphertexts,
-    const at::TensorList plaintexts,
-    const int64_t group_count,
-    const torch::Tensor rns_params) {
+torch::Tensor montgomery_weighted_sums_cpu(const at::TensorList ciphertexts,
+                                           const at::TensorList plaintexts,
+                                           const int64_t group_count,
+                                           const torch::Tensor rns_params) {
   constexpr const char* operation = "rns_montgomery_weighted_sums";
   TORCH_CHECK(group_count > 0, operation, " requires at least one group");
   TORCH_CHECK(!ciphertexts.empty(), operation, " requires at least one term");
@@ -222,8 +221,8 @@ torch::Tensor montgomery_weighted_sums_cpu(
     for (int64_t term = 0; term < ciphertexts.size(); ++term) {
       group_plaintexts.push_back(plaintexts[first + term]);
     }
-    outputs.push_back(montgomery_weighted_sum_cpu(
-        ciphertexts, group_plaintexts, rns_params));
+    outputs.push_back(
+        montgomery_weighted_sum_cpu(ciphertexts, group_plaintexts, rns_params));
   }
   return torch::stack(outputs, 1);
 }
@@ -503,61 +502,90 @@ torch::Tensor add_lazy_twice_modulus_cpu(const torch::Tensor lhs,
   return out;
 }
 
-torch::Tensor lift_centered_cpu(const torch::Tensor coefficients,
-                                const torch::Tensor twice_modulus) {
-  constexpr const char* operation = "rns_lift_centered_coefficients";
-  check_cpu_peer(coefficients, twice_modulus, operation, "twice_modulus");
+template <typename residue_t, typename integer_t>
+void lift_integer_rows_typed(const torch::Tensor& input,
+                             const torch::Tensor& twice_modulus,
+                             torch::Tensor& output) {
+  residue_t* values = output.data_ptr<residue_t>();
+  const integer_t* source = input.data_ptr<integer_t>();
+  const residue_t* twice = twice_modulus.data_ptr<residue_t>();
+  const int64_t twice_stride = twice_modulus.stride(0);
+  const int64_t batch_count = output.size(0);
+  const int64_t limbs = output.size(1);
+  const int64_t coefficient_count = output.size(2);
+  const int64_t source_stride0 = input.stride(0);
+  const int64_t source_stride1 = input.stride(1);
+  const int64_t out_stride0 = output.stride(0);
+  const int64_t out_stride1 = output.stride(1);
+  const int64_t out_stride2 = output.stride(2);
+  const int64_t elements = batch_count * limbs * coefficient_count;
+  at::parallel_for(
+      0,
+      elements,
+      fhelium::cpu::adaptive_grain(elements),
+      [&](int64_t begin, int64_t end) {
+        int64_t index = begin;
+        while (index < end) {
+          const int64_t batch_limb = index / coefficient_count;
+          const int64_t limb = batch_limb % limbs;
+          const int64_t batch = batch_limb / limbs;
+          const int64_t coefficient_begin =
+              index - batch_limb * coefficient_count;
+          const int64_t coefficient_end = std::min<int64_t>(
+              coefficient_count, end - batch_limb * coefficient_count);
+          const residue_t twice_modulus_value = twice[limb * twice_stride];
+          const integer_t* source_row = source + batch * source_stride0;
+          residue_t* output_row =
+              values + batch * out_stride0 + limb * out_stride1;
+          for (int64_t coefficient = coefficient_begin;
+               coefficient < coefficient_end;
+               ++coefficient) {
+            output_row[coefficient * out_stride2] =
+                fhelium::lift_integer_residue(
+                    source_row[coefficient * source_stride1],
+                    twice_modulus_value);
+          }
+          index = batch_limb * coefficient_count + coefficient_end;
+        }
+      });
+}
+
+template <typename residue_t>
+void lift_integer_rows(const torch::Tensor& input,
+                       const torch::Tensor& twice_modulus,
+                       torch::Tensor& output) {
+  AT_DISPATCH_SWITCH(input.scalar_type(),
+                     "rns_lift_integer_coefficients",
+                     AT_DISPATCH_CASE(at::kInt, [&] {
+                       lift_integer_rows_typed<residue_t, scalar_t>(
+                           input, twice_modulus, output);
+                     }) AT_DISPATCH_CASE(at::kLong, [&] {
+                       lift_integer_rows_typed<residue_t, scalar_t>(
+                           input, twice_modulus, output);
+                     }));
+}
+
+torch::Tensor lift_integer_cpu(const torch::Tensor coefficients,
+                               const torch::Tensor twice_modulus) {
+  constexpr const char* operation = "rns_lift_integer_coefficients";
+  TORCH_CHECK(
+      coefficients.device().is_cpu(), operation, " requires CPU tensors");
+  TORCH_CHECK(twice_modulus.device() == coefficients.device(),
+              operation,
+              " requires twice_modulus on the operand CPU device");
   const auto input = view_coefficient_batch_2d(coefficients, "coefficients");
   check_rns_row_vector(
       twice_modulus, twice_modulus.size(0), operation, "twice_modulus");
   auto shape = coefficients.sizes().vec();
   shape.insert(shape.end() - 1, twice_modulus.size(0));
-  auto out = coefficients.new_empty(shape);
+  auto out = twice_modulus.new_empty(shape);
   auto output = view_rns_batch_3d(out, "out");
-  AT_DISPATCH_INTEGRAL_TYPES(coefficients.scalar_type(), operation, [&] {
-    scalar_t* values = output.data_ptr<scalar_t>();
-    const scalar_t* source = input.data_ptr<scalar_t>();
-    const scalar_t* twice = twice_modulus.data_ptr<scalar_t>();
-    const int64_t twice_stride = twice_modulus.stride(0);
-    const int64_t batch_count = output.size(0);
-    const int64_t limbs = output.size(1);
-    const int64_t coefficient_count = output.size(2);
-    const int64_t source_stride0 = input.stride(0);
-    const int64_t source_stride1 = input.stride(1);
-    const int64_t out_stride0 = output.stride(0);
-    const int64_t out_stride1 = output.stride(1);
-    const int64_t out_stride2 = output.stride(2);
-    const int64_t elements = batch_count * limbs * coefficient_count;
-    at::parallel_for(
-        0,
-        elements,
-        fhelium::cpu::adaptive_grain(elements),
-        [&](int64_t begin, int64_t end) {
-          int64_t index = begin;
-          while (index < end) {
-            const int64_t batch_limb = index / coefficient_count;
-            const int64_t limb = batch_limb % limbs;
-            const int64_t batch = batch_limb / limbs;
-            const int64_t coefficient_begin =
-                index - batch_limb * coefficient_count;
-            const int64_t coefficient_end = std::min<int64_t>(
-                coefficient_count, end - batch_limb * coefficient_count);
-            const scalar_t twice_modulus_value = twice[limb * twice_stride];
-            const scalar_t* source_row = source + batch * source_stride0;
-            scalar_t* output_row =
-                values + batch * out_stride0 + limb * out_stride1;
-            for (int64_t coefficient = coefficient_begin;
-                 coefficient < coefficient_end;
-                 ++coefficient) {
-              output_row[coefficient * out_stride2] =
-                  fhelium::cpu::shift_positive(
-                      source_row[coefficient * source_stride1],
-                      twice_modulus_value);
-            }
-            index = batch_limb * coefficient_count + coefficient_end;
-          }
-        });
-  });
+  AT_DISPATCH_SWITCH(
+      twice_modulus.scalar_type(), operation, AT_DISPATCH_CASE(at::kInt, [&] {
+        lift_integer_rows<scalar_t>(input, twice_modulus, output);
+      }) AT_DISPATCH_CASE(at::kLong, [&] {
+        lift_integer_rows<scalar_t>(input, twice_modulus, output);
+      }));
   return out;
 }
 
@@ -596,13 +624,20 @@ torch::Tensor mixed_radix_decompose_cpu_impl(
                             neg_inv_modulus_hi}) {
     check_cpu_peer(source_residues, table, operation, "table");
   }
-  auto out = output_buffer ? *output_buffer : torch::empty_like(source_residues);
-  auto output = output_buffer
-      ? view_rns_output_3d(out, source_residues, source.size(1),
-                           {source_residues, normalizers, propagation,
-                            modulus_lo, modulus_hi, neg_inv_modulus_lo,
-                            neg_inv_modulus_hi}, operation)
-      : view_rns_batch_3d(out, "out");
+  auto out =
+      output_buffer ? *output_buffer : torch::empty_like(source_residues);
+  auto output = output_buffer ? view_rns_output_3d(out,
+                                                   source_residues,
+                                                   source.size(1),
+                                                   {source_residues,
+                                                    normalizers,
+                                                    propagation,
+                                                    modulus_lo,
+                                                    modulus_hi,
+                                                    neg_inv_modulus_lo,
+                                                    neg_inv_modulus_hi},
+                                                   operation)
+                              : view_rns_batch_3d(out, "out");
   AT_DISPATCH_INTEGRAL_TYPES(source_residues.scalar_type(), operation, [&] {
     const scalar_t* values = source.data_ptr<scalar_t>();
     scalar_t* digits_out = output.data_ptr<scalar_t>();
@@ -679,9 +714,16 @@ torch::Tensor mixed_radix_decompose_cpu_impl(
                     constants);
                 digits[row] = digit;
                 for (int64_t target = row + 1; target < row_count; ++target) {
-                  const auto target_constants = fhelium::cpu::load_constants(
-                      lo, modulus_lo_stride, hi, modulus_hi_stride,
-                      inv_lo, neg_inv_modulus_lo_stride, inv_hi, neg_inv_modulus_hi_stride, target);
+                  const auto target_constants =
+                      fhelium::cpu::load_constants(lo,
+                                                   modulus_lo_stride,
+                                                   hi,
+                                                   modulus_hi_stride,
+                                                   inv_lo,
+                                                   neg_inv_modulus_lo_stride,
+                                                   inv_hi,
+                                                   neg_inv_modulus_hi_stride,
+                                                   target);
                   const scalar_t term = fhelium::cpu::multiply_split(
                       digit,
                       prop[step * propagation_row_stride +
@@ -692,7 +734,8 @@ torch::Tensor mixed_radix_decompose_cpu_impl(
                   digits[target] = fhelium::cpu::reduce_operand_mod_q(
                       digits[target], target_constants);
                   digits[target] = fhelium::cpu::reduce_lazy_operand(
-                      static_cast<scalar_t>(digits[target] + term), target_constants);
+                      static_cast<scalar_t>(digits[target] + term),
+                      target_constants);
                 }
               }
               for (int64_t row = 0; row < row_count; ++row) {
@@ -732,12 +775,18 @@ torch::Tensor mixed_radix_extend_cpu_impl(
     out = torch::empty(shape, components.options());
   }
   auto output = output_buffer
-      ? view_rns_output_3d(out, components, destination_rows,
-                           {components, coefficients, params}, operation)
-      : view_rns_batch_3d(out, "out");
+                    ? view_rns_output_3d(out,
+                                         components,
+                                         destination_rows,
+                                         {components, coefficients, params},
+                                         operation)
+                    : view_rns_batch_3d(out, "out");
   check_rns_parameter_rows(output, params, operation);
-  TORCH_CHECK(params.size(0) >= RNS_PARAMETER_COUNT, operation,
-              " requires at least ", RNS_PARAMETER_COUNT, " parameter rows");
+  TORCH_CHECK(params.size(0) >= RNS_PARAMETER_COUNT,
+              operation,
+              " requires at least ",
+              RNS_PARAMETER_COUNT,
+              " parameter rows");
   AT_DISPATCH_INTEGRAL_TYPES(components.scalar_type(), operation, [&] {
     const scalar_t* source = digits.data_ptr<scalar_t>();
     const scalar_t* table = coefficients.data_ptr<scalar_t>();
@@ -811,99 +860,197 @@ torch::Tensor mixed_radix_decompose_cpu(
     const torch::Tensor modulus_hi,
     const torch::Tensor neg_inv_modulus_lo,
     const torch::Tensor neg_inv_modulus_hi) {
-  return mixed_radix_decompose_cpu_impl(
-      source_residues, normalizers, propagation, modulus_lo, modulus_hi,
-      neg_inv_modulus_lo, neg_inv_modulus_hi, std::nullopt);
+  return mixed_radix_decompose_cpu_impl(source_residues,
+                                        normalizers,
+                                        propagation,
+                                        modulus_lo,
+                                        modulus_hi,
+                                        neg_inv_modulus_lo,
+                                        neg_inv_modulus_hi,
+                                        std::nullopt);
 }
 
-void mixed_radix_decompose_out_cpu(
-    const torch::Tensor source_residues,
-    const torch::Tensor normalizers,
-    const torch::Tensor propagation,
-    const torch::Tensor modulus_lo,
-    const torch::Tensor modulus_hi,
-    const torch::Tensor neg_inv_modulus_lo,
-    const torch::Tensor neg_inv_modulus_hi,
-    torch::Tensor out) {
-  mixed_radix_decompose_cpu_impl(
-      source_residues, normalizers, propagation, modulus_lo, modulus_hi,
-      neg_inv_modulus_lo, neg_inv_modulus_hi, out);
+void mixed_radix_decompose_out_cpu(const torch::Tensor source_residues,
+                                   const torch::Tensor normalizers,
+                                   const torch::Tensor propagation,
+                                   const torch::Tensor modulus_lo,
+                                   const torch::Tensor modulus_hi,
+                                   const torch::Tensor neg_inv_modulus_lo,
+                                   const torch::Tensor neg_inv_modulus_hi,
+                                   torch::Tensor out) {
+  mixed_radix_decompose_cpu_impl(source_residues,
+                                 normalizers,
+                                 propagation,
+                                 modulus_lo,
+                                 modulus_hi,
+                                 neg_inv_modulus_lo,
+                                 neg_inv_modulus_hi,
+                                 out);
 }
 
-torch::Tensor mixed_radix_extend_cpu(
-    const torch::Tensor components,
-    const torch::Tensor coefficients,
-    const torch::Tensor params,
-    int64_t destination_rows) {
+torch::Tensor mixed_radix_extend_cpu(const torch::Tensor components,
+                                     const torch::Tensor coefficients,
+                                     const torch::Tensor params,
+                                     int64_t destination_rows) {
   return mixed_radix_extend_cpu_impl(
       components, coefficients, params, destination_rows, std::nullopt);
 }
 
-void mixed_radix_extend_out_cpu(
-    const torch::Tensor components,
-    const torch::Tensor coefficients,
-    const torch::Tensor params,
-    int64_t destination_rows,
-    torch::Tensor out) {
+void mixed_radix_extend_out_cpu(const torch::Tensor components,
+                                const torch::Tensor coefficients,
+                                const torch::Tensor params,
+                                int64_t destination_rows,
+                                torch::Tensor out) {
   mixed_radix_extend_cpu_impl(
       components, coefficients, params, destination_rows, out);
 }
 
 }  // namespace
 
-TORCH_LIBRARY_IMPL(fhelium_rns_ops, CPU, m) {
-  m.impl(
-      "montgomery_mul",
-      [](const torch::Tensor a, const torch::Tensor b, const torch::Tensor p) {
-        return binary_cpu<BinaryOperation::kMontgomeryMul>(
-            a, b, p, "rns_montgomery_mul");
-      });
-  m.impl("montgomery_weighted_sum", &montgomery_weighted_sum_cpu);
-  m.impl("montgomery_weighted_sums", &montgomery_weighted_sums_cpu);
-  m.impl(
-      "montgomery_mul_cyclic_compressed",
-      [](const torch::Tensor a, const torch::Tensor b, const torch::Tensor p) {
-        return compressed_cpu<RepetitionLayout::kCyclic>(
-            a, b, p, "rns_montgomery_mul_cyclic_compressed");
-      });
-  m.impl(
-      "montgomery_mul_contiguous_compressed",
-      [](const torch::Tensor a, const torch::Tensor b, const torch::Tensor p) {
-        return compressed_cpu<RepetitionLayout::kContiguous>(
-            a, b, p, "rns_montgomery_mul_contiguous_compressed");
-      });
-  m.impl("montgomery_mul_row_scalars_", &row_scalars_cpu_);
-  m.impl("to_montgomery_", [](torch::Tensor a, const torch::Tensor p) {
-    unary_cpu<UnaryOperation::kToMontgomery>(a, p, "rns_to_montgomery");
-  });
-  m.impl("from_montgomery_", [](torch::Tensor a, const torch::Tensor p) {
-    unary_cpu<UnaryOperation::kFromMontgomery>(a, p, "rns_from_montgomery");
-  });
-  m.impl(
-      "add_lazy",
-      [](const torch::Tensor a, const torch::Tensor b, const torch::Tensor p) {
-        return binary_cpu<BinaryOperation::kAddLazy>(a, b, p, "rns_add_lazy");
-      });
-  m.impl("add_lazy_with_twice_modulus", &add_lazy_twice_modulus_cpu);
-  m.impl(
-      "sub_lazy",
-      [](const torch::Tensor a, const torch::Tensor b, const torch::Tensor p) {
-        return binary_cpu<BinaryOperation::kSubLazy>(a, b, p, "rns_sub_lazy");
-      });
-  m.impl("reduce_to_standard_", [](torch::Tensor a, const torch::Tensor p) {
-    unary_cpu<UnaryOperation::kReduceToStandard>(
-        a, p, "rns_reduce_to_standard");
-  });
-  m.impl("center_residues_", [](torch::Tensor a, const torch::Tensor p) {
-    unary_cpu<UnaryOperation::kCenter>(a, p, "rns_center_residues");
-  });
-  m.impl(
-      "shift_residues_positive_", [](torch::Tensor a, const torch::Tensor p) {
-        unary_cpu<UnaryOperation::kShiftPositive>(a, p, "rns_shift_positive");
-      });
-  m.impl("lift_centered_coefficients", &lift_centered_cpu);
-  m.impl("mixed_radix_decompose", &mixed_radix_decompose_cpu);
-  m.impl("mixed_radix_decompose_out_", &mixed_radix_decompose_out_cpu);
-  m.impl("mixed_radix_basis_extend_to_montgomery", &mixed_radix_extend_cpu);
-  m.impl("mixed_radix_basis_extend_to_montgomery_out_", &mixed_radix_extend_out_cpu);
+namespace fhelium::rns::cpu {
+
+at::Tensor montgomery_mul(const at::Tensor& a,
+                          const at::Tensor& b,
+                          const at::Tensor& p) {
+  return binary_cpu<BinaryOperation::kMontgomeryMul>(
+      a, b, p, "rns_montgomery_mul");
 }
+
+at::Tensor montgomery_weighted_sum(at::TensorList ciphertexts,
+                                   at::TensorList plaintexts,
+                                   const at::Tensor& rns_params) {
+  return ::montgomery_weighted_sum_cpu(ciphertexts, plaintexts, rns_params);
+}
+
+at::Tensor montgomery_weighted_sums(at::TensorList ciphertexts,
+                                    at::TensorList plaintexts,
+                                    int64_t group_count,
+                                    const at::Tensor& rns_params) {
+  return ::montgomery_weighted_sums_cpu(
+      ciphertexts, plaintexts, group_count, rns_params);
+}
+
+at::Tensor montgomery_mul_cyclic_compressed(const at::Tensor& a,
+                                            const at::Tensor& b,
+                                            const at::Tensor& p) {
+  return compressed_cpu<RepetitionLayout::kCyclic>(
+      a, b, p, "rns_montgomery_mul_cyclic_compressed");
+}
+
+at::Tensor montgomery_mul_contiguous_compressed(const at::Tensor& a,
+                                                const at::Tensor& b,
+                                                const at::Tensor& p) {
+  return compressed_cpu<RepetitionLayout::kContiguous>(
+      a, b, p, "rns_montgomery_mul_contiguous_compressed");
+}
+
+void montgomery_mul_row_scalars_(at::Tensor& residues,
+                                 const at::Tensor& row_scalars,
+                                 const at::Tensor& rns_params) {
+  ::row_scalars_cpu_(residues, row_scalars, rns_params);
+}
+
+void to_montgomery_(at::Tensor& a, const at::Tensor& p) {
+  unary_cpu<UnaryOperation::kToMontgomery>(a, p, "rns_to_montgomery");
+}
+
+void from_montgomery_(at::Tensor& a, const at::Tensor& p) {
+  unary_cpu<UnaryOperation::kFromMontgomery>(a, p, "rns_from_montgomery");
+}
+
+at::Tensor add_lazy(const at::Tensor& a,
+                    const at::Tensor& b,
+                    const at::Tensor& p) {
+  return binary_cpu<BinaryOperation::kAddLazy>(a, b, p, "rns_add_lazy");
+}
+
+at::Tensor add_lazy_with_twice_modulus(const at::Tensor& lhs,
+                                       const at::Tensor& rhs,
+                                       const at::Tensor& twice_modulus) {
+  return ::add_lazy_twice_modulus_cpu(lhs, rhs, twice_modulus);
+}
+
+at::Tensor sub_lazy(const at::Tensor& a,
+                    const at::Tensor& b,
+                    const at::Tensor& p) {
+  return binary_cpu<BinaryOperation::kSubLazy>(a, b, p, "rns_sub_lazy");
+}
+
+void reduce_to_standard_(at::Tensor& a, const at::Tensor& p) {
+  unary_cpu<UnaryOperation::kReduceToStandard>(a, p, "rns_reduce_to_standard");
+}
+
+void center_residues_(at::Tensor& a, const at::Tensor& p) {
+  unary_cpu<UnaryOperation::kCenter>(a, p, "rns_center_residues");
+}
+
+void shift_residues_positive_(at::Tensor& a, const at::Tensor& p) {
+  unary_cpu<UnaryOperation::kShiftPositive>(a, p, "rns_shift_positive");
+}
+
+at::Tensor lift_integer_coefficients(const at::Tensor& coefficients,
+                                     const at::Tensor& twice_modulus) {
+  return ::lift_integer_cpu(coefficients, twice_modulus);
+}
+
+at::Tensor mixed_radix_decompose(
+    const at::Tensor& source_residues,
+    const at::Tensor& mixed_radix_normalizers,
+    const at::Tensor& mixed_radix_propagation_coefficients,
+    const at::Tensor& modulus_lo,
+    const at::Tensor& modulus_hi,
+    const at::Tensor& neg_inv_modulus_lo,
+    const at::Tensor& neg_inv_modulus_hi) {
+  return ::mixed_radix_decompose_cpu(source_residues,
+                                     mixed_radix_normalizers,
+                                     mixed_radix_propagation_coefficients,
+                                     modulus_lo,
+                                     modulus_hi,
+                                     neg_inv_modulus_lo,
+                                     neg_inv_modulus_hi);
+}
+
+void mixed_radix_decompose_out_(
+    const at::Tensor& source_residues,
+    const at::Tensor& mixed_radix_normalizers,
+    const at::Tensor& mixed_radix_propagation_coefficients,
+    const at::Tensor& modulus_lo,
+    const at::Tensor& modulus_hi,
+    const at::Tensor& neg_inv_modulus_lo,
+    const at::Tensor& neg_inv_modulus_hi,
+    at::Tensor& out) {
+  ::mixed_radix_decompose_out_cpu(source_residues,
+                                  mixed_radix_normalizers,
+                                  mixed_radix_propagation_coefficients,
+                                  modulus_lo,
+                                  modulus_hi,
+                                  neg_inv_modulus_lo,
+                                  neg_inv_modulus_hi,
+                                  out);
+}
+
+at::Tensor mixed_radix_basis_extend_to_montgomery(
+    const at::Tensor& mixed_radix_components,
+    const at::Tensor& basis_extension_coefficients,
+    const at::Tensor& rns_params,
+    int64_t destination_row_count) {
+  return ::mixed_radix_extend_cpu(mixed_radix_components,
+                                  basis_extension_coefficients,
+                                  rns_params,
+                                  destination_row_count);
+}
+
+void mixed_radix_basis_extend_to_montgomery_out_(
+    const at::Tensor& mixed_radix_components,
+    const at::Tensor& basis_extension_coefficients,
+    const at::Tensor& rns_params,
+    int64_t destination_row_count,
+    at::Tensor& out) {
+  ::mixed_radix_extend_out_cpu(mixed_radix_components,
+                               basis_extension_coefficients,
+                               rns_params,
+                               destination_row_count,
+                               out);
+}
+
+}  // namespace fhelium::rns::cpu

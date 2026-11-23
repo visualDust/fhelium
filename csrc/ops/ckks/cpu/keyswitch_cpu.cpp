@@ -2,13 +2,13 @@
 #include <ATen/MemoryOverlap.h>
 #include <ATen/Parallel.h>
 #include <c10/util/SmallVector.h>
-#include <torch/library.h>
 #include <torch/torch.h>
 
 #include <algorithm>
 
 #include "../../common/cpu/montgomery.h"
 #include "../../common/rns_batch.h"
+#include "../backends.h"
 #include "tensor_validation.h"
 
 namespace {
@@ -16,11 +16,12 @@ namespace {
 using fhelium::ckks::cpu::check_cpu_peer;
 
 template <bool Nearest>
-torch::Tensor keyswitch_moddown_cpu_impl(const torch::Tensor q_residues,
-                                    const torch::Tensor p_residues,
-                                    const torch::Tensor inverse,
-                                    const torch::Tensor rns_params,
-                                    const std::optional<torch::Tensor> half) {
+torch::Tensor keyswitch_moddown_cpu_impl(
+    const torch::Tensor q_residues,
+    const torch::Tensor p_residues,
+    const torch::Tensor inverse,
+    const torch::Tensor rns_params,
+    const std::optional<torch::Tensor> half) {
   constexpr const char* operation = "keyswitch_moddown_qp_to_q";
   for (const auto& peer : {p_residues, inverse, rns_params}) {
     check_cpu_peer(q_residues, peer, operation, "peer tensor");
@@ -43,7 +44,8 @@ torch::Tensor keyswitch_moddown_cpu_impl(const torch::Tensor q_residues,
     check_cpu_peer(q_residues, *half, operation, "moddown_half");
     TORCH_CHECK(half->dim() == 1 && half->is_contiguous() &&
                     half->numel() == q.size(1) + p.size(1),
-                operation, " moddown_half must contain one value per QP row");
+                operation,
+                " moddown_half must contain one value per QP row");
   }
   auto out = torch::empty_like(q_residues);
   auto output = view_rns_batch_3d(out, "out");
@@ -111,14 +113,18 @@ torch::Tensor keyswitch_moddown_cpu_impl(const torch::Tensor q_residues,
                  coefficient < coefficient_end;
                  ++coefficient) {
               for (int64_t row = 0; row < p_count; ++row) {
-                scalar_t value = p_rows[row * p_stride1 + coefficient * p_stride2];
+                scalar_t value =
+                    p_rows[row * p_stride1 + coefficient * p_stride2];
                 if constexpr (Nearest) {
-                  const auto constants = fhelium::cpu::load_constants(
-                      parameter_rows, parameter_row_stride, parameter_limb_stride,
-                      q_count + row);
+                  const auto constants =
+                      fhelium::cpu::load_constants(parameter_rows,
+                                                   parameter_row_stride,
+                                                   parameter_limb_stride,
+                                                   q_count + row);
                   value = fhelium::cpu::reduce_to_standard(
-                      fhelium::cpu::add_lazy(value, half_values[q_count + row],
-                                            constants.twice_modulus),
+                      fhelium::cpu::add_lazy(value,
+                                             half_values[q_count + row],
+                                             constants.twice_modulus),
                       constants.twice_modulus);
                 }
                 p_chain[static_cast<size_t>(row)] = value;
@@ -152,10 +158,12 @@ torch::Tensor keyswitch_moddown_cpu_impl(const torch::Tensor q_residues,
                                                  parameter_row_stride,
                                                  parameter_limb_stride,
                                                  row);
-                scalar_t source = q_rows[row * q_stride1 + coefficient * q_stride2];
+                scalar_t source =
+                    q_rows[row * q_stride1 + coefficient * q_stride2];
                 if constexpr (Nearest) {
                   source = fhelium::cpu::reduce_to_standard(
-                      fhelium::cpu::add_lazy(source, half_values[row], constants.twice_modulus),
+                      fhelium::cpu::add_lazy(
+                          source, half_values[row], constants.twice_modulus),
                       constants.twice_modulus);
                 }
                 scalar_t value = fhelium::cpu::multiply(
@@ -183,10 +191,12 @@ torch::Tensor keyswitch_moddown_cpu_impl(const torch::Tensor q_residues,
   return out;
 }
 
-torch::Tensor keyswitch_moddown_cpu(
-    const torch::Tensor q, const torch::Tensor p,
-    const torch::Tensor inverse, const torch::Tensor parameters,
-    const std::optional<torch::Tensor> half, const std::string& rounding) {
+torch::Tensor keyswitch_moddown_cpu(const torch::Tensor q,
+                                    const torch::Tensor p,
+                                    const torch::Tensor inverse,
+                                    const torch::Tensor parameters,
+                                    const std::optional<torch::Tensor> half,
+                                    const std::string& rounding) {
   TORCH_CHECK(rounding == "nearest" || rounding == "floor",
               "ModDown rounding must be 'nearest' or 'floor'");
   if (rounding == "nearest") {
@@ -195,13 +205,14 @@ torch::Tensor keyswitch_moddown_cpu(
   return keyswitch_moddown_cpu_impl<false>(q, p, inverse, parameters, half);
 }
 
-void keyswitch_accumulate_cpu_(torch::Tensor accumulator0_qp,
-                               torch::Tensor accumulator1_qp,
-                               const torch::Tensor digit_qp,
-                               const torch::Tensor key_digit,
-                               const torch::Tensor rns_params,
-                               const int64_t key_row_start,
-                               const std::optional<torch::Tensor> source_indices) {
+void keyswitch_accumulate_cpu_(
+    torch::Tensor accumulator0_qp,
+    torch::Tensor accumulator1_qp,
+    const torch::Tensor digit_qp,
+    const torch::Tensor key_digit,
+    const torch::Tensor rns_params,
+    const int64_t key_row_start,
+    const std::optional<torch::Tensor> source_indices) {
   constexpr const char* operation = "keyswitch_accumulate_digit_products";
   for (const auto& peer :
        {accumulator0_qp, accumulator1_qp, key_digit, rns_params}) {
@@ -220,7 +231,8 @@ void keyswitch_accumulate_cpu_(torch::Tensor accumulator0_qp,
     TORCH_CHECK(indices.device() == digit_qp.device() &&
                     indices.scalar_type() == torch::kInt32 &&
                     indices.dim() == 1 && indices.size(0) == digit.size(2),
-                operation, " requires int32 source indices matching N");
+                operation,
+                " requires int32 source indices matching N");
     at::assert_no_overlap(accumulator0, indices);
     at::assert_no_overlap(accumulator1, indices);
     permutation = indices.data_ptr<int32_t>();
@@ -228,7 +240,8 @@ void keyswitch_accumulate_cpu_(torch::Tensor accumulator0_qp,
     for (int64_t i = 0; i < digit.size(2); ++i) {
       TORCH_CHECK(permutation[i * permutation_stride] >= 0 &&
                       permutation[i * permutation_stride] < digit.size(2),
-                  operation, " source index is out of bounds");
+                  operation,
+                  " source index is out of bounds");
     }
   }
   TORCH_CHECK(key_digit.dim() == 3 && key_digit.size(0) == 2 &&
@@ -299,9 +312,11 @@ void keyswitch_accumulate_cpu_(torch::Tensor accumulator0_qp,
             for (int64_t coefficient = coefficient_begin;
                  coefficient < coefficient_end;
                  ++coefficient) {
-              const int64_t source_coefficient = permutation
-                  ? permutation[coefficient * permutation_stride] : coefficient;
-              const scalar_t value = source_row[source_coefficient * digit_stride2];
+              const int64_t source_coefficient =
+                  permutation ? permutation[coefficient * permutation_stride]
+                              : coefficient;
+              const scalar_t value =
+                  source_row[source_coefficient * digit_stride2];
               const scalar_t product0 = fhelium::cpu::multiply(
                   value, key_row0[coefficient * key_stride2], constants);
               const scalar_t product1 = fhelium::cpu::multiply(
@@ -323,7 +338,38 @@ void keyswitch_accumulate_cpu_(torch::Tensor accumulator0_qp,
 
 }  // namespace
 
-TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CPU, m) {
-  m.impl("keyswitch_moddown_qp_to_q", &keyswitch_moddown_cpu);
-  m.impl("keyswitch_accumulate_digit_products_", &keyswitch_accumulate_cpu_);
+namespace fhelium::ckks::cpu {
+
+at::Tensor keyswitch_moddown_qp_to_q(
+    const at::Tensor& q_residues,
+    const at::Tensor& p_residues,
+    const at::Tensor& moddown_p_drop_inverses_montgomery,
+    const at::Tensor& rns_params,
+    const std::optional<at::Tensor>& moddown_half,
+    c10::string_view rounding) {
+  return ::keyswitch_moddown_cpu(q_residues,
+                                 p_residues,
+                                 moddown_p_drop_inverses_montgomery,
+                                 rns_params,
+                                 moddown_half,
+                                 std::string(rounding));
 }
+
+void keyswitch_accumulate_digit_products_(
+    at::Tensor& accumulator0_qp,
+    at::Tensor& accumulator1_qp,
+    const at::Tensor& extended_digit_ntt_qp,
+    const at::Tensor& key_switch_key_digit,
+    const at::Tensor& rns_params,
+    int64_t key_digit_row_start,
+    const std::optional<at::Tensor>& source_indices) {
+  ::keyswitch_accumulate_cpu_(accumulator0_qp,
+                              accumulator1_qp,
+                              extended_digit_ntt_qp,
+                              key_switch_key_digit,
+                              rns_params,
+                              key_digit_row_start,
+                              source_indices);
+}
+
+}  // namespace fhelium::ckks::cpu

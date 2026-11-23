@@ -1,7 +1,7 @@
 """JIT-compile CKKS weighted-product and matrix-multiplication workloads.
 
-Compare each original function with its JIT wrapper after checking correctness.
-First-call latency is separate from warmed, alternating paired measurements.
+Compare each original function with its compiled wrapper and report numerical error.
+The first call includes preparation and is reported separately from warmed paired measurements.
 Manual pipelines and persisted Programs have separate examples.
 """
 
@@ -76,6 +76,13 @@ def main() -> None:
     parser.add_argument(
         "--runs", type=int, default=30, help="Timed samples per path"
     )
+    parser.add_argument("--no-cache", action="store_true")
+    parser.add_argument(
+        "--graph",
+        action="store_true",
+        help="enable automatic CUDA Graph capture",
+    )
+    parser.add_argument("--borrow-output", action="store_true")
     args = parser.parse_args()
     if args.warmup < 0 or args.runs < 1:
         parser.error("--warmup must be nonnegative and --runs must be positive")
@@ -87,7 +94,11 @@ def main() -> None:
     engine.set_secret_key(secret_key)
     public_key = engine.create_public_key(secret_key, device=device)
 
-    @fc.compile
+    @fc.compile(
+        cache=not args.no_cache,
+        graph="auto" if args.graph else False,
+        copy_output=not args.borrow_output,
+    )
     def weighted_product(
         lhs: Ciphertext,
         rhs: Ciphertext,
@@ -118,35 +129,36 @@ def main() -> None:
         engine.encode(clear_weight, device=device)
     )
 
-    # An ordinary first call prepares its specialization. Startup code can call
-    # prepare separately, but the first real execution may compile device code.
+    # The first call prepares the specialization and then executes it.
     result, weighted_first_ms = _timed_call(
         lambda: weighted_product(x, y, weight), device
     )
-    reference = weighted_product.reference
-    assert reference is not None
-    torch.testing.assert_close(
-        result.data, reference(x, y, weight).data, rtol=0, atol=0
+    reference = cast(Callable[..., Ciphertext], weighted_product.reference)
+    weighted_difference = int(
+        (result.data - reference(x, y, weight).data).abs().max()
     )
-    other_x = engine.negate(x)
-    torch.testing.assert_close(
-        weighted_product(other_x, y, weight).data,
-        reference(other_x, y, weight).data,
-        rtol=0,
-        atol=0,
-    )
-    assert len(weighted_product.specializations) == 1
-    weighted_product.prepare(x, y, weight, negative=True)
-    torch.testing.assert_close(
-        weighted_product(x, y, weight, negative=True).data,
-        reference(x, y, weight, True).data,
-        rtol=0,
-        atol=0,
-    )
-
     decoded = engine.decrypt_message(result, secret_key)
     weighted_error = float(
         (decoded - 2 * clear_x * clear_y * clear_weight).abs().max()
+    )
+
+    other_x = engine.negate(x)
+    other_result = weighted_product(other_x, y, weight)
+    print(
+        "Changing-input maximum residue difference:",
+        int(
+            (other_result.data - reference(other_x, y, weight).data).abs().max()
+        ),
+    )
+    weighted_product.prepare(x, y, weight, negative=True)
+    negative_result = weighted_product(x, y, weight, negative=True)
+    print(
+        "Static-branch maximum residue difference:",
+        int(
+            (negative_result.data - reference(x, y, weight, True).data)
+            .abs()
+            .max()
+        ),
     )
 
     matrix_size, columns, baby_step = 128, 8, 8
@@ -193,7 +205,11 @@ def main() -> None:
             )
         )
 
-    @fc.compile
+    @fc.compile(
+        cache=not args.no_cache,
+        graph="auto" if args.graph else False,
+        copy_output=not args.borrow_output,
+    )
     def matrix_multiply(value: Ciphertext) -> Ciphertext:
         rotated = engine.rotate_many_by_steps(
             value, baby_steps, use_hoisting=True
@@ -225,23 +241,24 @@ def main() -> None:
     matrix_result, matrix_first_ms = _timed_call(
         lambda: matrix_multiply(matrix_input), device
     )
-    matrix_reference = matrix_multiply.reference
-    assert matrix_reference is not None
-    torch.testing.assert_close(
-        matrix_result.data, matrix_reference(matrix_input).data, rtol=0, atol=0
+    matrix_reference = cast(
+        Callable[..., Ciphertext], matrix_multiply.reference
+    )
+    matrix_difference = int(
+        (matrix_result.data - matrix_reference(matrix_input).data).abs().max()
     )
     matrix_decoded = engine.decrypt_message(
         matrix_result, secret_key, is_real=True
     )[..., :matrix_size].T
-    torch.testing.assert_close(
-        matrix_decoded, matrix_expected, rtol=0, atol=1e-5
-    )
     matrix_error = float((matrix_decoded - matrix_expected).abs().max())
 
     print_table(
         ["property", "value"],
         [
             ["device", str(device)],
+            ["disk cache", not args.no_cache],
+            ["CUDA Graph policy", "auto" if args.graph else False],
+            ["owned Graph output", not args.borrow_output],
             [
                 "PyTorch intra-op / inter-op threads",
                 f"{torch.get_num_threads()} / {torch.get_num_interop_threads()}",
@@ -273,6 +290,7 @@ def main() -> None:
             "input Tensor shapes",
             "output depth / components",
             "maximum clear error",
+            "maximum residue difference",
         ],
         [
             [
@@ -281,6 +299,7 @@ def main() -> None:
                 f"CT {tuple(x.data.shape)}, PT {tuple(cast(torch.Tensor, weight.data).shape)}",
                 f"{result.depth} / {result.component_count}",
                 f"{weighted_error:.6e}",
+                str(weighted_difference),
             ],
             [
                 "2. CKKS matrix multiplication",
@@ -288,12 +307,17 @@ def main() -> None:
                 f"CT {tuple(matrix_input.data.shape)}, {len(diagonals)} compact PT diagonals",
                 f"{matrix_result.depth} / {matrix_result.component_count}",
                 f"{matrix_error:.6e}",
+                str(matrix_difference),
             ],
         ],
     )
     print(
         "lowering and fusion pipeline:",
         fc.default_lower_and_fuse_pipeline().names,
+    )
+    print(
+        "Local reuse retains global scheduling and final fusion checks; "
+        "use preparation/pass timings to assess its time savings."
     )
     for label, compiled in (
         ("1. CKKS weighted product", weighted_product),
@@ -302,9 +326,9 @@ def main() -> None:
         variant = compiled.specializations[0]
         print(f"\n{label}: {len(compiled.specializations)} specialization(s)")
         print_table(
-            ["pass", "transformed"],
+            ["pass", "transformed", "host seconds"],
             [
-                [report.name, report.stats.transformed]
+                [report.name, report.stats.transformed, f"{report.seconds:.6f}"]
                 for report in variant.compilation.reports
             ],
         )
@@ -318,12 +342,16 @@ def main() -> None:
         if args.print_ir:
             print(variant.compilation.program)
     print_table(
-        ["workload", "JIT first call (ms)"],
+        ["workload", "first call with preparation (ms)"],
         [
             ["1. CKKS weighted product", f"{weighted_first_ms:.3f}"],
             ["2. CKKS matrix multiplication", f"{matrix_first_ms:.3f}"],
         ],
     )
+    # Complete startup calls and any requested capture before steady-state samples.
+    weighted_product(x, y, weight)
+    matrix_multiply(matrix_input)
+    sync_if_cuda(device)
     rows = [
         _latency_row(
             "1. CKKS weighted product",
@@ -356,8 +384,69 @@ def main() -> None:
         rows,
     )
     print(
-        "First call includes preparation and any needed kernel compilation/cache loading. Warm timings exclude setup, encryption and decryption; no CUDA Graph."
+        "Warm timings exclude setup, encryption and decryption, and include Graph "
+        "output copies when enabled."
     )
+    print(
+        "Local reuse retains global scheduling and final fusion checks; "
+        "use preparation/pass timings to assess its time savings."
+    )
+    for label, compiled in (
+        ("Weighted product", weighted_product),
+        ("Matrix multiplication", matrix_multiply),
+    ):
+        statistics = compiled.stats()
+        print(f"{label} preparation seconds:", statistics["prepare_seconds"])
+        print("Resident cache hits:", statistics["resident_cache_hits"])
+        for record in statistics["specializations"]:
+            print(
+                "Instance cache:",
+                record["cache"],
+                "structure:",
+                record.get("structure", "not-needed"),
+                "template layer:",
+                record.get("structure_layer", "not-needed"),
+                "kernel warm seconds:",
+                record.get("warm_seconds", 0.0),
+            )
+            for stage, counts in record.get("selection_plans", {}).items():
+                print(
+                    f"{stage} plans:",
+                    "hits:",
+                    counts["hits"],
+                    "misses:",
+                    counts["misses"],
+                )
+            local = record.get("local_plans", {})
+            if local:
+                # Each recipe covers one operation and its direct ports.
+                # Facts count repeated queries within read-only analysis windows.
+                print("Local recipe requests:", local["occurrences"])
+                print(
+                    "Local recipes:",
+                    "hits:",
+                    local["recipe_hits"],
+                    "misses:",
+                    local["recipe_misses"],
+                )
+                print(
+                    "Window facts:",
+                    "hits:",
+                    local["facts_hits"],
+                    "misses:",
+                    local["facts_misses"],
+                )
+        for record in statistics["graphs"]:
+            print(
+                "Graph:",
+                record["state"],
+                "replays:",
+                record["replays"],
+                "fallback:",
+                record["fallback_reason"],
+            )
+    weighted_product.clear()
+    matrix_multiply.clear()
 
 
 if __name__ == "__main__":

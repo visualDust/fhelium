@@ -55,6 +55,7 @@ _PRESERVING_TYPES = (
     ckks.EncapsulatedModulusRaiseOp,
     ckks.AddScalarOp,
     ckks.MultiplyIntegerScalarOp,
+    ckks.SelectBatchOp,
 )
 
 
@@ -162,7 +163,9 @@ class AssignCkksScalesPass:
         function = program.function("main")
         block = program.single_block("main")
         if any(
-            operation.regions or operation.successors for operation in block.ops
+            (operation.regions and not isinstance(operation, ckks.RepeatOp))
+            or operation.successors
+            for operation in block.walk()
         ):
             raise ValueError(
                 "CKKS scale assignment supports a flat single-block SSA DAG"
@@ -224,7 +227,22 @@ class AssignCkksScalesPass:
                 "CKKS scale assignment requires an encrypted entry"
             )
 
-        for operation in tuple(block.ops):
+        from ..._repeat import (
+            sync_repeat_inputs,
+            sync_repeat_results,
+            sync_iteration,
+        )
+
+        for operation in tuple(block.walk()):
+            if isinstance(operation, ckks.RepeatOp):
+                sync_repeat_inputs(operation)
+                continue
+            if isinstance(operation, ckks.RepeatYieldOp):
+                sync_repeat_results(operation.parent_op())
+                continue
+            if isinstance(operation, ckks.RepeatIterationOp):
+                sync_iteration(operation)
+                continue
             if isinstance(operation, ReturnOp):
                 continue
             if isinstance(operation, UnrealizedConversionCastOp):
@@ -301,7 +319,10 @@ class AssignCkksScalesPass:
                         f"{operation.name} has unsupported scale mode "
                         f"{mode.data!r}"
                     )
-            elif isinstance(operation, ckks.MultiplyPlaintextOp):
+            elif isinstance(
+                operation,
+                (ckks.MultiplyPlaintextOp, ckks.MultiplyCompressedPlaintextOp),
+            ):
                 scale = require(
                     operation.ciphertext,
                     operation=operation.name,
@@ -350,7 +371,9 @@ class AssignCkksScalesPass:
                         f"{lhs!r} and {rhs!r}"
                     )
                 scale = lhs
-            elif isinstance(operation, ckks.AddPlaintextOp):
+            elif isinstance(
+                operation, (ckks.AddPlaintextOp, ckks.AddCompressedPlaintextOp)
+            ):
                 ciphertext_scale = require(
                     operation.ciphertext,
                     operation=operation.name,

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from fhelium.legacy.engine import CkksEngine
-
 import pytest
 import torch
 
 from fhelium import CkksConfig, Preset
+from fhelium.backend.rns.tables import moddown_inverse_tables
+from fhelium.eager import Engine
 from fhelium.native.wrapper import ckks_ops, ntt_ops, rns_ops
 
 
@@ -33,9 +33,9 @@ def _transpose_layout(tensor: torch.Tensor) -> torch.Tensor:
     return view
 
 
-def _cpu_engine(*, p_count: int = 2) -> CkksEngine:
+def _cpu_engine(*, p_count: int = 2) -> Engine:
     config = _small_config(p_count=p_count, max_depth=0)
-    return CkksEngine(config, device="cpu", allow_sk_gen=False)
+    return Engine(config, allow_automatic_key_generation=False)
 
 
 def _small_config(
@@ -58,9 +58,11 @@ def _small_config(
 
 def test_cpu_rns_and_ckks_vector_and_parameter_strides() -> None:
     engine = _cpu_engine()
-    parameters = engine.rns_runtime.basis_parameters(
-        0, include_p=True
-    ).native_parameters[:8, :3]
+    parameters = (
+        engine.rns_context("cpu")
+        .basis_parameters(0, include_p=True)
+        .native_parameters[:8, :3]
+    )
     strided_parameters = _transpose_layout(parameters)
     moduli = engine.config.moduli[:3]
     generator = torch.Generator().manual_seed(20260814)
@@ -70,14 +72,16 @@ def test_cpu_rns_and_ckks_vector_and_parameter_strides() -> None:
                 0,
                 modulus,
                 (2, 64),
-                dtype=engine.rns_runtime.dtype,
+                dtype=engine.rns_context("cpu").dtype,
                 generator=generator,
             )
             for modulus in moduli
         ],
         dim=1,
     )
-    row_scalars = torch.tensor([17, 19, 23], dtype=engine.rns_runtime.dtype)
+    row_scalars = torch.tensor(
+        [17, 19, 23], dtype=engine.rns_context("cpu").dtype
+    )
 
     expected = rns_ops.montgomery_mul_row_scalars_standard(
         residues, row_scalars, parameters
@@ -145,7 +149,7 @@ def test_cpu_rns_and_ckks_vector_and_parameter_strides() -> None:
     )
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
-    inverse = torch.tensor([29, 31, 37], dtype=engine.rns_runtime.dtype)
+    inverse = torch.tensor([29, 31, 37], dtype=engine.rns_context("cpu").dtype)
     dropped = torch.remainder(residues[:, 0], moduli[0])
     expected = ckks_ops.rescale_drop_leading_prime_truncate(
         residues, inverse, dropped, parameters
@@ -161,9 +165,11 @@ def test_cpu_rns_and_ckks_vector_and_parameter_strides() -> None:
 
 def test_cpu_mixed_radix_auxiliary_strides() -> None:
     engine = _cpu_engine()
-    parameters = engine.rns_runtime.basis_parameters(
-        0, include_p=True
-    ).native_parameters[:8, :3]
+    parameters = (
+        engine.rns_context("cpu")
+        .basis_parameters(0, include_p=True)
+        .native_parameters[:8, :3]
+    )
     generator = torch.Generator().manual_seed(20260815)
     source = torch.stack(
         [
@@ -171,16 +177,16 @@ def test_cpu_mixed_radix_auxiliary_strides() -> None:
                 0,
                 modulus,
                 (2, 32),
-                dtype=engine.rns_runtime.dtype,
+                dtype=engine.rns_context("cpu").dtype,
                 generator=generator,
             )
             for modulus in engine.config.moduli[:3]
         ],
         dim=1,
     )
-    normalizers = torch.tensor([41, 43], dtype=engine.rns_runtime.dtype)
+    normalizers = torch.tensor([41, 43], dtype=engine.rns_context("cpu").dtype)
     propagation = torch.tensor(
-        [[0, 47, 53], [0, 0, 59]], dtype=engine.rns_runtime.dtype
+        [[0, 47, 53], [0, 0, 59]], dtype=engine.rns_context("cpu").dtype
     )
     reduction_vectors = tuple(parameters[row] for row in (1, 2, 3, 4))
 
@@ -199,7 +205,7 @@ def test_cpu_mixed_radix_auxiliary_strides() -> None:
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
     extension_coefficients = torch.tensor(
-        [[61, 67, 71], [73, 79, 83]], dtype=engine.rns_runtime.dtype
+        [[61, 67, 71], [73, 79, 83]], dtype=engine.rns_context("cpu").dtype
     )
     expected_extended = rns_ops.mixed_radix_basis_extend_to_montgomery(
         expected,
@@ -220,7 +226,8 @@ def test_cpu_mixed_radix_auxiliary_strides() -> None:
 
 def test_cpu_indexed_ntt_auxiliary_strides() -> None:
     engine = _cpu_engine(p_count=1)
-    backend = engine.rns_runtime.ntt_backend
+    tables = engine._ntt_context_for("cpu").ntt_tables
+    rns_params = engine.rns_context("cpu").rns_parameter_tensor
     generator = torch.Generator().manual_seed(20260816)
     residues = torch.stack(
         [
@@ -228,7 +235,7 @@ def test_cpu_indexed_ntt_auxiliary_strides() -> None:
                 0,
                 modulus,
                 (engine.config.N,),
-                dtype=engine.rns_runtime.dtype,
+                dtype=engine.rns_context("cpu").dtype,
                 generator=generator,
             )
             for modulus in engine.config.moduli
@@ -237,17 +244,17 @@ def test_cpu_indexed_ntt_auxiliary_strides() -> None:
 
     expected = ntt_ops.forward_ntt_to_montgomery_indexed(
         residues,
-        backend.forward_even_indices,
-        backend.forward_odd_indices,
-        backend.forward_twiddles,
-        backend.rns_params,
+        tables.forward_even_indices,
+        tables.forward_odd_indices,
+        tables.forward_twiddles,
+        rns_params,
     )
     actual = ntt_ops.forward_ntt_to_montgomery_indexed(
         residues,
-        _gap_last_axis(backend.forward_even_indices),
-        _gap_last_axis(backend.forward_odd_indices),
-        _gap_last_axis(backend.forward_twiddles),
-        _transpose_layout(backend.rns_params),
+        _gap_last_axis(tables.forward_even_indices),
+        _gap_last_axis(tables.forward_odd_indices),
+        _gap_last_axis(tables.forward_twiddles),
+        _transpose_layout(rns_params),
     )
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
@@ -258,7 +265,8 @@ def test_transpose_strides_preserve_cpu_cuda_native_semantics() -> None:
         pytest.skip("CUDA is not available")
 
     engine = _cpu_engine(p_count=1)
-    backend = engine.rns_runtime.ntt_backend
+    tables = engine._ntt_context_for("cpu").ntt_tables
+    rns_params = engine.rns_context("cpu").rns_parameter_tensor
     generator = torch.Generator().manual_seed(20260818)
     residues = torch.stack(
         [
@@ -266,15 +274,15 @@ def test_transpose_strides_preserve_cpu_cuda_native_semantics() -> None:
                 0,
                 modulus,
                 (engine.config.N,),
-                dtype=engine.rns_runtime.dtype,
+                dtype=engine.rns_context("cpu").dtype,
                 generator=generator,
             )
             for modulus in engine.config.moduli
         ]
     )
-    even = _transpose_layout(backend.forward_even_indices)
-    odd = _transpose_layout(backend.forward_odd_indices)
-    parameters = _transpose_layout(backend.rns_params)
+    even = _transpose_layout(tables.forward_even_indices)
+    odd = _transpose_layout(tables.forward_odd_indices)
+    parameters = _transpose_layout(rns_params)
     cuda_even = even.cuda()
     cuda_odd = odd.cuda()
     cuda_parameters = parameters.cuda()
@@ -286,14 +294,14 @@ def test_transpose_strides_preserve_cpu_cuda_native_semantics() -> None:
         residues,
         even,
         odd,
-        backend.forward_twiddles,
+        tables.forward_twiddles,
         parameters,
     )
     cuda_result = ntt_ops.forward_ntt_to_montgomery_indexed(
         residues.cuda(),
         cuda_even,
         cuda_odd,
-        backend.forward_twiddles.cuda(),
+        tables.forward_twiddles.cuda(),
         cuda_parameters,
     ).cpu()
     moduli = torch.tensor(engine.config.moduli)[:, None]
@@ -310,24 +318,20 @@ def test_cpu_created_values_remain_valid_after_cuda_transfer() -> None:
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
 
-    cpu_engine = CkksEngine(
-        Preset.slots8192_scale40_depth7_int64,
-        device="cpu",
-        rng_seed=911,
-        rng_nonce=4,
+    cpu_engine = Engine(
+        Preset.slots8192_scale40_depth7_int64, rng_seed=911, rng_nonce=4
     )
-    secret_key = cpu_engine.create_secret_key()
-    public_key = cpu_engine.create_public_key(secret_key)
+    secret_key = cpu_engine.create_secret_key(device="cpu")
+    public_key = cpu_engine.create_public_key(secret_key, device="cpu")
     message = torch.linspace(-0.01, 0.01, 64, dtype=torch.float64).to(
         torch.complex128
     )
     ciphertext = cpu_engine.encrypt_message(message, public_key)
     cpu_plaintext = cpu_engine.decrypt(ciphertext, secret_key)
 
-    cuda_engine = CkksEngine(
+    cuda_engine = Engine(
         Preset.slots8192_scale40_depth7_int64,
-        device="cuda:0",
-        allow_sk_gen=False,
+        allow_automatic_key_generation=False,
     )
     cuda_ciphertext = ciphertext.to("cuda:0")
     cuda_secret_key = secret_key.to("cuda:0")
@@ -421,7 +425,7 @@ def test_cpu_keyswitch_moddown_supports_more_than_eight_p_rows_and_strides() -> 
                 0,
                 modulus,
                 (7,),
-                dtype=engine.rns_runtime.dtype,
+                dtype=engine.rns_context("cpu").dtype,
                 generator=generator,
             )
             for modulus in q_moduli
@@ -433,23 +437,25 @@ def test_cpu_keyswitch_moddown_supports_more_than_eight_p_rows_and_strides() -> 
                 0,
                 modulus,
                 (7,),
-                dtype=engine.rns_runtime.dtype,
+                dtype=engine.rns_context("cpu").dtype,
                 generator=generator,
             )
             for modulus in p_moduli
         ]
     ).unsqueeze(0)
-    inverse = engine.moddown_p_drop_inverses_montgomery_by_depth[0]
-    parameters = engine.rns_runtime.basis_parameters(
-        0, include_p=True
-    ).native_parameters
+    inverse = moddown_inverse_tables(engine.rns_context("cpu"))[0]
+    parameters = (
+        engine.rns_context("cpu")
+        .basis_parameters(0, include_p=True)
+        .native_parameters
+    )
 
     expected = _moddown_reference(
         q_residues,
         p_residues,
         inverse,
         tuple(engine.config.moduli),
-        montgomery_radix=engine.montgomery_parameters.R,
+        montgomery_radix=engine.rns_context("cpu").montgomery_parameters.R,
     )
     actual = ckks_ops.keyswitch_moddown_qp_to_q(
         q_residues,
@@ -485,9 +491,9 @@ def test_cuda_multistep_moddown_matches_integer_reference(
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
 
-    engine = CkksEngine(configuration, device="cpu", allow_sk_gen=False)
+    engine = Engine(configuration, allow_automatic_key_generation=False)
     key_switch_depth_count = len(
-        engine.moddown_p_drop_inverses_montgomery_by_depth
+        moddown_inverse_tables(engine.rns_context("cpu"))
     )
     depths = sorted(
         {0, key_switch_depth_count // 2, key_switch_depth_count - 1}
@@ -495,7 +501,9 @@ def test_cuda_multistep_moddown_matches_integer_reference(
     p_count = engine.config.num_p_primes
     for depth in depths:
         generator = torch.Generator().manual_seed(20260819 + depth)
-        basis = engine.rns_runtime.basis_parameters(depth, include_p=True)
+        basis = engine.rns_context("cpu").basis_parameters(
+            depth, include_p=True
+        )
         q_moduli = basis.moduli[:-p_count]
         p_moduli = basis.moduli[-p_count:]
         q_residues = torch.stack(
@@ -504,7 +512,7 @@ def test_cuda_multistep_moddown_matches_integer_reference(
                     0,
                     modulus,
                     (2, 11),
-                    dtype=engine.rns_runtime.dtype,
+                    dtype=engine.rns_context("cpu").dtype,
                     generator=generator,
                 )
                 for modulus in q_moduli
@@ -517,21 +525,21 @@ def test_cuda_multistep_moddown_matches_integer_reference(
                     0,
                     modulus,
                     (2, 11),
-                    dtype=engine.rns_runtime.dtype,
+                    dtype=engine.rns_context("cpu").dtype,
                     generator=generator,
                 )
                 for modulus in p_moduli
             ],
             dim=1,
         )
-        inverse = engine.moddown_p_drop_inverses_montgomery_by_depth[depth]
+        inverse = moddown_inverse_tables(engine.rns_context("cpu"))[depth]
         parameters = basis.native_parameters
         expected = _moddown_reference(
             q_residues,
             p_residues,
             inverse,
             tuple(basis.moduli),
-            montgomery_radix=engine.montgomery_parameters.R,
+            montgomery_radix=engine.rns_context("cpu").montgomery_parameters.R,
         )
         q_cuda = q_residues.cuda()
         p_cuda = p_residues.cuda()
@@ -647,10 +655,9 @@ def test_moddown_rounding_matches_integer_quotient(narrow, device):
 
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    engine = CkksEngine(
+    engine = Engine(
         _small_config(p_count=2, max_depth=0, narrow=narrow),
-        device="cpu",
-        allow_sk_gen=False,
+        allow_automatic_key_generation=False,
     )
     q_moduli = tuple(engine.config.q_moduli)
     p_moduli = tuple(engine.config.p_moduli)
@@ -670,7 +677,7 @@ def test_moddown_rounding_matches_integer_quotient(narrow, device):
         q_product,
         3 * q_product,
     ]
-    dtype = engine.rns_runtime.dtype
+    dtype = engine.rns_context("cpu").dtype
     q = torch.tensor(
         [[x % m for x in integers] for m in q_moduli],
         dtype=dtype,
@@ -682,10 +689,12 @@ def test_moddown_rounding_matches_integer_quotient(narrow, device):
         device=device,
     ).unsqueeze(0)
     q, p = _gap_last_axis(q), _gap_last_axis(p)
-    inverse = engine.moddown_p_drop_inverses_montgomery_by_depth[0].to(device)
-    parameters = engine.rns_runtime.basis_parameters(
-        0, include_p=True
-    ).native_parameters.to(device)
+    inverse = moddown_inverse_tables(engine.rns_context("cpu"))[0].to(device)
+    parameters = (
+        engine.rns_context("cpu")
+        .basis_parameters(0, include_p=True)
+        .native_parameters.to(device)
+    )
     offsets = torch.tensor(
         [half % m for m in (*q_moduli, *p_moduli)], dtype=dtype, device=device
     )

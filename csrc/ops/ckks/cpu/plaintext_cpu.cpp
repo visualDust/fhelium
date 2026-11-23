@@ -1,13 +1,13 @@
 #include <ATen/Dispatch.h>
 #include <ATen/MemoryOverlap.h>
 #include <ATen/Parallel.h>
-#include <torch/library.h>
 #include <torch/torch.h>
 
 #include <algorithm>
 
 #include "../../common/cpu/montgomery.h"
 #include "../../common/rns_batch.h"
+#include "../backends.h"
 #include "tensor_validation.h"
 
 namespace {
@@ -187,69 +187,70 @@ torch::Tensor add_plaintext_cpu(const torch::Tensor ciphertext_component,
 
 }  // namespace
 
-TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CPU, m) {
-  const auto empty = torch::Tensor{};
-  m.impl(
-      "add_prepared_plaintext_component",
-      [empty](
-          const torch::Tensor a, const torch::Tensor b, const torch::Tensor p) {
-        return add_plaintext_cpu<PlaintextLayout::kDense>(
-            a, b, empty, p, "ckks_add_prepared_plaintext_component");
-      });
-  m.impl(
-      "add_prepared_plaintext_component_",
-      [empty](torch::Tensor a, const torch::Tensor b, const torch::Tensor p) {
-        add_plaintext_cpu_<PlaintextLayout::kDense>(
-            a, b, empty, p, "ckks_add_prepared_plaintext_component");
-      });
-  m.impl(
-      "add_cyclic_compressed_plaintext_component",
-      [empty](
-          const torch::Tensor a, const torch::Tensor b, const torch::Tensor p) {
-        return add_plaintext_cpu<PlaintextLayout::kCyclic>(
-            a, b, empty, p, "ckks_add_cyclic_compressed_plaintext_component");
-      });
-  m.impl(
-      "add_cyclic_compressed_plaintext_component_",
-      [empty](torch::Tensor a, const torch::Tensor b, const torch::Tensor p) {
-        add_plaintext_cpu_<PlaintextLayout::kCyclic>(
-            a, b, empty, p, "ckks_add_cyclic_compressed_plaintext_component");
-      });
-  m.impl(
-      "add_contiguous_compressed_plaintext_component",
-      [empty](
-          const torch::Tensor a, const torch::Tensor b, const torch::Tensor p) {
-        return add_plaintext_cpu<PlaintextLayout::kContiguous>(
-            a,
-            b,
-            empty,
-            p,
-            "ckks_add_contiguous_compressed_plaintext_component");
-      });
-  m.impl(
-      "add_contiguous_compressed_plaintext_component_",
-      [empty](torch::Tensor a, const torch::Tensor b, const torch::Tensor p) {
-        add_plaintext_cpu_<PlaintextLayout::kContiguous>(
-            a,
-            b,
-            empty,
-            p,
-            "ckks_add_contiguous_compressed_plaintext_component");
-      });
-  m.impl("add_strided_plaintext_component",
-         [](const torch::Tensor a,
-            const torch::Tensor b,
-            const torch::Tensor implicit,
-            const torch::Tensor p) {
-           return add_plaintext_cpu<PlaintextLayout::kStrided>(
-               a, b, implicit, p, "ckks_add_strided_plaintext_component");
-         });
-  m.impl("add_strided_plaintext_component_",
-         [](torch::Tensor a,
-            const torch::Tensor b,
-            const torch::Tensor implicit,
-            const torch::Tensor p) {
-           add_plaintext_cpu_<PlaintextLayout::kStrided>(
-               a, b, implicit, p, "ckks_add_strided_plaintext_component");
-         });
+namespace fhelium::ckks::cpu {
+
+at::Tensor add_prepared_plaintext_component(const at::Tensor& a,
+                                            const at::Tensor& b,
+                                            const at::Tensor& p) {
+  const torch::Tensor empty;
+  return add_plaintext_cpu<PlaintextLayout::kDense>(
+      a, b, empty, p, "ckks_add_prepared_plaintext_component");
 }
+
+void add_prepared_plaintext_component_(at::Tensor& a,
+                                       const at::Tensor& b,
+                                       const at::Tensor& p) {
+  const torch::Tensor empty;
+  add_plaintext_cpu_<PlaintextLayout::kDense>(
+      a, b, empty, p, "ckks_add_prepared_plaintext_component");
+}
+
+at::Tensor add_cyclic_compressed_plaintext_component(const at::Tensor& a,
+                                                     const at::Tensor& b,
+                                                     const at::Tensor& p) {
+  const torch::Tensor empty;
+  return add_plaintext_cpu<PlaintextLayout::kCyclic>(
+      a, b, empty, p, "ckks_add_cyclic_compressed_plaintext_component");
+}
+
+void add_cyclic_compressed_plaintext_component_(at::Tensor& a,
+                                                const at::Tensor& b,
+                                                const at::Tensor& p) {
+  const torch::Tensor empty;
+  add_plaintext_cpu_<PlaintextLayout::kCyclic>(
+      a, b, empty, p, "ckks_add_cyclic_compressed_plaintext_component");
+}
+
+at::Tensor add_contiguous_compressed_plaintext_component(const at::Tensor& a,
+                                                         const at::Tensor& b,
+                                                         const at::Tensor& p) {
+  const torch::Tensor empty;
+  return add_plaintext_cpu<PlaintextLayout::kContiguous>(
+      a, b, empty, p, "ckks_add_contiguous_compressed_plaintext_component");
+}
+
+void add_contiguous_compressed_plaintext_component_(at::Tensor& a,
+                                                    const at::Tensor& b,
+                                                    const at::Tensor& p) {
+  const torch::Tensor empty;
+  add_plaintext_cpu_<PlaintextLayout::kContiguous>(
+      a, b, empty, p, "ckks_add_contiguous_compressed_plaintext_component");
+}
+
+at::Tensor add_strided_plaintext_component(const at::Tensor& a,
+                                           const at::Tensor& b,
+                                           const at::Tensor& implicit,
+                                           const at::Tensor& p) {
+  return add_plaintext_cpu<PlaintextLayout::kStrided>(
+      a, b, implicit, p, "ckks_add_strided_plaintext_component");
+}
+
+void add_strided_plaintext_component_(at::Tensor& a,
+                                      const at::Tensor& b,
+                                      const at::Tensor& implicit,
+                                      const at::Tensor& p) {
+  add_plaintext_cpu_<PlaintextLayout::kStrided>(
+      a, b, implicit, p, "ckks_add_strided_plaintext_component");
+}
+
+}  // namespace fhelium::ckks::cpu

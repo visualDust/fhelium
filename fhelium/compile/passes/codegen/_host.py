@@ -237,5 +237,9 @@ def emit_host_body(
             "Host block requires a return or yield operation"
         )
 
-    emit(block, 1)
-    return lines
+    try:
+        emit(block, 1)
+        return lines
+    finally:
+        # Recursive builders otherwise retain their bound execution callbacks.
+        emit = None

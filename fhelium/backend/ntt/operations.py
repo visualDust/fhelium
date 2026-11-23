@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
@@ -149,6 +147,7 @@ class _PreparedNativeNtt(_TensorOperandImplementation):
 @lru_cache(maxsize=128)
 def prepare_transition(transition: str, policy_name: str, *, in_place: bool):
     """Bind a native algorithm and transition without retaining operand data."""
+    original = transition
     policy = resolve_ntt_backend_policy(policy_name)
     copy_input = not in_place
     if copy_input and transition == "forward_to_montgomery_":
@@ -177,7 +176,11 @@ def prepare_transition(transition: str, policy_name: str, *, in_place: bool):
             output = source.clone() if copy_input else source
             return native(output, twiddles, roots, parameters)
 
-    return call
+    from fhelium.backend._artifact import rebuild_with
+
+    return rebuild_with(
+        call, prepare_transition, original, policy_name, in_place=in_place
+    )
 
 
 def execute_transition(transition, values, policy_name, *, in_place):
@@ -188,31 +191,3 @@ def execute_transition(transition, values, policy_name, *, in_place):
 
 
 __all__ = ["NativeNttImplementation"]
-
-
-def execute_named_transform(
-    source: torch.Tensor,
-    tensors: Mapping[str, torch.Tensor],
-    attributes: Mapping[str, object],
-    basis: str,
-    transition: str,
-    *,
-    in_place: bool = True,
-) -> torch.Tensor:
-    """Pass the selected Tensor tables to the shared native NTT dispatch."""
-    direction = "inverse" if transition.startswith("inverse") else "forward"
-    prefix = f"{basis}_{direction}_"
-    policy_name = str(attributes["ntt_backend"])
-    count = (
-        4
-        if policy_name == "radix2_indexed"
-        else 2
-        if policy_name.startswith("radix2_compact")
-        else 3
-    )
-    return execute_transition(
-        transition,
-        (source, *(tensors[f"{prefix}{i}"] for i in range(count))),
-        policy_name,
-        in_place=in_place,
-    )

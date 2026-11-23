@@ -179,9 +179,10 @@ class CkksLoweringRegistry:
         )
 
         definition = self.resolve(type(operation), requested)
-        resolve_key_layouts(compilation, (operation,))
         if OperationImplementationRegistry in compilation.workspace:
             resolve_material_requirements(compilation, (operation,))
+        else:
+            resolve_key_layouts(compilation, (operation,))
         diagnostics = self._operation_specs.require(operation.name).diagnostics(
             operation
         )

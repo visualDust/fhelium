@@ -29,71 +29,6 @@ class ConfigurationError(FHEliumError, ValueError):
     """Invalid or unavailable cryptographic configuration."""
 
 
-class PrimeCatalogError(ConfigurationError):
-    """Base class for prime-catalog lookup, capacity, or resource failures."""
-
-
-class PrimeCatalogResourceError(PrimeCatalogError):
-    """An installed immutable prime-catalog resource is missing or invalid."""
-
-    def __init__(self, *, resource_name: str, detail: str) -> None:
-        self.resource_name = str(resource_name)
-        self.detail = str(detail)
-        super().__init__(
-            f"Prime-catalog resource {self.resource_name!r} is unavailable "
-            f"or invalid: {self.detail}"
-        )
-
-
-class SpecialPrimeCatalogEntryNotFoundError(PrimeCatalogError):
-    """No special-prime catalog entry matches the requested parameters."""
-
-    def __init__(self, *, prime_bits: int, ring_dimension: int) -> None:
-        self.prime_bits = int(prime_bits)
-        self.ring_dimension = int(ring_dimension)
-        super().__init__(
-            "No special-prime catalog entry for "
-            f"prime_bits={self.prime_bits}, "
-            f"ring_dimension={self.ring_dimension}."
-        )
-
-
-class ScalingPrimeCatalogEntryNotFoundError(PrimeCatalogError):
-    """No scaling-prime catalog entry matches the requested parameters."""
-
-    def __init__(self, *, prime_bits: int, ring_dimension: int) -> None:
-        self.prime_bits = int(prime_bits)
-        self.ring_dimension = int(ring_dimension)
-        super().__init__(
-            "No scaling-prime catalog entry for "
-            f"prime_bits={self.prime_bits}, "
-            f"ring_dimension={self.ring_dimension}."
-        )
-
-
-class InsufficientPrimeCatalogError(PrimeCatalogError):
-    """The catalog cannot supply the requested modulus-chain width."""
-
-    def __init__(
-        self,
-        *,
-        prime_kind: Literal["special", "scaling"],
-        ring_dimension: int,
-        required_count: int,
-        available_count: int,
-    ) -> None:
-        self.prime_kind = prime_kind
-        self.ring_dimension = int(ring_dimension)
-        self.required_count = int(required_count)
-        self.available_count = int(available_count)
-        super().__init__(
-            f"Insufficient {prime_kind}-prime catalog capacity for "
-            f"ring_dimension={self.ring_dimension}: "
-            f"required_count={self.required_count}, "
-            f"available_count={self.available_count}."
-        )
-
-
 class SecurityBudgetExceededError(ConfigurationError):
     """The requested modulus chain exceeds the configured security budget."""
 
@@ -504,13 +439,9 @@ __all__ = [
     "ExecutionError",
     "ExecutionInputError",
     "FHEliumError",
-    "InsufficientPrimeCatalogError",
     "InvalidScaleError",
     "MaximumDepthError",
-    "SpecialPrimeCatalogEntryNotFoundError",
     "PolynomialDomainError",
-    "PrimeCatalogError",
-    "PrimeCatalogResourceError",
     "ResidencyBudgetError",
     "ResidencyClosedError",
     "ResidencyError",
@@ -528,7 +459,6 @@ __all__ = [
     "ResidueRepresentationError",
     "ScaleError",
     "ScaleMismatchError",
-    "ScalingPrimeCatalogEntryNotFoundError",
     "SecretKeyModulusBasisError",
     "SecurityBudgetExceededError",
     "StaleArtifactReferenceError",

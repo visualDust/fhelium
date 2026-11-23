@@ -26,6 +26,9 @@ if TYPE_CHECKING:
     from os import PathLike
 
 
+_DESCRIPTIONS_ATTRIBUTE = "fhelium.material_descriptions"
+
+
 class Program:
     """Own a structurally valid mixed-level xDSL module and its material annotations.
 
@@ -38,45 +41,62 @@ class Program:
         module.verify()
         self.module = module
 
-    @property
-    def material_descriptions(self) -> dict[str, dict[str, object]]:
-        """Return saved material annotations, independently of live bindings.
-
-        Descriptions are open JSON objects. They explain data to callers and
-        preparation tools; numerical execution does not validate against them.
-        Mutate descriptions with :meth:`set_material_description`.
-        """
-        descriptions = self.module.attributes.get(
-            "fhelium.material_descriptions"
-        )
+    def _description_attributes(self) -> Mapping[str, Attribute]:
+        descriptions = self.module.attributes.get(_DESCRIPTIONS_ATTRIBUTE)
         if descriptions is None:
             return {}
         if not isinstance(descriptions, DictionaryAttr):
             raise TypeError(
                 "Material descriptions must be a dictionary attribute"
             )
+        return descriptions.data
+
+    @property
+    def material_descriptions(self) -> dict[str, dict[str, object]]:
+        """Return saved material annotations, independently of live bindings.
+
+        Descriptions are open JSON objects. They explain data to callers and preparation tools; numerical execution does not validate against them. Mutate descriptions with :meth:`set_material_description`.
+        """
         result: dict[str, dict[str, object]] = {}
-        for symbol, encoded in descriptions.data.items():
+        for symbol, encoded in self._description_attributes().items():
             if not isinstance(encoded, StringAttr):
                 raise TypeError("A material description must contain JSON text")
             result[symbol] = json.loads(encoded.data)
         return result
 
+    def material_description(self, symbol: str) -> dict[str, object] | None:
+        """Decode one saved material description, or return None when absent."""
+        encoded = self._description_attributes().get(symbol)
+        if encoded is None:
+            return None
+        if not isinstance(encoded, StringAttr):
+            raise TypeError("A material description must contain JSON text")
+        return json.loads(encoded.data)
+
     def set_material_description(
         self, symbol: str, description: Mapping[str, object]
     ) -> None:
-        """Set descriptive metadata for a material symbol."""
-        descriptions = self.material_descriptions
-        descriptions[symbol] = dict(description)
-        self.module.attributes["fhelium.material_descriptions"] = (
-            DictionaryAttr(
-                {
-                    name: StringAttr(
-                        json.dumps(value, sort_keys=True, allow_nan=False)
+        """Set descriptive metadata while retaining other encoded descriptions."""
+        self.set_material_descriptions({symbol: description})
+
+    def set_material_descriptions(
+        self, descriptions: Mapping[str, Mapping[str, object]]
+    ) -> None:
+        """Merge material descriptions in one immutable metadata update."""
+        entries = dict(self._description_attributes())
+        entries.update(
+            (
+                symbol,
+                StringAttr(
+                    json.dumps(
+                        dict(description), sort_keys=True, allow_nan=False
                     )
-                    for name, value in descriptions.items()
-                }
+                ),
             )
+            for symbol, description in descriptions.items()
+        )
+        self.module.attributes[_DESCRIPTIONS_ATTRIBUTE] = DictionaryAttr(
+            entries
         )
 
     @classmethod
@@ -165,6 +185,34 @@ class Program:
         ).print_op(self.module)
         return stream.getvalue()
 
+    def encode(self) -> dict[str, object]:
+        """Return a JSON-compatible structural encoding of the module.
+
+        The encoding stores each distinct attribute once and operations as integer tables; :meth:`decode` reconstructs the module without parsing operation text. Locations are not retained.
+        """
+
+        from ._encoding import encode_module
+
+        return encode_module(self.module)
+
+    @classmethod
+    def decode(
+        cls, payload: Mapping[str, object], *, verify: bool = True
+    ) -> Program:
+        """Construct the Program produced by :meth:`encode`.
+
+        ``verify=False`` defers structural verification to the consumer, such as a linking pipeline that verifies its result.
+        """
+
+        from ._encoding import decode_module
+
+        module = decode_module(payload, create_dialect_context())
+        if verify:
+            return cls(module)
+        program = object.__new__(cls)
+        program.module = module
+        return program
+
     def save(self, path: str | PathLike[str]) -> None:
         """Write the current module and symbolic references as UTF-8 text."""
 
@@ -173,9 +221,14 @@ class Program:
         )
 
     def clone(self) -> Program:
-        """Return a structurally independent copy."""
+        """Return a structurally independent copy.
 
-        return Program(self.module.clone())
+        The copy inherits this Program's verified structure, so construction does not verify the module again.
+        """
+
+        program = object.__new__(type(self))
+        program.module = self.module.clone()
+        return program
 
     def verify_structure(self) -> None:
         """Run xDSL structural verification on the current module."""

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, cast
 
 import torch
@@ -14,6 +14,7 @@ from fhelium.config import (
     CkksConfig,
     compatible_ntt_backends,
 )
+from fhelium.config._derived import config_from_text
 from fhelium.ir.dialects import core
 from fhelium.values import (
     EvaluationKeySet,
@@ -27,6 +28,7 @@ if TYPE_CHECKING:
     from fhelium.backend.ckks.materialization import CkksDeviceResources
     from fhelium.backend.ntt.context import NttContext
     from fhelium.backend.rns.context import RnsContext
+    from fhelium.ir import Program
 
     from ._compilation import Compilation
 
@@ -116,6 +118,27 @@ def parameter_request_identity(
     )
 
 
+MATERIAL_REQUEST_ATTRIBUTE = "fhelium.material_request"
+
+
+def _material_request_attribute(identity: tuple[object, ...]) -> StringAttr:
+    """Encode generated numerical requests independently of live IR objects."""
+    import json
+
+    def encode(value):
+        if isinstance(value, Attribute):
+            return ["attribute", str(value)]
+        if isinstance(value, tuple):
+            return ["tuple", [encode(item) for item in value]]
+        if isinstance(value, (str, int)):
+            return value
+        raise TypeError(
+            f"Unsupported material request field {type(value).__name__}"
+        )
+
+    return StringAttr(json.dumps(encode(identity), separators=(",", ":")))
+
+
 def declare_material(
     compilation: Compilation,
     operation: Operation,
@@ -127,23 +150,31 @@ def declare_material(
 ) -> tuple[tuple[core.MaterialRefOp, ...], SSAValue]:
     """Declare a Tensor material input and reuse matching default requests.
 
-    The request-local cache shares declarations with the same default-request identity. Caller symbols remain independent. A shared declaration reuses a dominating reference, or the same symbol in another block; the Program records this sharing through SSA operands and material symbols.
+    Generated references carry their default-request identity through Program cloning and text persistence. The request-local cache indexes those references; caller symbols remain independent. A shared declaration reuses a dominating reference, or the same symbol in another block.
     """
     entries = cast(
         tuple[
             Operation,
-            dict[
-                tuple[object, ...], list[tuple[core.MaterialRefOp, Operation]]
-            ],
+            dict[StringAttr, list[tuple[core.MaterialRefOp, Operation]]],
         ]
         | None,
         compilation.workspace.get(declare_material),
     )
     if entries is None or entries[0] is not compilation.program.module:
         entries = (compilation.program.module, {})
+        for reference in compilation.program.walk():
+            if isinstance(reference, core.MaterialRefOp):
+                request = reference.attributes.get(MATERIAL_REQUEST_ATTRIBUTE)
+                if isinstance(request, StringAttr):
+                    entries[1].setdefault(request, []).append(
+                        (reference, reference)
+                    )
         compilation.workspace[declare_material] = entries
     requests = entries[1]
-    references = requests.get(identity, ()) if identity is not None else ()
+    request = (
+        _material_request_attribute(identity) if identity is not None else None
+    )
+    references = requests.get(request, ()) if request is not None else ()
     block = operation.parent_block()
     for reference, anchor in references:
         if reference.parent_block() is None and anchor is operation:
@@ -160,9 +191,10 @@ def declare_material(
         else material_symbol(operation, prefix)
     )
     reference = core.MaterialRefOp(value_type, symbol=symbol)
-    if identity is not None:
-        requests.setdefault(identity, []).append((reference, operation))
-    if symbol not in compilation.program.material_descriptions:
+    if request is not None:
+        reference.attributes[MATERIAL_REQUEST_ATTRIBUTE] = request
+        requests.setdefault(request, []).append((reference, operation))
+    if compilation.program.material_description(symbol) is None:
         compilation.program.set_material_description(symbol, description)
     return (reference,), reference.value
 
@@ -265,31 +297,80 @@ def prepare_material_bindings(
             _represent_key_layout(compilation, symbol, selected)
             compilation.material_bindings[symbol] = _key_tensor(selected)
             continue
-        kind = description.get("kind")
-        if not isinstance(kind, str):
-            missing.append(symbol)
-            continue
-        state = getattr(
-            getattr(operation.value.type, "state", None), "data", {}
+        selection = _provider_selection(operation, description)
+        tensor = (
+            None
+            if selection is None
+            else _select_provided(providers, selection, cache)
         )
-        device_hint = state.get("device")
-        selection = dict(description)
-        if (
-            isinstance(device_hint, StringAttr)
-            and device_hint.data != "unknown"
-        ):
-            selection.setdefault("device", device_hint.data)
-        candidates: dict[int, torch.Tensor] = {}
-        for provider in providers:
-            tensor = _provider_tensor(provider, selection, cache)
-            if tensor is not None:
-                candidates[id(tensor)] = tensor
-        if len(candidates) == 1:
-            tensor = next(iter(candidates.values()))
-            compilation.material_bindings[symbol] = tensor
-        else:
+        if tensor is None:
             missing.append(symbol)
+        else:
+            compilation.material_bindings[symbol] = tensor
     return tuple(missing)
+
+
+def _provider_selection(
+    operation: core.MaterialRefOp, description: Mapping[str, object]
+) -> dict[str, object] | None:
+    if not isinstance(description.get("kind"), str):
+        return None
+    state = getattr(getattr(operation.value.type, "state", None), "data", {})
+    device_hint = state.get("device")
+    selection = dict(description)
+    if isinstance(device_hint, StringAttr) and device_hint.data != "unknown":
+        selection.setdefault("device", device_hint.data)
+    return selection
+
+
+def _select_provided(providers, selection, cache) -> torch.Tensor | None:
+    candidates: dict[int, torch.Tensor] = {}
+    for provider in providers:
+        tensor = _provider_tensor(provider, selection, cache)
+        if tensor is not None:
+            candidates[id(tensor)] = tensor
+    return next(iter(candidates.values())) if len(candidates) == 1 else None
+
+
+def provided_material_selections(
+    compilation: Compilation,
+) -> dict[str | None, dict[str, object] | None]:
+    """Record every material symbol with the provider selection its description admits.
+
+    Binding these selections reproduces, without the Program, the provider lookups that :func:`prepare_material_bindings` performs for unbound symbols when no keys are supplied. Symbols without a provider description map to None.
+    """
+    descriptions = compilation.program.material_descriptions
+    selections: dict[str | None, dict[str, object] | None] = {}
+    for operation in compilation.program.walk():
+        if isinstance(operation, core.MaterialRefOp):
+            symbol = operation.symbol.data
+            if symbol not in selections:
+                selections[symbol] = _provider_selection(
+                    operation, descriptions.get(symbol, {})
+                )
+    return selections
+
+
+def bind_provided_materials(
+    bindings: dict[str, object],
+    selections: Mapping[str, Mapping[str, object] | None],
+    resources: Iterable[object],
+) -> bool:
+    """Bind unbound symbols from recorded selections; return False when one is not uniquely provided."""
+    providers = tuple(resources)
+    cache: dict[tuple[object, ...], object] = {}
+    for symbol, selection in selections.items():
+        if symbol in bindings:
+            continue
+        tensor = (
+            None
+            if selection is None
+            else _select_provided(providers, selection, cache)
+        )
+        if tensor is None:
+            return False
+        bindings[symbol] = tensor
+    return True
 
 
 def _key_for_symbol(compilation, reference, description, keys):
@@ -342,7 +423,6 @@ def _inventory_key_for_symbol(
     inventory: EvaluationKeySet,
 ) -> KeySwitchKey | None:
     """Select references covering the actual rows of all CKKS key consumers."""
-    import json
     from xdsl.dialects.builtin import ArrayAttr, IntegerAttr
     from fhelium.ir.dialects import ckks, rns
 
@@ -361,15 +441,11 @@ def _inventory_key_for_symbol(
         )
 
     def rotation_step(key):
-        step = getattr(getattr(key.type, "state", None), "data", {}).get(
-            "rotation_step"
-        )
-        if isinstance(step, IntegerAttr):
-            return int(step.value.data)
         owner = key.owner
         if isinstance(owner, core.MaterialRefOp) and owner.symbol is not None:
-            step = compilation.program.material_descriptions.get(
-                owner.symbol.data, {}
+            step = (
+                compilation.program.material_description(owner.symbol.data)
+                or {}
             ).get("rotation_step")
             return step if type(step) is int else None
         return None
@@ -400,8 +476,8 @@ def _inventory_key_for_symbol(
             ):
                 sources, operands = (consumer.value,), (consumer.key,)
                 steps = (
-                    (rotation_step(consumer.key),)
-                    if kind == "RotationKey"
+                    (int(consumer.rotation_step.value.data),)
+                    if isinstance(consumer, ckks.RotateOp)
                     else ()
                 )
             elif (
@@ -511,7 +587,7 @@ def _inventory_key_for_symbol(
                     required_steps.append(step)
             config_attr = consumer.attributes.get("ckks_config")
             config = (
-                CkksConfig.parse(json.loads(config_attr.data))
+                config_from_text(config_attr.data)
                 if isinstance(config_attr, StringAttr)
                 and config_attr.data != "unknown"
                 else compilation.workspace.get(CkksConfig)
@@ -623,7 +699,7 @@ def _inventory_key_for_symbol(
 
 def _key_state_attributes(fields: Mapping[str, object]) -> dict[str, Attribute]:
     """Convert key-layout fields to type-state attributes."""
-    from .frontend._eager_values import state_attribute
+    from fhelium.ir.dialects._common import state_attribute
 
     facts = {}
     for name, value in fields.items():
@@ -678,12 +754,16 @@ def _assign_key_facts(
     symbol: str,
     facts: Mapping[str, Attribute],
     description: Mapping[str, object],
+    aliases: Iterable[core.MaterialRefOp] | None = None,
 ) -> bool:
-    """Merge compatible key metadata across references to one material symbol."""
+    """Merge compatible key metadata across references to one material symbol.
+
+    ``aliases`` supplies the symbol's evaluation-key references when the caller has already collected them; otherwise the Program is walked.
+    """
     from xdsl.rewriter import Rewriter
     from fhelium.ir.dialects import ckks
 
-    previous = compilation.program.material_descriptions.get(symbol, {})
+    previous = compilation.program.material_description(symbol) or {}
     for name in (
         "prime_ids",
         "digit_prime_ids",
@@ -704,15 +784,17 @@ def _assign_key_facts(
                 f"Key material {symbol!r} conflicts with declared {name}"
             )
     updates = []
-    for operation in compilation.program.walk():
-        if not (
-            isinstance(operation, core.MaterialRefOp)
+    if aliases is None:
+        aliases = tuple(
+            operation
+            for operation in compilation.program.walk()
+            if isinstance(operation, core.MaterialRefOp)
             and operation.symbol is not None
             and operation.symbol.data == symbol
             and isinstance(operation.value.type, ckks.EvaluationKeyType)
-        ):
-            continue
-        typ = operation.value.type
+        )
+    for operation in aliases:
+        typ = cast(ckks.EvaluationKeyType, operation.value.type)
         additions = {}
         for name, value in facts.items():
             represented = typ.state.data.get(name)
@@ -760,34 +842,52 @@ def _assign_key_facts(
     return bool(updates) or merged != previous
 
 
-def _resolve_key_layouts(
-    compilation: Compilation,
-    layouts: Mapping[str, Mapping[str, object]],
-    *,
-    symbols: set[str] | None = None,
-) -> int:
-    """Declare key layouts shared by references to each material symbol.
-
-    Caller entries use material symbols or labels and may contain partial state. Default selection fills undeclared layouts from the available CKKS configuration.
-    """
-    import json
-    from fhelium.backend.rns.layout import RnsLayout
+def _collect_key_references(
+    program: Program,
+) -> dict[str, list[core.MaterialRefOp]]:
+    """Collect every evaluation-key alias in Program traversal order."""
     from fhelium.ir.dialects import ckks
 
     references: dict[str, list[core.MaterialRefOp]] = {}
-    for operation in compilation.program.walk():
+    for operation in program.walk():
         if (
             isinstance(operation, core.MaterialRefOp)
             and operation.symbol is not None
             and isinstance(operation.value.type, ckks.EvaluationKeyType)
         ):
-            if symbols is None or operation.symbol.data in symbols:
-                references.setdefault(operation.symbol.data, []).append(
-                    operation
-                )
+            references.setdefault(operation.symbol.data, []).append(operation)
+    return references
+
+
+def _resolve_key_layouts(
+    compilation: Compilation,
+    layouts: Mapping[str, Mapping[str, object]],
+    *,
+    symbols: set[str] | None = None,
+    references: Mapping[str, Sequence[core.MaterialRefOp]] | None = None,
+) -> int:
+    """Declare key layouts shared by references to each material symbol.
+
+    Caller entries use material symbols or labels and may contain partial state. Default selection fills undeclared layouts from the available CKKS configuration. A transforming pass may supply its current reference index; layout facts and descriptions are read anew on each call.
+    """
+    from fhelium.backend.rns.layout import RnsLayout
+    from fhelium.ir.dialects import ckks
+
+    if references is None:
+        references = _collect_key_references(compilation.program)
     changed = 0
-    for symbol, aliases in references.items():
-        description = compilation.program.material_descriptions.get(symbol, {})
+    for symbol, candidates in references.items():
+        if symbols is not None and symbol not in symbols:
+            continue
+        aliases = [
+            reference
+            for reference in candidates
+            if compilation.program.module.is_ancestor(reference)
+            and isinstance(reference.value.type, ckks.EvaluationKeyType)
+        ]
+        if not aliases:
+            continue
+        description = compilation.program.material_description(symbol) or {}
         supplied = layouts.get(
             symbol, layouts.get(str(description.get("label", "")))
         )
@@ -805,7 +905,6 @@ def _resolve_key_layouts(
             "digit_prime_ids",
             "polynomial_domain",
             "residue_representation",
-            "rotation_step",
             "modulus_basis",
         ):
             value = description.get(name)
@@ -816,13 +915,17 @@ def _resolve_key_layouts(
                     _key_state_attributes({state_name: value})[state_name],
                 )
         symbol_changed = _assign_key_facts(
-            compilation, symbol, facts, _key_layout_description(facts)
+            compilation,
+            symbol,
+            facts,
+            _key_layout_description(facts),
+            aliases,
         )
         keys = compilation.workspace.get("evaluation_keys", ())
         selected = _key_for_symbol(
             compilation,
             aliases[0],
-            compilation.program.material_descriptions.get(symbol, {}),
+            compilation.program.material_description(symbol) or {},
             keys,
         )
         if isinstance(selected, KeySwitchKey):
@@ -833,7 +936,11 @@ def _resolve_key_layouts(
                 selected.data.size(-1), 64
             )
             symbol_changed |= _assign_key_facts(
-                compilation, symbol, selected_facts, key_description(selected)
+                compilation,
+                symbol,
+                selected_facts,
+                key_description(selected),
+                aliases,
             )
             facts.update(
                 cast(ckks.EvaluationKeyType, aliases[0].value.type).state.data
@@ -857,7 +964,7 @@ def _resolve_key_layouts(
                         isinstance(represented, StringAttr)
                         and represented.data != "unknown"
                     ):
-                        config = CkksConfig.parse(json.loads(represented.data))
+                        config = config_from_text(represented.data)
                         break
             if not isinstance(config, CkksConfig):
                 continue
@@ -874,7 +981,11 @@ def _resolve_key_layouts(
             ).items():
                 facts.setdefault(name, value)
         symbol_changed |= _assign_key_facts(
-            compilation, symbol, facts, _key_layout_description(facts)
+            compilation,
+            symbol,
+            facts,
+            _key_layout_description(facts),
+            aliases,
         )
         changed += int(symbol_changed)
     return changed
@@ -927,6 +1038,7 @@ def _provider_tensor(
         "ntt_table",
         "key_switch_table",
         "rotation_sum_table",
+        "galois_table",
         "centered_basis_extension_table",
         "encapsulated_modulus_raise_table",
         "rescale_table",
@@ -970,9 +1082,27 @@ def _provider_tensor(
             )
             return tensors[1]
         return parameters[0] if kind == "twice_modulus" else parameters
+    if kind == "galois_table":
+        from fhelium.backend.rns.automorphism import (
+            coefficient_galois_gather_indices,
+        )
+
+        element, name = (
+            description.get("galois_element"),
+            description.get("name"),
+        )
+        if type(element) is not int or name not in (
+            "source_indices",
+            "source_sign",
+        ):
+            return None
+        tables = coefficient_galois_gather_indices(
+            config.N, element, context.device
+        )
+        return tables[0 if name == "source_indices" else 1]
     if kind == "rounding_state":
         return (
-            provider.rng.rounding_state
+            provider.rng.seed
             if isinstance(provider, CkksDeviceResources)
             else None
         )

@@ -7,7 +7,7 @@ import torch
 
 from fhelium import CkksConfig, Preset
 from fhelium.backend.rns.context import RnsContext
-from fhelium.backend.rns.modup import modup_digit
+from fhelium.native.wrapper import rns_ops
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda:0"])
@@ -54,7 +54,9 @@ def test_modup_digit_matches_integer_reference_across_workspace_sizes(device):
                 )
             },
         }
-        result = modup_digit(source, tables, 0, (0, width, 0))
+        result = rns_ops.hybrid_modup_digit(
+            source, list(tables), list(tables.values()), 0, [0, width, 0]
+        )
         radix = context.montgomery_parameters.R
         expected = torch.tensor(
             [

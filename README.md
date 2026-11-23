@@ -2,7 +2,7 @@
 
 > Pronounced **“philium”** /ˈfɪliəm/ or **“F-helium”** /ˌɛf ˈhiːliəm/.
 
-[![PyPI version](https://img.shields.io/pypi/v/fhelium)](https://pypi.org/project/fhelium/) [![Python versions](https://img.shields.io/pypi/pyversions/fhelium)](https://pypi.org/project/fhelium/) [![PyPI downloads](https://img.shields.io/pypi/dw/fhelium)](https://pypi.org/project/fhelium/) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![PyPI version](https://img.shields.io/pypi/v/fhelium)](https://pypi.org/project/fhelium/) [![Python versions](https://img.shields.io/pypi/pyversions/fhelium)](https://pypi.org/project/fhelium/) [![PyPI downloads](https://img.shields.io/pypi/dw/fhelium)](https://pypi.org/project/fhelium/) [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 **Documentation:** [fhelium.550w.host](https://fhelium.550w.host)
 
@@ -233,4 +233,6 @@ The same metadata is available in [`CITATION.cff`](./CITATION.cff).
 
 ## License
 
-FHElium is licensed under the [MIT License](./LICENSE).
+FHElium is licensed under either of the [MIT License](./LICENSE-MIT) or the [Apache License, Version 2.0](./LICENSE-APACHE), at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in FHElium by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.

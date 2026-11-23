@@ -72,6 +72,11 @@ Each guide states the required setup, the procedure, and the evidence that estab
     description="Place factories, values, keys, and compiled execution resources on CPU or CUDA."
     href="/how-to/switch-cpu-cuda"
   />
+  <DocCard
+    title="Call the native library from C++"
+    description="Link libfhelium through its CMake package and call CKKS, RNS, and NTT Tensor functions."
+    href="/how-to/call-native-library-from-cpp"
+  />
 </DocGrid>
 
 ## Repeated execution and memory

@@ -54,11 +54,14 @@ _PRESERVING_TYPES = (
     ckks.AddScalarOp,
     ckks.MultiplyScalarOp,
     ckks.MultiplyIntegerScalarOp,
+    ckks.SelectBatchOp,
 )
 _SAME_LEVEL_TYPES = (
     ckks.MultiplyOp,
     ckks.MultiplyPlaintextOp,
+    ckks.MultiplyCompressedPlaintextOp,
     ckks.AddPlaintextOp,
+    ckks.AddCompressedPlaintextOp,
 )
 
 
@@ -180,7 +183,9 @@ class AssignCkksDepthsPass:
         function = program.function("main")
         block = program.single_block("main")
         if any(
-            operation.regions or operation.successors for operation in block.ops
+            (operation.regions and not isinstance(operation, ckks.RepeatOp))
+            or operation.successors
+            for operation in block.walk()
         ):
             raise ValueError(
                 "CKKS depth assignment supports a flat single-block SSA DAG"
@@ -242,7 +247,22 @@ class AssignCkksDepthsPass:
                 "CKKS depth assignment requires an encrypted entry"
             )
 
-        for operation in tuple(block.ops):
+        from ..._repeat import (
+            sync_repeat_inputs,
+            sync_repeat_results,
+            sync_iteration,
+        )
+
+        for operation in tuple(block.walk()):
+            if isinstance(operation, ckks.RepeatOp):
+                sync_repeat_inputs(operation)
+                continue
+            if isinstance(operation, ckks.RepeatYieldOp):
+                sync_repeat_results(operation.parent_op())
+                continue
+            if isinstance(operation, ckks.RepeatIterationOp):
+                sync_iteration(operation)
+                continue
             if isinstance(operation, ReturnOp):
                 continue
             if isinstance(operation, UnrealizedConversionCastOp):

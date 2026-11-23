@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from fhelium.legacy.engine import CkksEngine
-
-from types import SimpleNamespace
 
 import pytest
 import torch
@@ -12,13 +9,8 @@ from torch._subclasses.fake_tensor import FakeTensorMode
 
 import fhelium.native  # noqa: F401 - loads native torch operator libraries
 from fhelium import Preset
-from fhelium.legacy.engine.direct_keyswitch_consumer import (
-    CompactTailFusedDirectKeySwitchDigitConsumer,
-    StandardDirectKeySwitchDigitConsumer,
-)
-from fhelium.legacy.engine.ntt.backends.compact_radix2 import (
-    CompactRadix2NttBackend,
-)
+from fhelium.backend.rns.tables import moddown_inverse_tables
+from fhelium.eager import Engine
 from fhelium.native.wrapper import ckks_ops, rns_ops
 
 
@@ -251,12 +243,9 @@ def test_shape_changing_native_ops_have_explicit_fake_shapes(
         assert extended.shape == (*batch_shape, 7, 32)
         assert extended.device.type == "cuda"
 
-        centered_coefficients = torch.empty(*batch_shape, 32, device="cuda")
+        coefficients = torch.empty(*batch_shape, 32, device="cuda")
         twice_modulus = torch.empty(7, device="cuda")
-        lifted = rns_ops.lift_centered_coefficients(
-            centered_coefficients,
-            twice_modulus,
-        )
+        lifted = rns_ops.lift_integer_coefficients(coefficients, twice_modulus)
         assert lifted.shape == (*batch_shape, 7, 32)
         assert lifted.device.type == "cuda"
 
@@ -299,22 +288,23 @@ def test_keyswitch_moddown_does_not_mutate_public_p_residues() -> None:
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
 
-    engine = CkksEngine(Preset.slots8192_scale40_depth7_int64, device="cuda:0")
+    engine = Engine(Preset.slots8192_scale40_depth7_int64)
+    rns = engine.rns_context("cuda:0")
     depth = 0
-    q_row_count = len(engine.rns_layout.prime_ids(depth))
+    q_row_count = len(rns.rns_layout.prime_ids(depth))
     p_row_count = engine.config.num_p_primes
     q_residues = torch.zeros(
         (q_row_count, engine.config.N),
-        dtype=engine.rns_runtime.dtype,
-        device=engine.device,
+        dtype=rns.dtype,
+        device="cuda:0",
     )
     p_residues = torch.arange(
         p_row_count,
-        dtype=engine.rns_runtime.dtype,
-        device=engine.device,
+        dtype=rns.dtype,
+        device="cuda:0",
     )[:, None].repeat(1, engine.config.N)
     p_before = p_residues.clone()
-    active_parameters = engine.rns_runtime.rns_parameters_for(
+    active_parameters = rns.rns_parameters_for(
         torch.cat((q_residues, p_residues)),
         include_p=True,
     )
@@ -322,7 +312,7 @@ def test_keyswitch_moddown_does_not_mutate_public_p_residues() -> None:
     result = ckks_ops.keyswitch_moddown_qp_to_q(
         q_residues,
         p_residues,
-        engine.moddown_p_drop_inverses_montgomery_by_depth[depth],
+        moddown_inverse_tables(rns)[depth],
         active_parameters,
         rounding="floor",
     )
@@ -334,7 +324,7 @@ def test_keyswitch_moddown_does_not_mutate_public_p_residues() -> None:
         ckks_ops.keyswitch_moddown_qp_to_q(
             q_residues,
             p_residues.cpu(),
-            engine.moddown_p_drop_inverses_montgomery_by_depth[depth],
+            moddown_inverse_tables(rns)[depth],
             active_parameters,
             rounding="floor",
         )
@@ -342,9 +332,7 @@ def test_keyswitch_moddown_does_not_mutate_public_p_residues() -> None:
         ckks_ops.keyswitch_moddown_qp_to_q(
             q_residues,
             p_residues,
-            engine.moddown_p_drop_inverses_montgomery_by_depth[depth].to(
-                torch.int32
-            ),
+            moddown_inverse_tables(rns)[depth].to(torch.int32),
             active_parameters,
             rounding="floor",
         )
@@ -353,7 +341,7 @@ def test_keyswitch_moddown_does_not_mutate_public_p_residues() -> None:
     invalid_key_digit = torch.zeros(
         (2, *qp_residues.shape),
         dtype=torch.int32,
-        device=engine.device,
+        device="cuda:0",
     )
     with pytest.raises(RuntimeError, match="same integral dtype"):
         ckks_ops.keyswitch_accumulate_digit_products_(
@@ -364,19 +352,6 @@ def test_keyswitch_moddown_does_not_mutate_public_p_residues() -> None:
             active_parameters,
             0,
         )
-
-
-def test_ordinary_keyswitch_consumer_remains_decomposed_for_group16() -> None:
-    compact_group16 = object.__new__(CompactRadix2NttBackend)
-    compact_group16.grouped_radix2_stage_count = 4
-    runtime = SimpleNamespace(ntt_backend=compact_group16)
-
-    consumer = StandardDirectKeySwitchDigitConsumer(runtime)  # type: ignore[arg-type]
-
-    assert type(consumer) is StandardDirectKeySwitchDigitConsumer
-    assert consumer.rns_runtime is runtime
-    fused = CompactTailFusedDirectKeySwitchDigitConsumer(compact_group16)
-    assert fused.backend is compact_group16
 
 
 @pytest.mark.gpu
@@ -400,7 +375,7 @@ def test_cpu_and_cuda_complete_native_dispatch_sets_match() -> None:
             "reduce_to_standard_",
             "center_residues_",
             "shift_residues_positive_",
-            "lift_centered_coefficients",
+            "lift_integer_coefficients",
             "mixed_radix_decompose",
             "mixed_radix_basis_extend_to_montgomery",
         ),
@@ -449,23 +424,23 @@ def test_native_binary_op_rejects_incompatible_batch_counts() -> None:
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
 
-    engine = CkksEngine(
+    engine = Engine(
         Preset.slots8192_scale40_depth7_int64,
-        device="cuda:0",
-        allow_sk_gen=False,
+        allow_automatic_key_generation=False,
     )
-    limb_count = len(engine.rns_layout.prime_ids(0))
+    rns = engine.rns_context("cuda:0")
+    limb_count = len(rns.rns_layout.prime_ids(0))
     lhs = torch.zeros(
         (3, limb_count, engine.config.N),
-        dtype=engine.rns_runtime.dtype,
-        device=engine.device,
+        dtype=rns.dtype,
+        device="cuda:0",
     )
     rhs = torch.zeros(
         (2, limb_count, engine.config.N),
-        dtype=engine.rns_runtime.dtype,
-        device=engine.device,
+        dtype=rns.dtype,
+        device="cuda:0",
     )
-    parameters = engine.rns_runtime.rns_parameters_for(lhs)
+    parameters = rns.rns_parameters_for(lhs)
 
     with pytest.raises(RuntimeError, match="batch counts differ"):
         rns_ops.add_standard(lhs, rhs, parameters)
@@ -476,21 +451,21 @@ def test_standard_subtraction_returns_residues_below_modulus() -> None:
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
 
-    engine = CkksEngine(
+    engine = Engine(
         Preset.slots8192_scale40_depth7_int64,
-        device="cuda:0",
-        allow_sk_gen=False,
+        allow_automatic_key_generation=False,
     )
+    rns = engine.rns_context("cuda:0")
     moduli = torch.tensor(
-        engine.rns_runtime.moduli_for_basis(0),
-        dtype=engine.rns_runtime.dtype,
-        device=engine.device,
+        rns.moduli_for_basis(0),
+        dtype=rns.dtype,
+        device="cuda:0",
     )[:, None]
     lhs = torch.cat((torch.ones_like(moduli), 2 * moduli - 1), dim=-1)
     rhs = torch.cat(
         (2 * torch.ones_like(moduli), torch.ones_like(moduli)), dim=-1
     )
-    parameters = engine.rns_runtime.rns_parameters_for(lhs)
+    parameters = rns.rns_parameters_for(lhs)
 
     reduced = rns_ops.sub_standard(lhs, rhs, parameters)
     expected = torch.cat((moduli - 1, moduli - 2), dim=-1)
@@ -507,27 +482,27 @@ def test_native_compressed_arithmetic_rejects_invalid_storage_and_dtype() -> (
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
 
-    engine = CkksEngine(
+    engine = Engine(
         Preset.slots8192_scale40_depth7_int64,
-        device="cuda:0",
-        allow_sk_gen=False,
+        allow_automatic_key_generation=False,
     )
-    limb_count = len(engine.rns_layout.prime_ids(0))
+    rns = engine.rns_context("cuda:0")
+    limb_count = len(rns.rns_layout.prime_ids(0))
     valid_ring = torch.zeros(
         (limb_count, engine.config.N),
-        dtype=engine.rns_runtime.dtype,
-        device=engine.device,
+        dtype=rns.dtype,
+        device="cuda:0",
     )
-    parameters = engine.rns_runtime.rns_parameters_for(valid_ring)
+    parameters = rns.rns_parameters_for(valid_ring)
     invalid_ring = torch.zeros(
         (limb_count, 12),
-        dtype=engine.rns_runtime.dtype,
-        device=engine.device,
+        dtype=rns.dtype,
+        device="cuda:0",
     )
     compressed = torch.zeros(
         (limb_count, 4),
-        dtype=engine.rns_runtime.dtype,
-        device=engine.device,
+        dtype=rns.dtype,
+        device="cuda:0",
     )
 
     with pytest.raises(RuntimeError, match="ring dimension must be"):
@@ -646,8 +621,6 @@ def test_mixed_radix_output_buffers_and_table_extents(
         )
         assert extended.untyped_storage().data_ptr() == storage
 
-        from fhelium.backend.rns.modup import modup_digit
-
         bindings = {
             "qp_parameters": parameters,
             "digit0_normalizers": tables["normalizers"],
@@ -658,18 +631,19 @@ def test_mixed_radix_output_buffers_and_table_extents(
                 for i, value in enumerate(arguments[3:])
             },
         }
-        span = (0, width, 0)
         reference = extended.clone()
         torch.testing.assert_close(
-            modup_digit(source, bindings, 0, span), reference, rtol=0, atol=0
+            rns_ops.hybrid_modup_digit(
+                source,
+                list(bindings),
+                list(bindings.values()),
+                0,
+                [0, width, 0],
+            ),
+            reference,
+            rtol=0,
+            atol=0,
         )
-        output = torch.empty_like(extended)
-        assert modup_digit(source, bindings, 0, span, out=output) is output
-        torch.testing.assert_close(output, reference, rtol=0, atol=0)
-        if width > 1:
-            modup_digit(source, bindings, 0, span, out=extended, scratch=digits)
-            torch.testing.assert_close(digits, expected, rtol=0, atol=0)
-            torch.testing.assert_close(extended, reference, rtol=0, atol=0)
         if source.is_cuda and not torch.version.hip:
             decomposition = list(arguments[1:]) if width > 1 else []
             rns_ops.mixed_radix_modup_tiled_out_(

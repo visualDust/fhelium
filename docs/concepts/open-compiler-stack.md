@@ -67,13 +67,13 @@ Compiler state serves analysis, transformation, and scheduling. Backend implemen
 | `Compilation` | Keep one Program, one `CompileWorkspace`, one material-binding dictionary, and ordered pass reports together |
 | `CompileWorkspace` | Carry caller- and pass-owned Python objects alongside Program text |
 | `Compilation.material_bindings` | Map Program material symbols to live Tensors |
-| Pass report | Record what one pass matched, changed, rejected, or decided |
+| Pass report | Record what one pass matched, changed, rejected, or decided, and its host duration |
 
 The workspace is an ordinary extensible mapping whose entry owners define each key and value contract. Its entries can include configuration, capture metadata, analyses, or caller-defined data. Captured Tensor constants are retained in `Compilation.material_bindings`. Program text remains independent of those live Python objects. Saving a Program serializes its IR structure while the compile request and runtime environment retain their own lifecycles.
 
 ## Pipelines are caller compositions
 
-A `Pipeline` is an ordered tuple of passes. `Pipeline.run(compilation)` clones the input Program once, calls each `Pass.run(current_compilation)`, structurally verifies every returned Program, and appends pass reports. The workspace and material-binding dictionary remain shared across that Pipeline invocation. Independent assignments can use copied mappings while retaining the live Tensor storage.
+A `Pipeline` is an ordered tuple of passes. `Pipeline.run(compilation)` clones the input Program once, calls each `Pass.run(current_compilation)`, and appends pass reports. By default it structurally verifies every returned Program; `verify=False` performs verification after the final pass. The workspace and material-binding dictionary remain shared across that Pipeline invocation. Independent assignments can use copied mappings while retaining the live Tensor storage.
 
 FHElium supplies a pass catalog for caller-composed pipelines. Callers can choose where to:
 
@@ -150,9 +150,38 @@ Manual Program/Compilation/Pipeline execution and callable specialization are eq
 
 Both routes can use the editable `default_lower_and_fuse_pipeline`. It resolves available facts, lowers semantic and logical arithmetic, prepares operands, selects local execution, reuses compatible intermediates, and constructs supported fusion regions. The baseline preserves caller-inserted state transitions and leaves rescale and relinearization scheduling to the caller's chosen passes. A supplied callable pipeline replaces the default recipe.
 
-A specialization records input metadata and static scalar conditions, its transformed Compilation, and its linked executable. `prepare` establishes a specialization before invocation. The default miss policy permits preparation for new conditions; `on_miss="error"` requires the matching preparation to exist. `with_backend` relinks existing transformed variants to another Backend, while future variants are prepared independently.
+A specialization records input metadata and static scalar conditions, its transformed Compilation, and its linked executable. A call with a new input specialization performs capture, transformation, linking and kernel warming before executing; `prepare` performs the same work without executing. `on_miss="error"` requires prior preparation. `with_backend` snapshots transformed variants for linking with another Backend, while future variants are prepared independently.
+
+Callable reuse has three levels: a resident executable for matching `CallSignature` conditions, an optimized Program for one input specialization, and a high-level structural template shared by a source family. A source family groups supported calls whose Python computation and fixed configuration agree while represented CKKS depth, scale or prime-row extent can vary. Each level retains the conditions needed by its consumer.
+
+The default `graph=False` policy retains prepared execution. Selecting `graph="auto"` or `graph=True` attempts CUDA Graph capture after a specialization’s first prepared execution. Each callable owns its Graphs and their device-local shared pools. Unsupported capture and autograd outputs retain prepared execution. Graph results use owned storage by default; borrowed output is an optional lifetime contract. These execution states and fallback reasons are observable in callable statistics.
+
+Clearing a callable releases its Graphs before their pools, then releases resident specializations. Persistent entries have an independent lifetime. Captured Python configuration is fixed for a resident specialization; changing it requires clearing or recreating the callable.
 
 Compile constructs fusion regions, and the selected Backend generates their numerical execution. A region may contain one pointwise kernel or several synchronized transform stages. Host preparation can complete before first-use device compilation; execute the prepared workload before measuring warmed execution or recording its CUDA Graph. Callable specialization, generated device code, and CUDA Graph capture therefore have distinct preparation lifetimes.
+
+## Structural templates and instance Programs
+
+A structural template retains captured operation structure and the origins of its state facts. An instance Program is the concrete computation produced by evaluating those facts against current input and material state. Template instantiation avoids repeating Python source execution and Engine capture adapters; transformation and linking operate on the new instance.
+
+| Fact origin | Meaning during instantiation |
+| --- | --- |
+| `Known` | A fixed captured constant or intrinsic operation attribute |
+| `InputField` | A field read from the current input or material owner |
+| `Derived` | A fact computed by an operation’s state-transition rule from current operands |
+| `Unknown` | A fact that remains unresolved until an applicable analysis or preparation step assigns it |
+
+Depth, actual scale, active prime identities and physical layouts retain their dependencies. The template preserves the declared evaluation-key layout; compatible fresh key payloads are rebound before execution. Material Tensor contents are absent from template identity and storage. Numerical tables are declared and supplied for the instance’s current state.
+
+Python reads of value metadata become guards: the observed field must retain the value on which captured Python control flow or attribute construction depended. A guard miss invokes ordinary capture and can produce another guarded variant. Changing captured Python constants requires clearing the resident callable so the next preparation observes the new source configuration.
+
+Supported CKKS templates include arithmetic, scalar operations, representation transitions, depth transitions, key operations and modulus raising. Capture can record static Python loops and supported helper calls. Registered Tensor calls and encrypted semantic addition, subtraction, multiplication, negation and rotation can also form templates. Codec-specific paths, grouped-RNS operations and arbitrary value replacement remain ordinary capture paths when template rules do not cover them. Template eligibility governs reuse; an unsupported template pattern can still execute through the normal compiler.
+
+An instantiated CKKS Program uses a reduced preparation recipe because its source-level transitions and current value states are already represented. A semantic template still requires the full instance scheduling sequence. Common-subexpression elimination, dead-value elimination, operation selection and fusion remain instance transformations.
+
+Selection plans retain guarded decisions for built-in per-operation lowering and whole-block fusion schedules. Applying a plan reconstructs operations and fusion regions on the current instance graph. Guards cover graph structure, implementation policy and the facts consumed by selection. A key-layout or digit-layout change can invalidate a local decision while neighboring arithmetic decisions remain reusable.
+
+Optimized Programs persist per input specialization. Structural templates are shared in process memory and optionally persisted under the cache directory’s `structures` subdirectory. Both store Program structure and material relocation descriptions; each reuse binds current material objects before linking. `cache=False` disables disk access while preserving resident executable and process-memory template reuse. Custom compilation configurations and ineligible source identities use ordinary preparation. Clearing one callable releases its resident state while shared templates and disk entries retain independent lifetimes.
 
 ## Four different validity questions
 

@@ -77,6 +77,96 @@ def _remap(index: str, output: tuple[int, ...], source: tuple[int, ...]) -> str:
     return " + ".join(terms) or "0"
 
 
+def _operation_facts(op: Operation):
+    common = None
+    if isinstance(op, core.MaterialRefOp):
+        return 0, None
+    if (
+        isinstance(op, UnrealizedConversionCastOp)
+        and len(op.inputs) == len(op.outputs) == 1
+    ):
+        return 0, None
+    if (
+        not isinstance(op, CallOp)
+        or op.kind != StringAttr("function")
+        or op.target is None
+        or op.target.data not in _SUPPORTED
+    ):
+        return None
+    dependencies = operation_dependencies(op)
+    if any(
+        dependencies.kind(0, index, "tensor_position")
+        not in {"element", "reindexed"}
+        for index in range(len(op.operands))
+    ):
+        return None
+    descriptor = json.loads(cast(StringAttr, op.argument_descriptor).data)
+    args = decode_argument(descriptor["args"], tuple(op.operands))
+    kwargs = decode_argument(descriptor["kwargs"], tuple(op.operands))
+    if op.target.data == "torch.roll":
+        shift = kwargs.get("shifts", args[1] if len(args) > 1 else None)
+        dim = kwargs.get("dims", args[2] if len(args) > 2 else None)
+        if type(shift) is not int or dim != -1:
+            return None
+    elif kwargs:
+        return None
+    for value in (*op.operands, *op.results):
+        facts = _facts(value)
+        if facts is None:
+            return None
+        shape, dtype, device, strides = facts
+        if torch.device(device).type != "cuda" or not all(shape):
+            return None
+        identity = (dtype, torch.device(device))
+        if common is not None and identity != common:
+            return None
+        common = identity
+        if strides is None or any(stride < 0 for stride in strides):
+            return None
+    return 1, common
+
+
+class TensorRegionMatcher:
+    """Match Tensor operations incrementally within one scheduling window."""
+
+    def __init__(self):
+        self.facts = {}
+        self.reset()
+
+    def reset(self):
+        self.count = 0
+        self.common = None
+        self.invalid = False
+
+    def _extension(self, operation):
+        if self.invalid:
+            return None
+        if operation not in self.facts:
+            self.facts[operation] = _operation_facts(operation)
+        facts = self.facts[operation]
+        if facts is None:
+            return None
+        count, common = facts
+        if (
+            common is not None
+            and self.common is not None
+            and common != self.common
+        ):
+            return None
+        return self.count + count, self.common if common is None else common
+
+    def probe(self, operation):
+        proposed = self._extension(operation)
+        return None if proposed is None else proposed[0]
+
+    def append(self, operation):
+        proposed = self._extension(operation)
+        if proposed is None:
+            self.invalid = True
+        else:
+            self.count, self.common = proposed
+
+
 @dataclass(frozen=True)
 class TritonTensorFusionImplementation:
     """Fuse supported Tensor expressions into a generated kernel.
@@ -91,58 +181,16 @@ class TritonTensorFusionImplementation:
     operation_types: tuple[type[Operation], ...] = (fusion.FusedOp,)
     supports_in_place: bool = False
 
+    def new_fusion_matcher(self):
+        return TensorRegionMatcher()
+
     def match_fusion(self, operations: Sequence[Operation]) -> int | None:
-        count = 0
-        common = None
-        for op in operations:
-            if isinstance(op, core.MaterialRefOp):
-                continue
-            if (
-                isinstance(op, UnrealizedConversionCastOp)
-                and len(op.inputs) == len(op.outputs) == 1
-            ):
-                continue
-            if (
-                not isinstance(op, CallOp)
-                or op.kind != StringAttr("function")
-                or op.target is None
-                or op.target.data not in _SUPPORTED
-            ):
+        matcher = self.new_fusion_matcher()
+        for operation in operations:
+            matcher.append(operation)
+            if matcher.invalid:
                 return None
-            dependencies = operation_dependencies(op)
-            if any(
-                dependencies.kind(0, index, "tensor_position")
-                not in {"element", "reindexed"}
-                for index in range(len(op.operands))
-            ):
-                return None
-            descriptor = json.loads(
-                cast(StringAttr, op.argument_descriptor).data
-            )
-            args = decode_argument(descriptor["args"], tuple(op.operands))
-            kwargs = decode_argument(descriptor["kwargs"], tuple(op.operands))
-            if op.target.data == "torch.roll":
-                shift = kwargs.get("shifts", args[1] if len(args) > 1 else None)
-                dim = kwargs.get("dims", args[2] if len(args) > 2 else None)
-                if type(shift) is not int or dim != -1:
-                    return None
-            elif kwargs:
-                return None
-            for value in (*op.operands, *op.results):
-                facts = _facts(value)
-                if facts is None:
-                    return None
-                shape, dtype, device, strides = facts
-                if torch.device(device).type != "cuda" or not all(shape):
-                    return None
-                identity = (dtype, torch.device(device))
-                if common is not None and identity != common:
-                    return None
-                common = identity
-                if strides is None or any(stride < 0 for stride in strides):
-                    return None
-            count += 1
-        return count
+        return matcher.count
 
     def resource_requirements(
         self, invocation: OperationInvocation
@@ -279,6 +327,7 @@ class _PreparedTensorFusion:
             PreparedKernel(
                 compile_source(source),
                 ((max(prod(f[0]) for f in output_facts) + 255) // 256,),
+                source=(compile_source, source),
                 enable_fp_fusion=False,
             ),
             max(prod(f[0]) for f in output_facts),
@@ -286,6 +335,18 @@ class _PreparedTensorFusion:
 
     def resource_requirements(self, invocation):
         return ()
+
+    def warm(self) -> tuple[int, int]:
+        """Compile and load the kernel for the prepared layouts."""
+        compiled = self.kernel.warm(
+            *(getattr(torch, f[1].removeprefix("torch.")) for f in self.inputs),
+            *(
+                getattr(torch, f[1].removeprefix("torch."))
+                for f in self.outputs
+            ),
+            256,
+        )
+        return int(compiled), int(not compiled)
 
     def execute(self, invocation, inputs, resources, *, in_place):
         for tensor, facts in zip(inputs, self.inputs, strict=True):

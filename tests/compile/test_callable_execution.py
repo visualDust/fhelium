@@ -22,7 +22,7 @@ def test_callable_reuses_live_inputs_and_preserves_argument_binding(device):
         value = (x + torch.roll(x, offset, dims=-1)) * weight
         return {"value": -value if negative else value, "pair": (value, value)}
 
-    compiled = fc.compile(source)
+    compiled = fc.compile(source, cache=False, graph=False)
     x = torch.linspace(-0.2, 0.3, 32, dtype=torch.float64, device=device)
     for negative in (False, True, False):
         actual = compiled(x, negative=negative)
@@ -33,6 +33,22 @@ def test_callable_reuses_live_inputs_and_preserves_argument_binding(device):
     assert len(compiled.specializations) == 2
     with pytest.raises(TypeError):
         compiled(x=x)  # pyright: ignore[reportCallIssue]
+
+
+def test_callable_where_preserves_tensor_type_checks_and_live_inputs():
+    def select_weight(weight):
+        assert isinstance(weight, torch.Tensor)
+        assert type(weight) is torch.Tensor
+        valid = torch.tensor([[True, False], [False, True]])
+        return torch.where(valid, weight, 0.0)
+
+    weight = torch.arange(4, dtype=torch.float64).reshape(2, 2)
+    compiled = fc.compile(select_weight, cache=False, graph=False)
+    compiled.prepare(weight)
+    for value in (weight, weight + 3.0):
+        torch.testing.assert_close(
+            compiled(value), select_weight(value), rtol=0, atol=0
+        )
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda:0"])
@@ -55,7 +71,7 @@ def test_callable_plaintext_arguments_and_static_variants(device):
         value = engine.add_plaintext(x, p)
         return engine.negate(value) if negative else value
 
-    compiled = fc.compile(source)
+    compiled = fc.compile(source, cache=False, graph=False)
     for negative in (False, True, False):
         actual = compiled(encrypted, plaintext, negative)
         expected = source(encrypted, plaintext, negative)
@@ -75,7 +91,7 @@ def test_clear_recaptures_changed_constants(on_miss):
     def source(x):
         return x * factor
 
-    compiled = fc.compile(source, on_miss=on_miss)
+    compiled = fc.compile(source, on_miss=on_miss, cache=False, graph=False)
     x = torch.tensor([1.0])
     compiled.prepare(x)
     torch.testing.assert_close(compiled(x), source(x), rtol=0, atol=0)
@@ -111,7 +127,7 @@ def test_callable_key_switch_regions_keep_live_key_and_ciphertext_data(device):
         rotated = engine.rotate_with_key(value, key)
         return engine.add(rotated, value)
 
-    compiled = fc.compile(source)
+    compiled = fc.compile(source, cache=False, graph=False)
     for key in keys:
         expected = source(value, key)
         actual = compiled(value, key)
@@ -153,7 +169,7 @@ def test_callable_batch_views_reduction_and_supplied_hoisted_keys(device):
             1, 3
         ).select_batch(0)
 
-    compiled = fc.compile(source)
+    compiled = fc.compile(source, cache=False, graph=False)
     for _ in range(2):
         actual, expected = compiled(x, p), source(x, p)
         for a, e in zip(actual, expected, strict=True):
@@ -187,7 +203,7 @@ def test_callable_fuses_ciphertext_products_after_batch_storage_views(device):
         product = engine.multiply(batch, batch)
         return product, engine.sum_ciphertext_batch(product)
 
-    compiled = fc.compile(source)
+    compiled = fc.compile(source, cache=False, graph=False)
     for _ in range(2):
         actual, expected = compiled(x), source(x)
         for a, e in zip(actual, expected, strict=True):
@@ -248,7 +264,7 @@ def test_callable_multiplies_live_batched_compressed_plaintexts(device):
             x, fixed
         )
 
-    compiled = fc.compile(source)
+    compiled = fc.compile(source, cache=False, graph=False)
     for weight in weights:
         fixed.data.copy_(weight.data)
         expected = engine.multiply_plaintext(batch, weight.to_plaintext())
@@ -278,7 +294,7 @@ def test_compressed_preparation_and_sparse_storage_capture(device, tmp_path):
     def prepare(message):
         return engine.prepare_compressed_plaintext(message, device=device)
 
-    compact = fc.compile(prepare)(period)
+    compact = fc.compile(prepare, cache=False, graph=False)(period)
     assert isinstance(compact, fh.CompressedPlaintext)
     assert compact.is_rns and compact.representation == "rns"
     assert not compact.is_slots and compact.unique_count == 64
@@ -305,7 +321,7 @@ def test_compressed_preparation_and_sparse_storage_capture(device, tmp_path):
             p.clone(),
         )
 
-    compiled = fc.compile(add)
+    compiled = fc.compile(add, cache=False, graph=False)
     for implicit in (0, 1):
         sparse.implicit_data.fill_(implicit)
         fixed.implicit_data.copy_(sparse.implicit_data)
@@ -359,7 +375,7 @@ def test_compressed_grouped_products_and_ntt_addition(device):
             [value, value], [[p, p], [p, p]]
         )
 
-    compiled = fc.compile(grouped)
+    compiled = fc.compile(grouped, cache=False, graph=False)
     expected = grouped(x, dense)
     actual = compiled(x, compact)
     moduli = torch.tensor(
@@ -418,7 +434,7 @@ def test_rotation_hoisting_shares_interleaved_inputs_and_keeps_live_keys(
             results.append(engine.add(left, right))
         return tuple(results)
 
-    compiled = fc.compile(source)
+    compiled = fc.compile(source, cache=False, graph=False)
     moduli = torch.tensor(
         engine.config.q_moduli, dtype=torch.int64, device=device
     ).view(-1, 1)
@@ -479,7 +495,7 @@ def test_callable_batch_reduction_uses_one_reduction(device):
     def source(x):
         return engine.sum_ciphertext_batch(x)
 
-    compiled = fc.compile(source)
+    compiled = fc.compile(source, cache=False, graph=False)
     actual = compiled(batch)
     expected = source(batch)
     torch.testing.assert_close(actual.data, expected.data, rtol=0, atol=0)
@@ -538,7 +554,7 @@ def test_callable_ntt_chain_preserves_fanout_and_live_inputs(policy):
         )
         return first, result, side
 
-    compiled = fc.compile(source)
+    compiled = fc.compile(source, cache=False, graph=False)
     for _ in range(2):
         actual, expected = compiled(x, weight), source(x, weight)
         for got, reference in zip(actual, expected, strict=True):
@@ -624,7 +640,7 @@ def test_callable_ntt_join_preserves_branch_outputs(policy):
         result = engine.ntt_domain_to_coefficient_domain(joined)
         return first, left, right, result
 
-    compiled = fc.compile(source)
+    compiled = fc.compile(source, cache=False, graph=False)
     actual, expected = compiled(x, y), source(x, y)
     for got, reference in zip(actual, expected, strict=True):
         torch.testing.assert_close(got.data, reference.data, rtol=0, atol=0)
@@ -672,7 +688,7 @@ def test_callable_preserves_key_switch_rounding(device):
         reference.conj(),
         reference.square(),
     )
-    compiled = fc.compile(source)
+    compiled = fc.compile(source, cache=False, graph=False)
     for rounding in ("nearest", "floor"):
         expected = source(x, triplet, rounding)
         actual = compiled(x, triplet, rounding)
@@ -761,7 +777,7 @@ def test_callable_weighted_sum_keeps_requested_backend_and_sparse_operands(
             (x, x), ((p, q), (q, p)), implementation="auto", term_chunk_size=1
         )
 
-    compiled = fc.compile(source)
+    compiled = fc.compile(source, cache=False, graph=False)
     actual = compiled(x, p, q)
     expected = source(x, p, q)
     assert torch.equal(actual.data, expected.data)
@@ -840,7 +856,12 @@ def test_aggregate_rotation_sum_preserves_decoded_values_and_live_keys(device):
         "rotation-hoisting", fc.AggregateRotationSumsPass()
     )
     compiled = fc.compile(
-        source, backend=backend, pipeline=pipeline, resources=resources
+        source,
+        backend=backend,
+        pipeline=pipeline,
+        resources=resources,
+        cache=False,
+        graph=False,
     )
 
     def aggregate(x, key1, key2):
@@ -848,7 +869,12 @@ def test_aggregate_rotation_sum_preserves_decoded_values_and_live_keys(device):
             ((x, key1), (x, key2), (x, None)), rescale=True
         )
 
-    direct = fc.compile(aggregate, backend=backend)
+    direct = fc.compile(
+        aggregate,
+        backend=backend,
+        cache=False,
+        graph=False,
+    )
     expected = message + torch.roll(message, 1) + torch.roll(message, -3)
     for sign in (1, -1):
         value = high if sign == 1 else engine.negate(high)
@@ -902,7 +928,10 @@ def test_aggregate_rotation_sum_preserves_decoded_values_and_live_keys(device):
     def identities(x):
         return tuple(engine.iter_rotations_with_keys(x, (None, None)))
 
-    for outputs in (identities(positive), fc.compile(identities)(positive)):
+    for outputs in (
+        identities(positive),
+        fc.compile(identities, cache=False, graph=False)(positive),
+    ):
         pointers = [
             positive.data.untyped_storage().data_ptr(),
             *(value.data.untyped_storage().data_ptr() for value in outputs),
@@ -926,6 +955,8 @@ def test_aggregate_rotation_sum_preserves_decoded_values_and_live_keys(device):
                 backend=backend,
                 pipeline=logical,
                 resources=engine.rns_context(device),
+                cache=False,
+                graph=False,
             )(value, *keys)
             expected_value = function(value, *keys)
             torch.testing.assert_close(
@@ -942,6 +973,8 @@ def test_aggregate_rotation_sum_preserves_decoded_values_and_live_keys(device):
         backend=backend,
         pipeline=logical,
         resources=engine.rns_context(device),
+        cache=False,
+        graph=False,
     )(positive)
     torch.testing.assert_close(
         observed.data, identity_sum(positive).data, rtol=0, atol=0
@@ -986,7 +1019,7 @@ def test_modulus_raise_uses_live_encapsulation_keys(device):
             x, first, second, **auxiliary
         )
 
-    compiled = fc.compile(source)
+    compiled = fc.compile(source, cache=False, graph=False)
     original = value.data.clone()
     for changed in (False, True):
         if changed:
@@ -1022,7 +1055,10 @@ def test_modulus_raise_uses_live_encapsulation_keys(device):
 
     invalid = engine.coefficient_domain_to_ntt_domain(value)
     for function in (centered, encapsulated):
-        for execute in (function, fc.compile(function)):
+        for execute in (
+            function,
+            fc.compile(function, cache=False, graph=False),
+        ):
             with pytest.raises(
                 (ValueError, VerifyException), match="coefficient"
             ):
@@ -1073,7 +1109,7 @@ def test_callable_objects_inline_methods_and_bind_only_used_materials(device):
 
     source = Affine()
     x = torch.ones(8, dtype=torch.float64, device=device)
-    compiled = fc.compile(source)
+    compiled = fc.compile(source, cache=False, graph=False)
     torch.testing.assert_close(compiled(x), source(x), rtol=0, atol=0)
     bindings = compiled.specializations[
         0
@@ -1082,13 +1118,16 @@ def test_callable_objects_inline_methods_and_bind_only_used_materials(device):
     source.weight.add_(1)
     torch.testing.assert_close(compiled(x), source(x), rtol=0, atol=0)
 
-    @fc.compile
+    @fc.compile(cache=False, graph=False)
     def outer(x):
         return source(x) + compiled(x)
 
     torch.testing.assert_close(outer(x), source(x) * 2, rtol=0, atol=0)
     torch.testing.assert_close(
-        fc.compile(source.transform)(x), source.transform(x), rtol=0, atol=0
+        fc.compile(source.transform, cache=False, graph=False)(x),
+        source.transform(x),
+        rtol=0,
+        atol=0,
     )
 
 
@@ -1106,7 +1145,7 @@ def test_capture_rejects_mutation_of_bound_object():
 
     source = Stateful()
     with pytest.raises(fc.CaptureError, match="mutate bound object"):
-        fc.compile(source)(torch.ones(1))
+        fc.compile(source, cache=False, graph=False)(torch.ones(1))
     assert source.count == 0
 
 
@@ -1146,7 +1185,7 @@ def test_callable_value_replacement_preserves_derived_metadata(device):
         )
 
     expected = source(value, plaintext)
-    actual = fc.compile(source)(value, plaintext)
+    actual = fc.compile(source, cache=False, graph=False)(value, plaintext)
     assert actual[0].component_count == expected[0].component_count == 3
     assert actual[0].ring_dimension == expected[0].ring_dimension == 4
     torch.testing.assert_close(actual[0].data, expected[0].data, rtol=0, atol=0)
@@ -1162,7 +1201,7 @@ def test_repeated_returned_arithmetic_has_independent_tensor_storage():
         return value * value, value * value
 
     value = torch.tensor([2.0, 3.0], dtype=torch.float64)
-    first, second = fc.compile(source)(value)
+    first, second = fc.compile(source, cache=False, graph=False)(value)
 
     torch.testing.assert_close(first, value * value, rtol=0, atol=0)
     torch.testing.assert_close(second, first, rtol=0, atol=0)

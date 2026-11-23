@@ -3,10 +3,12 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import { withBase } from 'vitepress'
 import {
   computeLabel,
+  languageLabels,
   methodLabels,
   osLabels,
   type ComputeId,
   type InstallSelection,
+  type LanguageId,
   type MethodId,
   type OsId,
 } from '../data/installSelector'
@@ -49,6 +51,11 @@ const groups = computed(() => [
     axis: 'torch' as const,
     label: 'Torch version',
     options: optionsFor('torch', selection.value).map(id => ({ id, label: id === 'installed-rocm' ? 'ROCm PyTorch' : `PyTorch ${id}`, icon: 'pytorch' })),
+  },
+  {
+    axis: 'language' as const,
+    label: 'Language',
+    options: optionsFor('language', selection.value).map(id => ({ id, label: languageLabels[id as LanguageId], icon: id === 'python' ? 'python' : 'build' })),
   },
   {
     axis: 'method' as const,
@@ -104,8 +111,8 @@ onBeforeUnmount(() => {
         <a href="https://pypi.org/project/fhelium/">
           <img src="https://img.shields.io/pypi/pyversions/fhelium" alt="Supported Python versions">
         </a>
-        <a href="https://github.com/VisualDust/fhelium/blob/main/LICENSE">
-          <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license">
+        <a href="https://github.com/VisualDust/fhelium#license">
+          <img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="MIT or Apache-2.0 license">
         </a>
       </div>
     </div>
@@ -159,6 +166,10 @@ onBeforeUnmount(() => {
         <span v-if="selection.compute === 'rocm'" class="home-install-rocm-note">
           AMD ROCm support is experimental. The development team currently lacks regular access to AMD GPUs. Run from the FHElium source directory with ROCm PyTorch and the HIP development toolkit installed.
           <a :href="withBase('/tutorial/installation#amd-rocm-source-builds')">ROCm build requirements</a>
+        </span>
+        <span v-if="selection.language === 'cpp'" class="home-install-rocm-note">
+          The installed package contains libfhelium, its headers, and the FHElium CMake package.
+          <a :href="withBase('/how-to/call-native-library-from-cpp')">Call the native library from C++</a>
         </span>
       </span>
     </p>

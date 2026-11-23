@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "../../common/cuda/kernel_support.cuh"
+#include "../../common/integer_lift.h"
 #include "../../common/montgomery.hpp"
 #include "../../common/cuda/repetition.cuh"
 #include "../../common/rns_batch.h"
@@ -434,17 +435,45 @@ __global__ void rns_add_lazy_twice_modulus_kernel(
                         twice_modulus[row]);
 }
 
-template <typename scalar_t>
-__global__ void rns_lift_centered_coefficients_kernel(
-    CudaTensorAccessor32<scalar_t, 3> out,
-    const CudaTensorAccessor32<scalar_t, 2> coefficients,
-    const CudaTensorAccessor32<scalar_t, 1> twice_modulus) {
+template <typename residue_t, typename integer_t>
+__global__ void rns_lift_integer_coefficients_kernel(
+    CudaTensorAccessor32<residue_t, 3> out,
+    const CudaTensorAccessor32<integer_t, 2> coefficients,
+    const CudaTensorAccessor32<residue_t, 1> twice_modulus) {
   const int row = blockIdx.x;
   const int coefficient = blockIdx.y * blockDim.x + threadIdx.x;
   const int batch = blockIdx.z;
   if (coefficient >= coefficients.size(1)) return;
-  out[batch][row][coefficient] = shift_residue_positive(
+  out[batch][row][coefficient] = fhelium::lift_integer_residue(
       coefficients[batch][coefficient], twice_modulus[row]);
+}
+
+template <typename residue_t>
+void launch_lift_integer_coefficients(const torch::Tensor& coefficient_rows,
+                                      const torch::Tensor& twice_modulus,
+                                      torch::Tensor& out_rows) {
+  const int device = coefficient_rows.device().index();
+  cudaSetDevice(device);
+  auto stream = at::cuda::getCurrentCUDAStream(device);
+  dim3 grid(out_rows.size(1),
+            (out_rows.size(2) + kCudaBlockSize - 1) / kCudaBlockSize,
+            out_rows.size(0));
+  AT_DISPATCH_SWITCH(
+      coefficient_rows.scalar_type(),
+      "rns_lift_integer_coefficients",
+      AT_DISPATCH_CASE(at::kInt, [&] {
+        rns_lift_integer_coefficients_kernel<residue_t, scalar_t>
+            <<<grid, kCudaBlockSize, 0, stream>>>(
+                FHELIUM_CUDA_ACCESSOR32(out_rows, residue_t, 3),
+                FHELIUM_CUDA_ACCESSOR32(coefficient_rows, scalar_t, 2),
+                FHELIUM_CUDA_ACCESSOR32(twice_modulus, residue_t, 1));
+      }) AT_DISPATCH_CASE(at::kLong, [&] {
+        rns_lift_integer_coefficients_kernel<residue_t, scalar_t>
+            <<<grid, kCudaBlockSize, 0, stream>>>(
+                FHELIUM_CUDA_ACCESSOR32(out_rows, residue_t, 3),
+                FHELIUM_CUDA_ACCESSOR32(coefficient_rows, scalar_t, 2),
+                FHELIUM_CUDA_ACCESSOR32(twice_modulus, residue_t, 1));
+      }));
 }
 
 }  // namespace
@@ -778,36 +807,29 @@ void rns_shift_residues_positive_inplace_cuda(torch::Tensor centered_residues,
       "rns_shift_residues_positive");
 }
 
-torch::Tensor rns_lift_centered_coefficients_cuda(
-    const torch::Tensor centered_coefficients,
-    const torch::Tensor twice_modulus) {
+torch::Tensor rns_lift_integer_coefficients_cuda(
+    const torch::Tensor coefficients, const torch::Tensor twice_modulus) {
   const auto coefficient_rows =
-      view_coefficient_batch_2d(centered_coefficients, "centered_coefficients");
+      view_coefficient_batch_2d(coefficients, "coefficients");
   check_rns_row_vector(twice_modulus,
                        twice_modulus.size(0),
-                       "rns_lift_centered_coefficients",
+                       "rns_lift_integer_coefficients",
                        "twice_modulus");
-  std::vector<int64_t> output_shape(centered_coefficients.sizes().begin(),
-                                    centered_coefficients.sizes().end() - 1);
+  std::vector<int64_t> output_shape(coefficients.sizes().begin(),
+                                    coefficients.sizes().end() - 1);
   output_shape.push_back(twice_modulus.size(0));
-  output_shape.push_back(centered_coefficients.size(-1));
-  auto out = centered_coefficients.new_empty(output_shape);
+  output_shape.push_back(coefficients.size(-1));
+  auto out = twice_modulus.new_empty(output_shape);
   auto out_rows = view_rns_batch_3d(out, "out");
-  AT_DISPATCH_INTEGRAL_TYPES(
-      centered_coefficients.scalar_type(),
-      "rns_lift_centered_coefficients",
-      [&] {
-        const int device = coefficient_rows.device().index();
-        cudaSetDevice(device);
-        auto stream = at::cuda::getCurrentCUDAStream(device);
-        dim3 grid(out_rows.size(1),
-                  (out_rows.size(2) + kCudaBlockSize - 1) / kCudaBlockSize,
-                  out_rows.size(0));
-        rns_lift_centered_coefficients_kernel<scalar_t>
-            <<<grid, kCudaBlockSize, 0, stream>>>(
-                FHELIUM_CUDA_ACCESSOR32(out_rows, scalar_t, 3),
-                FHELIUM_CUDA_ACCESSOR32(coefficient_rows, scalar_t, 2),
-                FHELIUM_CUDA_ACCESSOR32(twice_modulus, scalar_t, 1));
-      });
+  AT_DISPATCH_SWITCH(
+      twice_modulus.scalar_type(),
+      "rns_lift_integer_coefficients",
+      AT_DISPATCH_CASE(at::kInt, [&] {
+        launch_lift_integer_coefficients<scalar_t>(
+            coefficient_rows, twice_modulus, out_rows);
+      }) AT_DISPATCH_CASE(at::kLong, [&] {
+        launch_lift_integer_coefficients<scalar_t>(
+            coefficient_rows, twice_modulus, out_rows);
+      }));
   return out;
 }

@@ -169,8 +169,12 @@ class OperationBackend:
         compilation: Compilation,
         *,
         pipeline: Pipeline | None = None,
+        clone: bool = True,
     ) -> ProgramExecutable:
-        """Link one Compilation with this workspace into an executable."""
+        """Link one Compilation with this workspace into an executable.
+
+        Linking transforms a copy of the Program. ``clone=False`` transfers the Program to the executable, which then owns it; the caller must not use that Program afterwards.
+        """
 
         from fhelium.compile import Compilation, CompileWorkspace
         from fhelium.compile.passes.backend import backend_linking_pipeline
@@ -190,7 +194,7 @@ class OperationBackend:
             linking_workspace,
             material_bindings=dict(compilation.material_bindings),
         )
-        result = selected_pipeline.run(request)
+        result = selected_pipeline.run(request, clone=clone)
         executable = result.workspace.get(ProgramExecutable)
         if not isinstance(executable, ProgramExecutable):
             raise RuntimeError(
@@ -217,6 +221,13 @@ class ProgramExecutable:
     resource_indices: Mapping[Operation, tuple[int, ...]]
     bound_resources: Mapping[Operation, BoundResource]
     bound_materials: Mapping[Operation, object]
+    _requirements: tuple[ResourceRequirement, ...] = field(
+        default=(), repr=False, compare=False
+    )
+    _schedule_symbols: tuple[tuple[str, str], ...] = field(
+        default=(), repr=False, compare=False
+    )
+    _callee: str | None = field(default=None, repr=False, compare=False)
     _call: Callable[..., tuple[object, ...]] = field(
         init=False, repr=False, compare=False
     )
@@ -230,6 +241,34 @@ class ProgramExecutable:
         call, source = prepare_host_call(self)
         object.__setattr__(self, "_call", call)
         object.__setattr__(self, "host_source", source)
+
+    def rebind_materials(
+        self, bindings: Mapping[str, object]
+    ) -> ProgramExecutable:
+        """Reuse prepared dispatch, resources and host bytecode with new materials.
+
+        The owner supplies layout-compatible bindings and manages outstanding execution lifetimes. Only MaterialRef globals change; implementation and kernel preparation are retained.
+        """
+        from types import FunctionType
+
+        materials = {
+            operation: bindings.get(operation.symbol.data, value)
+            for operation, value in self.bound_materials.items()
+        }
+        namespace = dict(self._call.__globals__)
+        namespace.pop("__fhelium_codegen_execute", None)
+        for name, symbol in self._material_globals.items():
+            if symbol in bindings:
+                namespace[name] = bindings[symbol]
+        result = object.__new__(type(self))
+        result.__dict__.update(self.__dict__)
+        object.__setattr__(
+            result, "bound_materials", MappingProxyType(materials)
+        )
+        object.__setattr__(
+            result, "_call", FunctionType(self._call.__code__, namespace)
+        )
+        return result
 
     @property
     def manifest(self) -> Mapping[str, object]:
@@ -262,12 +301,20 @@ class ProgramExecutable:
         return self.program.single_block("main")
 
     @cached_property
+    def input_types(self) -> tuple[Attribute, ...]:
+        """Return the represented types of the Program inputs."""
+        return tuple(argument.type for argument in self._entry_block.args)
+
+    @cached_property
+    def output_types(self) -> tuple[Attribute, ...]:
+        """Return the represented types of the Program results."""
+        return tuple(self.program.function("main").function_type.outputs)
+
+    @cached_property
     def _input_adapters(self) -> tuple[Callable[[object], object], ...]:
         return tuple(
-            _prepare_boundary_input(
-                argument.type, label=f"Program input {index}"
-            )
-            for index, argument in enumerate(self._entry_block.args)
+            _prepare_boundary_input(value_type, label=f"Program input {index}")
+            for index, value_type in enumerate(self.input_types)
         )
 
     @cached_property
@@ -278,17 +325,14 @@ class ProgramExecutable:
             _prepare_boundary_output(
                 result_type, label=f"Program result {index}"
             )
-            for index, result_type in enumerate(
-                self.program.function("main").function_type.outputs
-            )
+            for index, result_type in enumerate(self.output_types)
         )
 
     def run(self, *inputs: object) -> object:
-        block = self._entry_block
-        if len(inputs) != len(block.args):
+        count = len(self.input_types)
+        if len(inputs) != count:
             raise ValueError(
-                f"Program executable requires {len(block.args)} inputs, "
-                f"got {len(inputs)}"
+                f"Program executable requires {count} inputs, got {len(inputs)}"
             )
         payloads = tuple(
             adapt(value)

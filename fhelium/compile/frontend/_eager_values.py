@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import torch
-from xdsl.dialects.builtin import (
-    ArrayAttr,
-    FloatAttr,
-    IntegerAttr,
-    StringAttr,
-    f64,
-)
+from xdsl.dialects.builtin import ArrayAttr, DictionaryAttr
 from xdsl.ir import Attribute
 
 from fhelium.ir.dialects import ckks, core
-from fhelium.ir.dialects._common import OpenStateType
+from fhelium.ir.dialects._common import (
+    OpenStateType,
+    attribute_key,
+    interned_attribute,
+)
 from fhelium.values import (
     Ciphertext,
     CompressedPlaintext,
     Plaintext,
     KeySwitchKey,
-    RotationKey,
 )
 
 
@@ -55,6 +54,12 @@ def value_state(
 def state_attributes(value: object) -> dict[str, Attribute]:
     """Represent argument state and physical Tensor layout in an open IR type."""
 
+    return {name: interned_attribute(key) for name, key in _state_keys(value)}
+
+
+def _state_keys(value: object) -> tuple[tuple[str, tuple[object, ...]], ...]:
+    """Return the typed attribute keys of a value's represented fields."""
+
     fields: dict[str, object] = {}
     if isinstance(value, KeySwitchKey):
         fields = {
@@ -64,8 +69,6 @@ def state_attributes(value: object) -> dict[str, Attribute]:
             "residue_representation": value.residue_representation,
             "basis": value.modulus_basis,
         }
-        if isinstance(value, RotationKey):
-            fields["rotation_step"] = value.rotation_step
     tensor: torch.Tensor | None = None
     if isinstance(value, (Ciphertext, Plaintext, CompressedPlaintext)):
         fields = value_state(value)
@@ -84,33 +87,28 @@ def state_attributes(value: object) -> dict[str, Attribute]:
             device=str(tensor.device),
             requires_grad=tensor.requires_grad,
         )
-    return {
-        name: attribute
+    return tuple(
+        (name, key)
         for name, value in fields.items()
-        if (attribute := state_attribute(value)) is not None
-    }
+        if (key := attribute_key(value)) is not None
+    )
 
 
-def state_attribute(value: object) -> Attribute | None:
-    """Convert one supported metadata field into a builtin IR attribute."""
-
-    if isinstance(value, str):
-        return StringAttr(value)
-    if isinstance(value, bool):
-        return IntegerAttr(int(value), 1)
-    if isinstance(value, int):
-        return IntegerAttr(value, 64)
-    if isinstance(value, float):
-        return FloatAttr(value, f64)
-    if isinstance(value, tuple):
-        items = tuple(state_attribute(item) for item in value)
-        if all(item is not None for item in items):
-            return ArrayAttr(item for item in items if item is not None)
-    return None
+@lru_cache(maxsize=1 << 14)
+def _interned_type(
+    cls: type[OpenStateType],
+    keys: tuple[tuple[str, tuple[object, ...]], ...],
+) -> OpenStateType:
+    return cls(
+        DictionaryAttr({name: interned_attribute(key) for name, key in keys})
+    )
 
 
 def value_type(value: object) -> OpenStateType:
-    """Create the input type for an ordinary CKKS value or public Tensor."""
+    """Return the shared input type for an ordinary CKKS value or public Tensor.
+
+    Values with equal represented state share one immutable type object.
+    """
 
     cls = (
         ckks.CiphertextType
@@ -123,7 +121,7 @@ def value_type(value: object) -> OpenStateType:
         if isinstance(value, KeySwitchKey)
         else core.MessageType
     )
-    return cls().with_state(state_attributes(value))
+    return _interned_type(cls, _state_keys(value))
 
 
 def replacement_state(source, data, implicit, updates, *, controlled):
