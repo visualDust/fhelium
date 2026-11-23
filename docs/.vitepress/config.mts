@@ -683,7 +683,7 @@ export default defineConfig({
     darkModeSwitchLabel: 'Appearance',
     footer: {
       message: 'Towards full-stack encrypted execution infrastructures',
-      copyright: 'Released under the MIT License. Copyright <a href="https://github.com/VisualDust" target="_blank" rel="noopener noreferrer">VisualDust</a> and <a href="https://github.com/VisualDust/fhelium/graphs/contributors" target="_blank" rel="noopener noreferrer">FHElium contributors</a>',
+      copyright: 'Released under the MIT License or the Apache License 2.0. Copyright <a href="https://github.com/VisualDust" target="_blank" rel="noopener noreferrer">VisualDust</a> and <a href="https://github.com/VisualDust/fhelium/graphs/contributors" target="_blank" rel="noopener noreferrer">FHElium contributors</a>',
     },
   },
 })

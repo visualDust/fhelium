@@ -111,8 +111,8 @@ onBeforeUnmount(() => {
         <a href="https://pypi.org/project/fhelium/">
           <img src="https://img.shields.io/pypi/pyversions/fhelium" alt="Supported Python versions">
         </a>
-        <a href="https://github.com/VisualDust/fhelium/blob/main/LICENSE">
-          <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license">
+        <a href="https://github.com/VisualDust/fhelium#license">
+          <img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="MIT or Apache-2.0 license">
         </a>
       </div>
     </div>
