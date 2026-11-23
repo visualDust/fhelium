@@ -2325,7 +2325,6 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
             "depth",
             "scale",
             "ring_dimension",
-            "min_modulus",
             "polynomial_domain",
         ),
     ),

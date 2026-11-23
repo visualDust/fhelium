@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -14,17 +15,12 @@ from fhelium.config.ntt import (
     resolve_ntt_backend_policy,
 )
 from fhelium.ir.dialects import ntt as ntt_dialect
-from fhelium.legacy.engine import CkksEngine
-from fhelium.legacy.engine.ntt.plans import (
-    CompactPowerOfTwoRadixNttPlan,
-    IndexedRadix2NttPlan,
-)
-from fhelium.legacy.engine.ntt.tables import (
+from fhelium.backend.ntt.tables import (
     CompactPowerOfTwoRadixTables,
     CompactRadix2Tables,
 )
-from fhelium.legacy.engine.rns.montgomery import MontgomeryParameters
-from fhelium.native.wrapper import ntt_diagnostic_ops, ntt_ops
+from fhelium.eager import Engine
+from fhelium.native.wrapper import ntt_diagnostic_ops, ntt_ops, rns_ops
 
 INDEXED_BACKEND = "radix2_indexed"
 RADIX2_PRODUCTION_BACKENDS = (
@@ -84,42 +80,28 @@ def _require_cuda() -> None:
 def _cpu_indexed_runtime(
     preset: Preset,
 ) -> tuple[
-    CkksConfig,
-    tuple[IndexedRadix2NttPlan, torch.Tensor, torch.Tensor],
-    torch.Tensor,
+    CkksConfig, tuple[SimpleNamespace, torch.Tensor, torch.Tensor], torch.Tensor
 ]:
     config = CkksConfig.parse(preset)
-    dtype = RnsExecutionFormat.select(config.moduli).dtype
-    montgomery = MontgomeryParameters(config)
-    plan = IndexedRadix2NttPlan(config, device="cpu")
-    for indices in (plan.forward_indices, plan.inverse_indices):
+    execution_format = RnsExecutionFormat.select(config.moduli)
+    dtype = execution_format.dtype
+    radix = 1 << execution_format.radix_bits
+    forward_indices, forward_twiddles, inverse_indices, inverse_twiddles = (
+        ntt_ops.indexed_radix2_plan(list(config.moduli), config.logN, dtype)
+    )
+    for indices in (forward_indices, inverse_indices):
         ntt_ops.validate_indexed_schedule(indices[0], indices[1], config.N)
-    parameters = torch.tensor(
-        [
-            montgomery.twice_modulus,
-            montgomery.modulus_lower_bits,
-            montgomery.modulus_higher_bits,
-            montgomery.neg_inv_modulus_lower_bits,
-            montgomery.neg_inv_modulus_higher_bits,
-            montgomery.montgomery_r2,
-            [0] * len(config.moduli),
-            [
-                (normalizer * montgomery.R) % modulus
-                for normalizer, modulus in zip(
-                    config.inverse_ntt_scale, config.moduli, strict=True
-                )
-            ],
-        ],
-        dtype=dtype,
+    plan = SimpleNamespace(
+        forward_indices=forward_indices, inverse_indices=inverse_indices
+    )
+    parameters = rns_ops.parameter_table(
+        list(config.moduli), config.logN, config.default_scale, dtype
     )
 
     def to_montgomery(table: torch.Tensor) -> torch.Tensor:
         rows = [
             torch.tensor(
-                [
-                    (int(value) * montgomery.R) % modulus
-                    for value in row.reshape(-1)
-                ],
+                [(int(value) * radix) % modulus for value in row.reshape(-1)],
                 dtype=dtype,
             ).reshape_as(row)
             for row, modulus in zip(table, config.moduli, strict=True)
@@ -130,8 +112,8 @@ def _cpu_indexed_runtime(
         config,
         (
             plan,
-            to_montgomery(plan.forward_twiddles),
-            to_montgomery(plan.inverse_twiddles),
+            to_montgomery(forward_twiddles),
+            to_montgomery(inverse_twiddles),
         ),
         parameters,
     )
@@ -278,7 +260,9 @@ def test_cpu_indexed_ntt_uses_the_same_exact_schema_and_representation(
         assert torch.equal(table, snapshot)
 
 
-def test_indexed_ntt_preparation_rejects_invalid_schedules_and_execution_checks_storage() -> None:
+def test_indexed_ntt_preparation_rejects_invalid_schedules_and_execution_checks_storage() -> (
+    None
+):
     config, tables, parameters = _cpu_indexed_runtime(
         Preset.slots8192_scale25_depth14_int32
     )
@@ -325,10 +309,22 @@ def test_indexed_ntt_preparation_rejects_invalid_schedules_and_execution_checks_
         )
 
 
-def _standard_rows(engine: CkksEngine) -> torch.Tensor:
+def _cuda_runtime(preset: Preset, ntt_backend: str) -> SimpleNamespace:
+    engine = Engine(
+        preset, ntt_backend=ntt_backend, allow_automatic_key_generation=False
+    )
+    return SimpleNamespace(
+        config=engine.config,
+        device=torch.device("cuda:0"),
+        rns=engine.rns_context("cuda:0"),
+        ntt=engine._ntt_context_for("cuda:0"),
+    )
+
+
+def _standard_rows(engine: SimpleNamespace) -> torch.Tensor:
     coefficients = torch.arange(
         engine.config.N,
-        dtype=engine.rns_runtime.dtype,
+        dtype=engine.rns.dtype,
         device=engine.device,
     )
     rows = []
@@ -365,11 +361,16 @@ def test_fixed_radix_root_powers_are_primitive_and_invertible(
     config = CkksConfig.parse(preset)
     policy = resolve_ntt_backend_policy(backend)
     assert isinstance(policy, CompactFixedRadixPolicy)
-    plan = CompactPowerOfTwoRadixNttPlan(config, policy)
+    _, _, forward_roots, inverse_roots = ntt_ops.power_of_two_radix_twiddles(
+        list(config.moduli),
+        config.logN,
+        policy.radix,
+        RnsExecutionFormat.select(config.moduli).dtype,
+    )
 
     for row, modulus in enumerate(config.moduli):
-        forward_root = int(plan.forward_radix_root_powers[row, 1])
-        inverse_root = int(plan.inverse_radix_root_powers[row, 1])
+        forward_root = int(forward_roots[row, 1])
+        inverse_root = int(inverse_roots[row, 1])
         assert pow(forward_root, policy.radix, modulus) == 1
         assert pow(forward_root, policy.radix // 2, modulus) == modulus - 1
         assert (forward_root * inverse_root) % modulus == 1
@@ -382,21 +383,16 @@ def test_production_backend_families_match_reference_exactly(
     backends: tuple[str, ...],
 ) -> None:
     _require_cuda()
-    reference = CkksEngine(
-        preset,
-        device="cuda:0",
-        ntt_backend=INDEXED_BACKEND,
-        allow_sk_gen=False,
-    )
+    reference = _cuda_runtime(preset, INDEXED_BACKEND)
     standard = _standard_rows(reference)
     coefficient_montgomery = standard.clone()
-    reference.rns_runtime.to_montgomery_(coefficient_montgomery, include_p=True)
+    reference.rns.to_montgomery_(coefficient_montgomery, include_p=True)
 
     expected_ntt = standard.clone()
-    reference.rns_runtime.forward_to_montgomery_(expected_ntt, include_p=True)
+    reference.ntt.forward_to_montgomery_(expected_ntt, include_p=True)
     expected_centered = torch.where(
-        standard > reference.rns_runtime.moduli[:, None] // 2,
-        standard - reference.rns_runtime.moduli[:, None],
+        standard > reference.rns.moduli[:, None] // 2,
+        standard - reference.rns.moduli[:, None],
         standard,
     )
     del reference
@@ -404,15 +400,10 @@ def test_production_backend_families_match_reference_exactly(
     torch.cuda.empty_cache()
 
     for backend in backends:
-        engine = CkksEngine(
-            preset,
-            device="cuda:0",
-            ntt_backend=backend,
-            allow_sk_gen=False,
-        )
+        engine = _cuda_runtime(preset, backend)
 
         from_standard = standard.clone()
-        engine.rns_runtime.forward_to_montgomery_(
+        engine.ntt.forward_to_montgomery_(
             from_standard,
             include_p=True,
         )
@@ -420,14 +411,14 @@ def test_production_backend_families_match_reference_exactly(
             torch.count_nonzero(
                 torch.remainder(
                     from_standard - expected_ntt,
-                    engine.rns_runtime.moduli[:, None],
+                    engine.rns.moduli[:, None],
                 )
             ).item()
             == 0
         )
 
         from_montgomery = coefficient_montgomery.clone()
-        engine.rns_runtime.forward_montgomery_(
+        engine.ntt.forward_montgomery_(
             from_montgomery,
             include_p=True,
         )
@@ -435,31 +426,31 @@ def test_production_backend_families_match_reference_exactly(
             torch.count_nonzero(
                 torch.remainder(
                     from_montgomery - expected_ntt,
-                    engine.rns_runtime.moduli[:, None],
+                    engine.rns.moduli[:, None],
                 )
             ).item()
             == 0
         )
 
         to_standard = expected_ntt.clone()
-        engine.rns_runtime.inverse_to_standard_(to_standard, include_p=True)
+        engine.ntt.inverse_to_standard_(to_standard, include_p=True)
         assert torch.equal(to_standard, standard)
 
         to_standard_lazy = expected_ntt.clone()
-        engine.rns_runtime.inverse_to_standard_lazy_(
+        engine.ntt.inverse_to_standard_lazy_(
             to_standard_lazy,
             include_p=True,
         )
         assert torch.equal(
             torch.remainder(
                 to_standard_lazy,
-                engine.rns_runtime.moduli[:, None],
+                engine.rns.moduli[:, None],
             ),
             standard,
         )
 
         to_montgomery = expected_ntt.clone()
-        engine.rns_runtime.inverse_montgomery_(
+        engine.ntt.inverse_montgomery_(
             to_montgomery,
             include_p=True,
         )
@@ -467,14 +458,14 @@ def test_production_backend_families_match_reference_exactly(
             torch.count_nonzero(
                 torch.remainder(
                     to_montgomery - coefficient_montgomery,
-                    engine.rns_runtime.moduli[:, None],
+                    engine.rns.moduli[:, None],
                 )
             ).item()
             == 0
         )
 
         to_centered = expected_ntt.clone()
-        engine.rns_runtime.inverse_to_centered_(to_centered, include_p=True)
+        engine.ntt.inverse_to_centered_(to_centered, include_p=True)
         assert torch.equal(to_centered, expected_centered)
 
         del engine
@@ -495,15 +486,10 @@ def test_native_ntt_schema_families_reject_invalid_twiddle_shapes(
     family: str,
 ) -> None:
     _require_cuda()
-    engine = CkksEngine(
-        Preset.slots8192_scale40_depth7_int64,
-        device="cuda:0",
-        ntt_backend=backend,
-        allow_sk_gen=False,
-    )
-    tables = engine.rns_runtime.ntt_tables
+    engine = _cuda_runtime(Preset.slots8192_scale40_depth7_int64, backend)
+    tables = engine.ntt.ntt_tables
     operand = _standard_rows(engine)
-    engine.rns_runtime.to_montgomery_(operand, include_p=True)
+    engine.rns.to_montgomery_(operand, include_p=True)
 
     if family == "compact_radix2":
         assert isinstance(tables, CompactRadix2Tables)
@@ -511,7 +497,7 @@ def test_native_ntt_schema_families_reject_invalid_twiddle_shapes(
             ntt_ops.forward_ntt_montgomery_compact_grouped_smem_(
                 operand,
                 tables.forward_twiddles[:, :-1],
-                engine.rns_runtime.rns_parameter_tensor,
+                engine.rns.rns_parameter_tensor,
                 3,
             )
     else:
@@ -521,7 +507,7 @@ def test_native_ntt_schema_families_reject_invalid_twiddle_shapes(
                 operand,
                 tables.forward_outer_twiddles[:, :-1],
                 tables.forward_radix_root_powers,
-                engine.rns_runtime.rns_parameter_tensor,
+                engine.rns.rns_parameter_tensor,
             )
 
 
@@ -552,18 +538,13 @@ def test_partial_shared_tail_bit_budgets_match_global_digits_exactly(
     shared_memory_limits: tuple[int, ...],
 ) -> None:
     _require_cuda()
-    engine = CkksEngine(
-        preset,
-        device="cuda:0",
-        ntt_backend=backend,
-        allow_sk_gen=False,
-    )
-    tables = engine.rns_runtime.ntt_tables
+    engine = _cuda_runtime(preset, backend)
+    tables = engine.ntt.ntt_tables
     assert isinstance(tables, CompactPowerOfTwoRadixTables)
     operand = _standard_rows(engine)
-    engine.rns_runtime.to_montgomery_(operand, include_p=True)
+    engine.rns.to_montgomery_(operand, include_p=True)
     operand = operand[:1].contiguous()
-    parameters = engine.rns_runtime.rns_parameter_tensor[:, :1]
+    parameters = engine.rns.rns_parameter_tensor[:, :1]
     forward_args = (
         tables.forward_outer_twiddles[:1],
         tables.forward_radix_root_powers[:1],

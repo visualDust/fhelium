@@ -7,14 +7,19 @@ from typing import cast
 import torch
 
 from fhelium.backend.implementation import OperationInvocation
+from fhelium.backend.random.stream import advance_
 from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.ir.dialects import ckks
-
-from ._codec import decode_tensor, encode_tensor
+from fhelium.native.wrapper import ckks_ops, rns_ops
 
 
 class NativeEncodeImplementation:
-    """Encode slots with supplied embedding tables and advancing rounding state."""
+    """Encode slots into stochastically rounded integer coefficients.
+
+    The libfhelium ``encode`` operation pads the message to the slot count,
+    applies the inverse slot embedding, and rounds the scaled coefficients
+    with the rounding state, which then advances.
+    """
 
     name = "native-ckks-encode"
     operation_types = (ckks.EncodeOp,)
@@ -34,15 +39,16 @@ class NativeEncodeImplementation:
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
         del resources, in_place
-        return (
-            encode_tensor(
-                inputs[0],
-                inputs[1],
-                inputs[2],
-                inputs[3],
-                scale=float(cast(float, invocation.attributes["scale"])),
-            ),
+        message, pre, twister, rounding_state = inputs
+        coefficients = ckks_ops.encode(
+            message,
+            pre,
+            twister,
+            rounding_state,
+            float(cast(float, invocation.attributes["scale"])),
         )
+        advance_(rounding_state)
+        return (coefficients,)
 
 
 class NativeDecodeImplementation:
@@ -67,12 +73,12 @@ class NativeDecodeImplementation:
     ) -> tuple[torch.Tensor, ...]:
         del resources, in_place
         return (
-            decode_tensor(
+            ckks_ops.decode(
                 inputs[0],
                 inputs[1],
                 inputs[2],
-                scale=float(cast(float, invocation.attributes["scale"])),
-                is_real=bool(invocation.attributes["is_real"]),
+                float(cast(float, invocation.attributes["scale"])),
+                bool(invocation.attributes["is_real"]),
             ),
         )
 
@@ -97,20 +103,8 @@ class NativeIntegerCoefficientsToRnsImplementation:
         *,
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
-        from fhelium.backend.rns.context import lift_integer_coefficients_exact
-
         del resources, in_place
-        minimum = invocation.attributes.get("min_modulus")
-        minimum = (
-            int((inputs[1] // 2).min().item())
-            if minimum is None
-            else int(cast(int, minimum))
-        )
-        return (
-            lift_integer_coefficients_exact(
-                inputs[0], inputs[1], min_modulus=minimum
-            ),
-        )
+        return (rns_ops.lift_integer_coefficients(inputs[0], inputs[1]),)
 
 
 __all__ = [

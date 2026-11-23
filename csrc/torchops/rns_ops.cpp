@@ -52,8 +52,8 @@ TORCH_LIBRARY_FRAGMENT(fhelium_rns_ops, m) {
       "shift_residues_positive_(Tensor(a!) centered_residues, Tensor "
       "rns_params) -> ()");
   m.def(
-      "lift_centered_coefficients(Tensor centered_coefficients, Tensor "
-      "twice_modulus) -> Tensor");
+      "lift_integer_coefficients(Tensor coefficients, Tensor twice_modulus) "
+      "-> Tensor");
   m.def(
       "crt_basis_extend_out_(Tensor source_residues, Tensor source_parameters, "
       "Tensor target_parameters, Tensor matrix, Tensor target_reciprocals, "
@@ -119,8 +119,7 @@ TORCH_LIBRARY_IMPL(fhelium_rns_ops, CPU, m) {
   m.impl("reduce_to_standard_", &fhelium::rns::reduce_to_standard_);
   m.impl("center_residues_", &fhelium::rns::center_residues_);
   m.impl("shift_residues_positive_", &fhelium::rns::shift_residues_positive_);
-  m.impl("lift_centered_coefficients",
-         &fhelium::rns::lift_centered_coefficients);
+  m.impl("lift_integer_coefficients", &fhelium::rns::lift_integer_coefficients);
   m.impl("mixed_radix_decompose", &fhelium::rns::mixed_radix_decompose);
   m.impl("mixed_radix_basis_extend_to_montgomery",
          &fhelium::rns::mixed_radix_basis_extend_to_montgomery);
@@ -128,6 +127,8 @@ TORCH_LIBRARY_IMPL(fhelium_rns_ops, CPU, m) {
          &fhelium::rns::mixed_radix_decompose_out_);
   m.impl("mixed_radix_basis_extend_to_montgomery_out_",
          &fhelium::rns::mixed_radix_basis_extend_to_montgomery_out_);
+  m.impl("crt_basis_extend_out_", &fhelium::rns::crt_basis_extend_out_);
+  m.impl("crt_basis_extend", &fhelium::rns::crt_basis_extend);
 }
 #endif
 
@@ -158,8 +159,7 @@ TORCH_LIBRARY_IMPL(fhelium_rns_ops, CUDA, m) {
   m.impl("reduce_to_standard_", &fhelium::rns::reduce_to_standard_);
   m.impl("center_residues_", &fhelium::rns::center_residues_);
   m.impl("shift_residues_positive_", &fhelium::rns::shift_residues_positive_);
-  m.impl("lift_centered_coefficients",
-         &fhelium::rns::lift_centered_coefficients);
+  m.impl("lift_integer_coefficients", &fhelium::rns::lift_integer_coefficients);
   m.impl("mixed_radix_decompose", &fhelium::rns::mixed_radix_decompose);
   m.impl("mixed_radix_basis_extend_to_montgomery",
          &fhelium::rns::mixed_radix_basis_extend_to_montgomery);
@@ -167,9 +167,9 @@ TORCH_LIBRARY_IMPL(fhelium_rns_ops, CUDA, m) {
          &fhelium::rns::mixed_radix_decompose_out_);
   m.impl("mixed_radix_basis_extend_to_montgomery_out_",
          &fhelium::rns::mixed_radix_basis_extend_to_montgomery_out_);
-#if defined(FHELIUM_WITH_CUDA)
   m.impl("crt_basis_extend_out_", &fhelium::rns::crt_basis_extend_out_);
   m.impl("crt_basis_extend", &fhelium::rns::crt_basis_extend);
+#if defined(FHELIUM_WITH_CUDA)
   m.impl("mixed_radix_modup_tiled", &fhelium::rns::mixed_radix_modup_tiled);
   m.impl("mixed_radix_modup_tiled_out_",
          &fhelium::rns::mixed_radix_modup_tiled_out_);

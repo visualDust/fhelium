@@ -63,12 +63,12 @@ macro(fhelium_finalize_native_install)
   install(
     CODE "
     execute_process(
-        COMMAND ${Python3_EXECUTABLE} ${WrapperGenScript}
+        COMMAND \"${Python3_EXECUTABLE}\" \"${WrapperGenScript}\"
                 --path \"${FHELIUM_WRAPPER_LIBRARY_DIR}\"
                 --library-dir \"${FHELIUM_INSTALLED_SDK_ROOT}/lib\"
                 --output \"${FHELIUM_WRAPPER_OUTPUT_DIR}\"
                 --no-format
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        WORKING_DIRECTORY \"${CMAKE_SOURCE_DIR}\"
         RESULT_VARIABLE result
     )
     if(NOT result EQUAL 0)
@@ -91,7 +91,7 @@ macro(fhelium_finalize_native_install)
   install(
     CODE "
     execute_process(
-        COMMAND ${Python3_EXECUTABLE} ${FHELIUM_FINALIZE_SCRIPT}
+        COMMAND \"${Python3_EXECUTABLE}\" \"${FHELIUM_FINALIZE_SCRIPT}\"
                 --source-root \"${CMAKE_SOURCE_DIR}\"
                 --package-root \"${FHELIUM_FINAL_PACKAGE_ROOT}\"
                 --backends \"${FHELIUM_FINAL_BACKENDS}\"
@@ -100,7 +100,7 @@ macro(fhelium_finalize_native_install)
                 --hip-compiler-id \"${CMAKE_HIP_COMPILER_ID}\"
                 --hip-compiler-version \"${CMAKE_HIP_COMPILER_VERSION}\"
                 --hip-version \"${hip_VERSION}\"
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        WORKING_DIRECTORY \"${CMAKE_SOURCE_DIR}\"
         RESULT_VARIABLE result
     )
     if(NOT result EQUAL 0)

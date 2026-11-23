@@ -57,7 +57,7 @@ cmake.args = ["-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"]
 build.verbose = true
 wheel.install-dir = "fhelium"
 wheel.packages = ["fhelium"]
-sdist.exclude = ["cloudflare/**", "third_party/triton-csprng/**", "uv.lock"]
+sdist.exclude = ["cloudflare/**", "uv.lock"]
 
 [[tool.dynamic-metadata]]
 provider = { path = "scripts", module = "release_dependencies" }

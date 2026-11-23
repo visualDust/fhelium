@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from fhelium.legacy.engine import CkksEngine
-
 import gc
 from collections.abc import Sequence
 
 import torch
 
 from fhelium import Preset
+from fhelium.backend.ntt.context import NttContext
+from fhelium.backend.rns.context import RnsContext
 from fhelium.backend.rns.format import RnsExecutionFormat
 from fhelium.benchmarks.model import (
     BenchmarkCheck,
@@ -123,9 +123,8 @@ def _run_ntt_backend_single_op(
     measured_rows: list[tuple[dict[str, object], float]] = []
     for backend in backends:
         progress(f"Creating {preset_name} engine for {backend}")
-        engine = CkksEngine(
-            preset,
-            device=device,
+        engine = NttContext(
+            RnsContext(CkksConfig.parse(preset), device=device),
             ntt_backend=backend,
         )
         standard_rows = make_residue_rows(engine, seed=seed)

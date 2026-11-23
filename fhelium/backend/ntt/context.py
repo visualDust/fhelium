@@ -56,8 +56,8 @@ class NttContext:
         self.ntt_backend_name = self.ntt_policy.name
         self.ntt_tables = prepare_ntt_tables(
             self.ntt_policy,
-            self.config,
-            materialize_parameter_rows=rns_context.materialize_parameter_rows,
+            rns_context.modulus_values,
+            self.config.logN,
             device=self.device,
             dtype=rns_context.dtype,
             rns_params=rns_context.rns_parameter_tensor,

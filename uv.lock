@@ -164,7 +164,6 @@ dependencies = [
     { name = "safetensors" },
     { name = "textual" },
     { name = "torch" },
-    { name = "triton-csprng" },
     { name = "triton-windows", marker = "sys_platform == 'win32'" },
     { name = "xdsl" },
 ]
@@ -196,7 +195,6 @@ requires-dist = [
     { name = "safetensors", specifier = ">=0.8.0" },
     { name = "textual", specifier = ">=8.2.8" },
     { name = "torch", specifier = ">=2.10,<2.15" },
-    { name = "triton-csprng", specifier = ">=0.1.4,<0.2" },
     { name = "triton-windows", marker = "sys_platform == 'win32'", specifier = "==3.7.1.post27" },
     { name = "xdsl", specifier = ">=0.68,<0.69" },
 ]
@@ -1038,20 +1036,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c4/6f/fb96d15db6f36d6eae4cafb998c2e0353bf59d7c4ea1662d7497f269134a/triton-3.7.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7e40869937a68206ec70d7f25bb7ec6433cb083f9135e1f36dbd318dc449a728", size = 197719725, upload-time = "2026-06-17T19:53:20.419Z" },
     { url = "https://files.pythonhosted.org/packages/00/42/c5089d4d9327fcd1e862c599cc2927f39418f84dd11a84cb2ccff9d4787a/triton-3.7.1-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:cdbfc09d9ec58bc5e68321525653220de7515c199e7a8097a97c85e62b52cd0a", size = 184694629, upload-time = "2026-06-17T20:03:53.444Z" },
     { url = "https://files.pythonhosted.org/packages/07/42/2c3ac59253ae8892b6f307875263dd23dc875cdf732d3aea40d6d41fb7cb/triton-3.7.1-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:58c0e131da05134a2a4788ccbcc0c1105cf0f54c8e98f19e34cd465396dc15eb", size = 197729241, upload-time = "2026-06-17T19:53:27.801Z" },
-]
-
-[[package]]
-name = "triton-csprng"
-version = "0.1.5"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "mpmath" },
-    { name = "numpy" },
-    { name = "torch" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ee/e5/2cc319c285acac6d45d4713b3b5726308f5144feb844fbd336e2c6a5fcff/triton_csprng-0.1.5.tar.gz", hash = "sha256:068e0142b9b14f804538978df845cea600bd967d2a5ec767ba63483671ab2781", size = 22892, upload-time = "2026-08-14T03:31:04.783Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ff/15/9148fa96c537a27c73ca9ece232620a7fb994cddbf9caa9b07e3c8fc3faa/triton_csprng-0.1.5-py3-none-any.whl", hash = "sha256:fe27fc348d39ed76f6c82525800b5342f71a0aac4ccd63debd67bd38cc781f7b", size = 20584, upload-time = "2026-08-14T03:31:03.572Z" },
 ]
 
 [[package]]

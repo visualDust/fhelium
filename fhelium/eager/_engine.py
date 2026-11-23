@@ -17,7 +17,6 @@ from fhelium.backend.assembly import create_builtin_operation_registry
 from fhelium.backend.ckks import (
     CkksKeyGenerator,
 )
-from fhelium.backend.ckks.crypto import reconstruct_q_coefficients_tensor
 from fhelium.backend.ckks.materialization import (
     CkksDeviceResources,
 )
@@ -33,6 +32,7 @@ from fhelium.eager._key_inventory import KeyInventory
 from fhelium.eager._operation_dispatch import _EagerOperationDispatcher
 from fhelium.eager._validation import CkksValidator
 from fhelium.errors import MaximumDepthError
+from fhelium.native.wrapper import ckks_ops
 from fhelium.ir.ckks_state import (
     depth_prime_ids,
     output_residues,
@@ -42,7 +42,7 @@ from fhelium.ir.ckks_state import (
     transform_state,
 )
 from fhelium.ir.dialects import ckks, ntt, rns
-from fhelium.rng import Csprng
+from fhelium.backend.random.stream import RandomStream
 from fhelium.utils.rotation import decompose_rotation_step
 from fhelium.values import (
     Ciphertext,
@@ -269,7 +269,7 @@ class Engine:
     def _rng_for(
         self,
         device: torch.device | str,
-    ) -> Csprng:
+    ) -> RandomStream:
         """Return the random stream for one concrete device."""
 
         return self._dispatcher_for(device).rng
@@ -435,7 +435,7 @@ class Engine:
 
         Without a weight, coefficients are independent uniform {-1,0,1}.
         With ``hamming_weight=h``, a uniform h-element support receives
-        independent uniform signs. The CSPRNG supplies both choices. Every
+        independent uniform signs. The device ChaCha20 stream supplies both choices. Every
         selected Q or QP row stores NTT(s)R in Montgomery form; the returned
         key owns its storage. Distribution and modulus parameters are caller
         choices and do not establish a security level by themselves.
@@ -863,7 +863,6 @@ class Engine:
                     "ring_dimension": self.config.N,
                     "modulus_basis": modulus_basis,
                     "polynomial_domain": polynomial_domain,
-                    "min_modulus": min(self.config.moduli[i] for i in ids),
                 },
                 result_count=2 if polynomial_domain == "coefficient" else 1,
             ),
@@ -1632,7 +1631,7 @@ class Engine:
         if residues.device != ciphertext.data.device:
             raise ValueError("residue device differs from the ciphertext")
         dispatcher = self._dispatcher_for(residues.device)
-        return reconstruct_q_coefficients_tensor(
+        return ckks_ops.reconstruct_q_coefficients(
             residues,
             *dispatcher.device_resources.reconstruction_operands(
                 ciphertext.depth
@@ -3770,8 +3769,12 @@ class Engine:
         then applies each key's Galois automorphism and key product independently.
         Each output is mathematically the requested slot rotation and retains the
         input's depth, scale and Q rows. The selected output domain determines
-        coefficient/standard or NTT/Montgomery representation."""
+        coefficient/standard or NTT/Montgomery representation. The operation
+        consumes coefficient/standard Q input, so an NTT/Montgomery input is
+        transformed once before the shared decomposition."""
 
+        if value.polynomial_domain == "ntt":
+            value = self.ntt_domain_to_coefficient_domain(value)
         identity = (
             self.coefficient_domain_to_ntt_domain(value)
             if output_domain == "ntt" and any(key is None for key in entries)

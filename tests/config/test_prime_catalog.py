@@ -1,63 +1,28 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from itertools import product
-from pathlib import Path
 
 import pytest
-from safetensors import safe_open
 
 import fhelium as fh
 from fhelium import CkksConfig, Preset
-from fhelium.config import _prime_catalog
-from fhelium.config._prime_catalog import get_prime_catalog
 from fhelium.eager import Engine
+from fhelium.native.wrapper import ckks_ops
 
 
-@contextmanager
-def _resource_path(name: str) -> Iterator[Path]:
-    resource = _prime_catalog.resources.files(
-        "fhelium.config.resources"
-    ).joinpath(name)
-    with _prime_catalog.resources.as_file(resource) as path:
-        yield Path(path)
-
-
-def test_packaged_prime_catalog_has_expected_version_and_coverage() -> None:
-    expected_degrees = {1 << log_degree for log_degree in range(12, 18)}
-    expected_scaling_keys = set(product(range(20, 55, 5), expected_degrees)) - {
-        (20, 1 << 17)
-    }
-    expected_special_keys = set(product((28, 60), expected_degrees))
-
-    catalog = get_prime_catalog()
-    assert set(catalog.scaling_keys) == expected_scaling_keys
-    assert set(catalog.special_keys) == expected_special_keys
-
-    for resource_name, expected_format in (
-        ("scaling_primes_v1.safetensors", "ckks-scaling-primes"),
-        ("special_primes_v1.safetensors", "ckks-special-primes"),
-    ):
-        with (
-            _resource_path(resource_name) as path,
-            safe_open(str(path), framework="pt", device="cpu") as handle,
-        ):
-            assert handle.metadata() == {
-                "format": expected_format,
-                "version": "1",
-            }
-
-
-def test_packaged_catalog_validation_uses_public_error_hierarchy() -> None:
-    with pytest.raises(fh.errors.PrimeCatalogResourceError) as captured:
-        _prime_catalog._decode_key(
-            "invalid-catalog-key",
-            resource_name="invalid.safetensors",
-        )
-
-    assert isinstance(captured.value, fh.errors.PrimeCatalogError)
-    assert captured.value.resource_name == "invalid.safetensors"
+def test_prime_catalog_covers_scaling_and_special_widths() -> None:
+    degrees = [1 << log_degree for log_degree in range(12, 18)]
+    for bits, degree in product(range(20, 55, 5), degrees):
+        if (bits, degree) == (20, 1 << 17):
+            with pytest.raises(ValueError, match="no scaling primes"):
+                ckks_ops.scaling_primes(bits, degree)
+            continue
+        primes = ckks_ops.scaling_primes(bits, degree)
+        assert primes and all((p - 1) % (2 * degree) == 0 for p in primes)
+    for bits, degree in product((28, 60), degrees):
+        primes = ckks_ops.special_primes(bits, degree)
+        assert primes and all((p - 1) % (2 * degree) == 0 for p in primes)
+    assert ckks_ops.preset_names() == [preset.value for preset in Preset]
 
 
 @pytest.mark.parametrize(

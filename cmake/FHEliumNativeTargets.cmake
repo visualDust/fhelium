@@ -30,8 +30,17 @@ function(_fhelium_map_msvc_build_paths target)
       ${target}
       PRIVATE
         "$<$<COMPILE_LANGUAGE:CXX>:/pathmap:${_path_mapping_source}=${_path_mapping_destination}>"
-        "$<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/pathmap:${_path_mapping_source}=${_path_mapping_destination}>"
     )
+    # nvcc forwards -Xcompiler text to cl unquoted, so a root containing a
+    # space, such as the default CUDA installation under Program Files, would
+    # split the option. CUDA objects keep those roots unmapped.
+    if(NOT _path_mapping_source MATCHES " ")
+      target_compile_options(
+        ${target}
+        PRIVATE
+          "$<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/pathmap:${_path_mapping_source}=${_path_mapping_destination}>"
+      )
+    endif()
   endforeach()
 endfunction()
 
@@ -97,32 +106,40 @@ endif()
 string(REGEX MATCH "^[0-9]+(\\.[0-9]+)*" FHELIUM_VERSION
              "${FHELIUM_VERSION_FULL}")
 
-function(add_fhelium_library name src_dir include_dir)
+# Builds library `name` from the sources below every directory that follows
+# `include_dir`. Sources under `cpu/`, `cuda/`, and `hip/` directories are
+# compiled only for the enabled backends.
+function(add_fhelium_library name include_dir)
   _fhelium_torch_cxx_standard(_FHELIUM_CXX_STANDARD)
 
-  file(GLOB_RECURSE COMMON_SOURCES CONFIGURE_DEPENDS "${src_dir}/*.cpp")
-  list(FILTER COMMON_SOURCES EXCLUDE REGEX "/(cpu|cuda|hip)/")
-
-  set(CPP_SOURCES ${COMMON_SOURCES})
+  set(CPP_SOURCES "")
   set(CU_SOURCES "")
   set(HIP_SOURCES "")
-  if(FHELIUM_BUILD_CPU)
-    file(GLOB_RECURSE CPU_SOURCES CONFIGURE_DEPENDS "${src_dir}/*/cpu/*.cpp")
-    list(APPEND CPP_SOURCES ${CPU_SOURCES})
-  endif()
-  if(FHELIUM_BUILD_CUDA)
-    file(GLOB_RECURSE CUDA_CPP_SOURCES CONFIGURE_DEPENDS
-         "${src_dir}/*/cuda/*.cpp")
-    file(GLOB_RECURSE CU_SOURCES CONFIGURE_DEPENDS "${src_dir}/*/cuda/*.cu")
-    list(APPEND CPP_SOURCES ${CUDA_CPP_SOURCES})
-  endif()
-
-  if(FHELIUM_BUILD_HIP)
-    file(GLOB_RECURSE HIP_CPP_SOURCES CONFIGURE_DEPENDS
-         "${src_dir}/*/hip/*.cpp")
-    file(GLOB_RECURSE HIP_SOURCES CONFIGURE_DEPENDS "${src_dir}/*/hip/*.hip")
-    list(APPEND CPP_SOURCES ${HIP_CPP_SOURCES})
-  endif()
+  foreach(src_dir IN LISTS ARGN)
+    file(GLOB_RECURSE COMMON_SOURCES CONFIGURE_DEPENDS "${src_dir}/*.cpp")
+    list(FILTER COMMON_SOURCES EXCLUDE REGEX "/(cpu|cuda|hip)/")
+    list(APPEND CPP_SOURCES ${COMMON_SOURCES})
+    if(FHELIUM_BUILD_CPU)
+      file(GLOB_RECURSE CPU_SOURCES CONFIGURE_DEPENDS "${src_dir}/*/cpu/*.cpp")
+      list(APPEND CPP_SOURCES ${CPU_SOURCES})
+    endif()
+    if(FHELIUM_BUILD_CUDA)
+      file(GLOB_RECURSE CUDA_CPP_SOURCES CONFIGURE_DEPENDS
+           "${src_dir}/*/cuda/*.cpp")
+      file(GLOB_RECURSE DIRECTORY_CU_SOURCES CONFIGURE_DEPENDS
+           "${src_dir}/*/cuda/*.cu")
+      list(APPEND CPP_SOURCES ${CUDA_CPP_SOURCES})
+      list(APPEND CU_SOURCES ${DIRECTORY_CU_SOURCES})
+    endif()
+    if(FHELIUM_BUILD_HIP)
+      file(GLOB_RECURSE HIP_CPP_SOURCES CONFIGURE_DEPENDS
+           "${src_dir}/*/hip/*.cpp")
+      file(GLOB_RECURSE DIRECTORY_HIP_SOURCES CONFIGURE_DEPENDS
+           "${src_dir}/*/hip/*.hip")
+      list(APPEND CPP_SOURCES ${HIP_CPP_SOURCES})
+      list(APPEND HIP_SOURCES ${DIRECTORY_HIP_SOURCES})
+    endif()
+  endforeach()
 
   list(SORT CPP_SOURCES)
   list(SORT CU_SOURCES)

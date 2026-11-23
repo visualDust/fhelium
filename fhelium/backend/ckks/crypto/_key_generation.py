@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from typing import cast
 
 import torch
 
@@ -17,21 +18,18 @@ from fhelium.values import (
     RotationKey,
     SecretKey,
 )
-from fhelium.backend.rns.automorphism import (
-    apply_coefficient_galois_automorphism,
-)
 from ..rotation._galois import rotation_galois_element
 from fhelium.errors import (
     PolynomialDomainError,
     ResidueRepresentationError,
     SecretKeyModulusBasisError,
 )
-from fhelium.native.wrapper import rns_ops
+from fhelium.native.wrapper import ckks_ops, rns_ops
 from fhelium.backend.ntt.context import NttContext
 from fhelium.backend.rns.context import RnsContext
 from fhelium.backend.rns.decomposition import _partition_q_digits
 from fhelium.values._validation import validate_prime_ids
-from fhelium.rng import Csprng
+from fhelium.backend.random.stream import RandomStream, advance_
 
 
 @dataclass(frozen=True)
@@ -39,10 +37,12 @@ class KeyGenerationResource:
     """Bind context, arithmetic, and random resources for one key device."""
 
     config: CkksConfig
-    rng: Csprng
+    rng: RandomStream
     rns_context: RnsContext
     ntt_context: NttContext
-    p_product_montgomery_q: torch.Tensor
+    _tables: dict[object, object] = field(
+        default_factory=dict, compare=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.rns_context.config != self.config:
@@ -53,46 +53,23 @@ class KeyGenerationResource:
             raise ValueError(
                 "Key-generation NTT context composes another RNS context"
             )
-        if self.rng.devices != [str(self.device)]:
+        if self.rng.device != self.device:
             raise ValueError(
                 "Key-generation random stream must own exactly its device"
             )
-        table = self.p_product_montgomery_q
-        if table.device != self.device:
-            raise ValueError(
-                "Key-generation P-product table is on another device"
-            )
-        if table.dtype != self.rns_context.dtype:
-            raise TypeError("Key-generation P-product table has another dtype")
 
     @classmethod
     def create(
         cls,
         *,
         config: CkksConfig,
-        rng: Csprng,
+        rng: RandomStream,
         rns_context: RnsContext,
         ntt_context: NttContext,
     ) -> KeyGenerationResource:
-        """Build key-generation scalars on one concrete context device."""
+        """Bind key-generation resources on one concrete context device."""
 
-        montgomery = rns_context.montgomery_parameters
-        product_p = math.prod(montgomery.moduli[-config.num_p_primes :])
-        pr = product_p * montgomery.R
-        return cls(
-            config,
-            rng,
-            rns_context,
-            ntt_context,
-            torch.tensor(
-                [
-                    pr % montgomery.moduli[prime_id]
-                    for prime_id in rns_context.rns_layout.prime_ids(0)
-                ],
-                dtype=rns_context.dtype,
-                device=rns_context.device,
-            ),
-        )
+        return cls(config, rng, rns_context, ntt_context)
 
     def for_config(
         self, config: CkksConfig, *, dtype: torch.dtype | None = None
@@ -113,6 +90,58 @@ class KeyGenerationResource:
         """Return the concrete device shared by all key-generation resources."""
 
         return self.rns_context.device
+
+    @property
+    def ntt_backend(self) -> str:
+        """Return the NTT policy name of the native key-generation calls."""
+
+        return self.ntt_context.ntt_backend_name
+
+    def tables(
+        self, prime_ids: tuple[int, ...], basis: str = ""
+    ) -> dict[str, torch.Tensor]:
+        """Return the parameters and NTT schedules of ``prime_ids``.
+
+        An empty ``basis`` names them ``parameters``, ``forward_{i}`` and
+        ``inverse_{i}``; another basis prefixes the schedule names with it.
+        """
+        key = ("tables", prime_ids, basis)
+        tables = self._tables.get(key)
+        if tables is None:
+            prefix = f"{basis}_" if basis else ""
+            tables = {}
+            if not basis:
+                tables["parameters"] = (
+                    self.rns_context.rns_parameters_for_prime_ids(prime_ids)
+                )
+            for direction in ("forward", "inverse"):
+                operands = self.ntt_context.tensor_operands(
+                    prime_ids, inverse=direction == "inverse"
+                )
+                tables.update(
+                    (f"{prefix}{direction}_{i}", value)
+                    for i, value in enumerate(operands)
+                )
+            self._tables[key] = tables
+        return cast(dict[str, torch.Tensor], tables)
+
+    def source_product(
+        self, p_moduli: tuple[int, ...], multiplier: int
+    ) -> torch.Tensor:
+        r"""Return $(m \prod P) R \bmod q_i$ for every Q row."""
+        key = ("source_product", p_moduli, multiplier)
+        product = self._tables.get(key)
+        if product is None:
+            factors = [*p_moduli, *([multiplier] if multiplier != 1 else [])]
+            product = rns_ops.product_residues(
+                factors,
+                list(self.config.q_moduli),
+                1,
+                True,
+                self.rns_context.dtype,
+            ).to(self.device)
+            self._tables[key] = product
+        return cast(torch.Tensor, product)
 
 
 class CkksKeyGenerator:
@@ -201,7 +230,6 @@ class CkksKeyGenerator:
         its centered representative. Destination storage and Montgomery radix
         belong to target; no sampling or input mutation occurs.
         """
-        from fhelium.backend.rns.basis_extension import centered_basis_extend
         from fhelium.backend.rns.tables import centered_basis_extension_tables
 
         self._require_ntt_montgomery_secret_key(
@@ -214,13 +242,10 @@ class CkksKeyGenerator:
             raise ValueError(
                 "Secret-key basis conversion requires one ring and device"
             )
-        source = secret_key.data.clone()
-        resources.ntt_context.inverse_to_standard_(
-            source, include_p=secret_key.modulus_basis == "QP"
-        )
         work_dtype = (
             torch.int64
-            if torch.int64 in (source.dtype, target.rns_context.dtype)
+            if torch.int64
+            in (resources.rns_context.dtype, target.rns_context.dtype)
             else torch.int32
         )
         work_source = resources.rns_context
@@ -233,15 +258,20 @@ class CkksKeyGenerator:
             work_target = RnsContext(
                 target.config, device=target.device, dtype=work_dtype
             )
-        source = source.to(work_dtype)
         target_ids = target.rns_context.rns_layout.prime_ids(0, include_p=True)
-        tables = centered_basis_extension_tables(
-            work_source, work_target, secret_key.prime_ids, target_ids
+        tables = {
+            **resources.tables(secret_key.prime_ids, "source"),
+            **target.tables(target_ids, "target"),
+            **centered_basis_extension_tables(
+                work_source, work_target, secret_key.prime_ids, target_ids
+            ),
+        }
+        data = ckks_ops.convert_secret_key(
+            secret_key.data,
+            list(tables),
+            list(tables.values()),
+            resources.ntt_backend,
         )
-        data = centered_basis_extend(source, tables).to(
-            target.rns_context.dtype
-        )
-        target.ntt_context.forward_to_montgomery_(data, include_p=True)
         return SecretKey(data=data, prime_ids=target_ids)
 
     def prepare_secret_key(
@@ -267,11 +297,17 @@ class CkksKeyGenerator:
             raise ValueError(
                 "Secret coefficients and resources must share a device"
             )
-        include_p = modulus_basis == "QP"
-        data = resources.rns_context.lift_integer_coefficients_exact(
-            coefficients, include_p=include_p, max_abs=2**63
+        tables = resources.tables(
+            resources.rns_context.rns_layout.prime_ids(
+                0, include_p=modulus_basis == "QP"
+            )
         )
-        resources.ntt_context.forward_to_montgomery_(data, include_p=include_p)
+        data = ckks_ops.prepare_secret_key(
+            coefficients,
+            list(tables),
+            list(tables.values()),
+            resources.ntt_backend,
+        )
         return SecretKey(
             data=data,
             prime_ids=self._prime_ids(data, limb_axis=0),
@@ -289,58 +325,33 @@ class CkksKeyGenerator:
     ) -> SecretKey:
         r"""Sample ternary s and return its depth-zero NTT/Montgomery RNS.
 
-        With no weight, coefficients are independent uniform {-1,0,1}.
-        A supplied h selects a uniform h-element support with independent
-        uniform signs. Sorting distinct 64-bit CSPRNG labels samples a uniform
-        permutation; collisions cause the labels to be resampled. Both label
-        and sign sampling consume the supplied cryptographic random stream.
+        With no weight, coefficients are independent uniform {-1,0,1}. A
+        supplied h selects an h-element support by the smallest 127-bit
+        random labels, with independent uniform signs. Both samplers consume
+        one nonce of the device's random stream.
         The output owns [limb, ntt_index] storage on its resource device.
         """
         if modulus_basis not in ("Q", "QP"):
             raise ValueError(f"Unsupported modulus_basis: {modulus_basis!r}")
-        if hamming_weight is None:
-            coefficients = resources.rng.randint(amax=3, shift=-1, repeats=1)[
-                0
-            ][0]
-        else:
-            n = resources.config.N
-            if (
-                not isinstance(hamming_weight, int)
-                or not 0 <= hamming_weight <= n
-            ):
-                raise ValueError("hamming_weight must be an integer in [0, N]")
-            coefficients = torch.zeros(
-                n, dtype=resources.rns_context.dtype, device=resources.device
+        n = resources.config.N
+        if hamming_weight is not None and (
+            not isinstance(hamming_weight, int) or not 0 <= hamming_weight <= n
+        ):
+            raise ValueError("hamming_weight must be an integer in [0, N]")
+        tables = resources.tables(
+            resources.rns_context.rns_layout.prime_ids(
+                0, include_p=modulus_basis == "QP"
             )
-            if hamming_weight:
-                if hamming_weight == n:
-                    indices = torch.arange(n, device=resources.device)
-                else:
-                    while True:
-                        words = (
-                            resources.rng.randbytes(shares=[0], repeats=2)[0][
-                                :, :n
-                            ].to(torch.int64)
-                            & 0xFFFFFFFF
-                        )
-                        labels = (words[0] << 32) | words[1]
-                        ordered, permutation = labels.sort()
-                        if not bool((ordered[1:] == ordered[:-1]).any().item()):
-                            indices = permutation[:hamming_weight]
-                            break
-                signs = (
-                    resources.rng.randint(amax=2, repeats=1)[0][0][
-                        :hamming_weight
-                    ]
-                    * 2
-                    - 1
-                )
-                coefficients[indices] = signs
-        include_p = modulus_basis == "QP"
-        data = resources.rns_context.lift_centered_coefficients(
-            coefficients, depth=0, include_p=include_p
         )
-        resources.ntt_context.forward_to_montgomery_(data, include_p=include_p)
+        data = ckks_ops.create_secret_key(
+            n,
+            list(tables),
+            list(tables.values()),
+            resources.rng.seed,
+            resources.ntt_backend,
+            hamming_weight,
+        )
+        advance_(resources.rng.seed)
         return SecretKey(
             data=data,
             prime_ids=self._prime_ids(data, limb_axis=0),
@@ -365,6 +376,7 @@ class CkksKeyGenerator:
         and optional sampled uniform/error coefficients are read-only and
         never alias the returned stacked tensor. When error coefficients are
         omitted, the generator samples its configured discrete Gaussian.
+        Each sampled component consumes one nonce, error first.
         """
 
         if modulus_basis not in ("Q", "QP"):
@@ -382,55 +394,36 @@ class CkksKeyGenerator:
                 secret_key,
                 operation="Public-key generation",
             )
-
-        depth = 0
-        error = (
-            resources.rng.discrete_gaussian(repeats=1)[0][0]
-            if error_coefficients is None
-            else error_coefficients
+        if error_coefficients is not None:
+            if error_coefficients.shape != (resources.config.N,):
+                raise ValueError(
+                    "Public-key error coefficients must have shape "
+                    f"[{resources.config.N}]"
+                )
+            if error_coefficients.dtype != resources.rns_context.dtype:
+                raise TypeError(
+                    "Public-key error coefficients have another dtype"
+                )
+            if error_coefficients.device != resources.device:
+                raise ValueError(
+                    "Public-key error coefficients are on another device"
+                )
+        tables = resources.tables(
+            resources.rns_context.rns_layout.prime_ids(0, include_p=include_p)
         )
-        if error.shape != (resources.config.N,):
-            raise ValueError(
-                "Public-key error coefficients must have shape "
-                f"[{resources.config.N}]"
-            )
-        if error.dtype != resources.rns_context.dtype:
-            raise TypeError("Public-key error coefficients have another dtype")
-        if error.device != resources.device:
-            raise ValueError(
-                "Public-key error coefficients are on another device"
-            )
-        error = resources.rns_context.lift_centered_coefficients(
-            error, depth, include_p=include_p
+        public_key_data = ckks_ops.create_public_key(
+            secret_key.data,
+            list(tables),
+            list(tables.values()),
+            resources.rng.seed,
+            resources.rng.cdt_table,
+            resources.ntt_backend,
+            uniform_component,
+            error_coefficients,
         )
-        resources.ntt_context.forward_to_montgomery_(error, include_p=include_p)
-
-        if uniform_component is None:
-            repeats = resources.config.num_p_primes if include_p else 0
-            uniform_component_data = resources.rng.randint(
-                [
-                    resources.rns_context.moduli_for_basis(
-                        depth, include_p=include_p
-                    )
-                ],
-                repeats=repeats,
-            )[0]
-        else:
-            uniform_component_data = uniform_component
-
-        secret_key_rows = secret_key.data
-        if not include_p and secret_key.modulus_basis == "QP":
-            secret_key_rows = secret_key_rows[: -resources.config.num_p_primes]
-
-        secret_times_uniform = resources.rns_context.montgomery_mul(
-            uniform_component_data, secret_key_rows, include_p=include_p
-        )
-        public_component0 = resources.rns_context.sub_lazy(
-            error, secret_times_uniform, include_p=include_p
-        )
-
-        public_key_data = torch.stack(
-            (public_component0, uniform_component_data), dim=0
+        advance_(
+            resources.rng.seed,
+            (uniform_component is None) + (error_coefficients is None),
         )
         return PublicKey(
             data=public_key_data,
@@ -439,6 +432,94 @@ class CkksKeyGenerator:
             modulus_basis=modulus_basis,
             residue_representation="montgomery",
         )
+
+    def _key_switch_layout(
+        self,
+        resources: KeyGenerationResource,
+        *,
+        source_depth: int,
+        digit_prime_ids: tuple[tuple[int, ...], ...] | None,
+        p_prime_ids: tuple[int, ...] | None,
+        source_multiplier: int,
+        uniform_component_by_key_digit: torch.Tensor | None,
+        error_coefficients_by_key_digit: torch.Tensor | None,
+    ) -> tuple[tuple[object, ...], dict[str, object]]:
+        """Select the key rows and digits; return native arguments and metadata."""
+        active_q = resources.rns_context.rns_layout.prime_ids(source_depth)
+        selected_p = (
+            resources.rns_context.rns_chain.p_prime_ids
+            if p_prime_ids is None
+            else validate_prime_ids(
+                p_prime_ids,
+                value_name="Key auxiliary basis",
+                require_increasing=False,
+            )
+        )
+        if any(
+            i >= resources.config.total_num_primes for i in selected_p
+        ) or set(selected_p).intersection(active_q):
+            raise ValueError(
+                "Key auxiliary rows must be catalog primes outside the source Q basis"
+            )
+        p_moduli = tuple(resources.config.moduli[i] for i in selected_p)
+        if digit_prime_ids is None:
+            digit_prime_ids = _partition_q_digits(
+                active_q,
+                resources.config.q_moduli[active_q[0] :],
+                p_moduli,
+            )
+        elif (
+            any(not rows for rows in digit_prime_ids)
+            or tuple(i for rows in digit_prime_ids for i in rows) != active_q
+        ):
+            raise ValueError("Key digits must partition the Q rows in order")
+        if (
+            error_coefficients_by_key_digit is not None
+            and error_coefficients_by_key_digit.shape
+            != (len(digit_prime_ids), resources.config.N)
+        ):
+            raise ValueError(
+                "Key-switch error coefficients must have shape "
+                f"[{len(digit_prime_ids)}, {resources.config.N}]"
+            )
+        tables = {
+            **resources.tables(
+                resources.rns_context.rns_layout.prime_ids(0, include_p=True)
+            ),
+            "source_product": resources.source_product(
+                p_moduli, source_multiplier
+            ),
+        }
+        arguments = (
+            list(tables),
+            list(tables.values()),
+            resources.rng.seed,
+            resources.rng.cdt_table,
+            resources.ntt_backend,
+            active_q[0],
+            [len(rows) for rows in digit_prime_ids],
+            list(selected_p),
+            uniform_component_by_key_digit,
+            error_coefficients_by_key_digit,
+        )
+        metadata: dict[str, object] = {
+            "prime_ids": (*active_q, *selected_p),
+            "digit_prime_ids": digit_prime_ids,
+            "polynomial_domain": "ntt",
+            "modulus_basis": "QP",
+            "residue_representation": "montgomery",
+        }
+        return arguments, metadata
+
+    @staticmethod
+    def _advance_key_switch(
+        resources: KeyGenerationResource,
+        metadata: dict[str, object],
+        arguments: tuple[object, ...],
+    ) -> None:
+        digits = len(cast(tuple, metadata["digit_prime_ids"]))
+        sampled = (arguments[-2] is None) + (arguments[-1] is None)
+        advance_(resources.rng.seed, digits * sampled)
 
     def create_key_switch_key(
         self,
@@ -460,9 +541,8 @@ class CkksKeyGenerator:
         Stable key digit $d$ satisfies, on that digit's embedded source rows,
         $k_{d,0}+k_{d,1}s_{\mathrm{dst}}=P m s_{\mathrm{src}}+e_d$.
         Here m is source_multiplier. Caller-supplied digit_prime_ids partition
-        the active Q rows in order. At source_depth zero, omission uses the
-        configured hybrid decomposition; at later depths it partitions active Q
-        by the same product-below-P rule.
+        the active Q rows in order; omission partitions active Q into
+        consecutive digits whose products are below P.
         Execution must use the same digit partition and source relation.
         Output is integral
         ``[key_digit, key_component=2, QP_limb, ntt_index]`` in
@@ -484,125 +564,20 @@ class CkksKeyGenerator:
             destination_secret_key,
             operation="Hybrid key-switch key generation (destination key)",
         )
-        depth = source_depth
-        active_q = resources.rns_context.rns_layout.prime_ids(depth)
-        supplied_p = p_prime_ids is not None
-        selected_p = (
-            resources.rns_context.rns_chain.p_prime_ids
-            if p_prime_ids is None
-            else validate_prime_ids(
-                p_prime_ids,
-                value_name="Key auxiliary basis",
-                require_increasing=False,
-            )
-        )
-        if any(
-            i >= resources.config.total_num_primes for i in selected_p
-        ) or set(selected_p).intersection(active_q):
-            raise ValueError(
-                "Key auxiliary rows must be catalog primes outside the source Q basis"
-            )
-        active_qp = (*active_q, *selected_p)
-        p_moduli = tuple(resources.config.moduli[i] for i in selected_p)
-
-        source_secret_q = source_secret_key.data[
-            : resources.rns_context.q_row_stop
-        ].clone()
-        product = resources.p_product_montgomery_q
-        if supplied_p or source_multiplier != 1:
-            product = resources.rns_context.integer_scalar_parameters(
-                math.prod(p_moduli) * source_multiplier
-            )[: resources.config.num_q_primes]
-        resources.rns_context.montgomery_mul_row_scalars_(
-            source_secret_q, product
-        )
-        if digit_prime_ids is None:
-            if depth == 0 and not supplied_p:
-                digit_prime_ids = tuple(
-                    spec.prime_ids
-                    for spec in resources.rns_context.rns_layout.digit_specs(0)
-                )
-            else:
-                digit_prime_ids = _partition_q_digits(
-                    active_q,
-                    resources.config.q_moduli[active_q[0] :],
-                    p_moduli,
-                )
-        elif (
-            any(not rows for rows in digit_prime_ids)
-            or tuple(i for rows in digit_prime_ids for i in rows) != active_q
-        ):
-            raise ValueError("Key digits must partition the Q rows in order")
-        if (
-            error_coefficients_by_key_digit is not None
-            and error_coefficients_by_key_digit.shape
-            != (len(digit_prime_ids), resources.config.N)
-        ):
-            raise ValueError(
-                "Key-switch error coefficients must have shape "
-                f"[{len(digit_prime_ids)}, {resources.config.N}]"
-            )
-        key_digits: list[torch.Tensor | None] = [None] * len(digit_prime_ids)
-        for key_digit_index, source_prime_ids in enumerate(digit_prime_ids):
-            uniform_component = (
-                uniform_component_by_key_digit[key_digit_index]
-                if uniform_component_by_key_digit is not None
-                else None
-            )
-            public_key = self.create_public_key(
-                resources,
-                destination_secret_key,
-                modulus_basis="QP",
-                uniform_component=uniform_component,
-                error_coefficients=(
-                    error_coefficients_by_key_digit[key_digit_index]
-                    if error_coefficients_by_key_digit is not None
-                    else None
-                ),
-            )
-
-            source_digit_key = tuple(source_prime_ids)
-            row_start = source_prime_ids[0]
-            row_stop = source_prime_ids[-1] + 1
-            source_secret_digit = source_secret_q[row_start:row_stop]
-            public_key_digit_c0 = public_key.k0[row_start:row_stop]
-            twice_modulus = resources.rns_context.rns_parameters_for_prime_ids(
-                source_digit_key
-            )[0]
-            updated_c0_digit = rns_ops.add_lazy_with_twice_modulus(
-                public_key_digit_c0, source_secret_digit, twice_modulus
-            )
-            public_key_digit_c0.copy_(updated_c0_digit, non_blocking=True)
-            if active_qp == tuple(
-                range(active_qp[0], resources.config.total_num_primes)
-            ):
-                key_digits[key_digit_index] = public_key.data[
-                    :, active_qp[0] :
-                ].contiguous()
-            else:
-                rows = torch.tensor(
-                    active_qp, dtype=torch.long, device=resources.device
-                )
-                key_digits[key_digit_index] = public_key.data.index_select(
-                    1, rows
-                )
-
-        if any(key_digit is None for key_digit in key_digits):
-            raise RuntimeError(
-                "Key-switch key generation left an empty hybrid-RNS digit"
-            )
-        key_data = torch.stack(
-            [key_digit for key_digit in key_digits if key_digit is not None],
-            dim=0,
-        )
-        return KeySwitchKey(
-            data=key_data,
-            prime_ids=active_qp,
+        arguments, metadata = self._key_switch_layout(
+            resources,
+            source_depth=source_depth,
             digit_prime_ids=digit_prime_ids,
-            polynomial_domain="ntt",
-            modulus_basis="QP",
-            residue_representation="montgomery",
+            p_prime_ids=p_prime_ids,
+            source_multiplier=source_multiplier,
+            uniform_component_by_key_digit=uniform_component_by_key_digit,
+            error_coefficients_by_key_digit=error_coefficients_by_key_digit,
         )
+        data = ckks_ops.create_key_switch_key(
+            source_secret_key.data, destination_secret_key.data, *arguments
+        )
+        self._advance_key_switch(resources, metadata, arguments)
+        return KeySwitchKey(data=data, **metadata)
 
     def create_encapsulation_keys(
         self,
@@ -677,32 +652,18 @@ class CkksKeyGenerator:
             secret_key,
             operation="Relinearization-key generation",
         )
-        squared_secret_key_data = resources.rns_context.montgomery_mul(
-            secret_key.data, secret_key.data, include_p=True
-        )
-        squared_secret_key = SecretKey(
-            data=squared_secret_key_data,
-            prime_ids=secret_key.prime_ids,
-            polynomial_domain="ntt",
-            modulus_basis="QP",
-            residue_representation="montgomery",
-        )
-        key_switch_key = self.create_key_switch_key(
+        arguments, metadata = self._key_switch_layout(
             resources,
-            squared_secret_key,
-            secret_key,
             source_depth=source_depth,
             digit_prime_ids=digit_prime_ids,
             p_prime_ids=p_prime_ids,
+            source_multiplier=1,
+            uniform_component_by_key_digit=None,
+            error_coefficients_by_key_digit=None,
         )
-        return RelinearizationKey(
-            data=key_switch_key.data,
-            prime_ids=key_switch_key.prime_ids,
-            digit_prime_ids=key_switch_key.digit_prime_ids,
-            polynomial_domain=key_switch_key.polynomial_domain,
-            modulus_basis=key_switch_key.modulus_basis,
-            residue_representation=key_switch_key.residue_representation,
-        )
+        data = ckks_ops.create_relinearization_key(secret_key.data, *arguments)
+        self._advance_key_switch(resources, metadata, arguments)
+        return RelinearizationKey(data=data, **metadata)
 
     def create_rotation_key(
         self,
@@ -732,43 +693,26 @@ class CkksKeyGenerator:
             rotation_step,
             ring_dimension=resources.config.N,
         )
-        rotated = secret_key.data.clone()
-        resources.ntt_context.inverse_montgomery_(rotated, include_p=True)
-        rotated = apply_coefficient_galois_automorphism(
-            rotated,
+        arguments, metadata = self._key_switch_layout(
+            resources,
+            source_depth=source_depth,
+            digit_prime_ids=digit_prime_ids,
+            p_prime_ids=p_prime_ids,
+            source_multiplier=1,
+            uniform_component_by_key_digit=uniform_component_by_key_digit,
+            error_coefficients_by_key_digit=None,
+        )
+        data = ckks_ops.create_galois_key(
+            secret_key.data,
             rotation_galois_element(
                 resources.config.N,
                 rotation_step,
                 resources.config.galois_generator,
             ),
-            resources.rns_context.moduli,
+            *arguments,
         )
-        resources.ntt_context.forward_montgomery_(rotated, include_p=True)
-        rotated_secret_key = SecretKey(
-            data=rotated,
-            prime_ids=secret_key.prime_ids,
-            polynomial_domain="ntt",
-            modulus_basis="QP",
-            residue_representation="montgomery",
-        )
-        key_switch_key = self.create_key_switch_key(
-            resources,
-            rotated_secret_key,
-            secret_key,
-            uniform_component_by_key_digit=uniform_component_by_key_digit,
-            source_depth=source_depth,
-            digit_prime_ids=digit_prime_ids,
-            p_prime_ids=p_prime_ids,
-        )
-        return RotationKey(
-            data=key_switch_key.data,
-            prime_ids=key_switch_key.prime_ids,
-            digit_prime_ids=key_switch_key.digit_prime_ids,
-            polynomial_domain=key_switch_key.polynomial_domain,
-            modulus_basis=key_switch_key.modulus_basis,
-            residue_representation=key_switch_key.residue_representation,
-            rotation_step=rotation_step,
-        )
+        self._advance_key_switch(resources, metadata, arguments)
+        return RotationKey(data=data, rotation_step=rotation_step, **metadata)
 
     def create_conjugation_key(
         self,
@@ -790,35 +734,17 @@ class CkksKeyGenerator:
             secret_key,
             operation="Conjugation-key generation",
         )
-
-        conjugated = secret_key.data.clone()
-        resources.ntt_context.inverse_montgomery_(conjugated, include_p=True)
-        conjugated = apply_coefficient_galois_automorphism(
-            conjugated,
-            2 * resources.config.N - 1,
-            resources.rns_context.moduli,
-        )
-        resources.ntt_context.forward_montgomery_(conjugated, include_p=True)
-        conjugated_secret_key = SecretKey(
-            data=conjugated,
-            prime_ids=secret_key.prime_ids,
-            polynomial_domain="ntt",
-            modulus_basis="QP",
-            residue_representation="montgomery",
-        )
-        key_switch_key = self.create_key_switch_key(
+        arguments, metadata = self._key_switch_layout(
             resources,
-            conjugated_secret_key,
-            secret_key,
             source_depth=source_depth,
             digit_prime_ids=digit_prime_ids,
             p_prime_ids=p_prime_ids,
+            source_multiplier=1,
+            uniform_component_by_key_digit=None,
+            error_coefficients_by_key_digit=None,
         )
-        return ConjugationKey(
-            data=key_switch_key.data,
-            prime_ids=key_switch_key.prime_ids,
-            digit_prime_ids=key_switch_key.digit_prime_ids,
-            polynomial_domain=key_switch_key.polynomial_domain,
-            modulus_basis=key_switch_key.modulus_basis,
-            residue_representation=key_switch_key.residue_representation,
+        data = ckks_ops.create_galois_key(
+            secret_key.data, 2 * resources.config.N - 1, *arguments
         )
+        self._advance_key_switch(resources, metadata, arguments)
+        return ConjugationKey(data=data, **metadata)

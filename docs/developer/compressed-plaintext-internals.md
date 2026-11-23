@@ -49,11 +49,11 @@ $$
 
 Using that target-root mapping makes the compact transform's bit-reversed entries correspond to contiguous blocks of $R$ evaluations in the full transform. Choosing an unrelated primitive root for the smaller ring could change evaluation ordering even though both roots are mathematically valid.
 
-`prepare_periodic_tensor` performs the $U$-point inverse embedding, quantizes the scaled coefficients, and lifts them into the selected Q or QP rows. Coefficient output stores Montgomery residues in `strided_sparse` layout with zero implicit rows. NTT output transforms the compact rows and returns `contiguous` layout in NTT/Montgomery form. Both retain the requested depth and actual scale. This path constructs compact coefficient and transform data directly, without allocating an expanded length-$N$ plaintext.
+`fhelium::ckks::prepare_periodic_plaintext` performs the $U$-point inverse embedding, quantizes the scaled coefficients, and lifts them into the selected Q or QP rows. Coefficient output stores Montgomery residues in `strided_sparse` layout with zero implicit rows. NTT output transforms the compact rows and returns `contiguous` layout in NTT/Montgomery form. Both retain the requested depth and actual scale. This path constructs compact coefficient and transform data directly, without allocating an expanded length-$N$ plaintext.
 
 ## How is rounding aligned with a full-ring stream?
 
-`rng.csprng.stochastic_round_` accepts `word_stride=R` for compact preparation. Stored coefficient $j$ uses random word $jR$ from the corresponding full-ring coefficient stream. The state advances by $N$ words per batch item, including the omitted coefficient positions. The generator retains its key/nonce and advances its counters and intra-block position.
+Compact preparation rounds with word stride $R$: stored coefficient $j$ uses key-stream word $jR$, which is the word of the corresponding full-ring coefficient. The nonce advances once per preparation, so a compact and a full preparation from the same stream state round shared coefficients identically.
 
 The smaller FFT and a full-ring FFT can have different floating-point roundoff near integer-quantization thresholds. Aligned random-word selection preserves the stream positions, but direct compact preparation can still produce different rounded integers from a separately encoded expanded message. Checked compression preserves an existing encoding bit for bit; direct preparation computes a compact encoding with its own FFT quantization. Numerical comparison should identify which of these two contracts is being evaluated.
 
@@ -117,7 +117,7 @@ Capture expands the grouped APIs into visible multiplication, addition, rotation
 | --- | --- |
 | Compact value storage and checked conversion | `fhelium/values/compressed_plaintext.py` |
 | Direct periodic embedding and target-root tables | `fhelium/backend/ckks/codec/_periodic.py` |
-| Strided rounding-stream selection | `fhelium/rng/csprng.py` |
+| Strided rounding-stream selection | `fhelium/backend/random/stream.py` |
 | Native compact arithmetic | `fhelium/backend/ckks/arithmetic.py` |
 | Generated compact expressions | `fhelium/backend/triton/_expressions.py` |
 | Capture and structured output restoration | `fhelium/compile/frontend/_eager_capture.py`, `fhelium/compile/_preparation.py` |

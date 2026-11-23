@@ -3,6 +3,8 @@
 from __future__ import annotations
 from functools import cache
 
+from fhelium.native.wrapper import ckks_ops
+
 
 @cache
 def rotation_galois_element(
@@ -16,9 +18,6 @@ def rotation_galois_element(
     names.
     """
 
-    exponent = -int(rotation_step) if generator == 5 else int(rotation_step)
-    return pow(
-        generator,
-        exponent % ring_dimension,
-        2 * ring_dimension,
+    return ckks_ops.rotation_galois_element(
+        ring_dimension.bit_length() - 1, int(rotation_step), generator
     )

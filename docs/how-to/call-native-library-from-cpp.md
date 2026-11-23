@@ -51,8 +51,18 @@ On Windows, add the directory that contains `fhelium.dll` (`fhelium/native/lib` 
 | `fhelium/ckks.h` | `fhelium::ckks` | Ciphertext multiplication, plaintext addition, rescale, Galois automorphisms, and key-switch primitives |
 | `fhelium/ntt_diagnostic.h` | `fhelium::ntt::diagnostic` | NTT variants with an explicit shared-memory transform size, for profiling |
 | `fhelium/rns_parameters.h` | `fhelium::rns` | Row layout of the `rns_params` operand |
+| `fhelium/rns_tables.h` | `fhelium::rns` | Parameter tables and the product, inverse, mixed-radix, CRT, and quotient tables of basis conversion, rescale, and ModDown |
+| `fhelium/ntt_tables.h` | `fhelium::ntt` | Negacyclic roots, compact and fixed-radix twiddles, indexed radix-2 schedules, and NTT-domain Galois permutations |
+| `fhelium/ckks_tables.h` | `fhelium::ckks` | Rotation Galois elements, coefficient Galois gathers, slot permutations and twists, and periodic-message positions |
+| `fhelium/ckks_parameters.h` | `fhelium::ckks` | Built-in presets, the prime catalog, moduli validation, the security budget table, and the hybrid key-digit partition |
+| `fhelium/random.h` | `fhelium::random` | ChaCha20 key streams and uniform, discrete Gaussian, centered binomial, and ternary samplers |
+| `fhelium/tensor_table.h` | `fhelium` | `TensorTable`, the named prepared tables that whole operations read |
+| `fhelium/ntt_operations.h` | `fhelium::ntt` | Forward and inverse transforms selected by NTT policy name |
+| `fhelium/rns_operations.h` | `fhelium::rns` | Hybrid ModUp, basis extension, ModDown, and rescale |
+| `fhelium/ckks_operations.h` | `fhelium::ckks` | Encoding and decoding, encryption and decryption, key switching, relinearization, rotation, rotation sums, modulus raising, compressed-plaintext arithmetic, and scalar arithmetic |
+| `fhelium/ckks_keys.h` | `fhelium::ckks` | Secret, public, key-switching, relinearization, and Galois key generation, and secret-key basis conversion |
 
-Each function has the name and arguments of the Torch operator with the same name. Mutated schema arguments are `at::Tensor&`, and a trailing underscore marks a function that mutates its first argument in place. A call executes on the device of its Tensor arguments: all-CPU arguments select the CPU implementation, and a CUDA argument selects the GPU implementation. A function that has no implementation for that device in the installed build raises `c10::NotImplementedError`.
+Each function has the name and arguments of the Torch operator with the same name; `preset_parameters` returns a `CkksParameters` structure, and its operator returns the same values as a tuple. A whole operation or key-generation function takes a `TensorTable` and an options structure such as `KeySwitchOptions` or `KeySwitchKeyLayout`; its operator receives the table as parallel `str[] table_names` and `Tensor[] tables` arguments and the options as separate attributes. Mutated schema arguments are `at::Tensor&`, and a trailing underscore marks a function that mutates its first argument in place. A call executes on the device of its Tensor arguments: all-CPU arguments select the CPU implementation, and a CUDA argument selects the GPU implementation. A function that has no implementation for that device in the installed build raises `c10::NotImplementedError`.
 
 ```cpp
 #include <fhelium/fhelium.h>
@@ -69,6 +79,6 @@ at::Tensor square(const at::Tensor& residues, const at::Tensor& params) {
 }
 ```
 
-The functions consume Tensors only; they do not construct parameter tables, NTT twiddles, schedules, or keys. Obtain these Tensors from the FHElium Python contexts, for example `RnsContext.rns_parameters_for`, and transfer them with Torch serialization, or compute them in the application according to the layout in `fhelium/rns_parameters.h`.
+The table functions compute on the host and return CPU Tensors in standard residues; move them to the execution device and convert twiddles to Montgomery form with `to_montgomery_` where the consuming function requires it. The Python contexts build their tables with the same functions. Evaluation keys are generated in Python and can be transferred with Torch serialization.
 
-The repository example [`examples/cpp`](https://github.com/VisualDust/fhelium/tree/main/examples/cpp) computes an RNS parameter table in C++, runs Montgomery multiplication, standard addition, and two-component ciphertext multiplication on CPU and on CUDA when available, and compares each result with 128-bit integer arithmetic.
+The repository example [`examples/cpp`](https://github.com/VisualDust/fhelium/tree/main/examples/cpp) builds an RNS parameter table with `parameter_table`, runs Montgomery multiplication, standard addition, and two-component ciphertext multiplication on CPU and on CUDA when available, compares each result with host modular arithmetic, and checks one ChaCha20 key-stream block against the RFC 8439 test vector.

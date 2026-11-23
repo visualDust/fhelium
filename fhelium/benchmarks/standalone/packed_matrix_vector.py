@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from fhelium.legacy.engine import CkksEngine
-
 import gc
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -21,6 +19,8 @@ from fhelium.benchmarks.model import (
     ProgressCallback,
 )
 from fhelium.benchmarks.registry import register_benchmark
+from fhelium.benchmarks.synthetic import ckks_engine
+from fhelium.eager import Engine
 from fhelium.benchmarks.timing import (
     measure,
     read_peak_memory,
@@ -98,7 +98,7 @@ def cyclic_diagonal_slots(
 
 
 def prepare_packed_matvec(
-    engine: CkksEngine,
+    engine: Engine,
     matrix: torch.Tensor,
     source: fh.Ciphertext,
 ) -> tuple[tuple[fh.Plaintext, ...], dict[int, fh.RotationKey]]:
@@ -109,6 +109,7 @@ def prepare_packed_matvec(
             engine.encode(
                 cyclic_diagonal_slots(matrix, step, engine.num_slots),
                 depth=source.depth,
+                device=source.data.device,
             )
         )
         for step in range(matrix.size(0))
@@ -120,7 +121,7 @@ def prepare_packed_matvec(
 
 
 def evaluate_packed_matvec(
-    engine: CkksEngine,
+    engine: Engine,
     source: fh.Ciphertext,
     diagonals: Sequence[fh.Plaintext],
     rotation_keys: Mapping[int, fh.RotationKey],
@@ -216,9 +217,10 @@ def _run_packed_matvec(
     hoist_chunk_size = int(parameters["hoist_chunk_size"])
 
     progress("Creating the engine and deterministic packed input")
-    engine = CkksEngine(
+    device = torch.device(str(parameters.get("device", "cuda:0")))
+    engine = ckks_engine(
         fh.Preset(str(parameters["preset"])),
-        device=str(parameters.get("device", "cuda:0")),
+        device=device,
         ntt_backend=str(parameters["ntt_backend"]),
     )
     if engine.num_slots % size != 0:
@@ -227,7 +229,7 @@ def _run_packed_matvec(
         )
     matrix, vector = matrix_and_vector(size, seed=seed)
     packed_vector = periodic_slots(vector, engine.num_slots)
-    source = engine.encrypt_message(packed_vector)
+    source = engine.encrypt_message(packed_vector, device=device)
 
     progress("Materializing direct rotation keys and operation-ready diagonals")
     diagonals, rotation_keys = prepare_packed_matvec(engine, matrix, source)
@@ -244,23 +246,23 @@ def _run_packed_matvec(
     progress("Warming the encrypted evaluator")
     for _ in range(warmup):
         evaluate()
-    synchronize(engine.device)
+    synchronize(device)
     gc.collect()
 
-    baseline = reset_peak_memory(engine.device)
+    baseline = reset_peak_memory(device)
     progress("Measuring encrypted matrix-vector evaluation")
     timing = measure(
         evaluate,
         warmup=0,
         runs=runs,
-        device=engine.device,
+        device=device,
         include_samples=include_raw_samples,
     )
     memory = read_peak_memory(baseline)
 
     progress("Decrypting one result and checking the cleartext oracle")
     result = evaluate()
-    actual = engine.decrypt_message(result, is_real=True)[:size]
+    actual = engine.decrypt_message(result, is_real=True, device="cpu")[:size]
     expected = matrix @ vector
     max_abs_error, rms_error = _error_stats(actual, expected)
     if max_abs_error > CORRECTNESS_ATOL:
@@ -296,8 +298,8 @@ def _run_packed_matvec(
     effective_parameters = dict(parameters)
     resolved_parameters = {
         "preset": parameters["preset"],
-        "device": str(engine.device),
-        "ntt_backend": engine.ntt_backend_name,
+        "device": str(device),
+        "ntt_backend": engine.ntt_backend_name(device),
         "matrix_size": size,
         "matrix_shape": [size, size],
         "vector_shape": [size],
@@ -337,7 +339,7 @@ def _run_packed_matvec(
             dimensions={
                 "category": "latency",
                 "matrix_size": size,
-                "backend": engine.ntt_backend_name,
+                "backend": engine.ntt_backend_name(device),
             },
             samples=tuple(timing.get("samples_ms", ())),
         ),
@@ -350,7 +352,7 @@ def _run_packed_matvec(
             dimensions={
                 "category": "throughput",
                 "matrix_size": size,
-                "backend": engine.ntt_backend_name,
+                "backend": engine.ntt_backend_name(device),
             },
         ),
         BenchmarkMetric(
@@ -362,7 +364,7 @@ def _run_packed_matvec(
             dimensions={
                 "category": "memory",
                 "matrix_size": size,
-                "backend": engine.ntt_backend_name,
+                "backend": engine.ntt_backend_name(device),
             },
         ),
         BenchmarkMetric(
@@ -374,7 +376,7 @@ def _run_packed_matvec(
             dimensions={
                 "category": "memory",
                 "matrix_size": size,
-                "backend": engine.ntt_backend_name,
+                "backend": engine.ntt_backend_name(device),
             },
         ),
     ]

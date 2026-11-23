@@ -1,7 +1,8 @@
 """Generate the C++ API reference pages from libfhelium's public headers.
 
 Header text supplies documentation: `//!` lines before the namespace describe
-the header, and `///` lines document the declaration that follows them. Torch
+the header, and `///` lines document the function, enumerator, struct, class or
+member declaration that follows them. Torch
 operator schemas come from the registration sources in `csrc/torchops`, and
 device implementations come from the routers in `csrc/ops/<family>/api.cpp`.
 Like the Python reference, generation scans source text and needs neither a
@@ -30,7 +31,17 @@ HEADERS = (
     ("fhelium/rns.h", "rns"),
     ("fhelium/ntt.h", "ntt"),
     ("fhelium/ntt_diagnostic.h", "ntt-diagnostic"),
+    ("fhelium/random.h", "random"),
     ("fhelium/rns_parameters.h", "rns-parameters"),
+    ("fhelium/rns_tables.h", "rns-tables"),
+    ("fhelium/ntt_tables.h", "ntt-tables"),
+    ("fhelium/ckks_tables.h", "ckks-tables"),
+    ("fhelium/ckks_parameters.h", "ckks-parameters"),
+    ("fhelium/tensor_table.h", "tensor-table"),
+    ("fhelium/ntt_operations.h", "ntt-operations"),
+    ("fhelium/rns_operations.h", "rns-operations"),
+    ("fhelium/ckks_operations.h", "ckks-operations"),
+    ("fhelium/ckks_keys.h", "ckks-keys"),
 )
 
 DISPATCH_DEVICES = {
@@ -42,6 +53,7 @@ DISPATCH_DEVICES = {
 ANY_DEVICE = "Any device"
 
 NAMESPACE_RE = re.compile(r"^namespace\s+([\w:]+)\s*\{")
+TYPE_RE = re.compile(r"^(struct|class)\s+(?:FHELIUM_API\s+)?(\w+)")
 STRING_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
 
@@ -53,6 +65,7 @@ class Declaration:
     doc: tuple[str, ...]
     start_line: int
     end_line: int
+    parent: str = ""
 
 
 @dataclass(frozen=True)
@@ -99,6 +112,7 @@ def parse_header(include: str, page: str) -> Header:
     intro: list[str] = []
     pending: list[str] = []
     declarations: list[Declaration] = []
+    parent = ""
     index = 0
     while index < len(lines):
         stripped = lines[index].strip()
@@ -108,15 +122,41 @@ def parse_header(include: str, page: str) -> Header:
             pending.append(stripped[3:].removeprefix(" "))
         elif match := NAMESPACE_RE.match(stripped):
             namespace = match.group(1)
+        elif stripped == "};":
+            parent = ""
+        elif pending and (match := TYPE_RE.match(stripped)):
+            declarations.append(
+                Declaration(
+                    name=match.group(2),
+                    kind=match.group(1),
+                    text=f"{match.group(1)} {match.group(2)}",
+                    doc=paragraphs(pending),
+                    start_line=index + 1,
+                    end_line=index + 1,
+                )
+            )
+            parent = match.group(2)
+            pending = []
         elif pending:
             start = index
-            terminator = ";" if stripped.startswith("FHELIUM_API") else ","
+            if parent:
+                terminators: tuple[str, ...] = (";", "{")
+            elif stripped.startswith("FHELIUM_API"):
+                terminators = (";",)
+            else:
+                terminators = (",",)
             text = [stripped]
-            while not text[-1].endswith(terminator):
+            while not text[-1].endswith(terminators):
                 index += 1
                 text.append(lines[index].strip())
             declaration = " ".join(text)
-            if terminator == ";":
+            if parent:
+                declaration = declaration.rstrip("{;").strip()
+                name = re.search(r"(\w+)\(", declaration) or re.search(
+                    r"(\w+)(?:\s*=.*)?$", declaration
+                )
+                kind = "member"
+            elif terminators == (";",):
                 declaration = declaration.removeprefix("FHELIUM_API").strip()
                 name = re.search(r"(\w+)\(", declaration)
                 kind = "function"
@@ -132,6 +172,7 @@ def parse_header(include: str, page: str) -> Header:
                     doc=paragraphs(pending),
                     start_line=start + 1,
                     end_line=index + 1,
+                    parent=parent,
                 )
             )
             pending = []
@@ -177,7 +218,15 @@ def torch_operators() -> dict[str, tuple[str, str]]:
                     part.strip() for part in arguments.split(",", 1)
                 )
                 target = re.sub(r"\s+", "", target).lstrip("&")
-                functions[target] = (library, name.strip('"'))
+                name = name.strip('"')
+                # A file-local adapter registers the public function of the
+                # same name in the library's namespace.
+                if "::" not in target:
+                    family = library.removeprefix("fhelium_").removesuffix(
+                        "_ops"
+                    )
+                    target = f"fhelium::{family}::{name}"
+                functions[target] = (library, name)
     return {
         qualified: (library, schemas[(library, name)])
         for qualified, (library, name) in functions.items()
@@ -259,7 +308,6 @@ def render_function(
     devices: dict[str, str],
 ) -> str:
     qualified = f"{header.namespace}::{declaration.name}"
-    library, schema = operators[qualified]
     parts = [
         f"## `{declaration.name}` {{#{declaration.name}}}",
         "",
@@ -271,13 +319,42 @@ def render_function(
         "```",
         "",
         f"**Devices:** {devices.get(qualified, ANY_DEVICE)}  ",
-        f"**Torch operator:** `torch.ops.{library}.{declaration.name}`",
+    ]
+    if qualified in operators:
+        library, schema = operators[qualified]
+        parts.extend(
+            [
+                f"**Torch operator:** `torch.ops.{library}.{declaration.name}`",
+                "",
+                "```text",
+                f"{library}::{schema}",
+                "```",
+            ]
+        )
+    parts.extend(["", *[f"{paragraph}\n" for paragraph in declaration.doc]])
+    return "\n".join(parts).rstrip() + "\n"
+
+
+def render_type(header: Header, declaration: Declaration) -> str:
+    members = [
+        d
+        for d in header.declarations
+        if d.kind == "member" and d.parent == declaration.name
+    ]
+    parts = [
+        f"## `{declaration.name}` {{#{declaration.name}}}",
         "",
-        "```text",
-        f"{library}::{schema}",
-        "```",
+        f'<span class="api-kind">{declaration.kind}</span> '
+        f"[View source]({source_link(header.include, declaration)})",
         "",
         *[f"{paragraph}\n" for paragraph in declaration.doc],
+        "| Member | Description |",
+        "| --- | --- |",
+        *[
+            f"| [`{escape_cell(d.text)}`]({source_link(header.include, d)}) "
+            f"| {escape_cell(' '.join(d.doc))} |"
+            for d in members
+        ],
     ]
     return "\n".join(parts).rstrip() + "\n"
 
@@ -288,6 +365,8 @@ def render_enumerators(header: Header) -> str:
         "| --- | --- | --- |",
     ]
     for declaration in header.declarations:
+        if declaration.kind != "enumerator":
+            continue
         value = declaration.text.split("=", 1)[1].strip()
         rows.append(
             f"| [`{declaration.name}`]({source_link(header.include, declaration)}) "
@@ -302,6 +381,8 @@ def render_page(
     devices: dict[str, str],
 ) -> str:
     functions = [d for d in header.declarations if d.kind == "function"]
+    types = [d for d in header.declarations if d.kind in {"struct", "class"}]
+    enumerators = [d for d in header.declarations if d.kind == "enumerator"]
     parts = [
         "---",
         "editLink: false",
@@ -313,6 +394,7 @@ def render_page(
         "",
         *[f"{paragraph}\n" for paragraph in header.intro],
     ]
+    parts.extend(render_type(header, d) for d in types)
     if functions:
         parts.extend(
             [
@@ -330,7 +412,7 @@ def render_page(
         parts.extend(
             render_function(header, d, operators, devices) for d in functions
         )
-    else:
+    if enumerators:
         parts.append(render_enumerators(header))
     return "\n".join(parts).rstrip() + "\n"
 

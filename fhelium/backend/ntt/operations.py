@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
@@ -188,31 +186,3 @@ def execute_transition(transition, values, policy_name, *, in_place):
 
 
 __all__ = ["NativeNttImplementation"]
-
-
-def execute_named_transform(
-    source: torch.Tensor,
-    tensors: Mapping[str, torch.Tensor],
-    attributes: Mapping[str, object],
-    basis: str,
-    transition: str,
-    *,
-    in_place: bool = True,
-) -> torch.Tensor:
-    """Pass the selected Tensor tables to the shared native NTT dispatch."""
-    direction = "inverse" if transition.startswith("inverse") else "forward"
-    prefix = f"{basis}_{direction}_"
-    policy_name = str(attributes["ntt_backend"])
-    count = (
-        4
-        if policy_name == "radix2_indexed"
-        else 2
-        if policy_name.startswith("radix2_compact")
-        else 3
-    )
-    return execute_transition(
-        transition,
-        (source, *(tensors[f"{prefix}{i}"] for i in range(count))),
-        policy_name,
-        in_place=in_place,
-    )

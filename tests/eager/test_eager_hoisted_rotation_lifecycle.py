@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from fhelium.legacy.engine import CkksEngine
-
 import pytest
 import torch
 
@@ -12,41 +10,33 @@ from fhelium.eager import Engine
 
 
 def _assert_hoisted_rotation_lifecycle(device: str) -> None:
-    config = Preset.slots8192_scale40_depth7_int64
-    reference = CkksEngine(
-        config,
-        device=device,
-        rng_seed=941,
-        rng_nonce=17,
-    )
     engine = Engine(
-        config,
-        rng_seed=941,
-        rng_nonce=17,
+        Preset.slots8192_scale40_depth7_int64, rng_seed=941, rng_nonce=17
     )
-    message = torch.linspace(
-        -0.01,
-        0.01,
-        reference.num_slots,
-        dtype=torch.float64,
-    )
-    secret_key = reference.create_secret_key()
-    public_key = reference.create_public_key(secret_key)
-    source = reference.encrypt(reference.encode(message), public_key)
-    source = reference.mod_switch_to_depth(source, 2)
-    keys = [
-        reference.create_rotation_key(step, secret_key) for step in (1, -3, 1)
-    ]
+    with torch.device(device):
+        message = torch.linspace(
+            -0.01, 0.01, engine.num_slots, dtype=torch.float64
+        )
+        secret_key = engine.create_secret_key()
+        public_key = engine.create_public_key(secret_key)
+        source = engine.encrypt(engine.encode(message), public_key)
+        source = engine.mod_switch_to_depth(source, 2)
+        keys = [
+            engine.create_rotation_key(step, secret_key) for step in (1, -3, 1)
+        ]
+
+    def fresh_hoisted(rotation_keys):
+        """Return hoisted rotations from an Engine without cached executors."""
+
+        return Engine(engine.config).rotate_many_with_keys(
+            source, rotation_keys, use_hoisting=True, moddown_rounding="floor"
+        )
 
     for _ in range(2):
         actual = engine.rotate_many_with_keys(
             source, keys, use_hoisting=True, moddown_rounding="floor"
         )
-        expected = reference.rotate_many_with_keys(
-            source,
-            keys,
-            use_hoisting=True,
-        )
+        expected = fresh_hoisted(keys)
         assert len(actual) == len(expected)
         assert all(
             torch.equal(actual_value.data, expected_value.data)
@@ -91,11 +81,7 @@ def _assert_hoisted_rotation_lifecycle(device: str) -> None:
     actual_after_mutation = engine.rotate_many_with_keys(
         source, keys, use_hoisting=True, moddown_rounding="floor"
     )
-    expected_after_mutation = reference.rotate_many_with_keys(
-        source,
-        keys,
-        use_hoisting=True,
-    )
+    expected_after_mutation = fresh_hoisted(keys)
     assert all(
         torch.equal(actual_value.data, expected_value.data)
         for actual_value, expected_value in zip(

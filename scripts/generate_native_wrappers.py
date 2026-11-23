@@ -41,7 +41,10 @@ TYPE_MAP = {
     "float": "float",
     "bool": "bool",
     "str": "str",
+    "List[str]": "list[str]",
+    "Optional[int]": "int | None",
     "ScalarType": "torch.dtype",
+    "Device": "torch.device",
 }
 
 GENERATED_MARKER = (
@@ -87,6 +90,7 @@ class OpSpec:
     schema: str
     args: tuple[ArgSpec, ...]
     returns: tuple[ReturnSpec, ...]
+    decomposes: bool = False
 
     @property
     def python_name(self) -> str:
@@ -114,6 +118,7 @@ class FakeTensorShapeRule:
     like_arg: str
     shape_expression: str
     factory_expression: str | None = None
+    dtype_expression: str | None = None
 
 
 FAKE_TENSOR_SHAPE_RULES = {
@@ -137,9 +142,9 @@ FAKE_TENSOR_SHAPE_RULES = {
         like_arg="mixed_radix_components",
         shape_expression="(*mixed_radix_components.shape[:-2], destination_row_count, mixed_radix_components.size(-1))",
     ),
-    "fhelium_rns_ops::lift_centered_coefficients": FakeTensorShapeRule(
-        like_arg="centered_coefficients",
-        shape_expression="(*centered_coefficients.shape[:-1], twice_modulus.size(0), centered_coefficients.size(-1))",
+    "fhelium_rns_ops::lift_integer_coefficients": FakeTensorShapeRule(
+        like_arg="twice_modulus",
+        shape_expression="(*coefficients.shape[:-1], twice_modulus.size(0), coefficients.size(-1))",
     ),
     "fhelium_rns_ops::montgomery_weighted_sum": FakeTensorShapeRule(
         like_arg="ciphertexts",
@@ -150,6 +155,40 @@ FAKE_TENSOR_SHAPE_RULES = {
         like_arg="ciphertexts",
         shape_expression="(ciphertexts[0].size(0), group_count, *ciphertexts[0].shape[1:])",
         factory_expression="ciphertexts[0]",
+    ),
+    "fhelium_random_ops::chacha20_keystream": FakeTensorShapeRule(
+        like_arg="seed",
+        shape_expression="(block_count, 16)",
+        dtype_expression="torch.uint32",
+    ),
+    "fhelium_random_ops::sample_uniform_residues": FakeTensorShapeRule(
+        like_arg="rns_params",
+        shape_expression="(*shape[:-1], rns_params.size(1), shape[-1])",
+    ),
+    "fhelium_random_ops::stochastic_round": FakeTensorShapeRule(
+        like_arg="values",
+        shape_expression="values.shape",
+        dtype_expression="torch.int64",
+    ),
+    "fhelium_random_ops::sample_discrete_gaussian": FakeTensorShapeRule(
+        like_arg="seed",
+        shape_expression="tuple(shape) if rns_params is None else (*shape[:-1], rns_params.size(1), shape[-1])",
+        factory_expression="(seed if rns_params is None else rns_params)",
+    ),
+    "fhelium_random_ops::sample_centered_binomial": FakeTensorShapeRule(
+        like_arg="seed",
+        shape_expression="tuple(shape) if rns_params is None else (*shape[:-1], rns_params.size(1), shape[-1])",
+        factory_expression="(seed if rns_params is None else rns_params)",
+    ),
+    "fhelium_random_ops::sample_ternary": FakeTensorShapeRule(
+        like_arg="seed",
+        shape_expression="tuple(shape) if rns_params is None else (*shape[:-1], rns_params.size(1), shape[-1])",
+        factory_expression="(seed if rns_params is None else rns_params)",
+    ),
+    "fhelium_random_ops::sample_fixed_weight_ternary": FakeTensorShapeRule(
+        like_arg="seed",
+        shape_expression="tuple(shape) if rns_params is None else (*shape[:-1], rns_params.size(1), shape[-1])",
+        factory_expression="(seed if rns_params is None else rns_params)",
     ),
 }
 
@@ -234,6 +273,9 @@ def schema_to_spec(schema: torch.FunctionSchema) -> OpSpec:
         schema=str(schema),
         args=tuple(args),
         returns=returns,
+        decomposes=torch._C._dispatch_has_kernel_for_dispatch_key(
+            schema.name, "CompositeImplicitAutograd"
+        ),
     )
 
 
@@ -351,7 +393,14 @@ def fake_return_expression(spec: OpSpec) -> str:
                 f"argument {shape_rule.like_arg!r}"
             )
         factory = shape_rule.factory_expression or shape_rule.like_arg
-        return f"return {factory}.new_empty({shape_rule.shape_expression})"
+        dtype = (
+            f", dtype={shape_rule.dtype_expression}"
+            if shape_rule.dtype_expression
+            else ""
+        )
+        return (
+            f"return {factory}.new_empty({shape_rule.shape_expression}{dtype})"
+        )
 
     tensor_arg = next(
         (arg for arg in spec.args if arg.py_type == "torch.Tensor"), None
@@ -486,10 +535,15 @@ def render_fake_module(specs_by_namespace: dict[str, list[OpSpec]]) -> str:
     all_specs = [
         spec for specs in specs_by_namespace.values() for spec in specs
     ]
+    # Operators without Tensor arguments run their host kernel under fake
+    # tensor modes, and CompositeImplicitAutograd operators decompose into
+    # registered operators; neither needs a fake implementation.
     fake_ops = [
         render_fake(spec)
         for specs in specs_by_namespace.values()
         for spec in specs
+        if not spec.decomposes
+        and any("Tensor" in arg.type_repr for arg in spec.args)
     ]
     return (
         f"{render_header(specs_need_any(all_specs), require_native=False)}\n\n"

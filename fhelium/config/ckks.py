@@ -7,19 +7,16 @@ from functools import cached_property
 from typing import Any, cast
 
 from fhelium._version import __version__
-from fhelium.config._prime_catalog import get_prime_catalog
 from fhelium.config.security import (
     SecurityAssessment,
     _lookup_maximum_modulus_bits,
     assess_config_security,
 )
 from fhelium.errors import (
-    InsufficientPrimeCatalogError,
-    ScalingPrimeCatalogEntryNotFoundError,
-    SpecialPrimeCatalogEntryNotFoundError,
     SecurityBudgetExceededError,
     SecurityParametersUnsupportedError,
 )
+from fhelium.native.wrapper import ckks_ops
 
 
 class Preset(Enum):
@@ -53,116 +50,6 @@ class Preset(Enum):
     slots65536_scale25_depth14_int32 = "slots65536-scale25-depth14-int32"
 
 
-_PRESET_CONFIGS: dict[Preset, dict[str, int]] = {
-    Preset.slots8192_scale30_depth9_int64: {
-        "logN": 14,
-        "scaling_prime_bits": 30,
-        "max_depth": 9,
-        "num_p_primes": 1,
-    },
-    Preset.slots8192_scale40_depth7_int64: {
-        "logN": 14,
-        "scaling_prime_bits": 40,
-        "max_depth": 7,
-        "num_p_primes": 1,
-    },
-    Preset.slots8192_scale50_depth5_int64: {
-        "logN": 14,
-        "scaling_prime_bits": 50,
-        "max_depth": 5,
-        "num_p_primes": 1,
-    },
-    Preset.slots16384_scale30_depth21_int64: {
-        "logN": 15,
-        "scaling_prime_bits": 30,
-        "max_depth": 21,
-        "num_p_primes": 2,
-    },
-    Preset.slots16384_scale40_depth16_int64: {
-        "logN": 15,
-        "scaling_prime_bits": 40,
-        "max_depth": 16,
-        "num_p_primes": 2,
-    },
-    Preset.slots16384_scale50_depth12_int64: {
-        "logN": 15,
-        "scaling_prime_bits": 50,
-        "max_depth": 12,
-        "num_p_primes": 2,
-    },
-    Preset.slots32768_scale30_depth45_int64: {
-        "logN": 16,
-        "scaling_prime_bits": 30,
-        "max_depth": 45,
-        "num_p_primes": 4,
-    },
-    Preset.slots32768_scale40_depth34_int64: {
-        "logN": 16,
-        "scaling_prime_bits": 40,
-        "max_depth": 34,
-        "num_p_primes": 4,
-    },
-    Preset.slots32768_scale50_depth27_int64: {
-        "logN": 16,
-        "scaling_prime_bits": 50,
-        "max_depth": 27,
-        "num_p_primes": 4,
-    },
-    Preset.slots32768_scale50_depth29_int64: {
-        "logN": 16,
-        "scaling_prime_bits": 50,
-        "max_depth": 29,
-        "num_p_primes": 4,
-    },
-    Preset.slots65536_scale30_depth95_int64: {
-        "logN": 17,
-        "scaling_prime_bits": 30,
-        "max_depth": 95,
-        "num_p_primes": 6,
-    },
-    Preset.slots65536_scale40_depth72_int64: {
-        "logN": 17,
-        "scaling_prime_bits": 40,
-        "max_depth": 72,
-        "num_p_primes": 6,
-    },
-    Preset.slots65536_scale50_depth58_int64: {
-        "logN": 17,
-        "scaling_prime_bits": 50,
-        "max_depth": 58,
-        "num_p_primes": 6,
-    },
-    Preset.slots8192_scale25_depth14_int32: {
-        "special_prime_bits": 28,
-        "logN": 14,
-        "scaling_prime_bits": 25,
-        "max_depth": 14,
-        "num_p_primes": 1,
-    },
-    Preset.slots16384_scale25_depth29_int32: {
-        "special_prime_bits": 28,
-        "logN": 15,
-        "scaling_prime_bits": 25,
-        "max_depth": 29,
-        "num_p_primes": 2,
-    },
-    Preset.slots32768_scale25_depth24_int32: {
-        "special_prime_bits": 28,
-        "logN": 16,
-        "scaling_prime_bits": 25,
-        "max_depth": 24,
-        "num_p_primes": 4,
-    },
-    Preset.slots65536_scale25_depth14_int32: {
-        "special_prime_bits": 28,
-        "logN": 17,
-        "scaling_prime_bits": 25,
-        "max_depth": 14,
-        "num_p_primes": 6,
-    },
-}
-
-
 def _dumped_moduli(
     value: object,
     *,
@@ -181,62 +68,20 @@ def _dumped_moduli(
 
 
 def _preset_parameters(preset: Preset) -> dict[str, object]:
-    """Resolve a preset recipe to its Q and P prime values."""
+    """Resolve a preset to its Q and P prime values with libfhelium."""
 
-    recipe = _PRESET_CONFIGS[preset]
-    log_n = recipe["logN"]
-    degree = 1 << log_n
-    scaling_bits = recipe["scaling_prime_bits"]
-    special_bits = recipe.get("special_prime_bits", 60)
-    max_depth = recipe["max_depth"]
-    p_count = recipe["num_p_primes"]
-    catalog = get_prime_catalog()
-    try:
-        scaling_candidates = catalog.scaling_primes(scaling_bits, degree)
-    except KeyError as error:
-        raise ScalingPrimeCatalogEntryNotFoundError(
-            prime_bits=scaling_bits, ring_dimension=degree
-        ) from error
-    scaling_count = max_depth
-    if len(scaling_candidates) < scaling_count:
-        raise InsufficientPrimeCatalogError(
-            prime_kind="scaling",
-            ring_dimension=degree,
-            required_count=scaling_count,
-            available_count=len(scaling_candidates),
-        )
-    scaling = tuple(scaling_candidates[:scaling_count])
-    try:
-        special_candidates = catalog.special_primes(special_bits, degree)
-    except KeyError as error:
-        raise SpecialPrimeCatalogEntryNotFoundError(
-            prime_bits=special_bits, ring_dimension=degree
-        ) from error
-    if len(scaling_candidates) < scaling_count + 1:
-        raise InsufficientPrimeCatalogError(
-            prime_kind="scaling",
-            ring_dimension=degree,
-            required_count=(scaling_count + 1),
-            available_count=len(scaling_candidates),
-        )
-    terminal = scaling_candidates[scaling_count]
-    selected_q = (*scaling, terminal)
-    special_available = [
-        prime for prime in special_candidates if prime not in selected_q
-    ]
-    if len(special_available) < p_count:
-        raise InsufficientPrimeCatalogError(
-            prime_kind="special",
-            ring_dimension=degree,
-            required_count=p_count,
-            available_count=len(special_available),
-        )
-    special = tuple(special_available[:p_count])
+    log_n, default_scale, q_moduli, group_sizes, p_moduli = (
+        ckks_ops.preset_parameters(preset.value)
+    )
+    groups = []
+    start = 0
+    for size in group_sizes:
+        groups.append(tuple(q_moduli[start : start + size]))
+        start += size
     return {
-        "default_scale": float(1 << scaling_bits),
-        "q_depth_groups": tuple((prime,) for prime in scaling)
-        + ((terminal,),),
-        "p_moduli": special,
+        "default_scale": default_scale,
+        "q_depth_groups": tuple(groups),
+        "p_moduli": tuple(p_moduli),
         "logN": log_n,
     }
 
@@ -304,15 +149,7 @@ class CkksConfig:
             p_moduli, name="p_moduli", require_nonempty=True
         )
         all_moduli = tuple(prime for group in groups for prime in group) + special
-        if len(set(all_moduli)) != len(all_moduli):
-            raise ValueError("Q and P must contain distinct primes")
-        if any(prime <= 2 or prime % 2 == 0 for prime in all_moduli):
-            raise ValueError("Every Q/P modulus must be an odd integer above two")
-        N = 1 << logN
-        if any((prime - 1) % (2 * N) for prime in all_moduli):
-            raise ValueError(
-                "Every Q/P modulus must support the configured negacyclic NTT"
-            )
+        ckks_ops.validate_moduli(logN, list(all_moduli))
         if not isinstance(sigma, (int, float)) or isinstance(sigma, bool):
             raise TypeError("sigma must be a real number")
         sigma = float(sigma)
@@ -494,7 +331,7 @@ class CkksConfig:
     def total_modulus_bits(self) -> int:
         """Bit width of the complete QP product."""
 
-        return (math.prod(self.moduli) - 1).bit_length()
+        return ckks_ops.modulus_bits(list(self.moduli))
 
     @cached_property
     def maximum_modulus_bits(self) -> int:

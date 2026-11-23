@@ -32,7 +32,7 @@ decltype(::fhelium::rns::montgomery_mul_row_scalars_standard)
 decltype(::fhelium::rns::reduce_to_standard_) reduce_to_standard_;
 decltype(::fhelium::rns::center_residues_) center_residues_;
 decltype(::fhelium::rns::shift_residues_positive_) shift_residues_positive_;
-decltype(::fhelium::rns::lift_centered_coefficients) lift_centered_coefficients;
+decltype(::fhelium::rns::lift_integer_coefficients) lift_integer_coefficients;
 decltype(::fhelium::rns::mixed_radix_decompose) mixed_radix_decompose;
 decltype(::fhelium::rns::mixed_radix_basis_extend_to_montgomery)
     mixed_radix_basis_extend_to_montgomery;
@@ -67,7 +67,7 @@ decltype(::fhelium::rns::montgomery_mul_row_scalars_standard)
 decltype(::fhelium::rns::reduce_to_standard_) reduce_to_standard_;
 decltype(::fhelium::rns::center_residues_) center_residues_;
 decltype(::fhelium::rns::shift_residues_positive_) shift_residues_positive_;
-decltype(::fhelium::rns::lift_centered_coefficients) lift_centered_coefficients;
+decltype(::fhelium::rns::lift_integer_coefficients) lift_integer_coefficients;
 decltype(::fhelium::rns::mixed_radix_decompose) mixed_radix_decompose;
 decltype(::fhelium::rns::mixed_radix_basis_extend_to_montgomery)
     mixed_radix_basis_extend_to_montgomery;

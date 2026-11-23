@@ -60,6 +60,5 @@ void rns_center_residues_inplace_hip(torch::Tensor standard_residues,
 void rns_shift_residues_positive_inplace_hip(torch::Tensor centered_residues,
                                               const torch::Tensor rns_params);
 
-torch::Tensor rns_lift_centered_coefficients_hip(
-    const torch::Tensor centered_coefficients,
-    const torch::Tensor twice_modulus);
+torch::Tensor rns_lift_integer_coefficients_hip(
+    const torch::Tensor coefficients, const torch::Tensor twice_modulus);

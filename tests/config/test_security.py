@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from fhelium.legacy.engine import CkksEngine
-
 from dataclasses import FrozenInstanceError
 
 import pytest
-import fhelium.legacy.engine.ckks_engine as ckks_engine_module
 from fhelium import CkksConfig, Preset, config
+from fhelium.eager import Engine
 from fhelium.config import (
     SecurityAssessment,
     assess_config_security,
@@ -28,6 +26,7 @@ def _config(**overrides: object) -> CkksConfig:
     }
     parameters.update(overrides)
     return CkksConfig(**parameters)  # type: ignore[arg-type]
+
 
 _TABLE_ROWS = {
     "ternary": {
@@ -257,14 +256,7 @@ def test_config_convenience_assesses_the_exact_complete_qp_product() -> None:
     assert assessment.status == "meets"
 
 
-def test_engine_enforces_over_budget_before_rns_initialization(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class UnexpectedRnsRuntime:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            raise AssertionError("RNS initialization must not run")
-
-    monkeypatch.setattr(ckks_engine_module, "RnsRuntime", UnexpectedRnsRuntime)
+def test_engine_enforces_security_budget_at_construction() -> None:
     source = CkksConfig.parse(Preset.slots32768_scale30_depth45_int64)
     config = CkksConfig(
         default_scale=source.default_scale,
@@ -275,21 +267,14 @@ def test_engine_enforces_over_budget_before_rns_initialization(
     assert config.security_assessment.status == "exceeds"
 
     with pytest.raises(SecurityBudgetExceededError):
-        CkksEngine(config, device="cpu")
+        Engine(config)
 
 
-def test_engine_rejects_unsupported_sigma_before_rns_initialization(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class UnexpectedRnsRuntime:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            raise AssertionError("RNS initialization must not run")
-
-    monkeypatch.setattr(ckks_engine_module, "RnsRuntime", UnexpectedRnsRuntime)
+def test_engine_rejects_unsupported_sigma_at_construction() -> None:
     config = _config(sigma=3.2)
 
     with pytest.raises(SecurityParametersUnsupportedError):
-        CkksEngine(config, device="cpu")
+        Engine(config)
 
 
 def test_public_exports() -> None:

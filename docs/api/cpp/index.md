@@ -1,6 +1,6 @@
 # C++ reference
 
-`libfhelium` exports the native CKKS, RNS, and NTT functions as C++ functions on ATen Tensors. Each function is also registered as the Torch operator of the same name, which FHElium's Python Backend calls, so one entry documents both interfaces. [Call the native library from C++](../../how-to/call-native-library-from-cpp.md) describes how to link the library through the `FHElium` CMake package.
+`libfhelium` exports the native CKKS, RNS, NTT, and sampling functions as C++ functions on ATen Tensors. Each function is also registered as the Torch operator of the same name, which FHElium's Python Backend calls, so one entry documents both interfaces. [Call the native library from C++](../../how-to/call-native-library-from-cpp.md) describes how to link the library through the `FHElium` CMake package.
 
 | Header | Namespace | Contents |
 | --- | --- | --- |
@@ -8,6 +8,7 @@
 | [`fhelium/rns.h`](rns.md) | `fhelium::rns` | Modular arithmetic, Montgomery conversion, and basis conversion on residue Tensors |
 | [`fhelium/ntt.h`](ntt.md) | `fhelium::ntt` | Forward and inverse negacyclic NTTs and indexed-schedule validation |
 | [`fhelium/ntt_diagnostic.h`](ntt-diagnostic.md) | `fhelium::ntt::diagnostic` | NTT functions with a selectable shared-memory transform size |
+| [`fhelium/random.h`](random.md) | `fhelium::random` | ChaCha20 keystreams and uniform, discrete Gaussian, centered binomial, ternary, and stochastic-rounding samplers |
 | [`fhelium/rns_parameters.h`](rns-parameters.md) | `fhelium::rns` | Row layout of the `rns_params` Tensor |
 
 `fhelium/fhelium.h` includes every header.

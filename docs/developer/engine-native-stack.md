@@ -103,6 +103,7 @@ Loading `_ops` registers these operator namespaces:
 - `torch.ops.fhelium_rns_ops` for modular and basis arithmetic;
 - `torch.ops.fhelium_ntt_ops` for production NTT transitions;
 - `torch.ops.fhelium_ckks_ops` for plaintext, Galois, key-switch, and rescale tensor primitives;
+- `torch.ops.fhelium_random_ops` for ChaCha20 key streams and CKKS samplers;
 - `torch.ops.fhelium_ntt_diagnostic_ops` for named NTT profiling variants.
 
 Wrappers under `fhelium.native.wrapper` are generated from the live operator schemas. A representative wrapper is equivalent to:

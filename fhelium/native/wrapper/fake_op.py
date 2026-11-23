@@ -574,6 +574,93 @@ def _fake_fhelium_ntt_ops_validate__indexed__schedule(
     pass
 
 
+@torch.library.register_fake("fhelium_random_ops::add_discrete_gaussian_")
+def _fake_fhelium_random_ops_add__discrete__gaussian__(
+    residues: torch.Tensor,
+    seed: torch.Tensor,
+    cdt_table: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_random_ops::chacha20_keystream")
+def _fake_fhelium_random_ops_chacha20__keystream(
+    seed: torch.Tensor, first_block: int, block_count: int
+) -> torch.Tensor:
+    return seed.new_empty((block_count, 16), dtype=torch.uint32)
+
+
+@torch.library.register_fake("fhelium_random_ops::sample_centered_binomial")
+def _fake_fhelium_random_ops_sample__centered__binomial(
+    seed: torch.Tensor,
+    shape: list[int],
+    k: int,
+    rns_params: torch.Tensor | None = None,
+) -> torch.Tensor:
+    return (seed if rns_params is None else rns_params).new_empty(
+        tuple(shape)
+        if rns_params is None
+        else (*shape[:-1], rns_params.size(1), shape[-1])
+    )
+
+
+@torch.library.register_fake("fhelium_random_ops::sample_discrete_gaussian")
+def _fake_fhelium_random_ops_sample__discrete__gaussian(
+    seed: torch.Tensor,
+    shape: list[int],
+    cdt_table: torch.Tensor,
+    rns_params: torch.Tensor | None = None,
+) -> torch.Tensor:
+    return (seed if rns_params is None else rns_params).new_empty(
+        tuple(shape)
+        if rns_params is None
+        else (*shape[:-1], rns_params.size(1), shape[-1])
+    )
+
+
+@torch.library.register_fake("fhelium_random_ops::sample_fixed_weight_ternary")
+def _fake_fhelium_random_ops_sample__fixed__weight__ternary(
+    seed: torch.Tensor,
+    shape: list[int],
+    weight: int,
+    rns_params: torch.Tensor | None = None,
+) -> torch.Tensor:
+    return (seed if rns_params is None else rns_params).new_empty(
+        tuple(shape)
+        if rns_params is None
+        else (*shape[:-1], rns_params.size(1), shape[-1])
+    )
+
+
+@torch.library.register_fake("fhelium_random_ops::sample_ternary")
+def _fake_fhelium_random_ops_sample__ternary(
+    seed: torch.Tensor,
+    shape: list[int],
+    nonzero_probability: float,
+    rns_params: torch.Tensor | None = None,
+) -> torch.Tensor:
+    return (seed if rns_params is None else rns_params).new_empty(
+        tuple(shape)
+        if rns_params is None
+        else (*shape[:-1], rns_params.size(1), shape[-1])
+    )
+
+
+@torch.library.register_fake("fhelium_random_ops::sample_uniform_residues")
+def _fake_fhelium_random_ops_sample__uniform__residues(
+    seed: torch.Tensor, shape: list[int], rns_params: torch.Tensor
+) -> torch.Tensor:
+    return rns_params.new_empty((*shape[:-1], rns_params.size(1), shape[-1]))
+
+
+@torch.library.register_fake("fhelium_random_ops::stochastic_round")
+def _fake_fhelium_random_ops_stochastic__round(
+    seed: torch.Tensor, values: torch.Tensor, word_stride: int = 1
+) -> torch.Tensor:
+    return values.new_empty(values.shape, dtype=torch.int64)
+
+
 @torch.library.register_fake("fhelium_rns_ops::add_lazy")
 def _fake_fhelium_rns_ops_add__lazy(
     lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
@@ -649,16 +736,12 @@ def _fake_fhelium_rns_ops_from__montgomery__(
     pass
 
 
-@torch.library.register_fake("fhelium_rns_ops::lift_centered_coefficients")
-def _fake_fhelium_rns_ops_lift__centered__coefficients(
-    centered_coefficients: torch.Tensor, twice_modulus: torch.Tensor
+@torch.library.register_fake("fhelium_rns_ops::lift_integer_coefficients")
+def _fake_fhelium_rns_ops_lift__integer__coefficients(
+    coefficients: torch.Tensor, twice_modulus: torch.Tensor
 ) -> torch.Tensor:
-    return centered_coefficients.new_empty(
-        (
-            *centered_coefficients.shape[:-1],
-            twice_modulus.size(0),
-            centered_coefficients.size(-1),
-        )
+    return twice_modulus.new_empty(
+        (*coefficients.shape[:-1], twice_modulus.size(0), coefficients.size(-1))
     )
 
 

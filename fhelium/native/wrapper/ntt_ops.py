@@ -35,6 +35,26 @@ def compact_ntt_stage_range_(residues: torch.Tensor, compact_twiddles: torch.Ten
     torch.ops.fhelium_ntt_ops.compact_ntt_stage_range_(residues, compact_twiddles, rns_params, inverse, start_stage, end_stage, grouped_stage_count)
 
 
+def compact_twiddles(moduli: list[int], log_n: int, dtype: int, shoup32: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::compact_twiddles``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::compact_twiddles(int[] moduli, int log_n, ScalarType dtype, bool shoup32=False) -> (Tensor, Tensor)
+
+    Args:
+        moduli: list[int].
+        log_n: int.
+        dtype: int.
+        shoup32: bool.
+
+    Returns: tuple[torch.Tensor, torch.Tensor].
+    """
+    _require_native()
+    return torch.ops.fhelium_ntt_ops.compact_twiddles(moduli, log_n, dtype, shoup32)
+
+
 def fixed_radix_ntt_stage_range_(residues: torch.Tensor, outer_twiddles: torch.Tensor, root_powers: torch.Tensor, rns_params: torch.Tensor, inverse: bool, start_stage: int, end_stage: int) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::fixed_radix_ntt_stage_range_``.
@@ -287,6 +307,43 @@ def forward_ntt_to_montgomery_power_of_two_radix_compact_(standard_residues: tor
     torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_power_of_two_radix_compact_(standard_residues, outer_twiddles, radix_root_powers, rns_params)
 
 
+def galois_indices(log_n: int, galois_element: int) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::galois_indices``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::galois_indices(int log_n, int galois_element) -> Tensor
+
+    Args:
+        log_n: int.
+        galois_element: int.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_ntt_ops.galois_indices(log_n, galois_element)
+
+
+def indexed_radix2_plan(moduli: list[int], log_n: int, dtype: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::indexed_radix2_plan``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::indexed_radix2_plan(int[] moduli, int log_n, ScalarType dtype) -> (Tensor, Tensor, Tensor, Tensor)
+
+    Args:
+        moduli: list[int].
+        log_n: int.
+        dtype: int.
+
+    Returns: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor].
+    """
+    _require_native()
+    return torch.ops.fhelium_ntt_ops.indexed_radix2_plan(moduli, log_n, dtype)
+
+
 def inverse_ntt_montgomery_compact_grouped_smem_(montgomery_residues: torch.Tensor, inverse_twiddles: torch.Tensor, rns_params: torch.Tensor, grouped_stage_count: int) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_montgomery_compact_grouped_smem_``.
@@ -529,6 +586,108 @@ def inverse_ntt_to_standard_power_of_two_radix_compact_(montgomery_residues: tor
     """
     _require_native()
     torch.ops.fhelium_ntt_ops.inverse_ntt_to_standard_power_of_two_radix_compact_(montgomery_residues, outer_twiddles, radix_root_powers, rns_params)
+
+
+def negacyclic_root(modulus: int, log_n: int) -> int:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::negacyclic_root``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::negacyclic_root(int modulus, int log_n) -> int
+
+    Args:
+        modulus: int.
+        log_n: int.
+
+    Returns: int.
+    """
+    _require_native()
+    return torch.ops.fhelium_ntt_ops.negacyclic_root(modulus, log_n)
+
+
+def power_of_two_radix_twiddles(moduli: list[int], log_n: int, radix: int, dtype: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::power_of_two_radix_twiddles``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::power_of_two_radix_twiddles(int[] moduli, int log_n, int radix, ScalarType dtype) -> (Tensor, Tensor, Tensor, Tensor)
+
+    Args:
+        moduli: list[int].
+        log_n: int.
+        radix: int.
+        dtype: int.
+
+    Returns: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor].
+    """
+    _require_native()
+    return torch.ops.fhelium_ntt_ops.power_of_two_radix_twiddles(moduli, log_n, radix, dtype)
+
+
+def subring_indexed_radix2_plan(moduli: list[int], log_n: int, log_extent: int, dtype: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::subring_indexed_radix2_plan``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::subring_indexed_radix2_plan(int[] moduli, int log_n, int log_extent, ScalarType dtype) -> (Tensor, Tensor, Tensor)
+
+    Args:
+        moduli: list[int].
+        log_n: int.
+        log_extent: int.
+        dtype: int.
+
+    Returns: tuple[torch.Tensor, torch.Tensor, torch.Tensor].
+    """
+    _require_native()
+    return torch.ops.fhelium_ntt_ops.subring_indexed_radix2_plan(moduli, log_n, log_extent, dtype)
+
+
+def transform(residues: torch.Tensor, table_names: list[str], tables: list[torch.Tensor], ntt_backend: str, basis: str, transition: str) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::transform``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::transform(Tensor residues, str[] table_names, Tensor[] tables, str ntt_backend, str basis, str transition) -> Tensor
+
+    Args:
+        residues: torch.Tensor.
+        table_names: list[str].
+        tables: list[torch.Tensor].
+        ntt_backend: str.
+        basis: str.
+        transition: str.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_ntt_ops.transform(residues, table_names, tables, ntt_backend, basis, transition)
+
+
+def transform_(residues: torch.Tensor, table_names: list[str], tables: list[torch.Tensor], ntt_backend: str, basis: str, transition: str) -> None:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::transform_``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::transform_(Tensor(a!) residues, str[] table_names, Tensor[] tables, str ntt_backend, str basis, str transition) -> ()
+
+    Args:
+        residues: torch.Tensor (modified in-place).
+        table_names: list[str].
+        tables: list[torch.Tensor].
+        ntt_backend: str.
+        basis: str.
+        transition: str.
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_ntt_ops.transform_(residues, table_names, tables, ntt_backend, basis, transition)
 
 
 def validate_indexed_schedule(even_indices: torch.Tensor, odd_indices: torch.Tensor, ring_dimension: int) -> None:

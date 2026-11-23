@@ -2,7 +2,7 @@
 
 This guide is for a deployment where the target GPU and CKKS preset are known, but backend measurements are close, inconsistent, or different between raw NTT kernels and CKKS operations. It explains how to identify the limiting resource before selecting an Eager NTT policy or a Compile implementation requirement.
 
-The recommendation commands currently run the retained internal `fhelium.legacy.engine.CkksEngine` diagnostic evaluator. They provide backend screening evidence, not current `fhelium.eager.Engine` performance evidence. Confirm the selected policy with the current Eager evaluator and the complete production workload.
+The recommendation commands time NTT context transforms and `fhelium.eager.Engine` CKKS methods. They provide backend screening evidence; confirm the selected policy with the complete production workload.
 
 For the screening command, decision thresholds, and a complete example result, start with [Screen NTT backends on the target GPU](screen-ntt-backends.md).
 
@@ -146,7 +146,7 @@ Use the pattern, not only the aggregate rank:
 | Repetition winner changes or CV is high | Thermal state, clock drift, competing work, first-use effects, or insufficient runs | Stabilize the machine and repeat; do not encode a winner. |
 | One backend fails correctness | Specification or implementation defect, not a performance result | Stop ranking and preserve the failing input/environment. |
 
-The legacy CKKS primitive suite times key use but excludes key generation. Its `multiply_relinearize` measurement includes multiplication and relinearization; `rotate_many_by_steps[4]` includes grouped decomposition/hoisting and four rotations. Measure the selected policy again in the Eager or Compile workload being deployed.
+The CKKS primitive suite times key use but excludes key generation. Its `multiply_relinearize` measurement includes multiplication and relinearization; `rotate_many_by_steps[4]` includes grouped decomposition/hoisting and four rotations. Measure the selected policy again in the Eager or Compile workload being deployed.
 
 One RTX A6000 measurement illustrates the final application check. For `logN = 15`, the CKKS primitive suite recommended `radix2_compact_group4_smem8`, while the staged graph-captured 128 x 128 rotation-parallel matvec selected `radix8_compact`. The primitive result was a shortlist decision; the production evaluator changed NTT call composition, rotation schedule, diagonal policy, and live working set. Preserve both results under their actual measured scopes rather than treating either as a contradiction.
 

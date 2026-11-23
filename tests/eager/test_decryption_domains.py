@@ -6,9 +6,7 @@ import pytest
 import torch
 
 import fhelium as fh
-from fhelium.backend.ckks.crypto._decryption import (
-    _decrypt_tensor_to_coefficient_standard_rns,
-)
+from fhelium.native.wrapper import ckks_ops
 from fhelium.eager import Engine
 from fhelium.values import Ciphertext, ModulusBasis
 
@@ -53,26 +51,28 @@ def test_decryption_phase_matches_across_input_domains(
     rns_context = engine.rns_context(torch.device("cpu"))
     ntt_context = engine._ntt_context_for(torch.device("cpu"))
     ids = coefficient.prime_ids
-    tables = dict(
-        parameters=rns_context.rns_parameters_for_prime_ids(ids),
-        forward=ntt_context.tensor_operands(ids, inverse=False),
-        inverse=ntt_context.tensor_operands(ids, inverse=True),
-        key_row_start=0,
-        ntt_backend=ntt_context.ntt_backend_name,
-    )
+    forward = ntt_context.tensor_operands(ids, inverse=False)
+    inverse = ntt_context.tensor_operands(ids, inverse=True)
+    names = [
+        "parameters",
+        *(f"forward_{i}" for i in range(len(forward))),
+        *(f"inverse_{i}" for i in range(len(inverse))),
+    ]
+    tables = [rns_context.rns_parameters_for_prime_ids(ids), *forward, *inverse]
 
-    coefficient_phase = _decrypt_tensor_to_coefficient_standard_rns(
-        coefficient.data,
-        secret.data,
-        input_domain="coefficient",
-        **tables,
-    )
-    ntt_phase = _decrypt_tensor_to_coefficient_standard_rns(
-        ntt.data,
-        secret.data,
-        input_domain="ntt",
-        **tables,
-    )
+    def phase(ciphertext, domain):
+        return ckks_ops.decrypt_phase(
+            ciphertext.data,
+            secret.data,
+            names,
+            tables,
+            ntt_context.ntt_backend_name,
+            0,
+            domain,
+        )
+
+    coefficient_phase = phase(coefficient, "coefficient")
+    ntt_phase = phase(ntt, "ntt")
 
     assert torch.equal(ntt_phase, coefficient_phase)
     assert torch.equal(coefficient.data, coefficient_before)

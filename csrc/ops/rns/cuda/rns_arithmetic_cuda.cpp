@@ -91,10 +91,9 @@ void shift_residues_positive_(at::Tensor& centered_residues,
   rns_shift_residues_positive_inplace_cuda(centered_residues, rns_params);
 }
 
-at::Tensor lift_centered_coefficients(const at::Tensor& centered_coefficients,
-                                      const at::Tensor& twice_modulus) {
-  return rns_lift_centered_coefficients_cuda(centered_coefficients,
-                                             twice_modulus);
+at::Tensor lift_integer_coefficients(const at::Tensor& coefficients,
+                                     const at::Tensor& twice_modulus) {
+  return rns_lift_integer_coefficients_cuda(coefficients, twice_modulus);
 }
 
 at::Tensor mixed_radix_decompose(

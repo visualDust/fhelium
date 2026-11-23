@@ -215,15 +215,16 @@ FHELIUM_API void center_residues_(at::Tensor& standard_residues,
 FHELIUM_API void shift_residues_positive_(at::Tensor& centered_residues,
                                           const at::Tensor& rns_params);
 
-/// Lifts centered integer coefficients to standard residues for every limb.
+/// Lifts signed integer coefficients to standard residues for every limb.
 ///
-/// `centered_coefficients` has shape `[*batch, coefficient]`, and
-/// `twice_modulus` holds $2q_j$ for each output limb. The result has shape
-/// `[*batch, limb, coefficient]` with entry $c + q_j$, a standard residue in
-/// the lazy range for $|c| < q_j$. The caller orders `twice_modulus` to match
-/// the output limbs.
-FHELIUM_API at::Tensor lift_centered_coefficients(
-    const at::Tensor& centered_coefficients, const at::Tensor& twice_modulus);
+/// `coefficients` (int32 or int64) has shape `[*batch, coefficient]`, and
+/// `twice_modulus` holds $2q_j$ for each output limb. The result has the dtype
+/// of `twice_modulus`, shape `[*batch, limb, coefficient]` and entry
+/// $c + q_j$ for $-q_j \le c < q_j$, otherwise $c \bmod q_j$; both are
+/// standard residues in the lazy range $[0, 2q_j)$. The caller orders
+/// `twice_modulus` to match the output limbs.
+FHELIUM_API at::Tensor lift_integer_coefficients(
+    const at::Tensor& coefficients, const at::Tensor& twice_modulus);
 
 /// Output form of `crt_basis_extend`; the result is written to `output`.
 FHELIUM_API void crt_basis_extend_out_(
@@ -250,8 +251,10 @@ FHELIUM_API void crt_basis_extend_out_(
 /// Neither lift selects the least nonnegative representative modulo $D$.
 ///
 /// `target_reciprocals` and `source_reciprocals` are int64 vectors of $\lfloor
-/// 2^{64}/q \rfloor$ for their primes. CUDA int32 execution requires primes
-/// below $2^{30}$.
+/// 2^{64}/q \rfloor$ for their primes. CUDA int32 inputs whose source rows and
+/// matrix fit one 48 KiB coefficient tile use a fused kernel, which requires
+/// primes below $2^{30}$; other inputs, on any device, accumulate the matrix
+/// terms with Montgomery products and give the same residues.
 FHELIUM_API at::Tensor crt_basis_extend(
     const at::Tensor& source_residues,
     const at::Tensor& source_parameters,

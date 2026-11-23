@@ -95,16 +95,6 @@ class RnsContext:
     # Arrange according to partitioning scheme input variables, and copy to GPUs for fast access.
     # -------------------------------------------------------------------------------------------------
 
-    def materialize_parameter_rows(self, variable) -> torch.Tensor:
-        """Select this rank's QP row order into one tensor."""
-
-        source = torch.as_tensor(variable, dtype=self.dtype)
-        row_ids = torch.tensor(
-            self.rns_layout.prime_ids(0, include_p=True),
-            dtype=torch.long,
-        )
-        return source.index_select(0, row_ids).to(self.device)
-
     def integer_scalar_parameters(self, scalar: int) -> torch.Tensor:
         r"""Return the reusable QP row vector $kR \bmod q_i$ for integer $k$."""
 
@@ -119,77 +109,32 @@ class RnsContext:
             self._integer_scalar_parameters[scalar] = parameters
         return parameters
 
-    def _prepare_inverse_ntt_scale_montgomery(self) -> torch.Tensor:
-        r"""Materialize $N^{-1}R \bmod q_i$ in QP row order."""
-
-        values = [
-            (inverse_ntt_scale * self.montgomery_parameters.R) % modulus
-            for inverse_ntt_scale, modulus in zip(
-                self.config.inverse_ntt_scale,
-                self.config.moduli,
-                strict=True,
-            )
-        ]
-        return self.materialize_parameter_rows(values)
-
     def _prepare_context_parameters(self):
-        scale = round(self.config.default_scale)
-        self.scaled_montgomery_r2 = self.materialize_parameter_rows(
-            [
-                (montgomery_r2 * scale) % q
-                for montgomery_r2, q in zip(
-                    self.montgomery_parameters.montgomery_r2, self.config.moduli
-                )
-            ]
-        )
-
-        self.montgomery_r2 = self.materialize_parameter_rows(
-            self.montgomery_parameters.montgomery_r2
-        )
-
-        self.moduli = self.materialize_parameter_rows(
-            self.montgomery_parameters.moduli
-        )
-        self.twice_modulus = self.materialize_parameter_rows(
-            self.montgomery_parameters.twice_modulus
-        )
-        self.modulus_lo = self.materialize_parameter_rows(
-            self.montgomery_parameters.modulus_lower_bits
-        )
-        self.modulus_hi = self.materialize_parameter_rows(
-            self.montgomery_parameters.modulus_higher_bits
-        )
-        self.neg_inv_modulus_lo = self.materialize_parameter_rows(
-            self.montgomery_parameters.neg_inv_modulus_lower_bits
-        )
-        self.neg_inv_modulus_hi = self.materialize_parameter_rows(
-            self.montgomery_parameters.neg_inv_modulus_higher_bits
-        )
-
-        self.inverse_ntt_scale_montgomery = (
-            self._prepare_inverse_ntt_scale_montgomery()
-        )
-
-        # Integral tensor [parameter, limb] in depth-zero QP
-        # prime-id order. Parameter rows are [2q_i, q_i low, q_i high,
-        # -q_i^{-1} low, -q_i^{-1} high, R^2 mod q_i,
-        # Delta_0 R^2 mod q_i, N^{-1} R mod q_i]. The scaled-R2 row remains
-        # stored for parameter-table compatibility; no public conversion op
-        # implicitly applies Delta_0. Native operands receive the corresponding
-        # limb slice, so parameter column j always describes operand limb j.
-        self.rns_parameter_tensor = torch.stack(
-            [
-                self.twice_modulus,
-                self.modulus_lo,
-                self.modulus_hi,
-                self.neg_inv_modulus_lo,
-                self.neg_inv_modulus_hi,
-                self.montgomery_r2,
-                self.scaled_montgomery_r2,
-                self.inverse_ntt_scale_montgomery,
-            ]
-        ).contiguous()
-
+        # Integral tensor [parameter, limb] in depth-zero QP prime-id order,
+        # built by libfhelium. Parameter rows are [2q_i, q_i low, q_i high,
+        # -q_i^{-1} low, -q_i^{-1} high, R^2 mod q_i, Delta_0 R^2 mod q_i,
+        # N^{-1} R mod q_i]. The scaled-R2 row remains stored for
+        # parameter-table compatibility; no public conversion op implicitly
+        # applies Delta_0. Native operands receive the corresponding limb
+        # slice, so parameter column j always describes operand limb j.
+        moduli = [
+            self.config.moduli[index]
+            for index in self.rns_layout.prime_ids(0, include_p=True)
+        ]
+        self.rns_parameter_tensor = rns_ops.parameter_table(
+            moduli, self.config.logN, self.config.default_scale, self.dtype
+        ).to(self.device)
+        (
+            self.twice_modulus,
+            self.modulus_lo,
+            self.modulus_hi,
+            self.neg_inv_modulus_lo,
+            self.neg_inv_modulus_hi,
+            self.montgomery_r2,
+            self.scaled_montgomery_r2,
+            self.inverse_ntt_scale_montgomery,
+        ) = self.rns_parameter_tensor.unbind(0)
+        self.moduli = self.twice_modulus >> 1
         self.montgomery_reduction_parameter_tables = (
             self.modulus_lo,
             self.modulus_hi,
@@ -672,53 +617,26 @@ class RnsContext:
             params,
         )
 
-    def lift_centered_coefficients(
-        self,
-        a: torch.Tensor,
-        depth: int = 0,
-        *,
-        include_p: bool = False,
-    ) -> torch.Tensor:
-        r"""Lift ``[*batch, coefficient]`` integers into coefficient RNS.
-
-        The input is an integral tensor of final extent $N$ with
-        $-q_i<x<q_i$ for every selected prime. Output is
-        ``[*batch, limb, coefficient]`` in standard representation with limb
-        order ``rns_layout.prime_ids(depth, include_p=include_p)`` and lazy
-        range $[0,2q_i)$. The functional result does not alias ``a``.
-        """
-
-        return rns_ops.lift_centered_coefficients(
-            a,
-            self.twice_modulus_for_basis(depth, include_p=include_p),
-        )
-
-    def lift_integer_coefficients_exact(
+    def lift_integer_coefficients(
         self,
         coefficients: torch.Tensor,
         depth: int = 0,
         *,
         include_p: bool = False,
-        max_abs: int | None = None,
     ) -> torch.Tensor:
-        r"""Lift signed compact coefficients without a one-prime assumption.
+        r"""Lift signed ``[*batch, coefficient]`` integers into coefficient RNS.
 
-        For row $i$, the native centered lift stores $x+q_i$ as a lazy
-        residue, so it is valid only while $-q_i<x<q_i$ for every active
-        modulus. Wider machine integers require an actual
-        remainder for each RNS row.
+        ``coefficients`` is an int32 or int64 tensor of final extent $N$.
+        Output is ``[*batch, limb, coefficient]`` in standard representation
+        with limb order ``rns_layout.prime_ids(depth, include_p=include_p)``;
+        row $i$ holds $x+q_i$ for $-q_i\le x<q_i$ and $x \bmod q_i$
+        otherwise, both in the lazy range $[0,2q_i)$. The functional result
+        does not alias ``coefficients``.
         """
 
-        prime_ids = self.rns_layout.prime_ids(depth, include_p=include_p)
-        moduli = tuple(
-            int(self.montgomery_parameters.moduli[index]) for index in prime_ids
-        )
-        parameters = self.rns_parameters_for_prime_ids(prime_ids)
-        return lift_integer_coefficients_exact(
+        return rns_ops.lift_integer_coefficients(
             coefficients,
-            parameters[0],
-            min_modulus=min(moduli),
-            max_abs=max_abs,
+            self.twice_modulus_for_basis(depth, include_p=include_p),
         )
 
     def add_standard(
@@ -833,25 +751,3 @@ class RnsContext:
             f"row_count_qp_depth0="
             f"{len(self.rns_layout.prime_ids(0, include_p=True))})"
         )
-
-
-def lift_integer_coefficients_exact(
-    coefficients: torch.Tensor,
-    twice_modulus: torch.Tensor,
-    *,
-    min_modulus: int,
-    max_abs: int | None = None,
-) -> torch.Tensor:
-    """Lift machine integers into standard RNS rows, retaining native lazy representatives."""
-    if max_abs is None:
-        max_abs = int(torch.max(torch.abs(coefficients)).item())
-    if max_abs < min_modulus and coefficients.dtype == twice_modulus.dtype:
-        return rns_ops.lift_centered_coefficients(coefficients, twice_modulus)
-    moduli = (
-        (twice_modulus // 2)
-        .to(coefficients.dtype)
-        .view(*([1] * (coefficients.ndim - 1)), -1, 1)
-    )
-    return torch.remainder(coefficients.unsqueeze(-2), moduli).to(
-        twice_modulus.dtype
-    )

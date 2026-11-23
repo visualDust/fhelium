@@ -215,11 +215,11 @@ def _sample_gaussian_coefficients(
 ) -> torch.Tensor:
     if type(count) is not int or count <= 0:
         raise ValueError(f"count must be a positive integer, got {count!r}")
-    samples = [
-        engine._rng_for(device).discrete_gaussian(repeats=1)[0][0]
-        for _ in range(count)
-    ]
-    return torch.stack(samples, dim=0).contiguous()
+    return (
+        engine._rng_for(device)
+        .discrete_gaussian([count, engine.config.N])
+        .to(engine.dtype)
+    )
 
 
 def _lift_coefficients(
@@ -231,14 +231,9 @@ def _lift_coefficients(
     to_ntt: bool,
 ) -> torch.Tensor:
     include_p = basis == "QP"
-    contiguous = coefficients.contiguous()
-    max_abs = int(torch.max(torch.abs(contiguous)).item())
     rns_context = engine.rns_context(coefficients.device)
-    result = rns_context.lift_integer_coefficients_exact(
-        contiguous,
-        depth,
-        include_p=include_p,
-        max_abs=max_abs,
+    result = rns_context.lift_integer_coefficients(
+        coefficients.contiguous(), depth, include_p=include_p
     )
     if to_ntt:
         engine._ntt_context_for(coefficients.device).forward_to_montgomery_(
@@ -531,15 +526,11 @@ def sample_common_uniform(
         torch.get_default_device() if device is None else torch.device(device)
     )
     rns_context = engine.rns_context(target)
-    moduli = rns_context.moduli_for_basis(0, include_p=include_p)
-    repeats = engine.config.num_p_primes if include_p else 0
-    values = [
-        engine._rng_for(target).randint([moduli], repeats=repeats)[0]
-        for _ in range(sample_count)
-    ]
-    if count is None:
-        return values[0].contiguous()
-    return torch.stack(values, dim=0).contiguous()
+    rows = rns_context.twice_modulus_for_basis(0, include_p=include_p)
+    values = engine._rng_for(target).uniform_residues(
+        [sample_count, engine.config.N], rows.unsqueeze(0)
+    )
+    return values[0] if count is None else values
 
 
 def ckg_share(

@@ -2,8 +2,9 @@
 
 Public modules are named for the configured subject: ``ckks`` owns the CKKS
 parameter model, ``ntt`` owns NTT execution policies, and ``security`` assesses
-complete modulus sets against the published table built into FHElium. Private
-resource mechanisms use a leading underscore, as in ``_prime_catalog``.
+complete modulus sets against the published table built into FHElium. Preset
+resolution, the prime catalog, and the budget table are compiled into
+libfhelium.
 """
 
 from .ckks import CkksConfig, Preset  # noqa: I001

@@ -2,108 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import cast
 
-import torch
-
 from fhelium.ir.dialects import ckks
 from xdsl.ir import Attribute
-from fhelium.backend.ntt.operations import execute_named_transform
-from fhelium.backend.rns.basis_extension import centered_basis_extend
-from fhelium.backend.rns.moddown import divide_trailing_rows
+from fhelium.backend._native_operands import key_switch_options, named_tables
 from fhelium.native.wrapper import ckks_ops, rns_ops
-from .key_switch import key_switch_corrections
 from .tables import encapsulation_configs
 from ._key_switch_preparation import key_switch_runtime_attributes
-
-
-def encapsulated_modulus_raise(
-    source: torch.Tensor,
-    low_key: torch.Tensor,
-    return_key: torch.Tensor,
-    tensors: Mapping[str, torch.Tensor],
-    attributes: Mapping[str, object],
-) -> torch.Tensor:
-    r"""Switch into a low secret relation, center-raise and return to the main key.
-
-    Source is CT2 coefficient/standard Q at the declared low basis. Low key
-    digits encode P_low*s under t. The one-digit return hint encodes
-    D*t under s, where D=guard*P_return. The output is
-    (c0_tilde,0)+Round(c1_tilde*(H0,H1)/D) on the selected target Q rows.
-    All operands remain live and unmodified; output storage is independent.
-    """
-    low_tensors = {
-        name[4:]: value
-        for name, value in tensors.items()
-        if name.startswith("low_")
-    }
-    low_facts = {
-        name[4:]: value
-        for name, value in attributes.items()
-        if name.startswith("low_")
-    }
-    rounding = str(attributes.get("moddown_rounding", "nearest"))
-    low_facts["moddown_rounding"] = rounding
-    corrections = key_switch_corrections(
-        source[1], tensors=low_tensors, attributes=low_facts, key=low_key
-    )
-    sparse = torch.stack(
-        (
-            rns_ops.add_standard(
-                source[0], corrections[0], low_tensors["q_parameters"]
-            ),
-            corrections[1],
-        )
-    )
-    del corrections
-    raised = centered_basis_extend(
-        sparse,
-        {
-            name[6:]: value
-            for name, value in tensors.items()
-            if name.startswith("raise_")
-        },
-    )
-    del sparse
-    component = raised[1]
-    execute_named_transform(
-        component, tensors, attributes, "return", "forward_to_montgomery_"
-    )
-    products = torch.zeros(
-        (2, *component.shape), dtype=component.dtype, device=component.device
-    )
-    ckks_ops.keyswitch_accumulate_digit_products_(
-        products[0],
-        products[1],
-        component,
-        return_key[0],
-        tensors["return_parameters"],
-        0,
-    )
-    del component
-    execute_named_transform(
-        products, tensors, attributes, "return", "inverse_to_standard_"
-    )
-    switched = divide_trailing_rows(
-        products,
-        tensors["quotient_inverses"],
-        tensors["quotient_parameters"],
-        cast(int, attributes["return_drop_count"]),
-        half=tensors.get("quotient_half"),
-        row_order=tensors["quotient_order"],
-        rounding=rounding,
-    )
-    start = cast(int, attributes["target_row_start"])
-    count = cast(int, attributes["q_count"])
-    output = switched[..., start:, :].contiguous()
-    rns_ops.add_standard_(
-        output[0],
-        raised[0, ..., start + 1 : count + 1, :],
-        tensors["target_parameters"],
-    )
-    return output
 
 
 def modulus_raise_requirements(operation, config):
@@ -246,25 +153,27 @@ class NativeModulusRaiseImplementation:
 
     def execute(self, invocation, inputs, resources, *, in_place):
         del resources, in_place
-        encapsulated = (
-            invocation.operation_type is ckks.EncapsulatedModulusRaiseOp
-        )
-        start = 3 if encapsulated else 1
-        tensors = dict(
-            zip(
-                invocation.attributes["parameter_names"],
-                inputs[start:],
-                strict=True,
-            )
-        )
-        if encapsulated:
+        attributes = invocation.attributes
+        if invocation.operation_type is not ckks.EncapsulatedModulusRaiseOp:
             return (
-                encapsulated_modulus_raise(
+                rns_ops.centered_basis_extend(
                     inputs[0],
-                    inputs[1],
-                    inputs[2],
-                    tensors,
-                    invocation.attributes,
+                    *named_tables(attributes["parameter_names"], inputs[1:]),
                 ),
             )
-        return (centered_basis_extend(inputs[0], tensors),)
+        low = key_switch_options(attributes, prefix="low_")
+        low["moddown_rounding"] = str(
+            attributes.get("moddown_rounding", "nearest")
+        )
+        return (
+            ckks_ops.encapsulated_modulus_raise(
+                inputs[0],
+                inputs[1],
+                inputs[2],
+                *named_tables(attributes["parameter_names"], inputs[3:]),
+                **low,
+                return_drop_count=int(attributes["return_drop_count"]),
+                target_row_start=int(attributes["target_row_start"]),
+                q_count=int(attributes["q_count"]),
+            ),
+        )
