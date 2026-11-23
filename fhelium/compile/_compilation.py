@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import cached_property
 
 import torch
 
@@ -52,4 +53,37 @@ class Compilation:
         )
 
 
-__all__ = ["Compilation"]
+class DeferredCompilation(Compilation):
+    """A Compilation whose Program is produced on first access.
+
+    The workspace, reports and material bindings are available immediately; ``load`` returns a Program owned by this Compilation.
+    """
+
+    __hash__ = object.__hash__
+    __eq__ = object.__eq__
+
+    def __init__(
+        self,
+        load,
+        workspace: CompileWorkspace,
+        reports: tuple[PassReport, ...] = (),
+        material_bindings: dict[str, torch.Tensor] | None = None,
+    ) -> None:
+        self.__dict__.update(
+            _load=load,
+            workspace=workspace,
+            reports=tuple(reports),
+            material_bindings=(
+                {} if material_bindings is None else material_bindings
+            ),
+        )
+
+    @cached_property
+    def program(self) -> Program:
+        return self._load()
+
+    def __repr__(self) -> str:
+        return f"DeferredCompilation(workspace={self.workspace!r})"
+
+
+__all__ = ["Compilation", "DeferredCompilation"]

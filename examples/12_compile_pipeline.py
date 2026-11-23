@@ -143,19 +143,6 @@ def main() -> None:
         executable.run(encrypted_x),
     )
     decoded = engine.decrypt_message(result, secret_key)
-    torch.testing.assert_close(
-        decoded.real,
-        expected,
-        rtol=5e-6,
-        atol=5e-6,
-    )
-    torch.testing.assert_close(
-        decoded.imag,
-        torch.zeros_like(decoded.imag),
-        rtol=0.0,
-        atol=5e-6,
-    )
-
     captured_inventory = ir.inventory_program(captured.program)
     compiled_inventory = ir.inventory_program(compiled.program)
     print_table(
@@ -183,13 +170,21 @@ def main() -> None:
             ["result scale", f"{result.scale:.6e}"],
             [
                 "maximum error",
-                f"{float((decoded.real - expected).abs().max()):.6e}",
+                f"{float((decoded - expected).abs().max()):.6e}",
             ],
         ],
     )
     print()
     print_table(
-        ["pass", "matched", "transformed", "inserted", "removed", "skipped"],
+        [
+            "pass",
+            "matched",
+            "transformed",
+            "inserted",
+            "removed",
+            "skipped",
+            "host seconds",
+        ],
         [
             [
                 report.name,
@@ -198,6 +193,7 @@ def main() -> None:
                 report.stats.inserted,
                 report.stats.removed,
                 report.stats.skipped,
+                f"{report.seconds:.6f}",
             ]
             for report in compiled.reports
         ],

@@ -2,6 +2,12 @@
 
 A CUDA Graph records a sequence of device operations for repeated execution at stable storage addresses. `CudaGraphProgram` stages a rank-local callable's inputs into fixed buffers and retains its captured outputs. The callable can invoke Eager methods, a manually linked Program, or a prepared compiled specialization.
 
+## Callable-owned capture
+
+`CompiledCallable` uses prepared execution by default (`graph=False`). Selecting `graph="auto"` or `graph=True` enables callable-owned capture. The first prepared invocation executes the linked function; the next compatible invocation attempts capture and replay. Each callable retains device-local pools shared by its specializations, with separate Graphs for the recorded gradient, inference and autocast contexts. CPU inputs, outputs requiring autograd, and capture failures continue through prepared execution. Statistics retain the Graph state and fallback reason.
+
+Callable Graph outputs are owned copies by default (`copy_output=True`). The copy participates in execution cost. With `copy_output=False`, a result borrows retained storage until that Graph’s next replay or callable clearing. `clear()` closes Graphs before pools. Direct `CudaGraphProgram` use exposes capture, streams and storage management separately; its default replay output is borrowed.
+
 ## Static and dynamic state
 
 ```mermaid

@@ -120,7 +120,7 @@ flowchart LR
     EX --> WBUF --> WARM --> CBUF --> CAP --> OUT --> REPLAY --> READY
 ```
 
-Warmup uses fresh storage so lazy backend initialization does not mutate the addresses retained for capture. The captured callable invokes its prepared native or generated kernels; CUDA Graph records those launches and their fixed storage addresses. Prepare the desired Compile specialization before capture, and warm any lazy device-code compilation as described in [prepared host execution](prepared-host-execution.md).
+Warmup uses fresh storage so lazy backend initialization does not mutate the addresses retained for capture. The captured callable invokes its prepared native or generated kernels; CUDA Graph records those launches and their fixed storage addresses. For manually owned capture, construct a compiled callable with `graph=False`, prepare the desired specialization, and warm any lazy device-code compilation as described in [prepared host execution](prepared-host-execution.md).
 
 Dynamic keyword arguments and arbitrary Python control objects are not captured. Adapt a dynamic keyword-only tensor into a positional input and keep dynamic control flow outside the graph.
 

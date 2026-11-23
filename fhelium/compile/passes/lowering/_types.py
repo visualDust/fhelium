@@ -16,6 +16,7 @@ from xdsl.ir import Attribute, Operation, SSAValue
 
 
 from ....ir.dialects import ckks, rns
+from ....ir.dialects._common import state_attribute
 
 
 def _key_switch_qp_basis(
@@ -69,9 +70,7 @@ def _key_switch_qp_basis(
     if auxiliary is None:
         return None, row_count
     active_q = tuple(int(cast(IntegerAttr, i).value.data) for i in q_ids)
-    return ArrayAttr(
-        IntegerAttr(i, 64) for i in (*active_q, *auxiliary)
-    ), row_count
+    return cast(ArrayAttr, state_attribute((*active_q, *auxiliary))), row_count
 
 
 def _rns_type(value_type: object) -> rns.RnsBundleType:
@@ -116,10 +115,10 @@ def _bundle_type(
 ) -> rns.RnsBundleType:
     source = _rns_type(value_type)
     fields: dict[str, Attribute | None] = {
-        "value_kind": StringAttr("polynomial"),
+        "value_kind": state_attribute("polynomial"),
         "component_count": None
         if components is None
-        else IntegerAttr(components, 64),
+        else state_attribute(components),
         "strides": None,
     }
     shape = source.state.data.get("shape")
@@ -132,7 +131,7 @@ def _bundle_type(
         )
         ids = updates.get("prime_ids", source.state.data.get("prime_ids"))
         rows = (
-            IntegerAttr(len(ids), 64)
+            state_attribute(len(ids))
             if isinstance(ids, ArrayAttr)
             else row_count
             if row_count is not None
@@ -141,7 +140,7 @@ def _bundle_type(
         fields["shape"] = ArrayAttr(
             (
                 *(
-                    (IntegerAttr(components, 64),)
+                    (state_attribute(components),)
                     if components is not None
                     else ()
                 ),

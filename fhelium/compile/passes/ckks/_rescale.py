@@ -9,7 +9,6 @@ if TYPE_CHECKING:
 
 
 from typing import Literal, cast
-import json
 
 from ..._pipeline import (
     PassResult,
@@ -31,6 +30,7 @@ from xdsl.ir import Attribute, Operation, SSAValue, Use
 from fhelium.ir import Program
 from fhelium.ir.dialects import ckks
 from fhelium.config import CkksConfig
+from fhelium.config._derived import config_from_text
 from .._operation_transforms import (
     ciphertext_type,
     display_name,
@@ -196,7 +196,7 @@ def _materialize_rescale(
     if config is None:
         represented_config = operation.attributes.get("ckks_config")
         if isinstance(represented_config, StringAttr):
-            config = CkksConfig.parse(json.loads(represented_config.data))
+            config = config_from_text(represented_config.data)
     source_type = ciphertext_type(
         source,
         domain=representation[0],

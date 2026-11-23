@@ -40,24 +40,40 @@ def compile_endpoint(source: str) -> Any:
         "shoup32_mul": shoup32_mul,
     }
     exec(compile(source, filename, "exec", dont_inherit=True), namespace)
-    function = namespace["endpoint"]
-    alignment_independent = [
-        name
-        for name in function.__code__.co_varnames[
-            : function.__code__.co_argcount
-        ]
-        if function.__annotations__.get(name) is not tl.constexpr
-    ]
+    function = namespace.pop("endpoint")
+    alignment_independent, scalars = _parameter_policy(function)
     if knobs.runtime.interpret:
-        return triton.jit(do_not_specialize_on_alignment=alignment_independent)(
-            function
-        )
+        return triton.jit(
+            do_not_specialize=scalars,
+            do_not_specialize_on_alignment=alignment_independent,
+        )(function)
 
     from ._ntt_compiler import NttJITFunction
 
     return NttJITFunction(
-        function, do_not_specialize_on_alignment=alignment_independent
+        function,
+        do_not_specialize=scalars,
+        do_not_specialize_on_alignment=alignment_independent,
     )
+
+
+def _parameter_policy(function: Any) -> tuple[list[str], list[str]]:
+    """Return (alignment-independent, value-independent) parameter names.
+
+    Pointer and scalar parameters never specialize on 16-byte alignment, since
+    Tensor views bound later may be unaligned. Integer scalar parameters
+    (annotated ``tl.int64``) also never specialize on their value, so one
+    compiled kernel serves every row count and stride passed at launch.
+    """
+    import triton.language as tl
+
+    names = function.__code__.co_varnames[: function.__code__.co_argcount]
+    annotations = function.__annotations__
+    alignment_independent = [
+        name for name in names if annotations.get(name) is not tl.constexpr
+    ]
+    scalars = [name for name in names if annotations.get(name) is tl.int64]
+    return alignment_independent, scalars
 
 
 class StageEmitter:

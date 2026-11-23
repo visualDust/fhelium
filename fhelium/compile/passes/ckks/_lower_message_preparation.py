@@ -10,8 +10,8 @@ if TYPE_CHECKING:
 
 from typing import cast
 
-import json
 from fhelium.config import CkksConfig
+from fhelium.config._derived import config_from_text
 from ..._materials import material_symbol, parameter_description
 
 from ..._pipeline import (
@@ -182,7 +182,7 @@ class LowerMessagePlaintextPreparationPass:
             )
             config_attr = operation.attributes.get("ckks_config")
             config = (
-                CkksConfig.parse(json.loads(config_attr.data))
+                config_from_text(config_attr.data)
                 if isinstance(config_attr, StringAttr)
                 else shared_data.get(CkksConfig)
             )

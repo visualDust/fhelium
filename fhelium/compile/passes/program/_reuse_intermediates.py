@@ -113,108 +113,119 @@ class ReuseIntermediatesPass:
     name: str = "reuse-intermediates"
 
     def run(self, compilation: "Compilation") -> PassResult:
-        program = compilation.program
-        workspace = compilation.workspace
-        del workspace
-        references = casts = computations = 0
-        decisions: list[DecisionRecord] = []
+        return reuse_blocks(
+            compilation,
+            (
+                block
+                for function in compilation.program.functions
+                for block in function.body.blocks
+            ),
+        )
 
-        def replace(operation: Operation, values: tuple[SSAValue, ...]) -> None:
-            for source, target in zip(operation.results, values, strict=True):
-                source.replace_all_uses_with(target)
-            Rewriter.erase_op(operation)
 
-        def visit(block: Block) -> None:
-            nonlocal references, casts, computations
-            refs: dict[tuple[object, ...], Operation] = {}
-            expressions: dict[tuple[object, ...], Operation] = {}
-            cast_values: dict[tuple[object, ...], SSAValue] = {}
-            for operation in tuple(block.ops):
-                if EXECUTION_IMPLEMENTATION_ATTRIBUTE in operation.attributes:
-                    expressions.clear()
-                    continue
-                for child in known_region_blocks(operation):
-                    visit(child)
-                if type(operation) in (core.ResourceRefOp, core.MaterialRefOp):
-                    key = _expression_key(operation)
-                    previous = refs.get(key)
-                    if previous is None:
-                        refs[key] = operation
-                    else:
-                        replace(operation, tuple(previous.results))
-                        references += 1
-                    continue
-                if (
-                    type(operation) is UnrealizedConversionCastOp
-                    and len(operation.inputs) == len(operation.outputs) == 1
-                    and known_pure(operation)
-                ):
-                    source = operation.inputs[0]
-                    while (
-                        type(source.owner) is UnrealizedConversionCastOp
-                        and len(source.owner.inputs)
-                        == len(source.owner.outputs)
-                        == 1
-                        and known_pure(source.owner)
-                        and EXECUTION_IMPLEMENTATION_ATTRIBUTE
-                        not in source.owner.attributes
-                    ):
-                        source = source.owner.inputs[0]
-                    operation.operands[0] = source
-                    result = operation.outputs[0]
-                    if source.type == result.type:
-                        replace(operation, (source,))
-                        casts += 1
-                    else:
-                        key = (
-                            source,
-                            result.type,
-                            tuple(sorted(operation.attributes.items())),
-                            tuple(sorted(operation.properties.items())),
-                        )
-                        previous = cast_values.get(key)
-                        if previous is None:
-                            cast_values[key] = result
-                        else:
-                            replace(operation, (previous,))
-                            casts += 1
-                    continue
-                if not known_pure(operation) or operation.regions:
-                    expressions.clear()
-                    continue
-                if not all(
-                    _internal(result, block) for result in operation.results
-                ):
-                    continue
+def reuse_blocks(compilation, blocks):
+    """Apply the same SSA reuse rules to a selected collection of region bodies."""
+    program = compilation.program
+    workspace = compilation.workspace
+    del workspace
+    references = casts = computations = 0
+    decisions: list[DecisionRecord] = []
+
+    def replace(operation: Operation, values: tuple[SSAValue, ...]) -> None:
+        for source, target in zip(operation.results, values, strict=True):
+            source.replace_all_uses_with(target)
+        Rewriter.erase_op(operation)
+
+    def visit(block: Block) -> None:
+        nonlocal references, casts, computations
+        refs: dict[tuple[object, ...], Operation] = {}
+        expressions: dict[tuple[object, ...], Operation] = {}
+        cast_values: dict[tuple[object, ...], SSAValue] = {}
+        for operation in tuple(block.ops):
+            if EXECUTION_IMPLEMENTATION_ATTRIBUTE in operation.attributes:
+                expressions.clear()
+                continue
+            for child in known_region_blocks(operation):
+                visit(child)
+            if type(operation) in (core.ResourceRefOp, core.MaterialRefOp):
                 key = _expression_key(operation)
-                previous = expressions.get(key)
+                previous = refs.get(key)
                 if previous is None:
-                    expressions[key] = operation
+                    refs[key] = operation
                 else:
                     replace(operation, tuple(previous.results))
-                    computations += 1
-                    decisions.append(
-                        DecisionRecord(
-                            operation.name,
-                            selected="reuse-prior-expression",
-                            details=(
-                                "same SSA operands, types, attributes and properties; all results remain internal",
-                            ),
-                        )
+                    references += 1
+                continue
+            if (
+                type(operation) is UnrealizedConversionCastOp
+                and len(operation.inputs) == len(operation.outputs) == 1
+                and known_pure(operation)
+            ):
+                source = operation.inputs[0]
+                while (
+                    type(source.owner) is UnrealizedConversionCastOp
+                    and len(source.owner.inputs)
+                    == len(source.owner.outputs)
+                    == 1
+                    and known_pure(source.owner)
+                    and EXECUTION_IMPLEMENTATION_ATTRIBUTE
+                    not in source.owner.attributes
+                ):
+                    source = source.owner.inputs[0]
+                operation.operands[0] = source
+                result = operation.outputs[0]
+                if source.type == result.type:
+                    replace(operation, (source,))
+                    casts += 1
+                else:
+                    key = (
+                        source,
+                        result.type,
+                        tuple(sorted(operation.attributes.items())),
+                        tuple(sorted(operation.properties.items())),
                     )
+                    previous = cast_values.get(key)
+                    if previous is None:
+                        cast_values[key] = result
+                    else:
+                        replace(operation, (previous,))
+                        casts += 1
+                continue
+            if not known_pure(operation) or operation.regions:
+                expressions.clear()
+                continue
+            if not all(
+                _internal(result, block) for result in operation.results
+            ):
+                continue
+            key = _expression_key(operation)
+            previous = expressions.get(key)
+            if previous is None:
+                expressions[key] = operation
+            else:
+                replace(operation, tuple(previous.results))
+                computations += 1
+                decisions.append(
+                    DecisionRecord(
+                        operation.name,
+                        selected="reuse-prior-expression",
+                        details=(
+                            "same SSA operands, types, attributes and properties; all results remain internal",
+                        ),
+                    )
+                )
 
-        for function in program.functions:
-            for block in function.body.blocks:
-                visit(block)
-        total = references + casts + computations
-        if not total:
-            return PassResult.unchanged(program)
-        return PassResult(
-            program,
-            PassStats(matched=total, transformed=total, removed=total),
-            (
-                f"deduplicated references={references}, removed casts={casts}, "
-                f"reused pure computations={computations}",
-            ),
-            tuple(decisions),
-        )
+    for block in blocks:
+        visit(block)
+    total = references + casts + computations
+    if not total:
+        return PassResult.unchanged(program)
+    return PassResult(
+        program,
+        PassStats(matched=total, transformed=total, removed=total),
+        (
+            f"deduplicated references={references}, removed casts={casts}, "
+            f"reused pure computations={computations}",
+        ),
+        tuple(decisions),
+    )

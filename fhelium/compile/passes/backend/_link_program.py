@@ -51,7 +51,7 @@ class LinkProgramPass:
         material_values = program_material_values(
             program, compilation.material_bindings
         )
-        prepare_ntt_schedules(program, material_values)
+        schedules = prepare_ntt_schedules(program, material_values)
         resource_references, requirements = program_resource_requirements(
             program,
             dispatch_table,
@@ -78,6 +78,8 @@ class LinkProgramPass:
             MappingProxyType(resource_indices),
             MappingProxyType(bound_resources),
             MappingProxyType(material_values),
+            requirements,
+            schedules,
         )
         return PassResult.unchanged(
             program,

@@ -295,9 +295,7 @@ def _rotation_program(
             if index == key_symbol_index
             else f"rotation-key:{shift}"
         )
-        key_type = ir.dialects.ckks.EvaluationKeyType().with_state(
-            {"rotation_step": IntegerAttr(shift, 64)}
-        )
+        key_type = ir.dialects.ckks.EvaluationKeyType()
         key_reference = ir.dialects.core.MaterialRefOp(
             key_type,
             symbol=symbol,
@@ -306,6 +304,7 @@ def _rotation_program(
             block.args[0],
             key_reference.value,
             ciphertext_type,
+            rotation_step=shift,
         )
         rotation.result.name_hint = (
             result_names[index]

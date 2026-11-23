@@ -147,6 +147,7 @@ class _PreparedNativeNtt(_TensorOperandImplementation):
 @lru_cache(maxsize=128)
 def prepare_transition(transition: str, policy_name: str, *, in_place: bool):
     """Bind a native algorithm and transition without retaining operand data."""
+    original = transition
     policy = resolve_ntt_backend_policy(policy_name)
     copy_input = not in_place
     if copy_input and transition == "forward_to_montgomery_":
@@ -175,7 +176,11 @@ def prepare_transition(transition: str, policy_name: str, *, in_place: bool):
             output = source.clone() if copy_input else source
             return native(output, twiddles, roots, parameters)
 
-    return call
+    from fhelium.backend._artifact import rebuild_with
+
+    return rebuild_with(
+        call, prepare_transition, original, policy_name, in_place=in_place
+    )
 
 
 def execute_transition(transition, values, policy_name, *, in_place):

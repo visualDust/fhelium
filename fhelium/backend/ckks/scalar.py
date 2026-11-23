@@ -56,6 +56,35 @@ class NativeScalarArithmeticImplementation:
         ckks.MultiplyIntegerScalarOp,
     )
 
+    @staticmethod
+    def tensor_requirements(operation, config):
+        from xdsl.dialects.builtin import ArrayAttr, IntegerAttr
+
+        if operation.parameters:
+            return {}, {}
+        ids = operation.ciphertext.type.state.data.get("prime_ids")
+        if not isinstance(ids, ArrayAttr) or not all(
+            isinstance(item, IntegerAttr) for item in ids
+        ):
+            return None
+        prime_ids = tuple(int(item.value.data) for item in ids)
+        scalar = operation.scalar.value.data
+        descriptions = {
+            "rns_parameters": {
+                "kind": "rns_parameters",
+                "prime_ids": list(prime_ids),
+            }
+        }
+        if isinstance(operation, ckks.MultiplyIntegerScalarOp):
+            descriptions["integer_scalar"] = {
+                "kind": "integer_scalar",
+                "prime_ids": list(prime_ids),
+                "scalar": scalar,
+            }
+            return {}, descriptions
+        descriptions["rounding_state"] = {"kind": "rounding_state"}
+        return {}, descriptions
+
     def resource_requirements(
         self, invocation: OperationInvocation
     ) -> tuple[ResourceRequirement, ...]:

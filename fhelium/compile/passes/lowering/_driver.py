@@ -7,8 +7,8 @@ from ..._pipeline import (
 )
 
 from fhelium.config import CkksConfig
+from fhelium.config._derived import config_from_text
 
-import json
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 
@@ -79,7 +79,7 @@ def apply_lowering(operation, config, compilation, *, registry, requested=None):
         operation, lowered.operations, new_results=(lowered.result,)
     )
     for symbol, description in lowered.material_descriptions.items():
-        if symbol not in compilation.program.material_descriptions:
+        if compilation.program.material_description(symbol) is None:
             compilation.program.set_material_description(symbol, description)
     if OperationImplementationRegistry in compilation.workspace:
         resolve_material_requirements(compilation, lowered.operations)
@@ -90,6 +90,15 @@ def apply_lowering(operation, config, compilation, *, registry, requested=None):
             break
         replacements.append(current)
         current = current.next_op
+    from ..._origins import replace_origin
+
+    if compilation.workspace.get("local_plan_reuse") is not False:
+        replace_origin(
+            compilation,
+            operation,
+            replacements,
+            lowering=requested or registry.resolve(type(operation)).name,
+        )
     return LoweredCkksOperation(
         tuple(replacements), lowered.result, lowered.material_descriptions
     )
@@ -164,7 +173,7 @@ def lower_ckks_program(
         )
         represented = operation.attributes.get("ckks_config")
         selected_config = (
-            CkksConfig.parse(json.loads(represented.data))
+            config_from_text(represented.data)
             if isinstance(represented, StringAttr)
             else config
         )

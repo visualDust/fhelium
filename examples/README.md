@@ -74,9 +74,9 @@ Scripts with configurable workloads expose `--help`. Examples 12–15 and 24 use
 
 ## Entry points
 
-- **Eager versus Compile:** 01 executes operations immediately; 11 JIT-compiles a decorated function; 12 controls the complete pass sequence. Example 14 adds a custom transformation, rather than another default compilation wrapper.
+- **Eager versus Compile:** 01 executes operations immediately; 11 demonstrates Eager-first or Compile-first callable execution with disk reuse and opt-in automatic Graph capture; 12 controls the complete pass sequence. Example 14 adds a custom transformation, rather than another default compilation wrapper.
 - **Persistence:** 09 owns individual file paths; 10 owns named artifact generations; 16 persists a Program with optional data. Key creation stays in 02.
-- **Repeated execution:** 17 schedules copies and buffer reuse; 18 captures and replays device execution. Residency 19–20 adds managed placement and admission.
+- **Repeated execution:** 17 schedules copies and buffer reuse; 18 captures and replays device execution, with `--compile` selecting callable-owned capture. Residency 19–20 adds managed placement and admission.
 - **Distributed:** 21 gathers independent outputs, 22 reduces additive partials, 23 reconstructs disjoint RNS rows, and 24 describes a collective in Program IR.
 
 ## Run distributed examples

@@ -20,6 +20,7 @@ from fhelium.backend.ckks import (
 from .ckks.arithmetic import (
     NativeCiphertextMultiplyImplementation,
     NativeCompressedPlaintextImplementation,
+    NativeSelectBatchImplementation,
 )
 from .ckks.modulus_raise import NativeModulusRaiseImplementation
 from .ckks.key_switch import (
@@ -118,6 +119,7 @@ def create_builtin_operation_registry(
             NativeRotateImplementation(),
             NativeRotationSumImplementation(),
             NativeCompressedPlaintextImplementation(),
+            NativeSelectBatchImplementation(),
             NativeHoistedRotateManyImplementation(),
             NativeGroupedRotationWeightedSumImplementation(),
             NativeEncodeImplementation(),

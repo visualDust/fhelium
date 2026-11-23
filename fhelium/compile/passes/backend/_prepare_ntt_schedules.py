@@ -31,6 +31,14 @@ def _source(value: SSAValue) -> SSAValue:
             parent := value.owner.parent_op(), fusion.FusedOp
         ):
             value = parent.inputs[value.index]
+        elif (
+            isinstance(value, BlockArgument)
+            and isinstance(parent := value.owner.parent_op(), ckks.RepeatOp)
+            and value.index
+        ):
+            value = (*parent.shared, *parent.row(0), *parent.carried)[
+                value.index - 1
+            ]
         else:
             return value
 
@@ -75,14 +83,15 @@ def _schedule_operands(
 
 def prepare_ntt_schedules(
     program: Program, materials: Mapping[Operation, object]
-) -> None:
+) -> tuple[tuple[str, str], ...]:
     """Validate bound schedules once before constructing the host callable.
 
-    Input-dependent schedules remain caller-prepared Tensor operands. Index
+    Returns the validated (even, odd) material symbol pairs. Input-dependent schedules remain caller-prepared Tensor operands. Index
     values and layout stay fixed during execution; numerical twiddles and RNS
     parameters continue to be read from their live Tensor bindings.
     """
     prepared: set[tuple[int, int]] = set()
+    symbols: dict[tuple[str, str], None] = {}
     for operation in program.single_block("main").walk():
         for even_value, odd_value in _schedule_operands(operation):
             even_ref, odd_ref = (
@@ -93,9 +102,11 @@ def prepare_ntt_schedules(
                 odd_ref, core.MaterialRefOp
             ):
                 continue
+            symbols[(even_ref.symbol.data, odd_ref.symbol.data)] = None
             even = cast(torch.Tensor, materials[even_ref])
             odd = cast(torch.Tensor, materials[odd_ref])
             identity = (id(even), id(odd))
             if identity not in prepared:
                 ntt_ops.validate_indexed_schedule(even, odd, 2 * even.size(1))
                 prepared.add(identity)
+    return tuple(symbols)

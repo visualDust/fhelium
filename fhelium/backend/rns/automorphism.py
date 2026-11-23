@@ -3,7 +3,6 @@ r"""Coefficient indexing and RNS execution of polynomial automorphisms."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
 
 import torch
 from xdsl.ir import Operation
@@ -98,24 +97,13 @@ class NativeCoefficientAutomorphismImplementation:
         *,
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
-        del in_place
-        if len(values) != 2:
-            raise ValueError(
-                "Coefficient automorphism requires a value and parameter Tensor"
-            )
-        source = values[0]
-        parameters = values[1]
-        gather, source_sign = coefficient_galois_gather_indices(
-            source.size(-1),
-            cast(int, invocation.attributes["galois_element"]),
-            source.device,
-        )
-        twice_modulus = parameters[0]
+        del invocation, resources, in_place
+        source, parameters, source_indices, source_sign = values
         return (
             ckks_ops.apply_coefficient_galois_automorphism(
                 source,
-                gather,
+                source_indices,
                 source_sign,
-                twice_modulus,
+                parameters[0],
             ),
         )

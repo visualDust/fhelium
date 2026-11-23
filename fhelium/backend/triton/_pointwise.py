@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import linecache
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Hashable, Sequence
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from math import prod
 from typing import TYPE_CHECKING, Any
@@ -15,6 +15,7 @@ from xdsl.ir import Operation
 
 from fhelium.backend.implementation import FusionMatcher, OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
+from fhelium.ir._structure import structural_key
 from fhelium.ir.dialects import ckks, fusion, rns
 
 from ._expressions import (
@@ -24,18 +25,29 @@ from ._expressions import (
     Expr,
     ExpressionGraph,
     InputLayout,
+    KernelArguments,
     ValueExpr,
     arithmetic_value,
     component_axis,
     compact_value,
+    material_view_owners,
+)
+from ._budget import (
+    DEFAULT_KERNEL_BUDGET,
+    DEFAULT_POINTWISE_BUDGET,
+    KernelBudget,
+    indivisible_kernel,
+    within_budget,
 )
 from ._launch import PreparedKernel
+from ._layout import polynomial_shape
+from ._ntt_codegen import _parameter_policy
 
 if TYPE_CHECKING:
     pass
 
 
-@lru_cache(maxsize=128)
+@lru_cache(maxsize=1024)
 def compile_source(source: str) -> Any:
     """Compile generated Python to a Triton function, retaining inspectable source."""
     import triton
@@ -65,27 +77,58 @@ def compile_source(source: str) -> Any:
         },
     }
     exec(compile(source, filename, "exec", dont_inherit=True), namespace)
-    function = namespace["fused"]
+    function = namespace.pop("fused")
+    alignment_independent, scalars = _parameter_policy(function)
     return triton.jit(
-        do_not_specialize_on_alignment=[
-            name
-            for name in function.__code__.co_varnames[
-                : function.__code__.co_argcount
-            ]
-            if function.__annotations__.get(name) is not tl.constexpr
-        ],
+        do_not_specialize=scalars,
+        do_not_specialize_on_alignment=alignment_independent,
     )(function)
 
 
 @dataclass(frozen=True)
+class _Value:
+    """Result root, extent and view of a restored plan output."""
+
+    root: int
+    shape: tuple[int, ...]
+    view: tuple[object, ...] = ()
+
+
+@dataclass(frozen=True)
+class _Outputs:
+    outputs: tuple[_Value, ...]
+
+
+def _restore_pointwise(outputs, materialized, *fields):
+    return PointwisePlan(_Outputs(outputs), materialized, *fields)
+
+
+@dataclass(frozen=True)
 class PointwisePlan:
+    """Execute complete output reductions using bounded generated kernels.
+
+    ``inputs`` lists the region input numbers a leaf kernel reads in parameter
+    order; ``scalars`` are the runtime layout arguments appended after the
+    compile constants. Extents and strides are non-specialized int64 arguments.
+    """
+
     graph: BoundGraph
     materialized: tuple[ValueExpr, ...]
-    kernel: Any
+    kernel: PreparedKernel | None
     length: int
+    inputs: tuple[int, ...]
+    scalars: tuple[int, ...]
+    dtype: torch.dtype = torch.int64
+    parts: tuple[PointwisePlan, ...] = ()
 
     @classmethod
-    def build(cls, graph: BoundGraph) -> PointwisePlan:
+    def build(
+        cls,
+        graph: BoundGraph,
+        *,
+        dtype: torch.dtype = torch.int64,
+        kernel_budget: KernelBudget = DEFAULT_POINTWISE_BUDGET,
+    ) -> PointwisePlan:
         if graph.anchors:
             raise ValueError(
                 "NTT anchors require the transform execution implementation"
@@ -100,49 +143,128 @@ class PointwisePlan:
         length = max(
             (prod(v.batch_shape) * rows * n for v in materialized), default=0
         )
-        parameters = [
-            *(f"x{i}" for i in range(len(graph.layouts))),
-            *(f"out{i}" for i in range(len(materialized))),
-            "rns_parameters",
-            "PSTRIDE: tl.constexpr",
-            "PROW_STRIDE: tl.constexpr",
-            "RADIX: tl.constexpr",
-            "BLOCK: tl.constexpr",
-        ]
+        names = KernelArguments(graph.layouts)
+        length_name = names.scalar("length", length)
+        rows_name = names.scalar("rows", rows)
+        plane = names.scalar("plane", rows * n)
         lines = [
-            "def fused(" + ", ".join(parameters) + "):",
-            "    offset = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)",
-            f"    mask = offset < {length}",
-            f"    index = offset % {n}",
-            f"    row = (offset // {n}) % {rows}",
-            f"    batch = offset // {rows * n}",
-            "    q = tl.load(rns_parameters + row * PROW_STRIDE, mask=mask, other=2).to(tl.int64) // 2",
-            "    klo = tl.load(rns_parameters + 3 * PSTRIDE + row * PROW_STRIDE, mask=mask, other=0).to(tl.uint64)",
-            "    khi = tl.load(rns_parameters + 4 * PSTRIDE + row * PROW_STRIDE, mask=mask, other=0).to(tl.uint64)",
-            "    k = klo | (khi << (RADIX // 2))",
-            "    r2 = tl.load(rns_parameters + 5 * PSTRIDE + row * PROW_STRIDE, mask=mask, other=0).to(tl.int64)",
+            "offset = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)",
+            f"mask = offset < {length_name}",
+            f"index = offset % {n}",
+            f"row = (offset // {n}) % {rows_name}",
+            f"batch = offset // {plane}",
+            "q = tl.load(rns_parameters + row * PROW_STRIDE, mask=mask, other=2).to(tl.int64) // 2",
+            "klo = tl.load(rns_parameters + 3 * PSTRIDE + row * PROW_STRIDE, mask=mask, other=0).to(tl.uint64)",
+            "khi = tl.load(rns_parameters + 4 * PSTRIDE + row * PROW_STRIDE, mask=mask, other=0).to(tl.uint64)",
+            "k = klo | (khi << (RADIX // 2))",
+            "r2 = tl.load(rns_parameters + 5 * PSTRIDE + row * PROW_STRIDE, mask=mask, other=0).to(tl.int64)",
         ]
-        emitter = Emitter(graph.layouts)
+        emitter = Emitter(graph.layouts, names)
         stores: list[str] = []
         for number, value in enumerate(materialized):
             count = prod(value.batch_shape) * rows * n
-            output_mask = f"(offset < {count})"
+            count_name = names.scalar(f"count{number}", count)
+            output_mask = f"(offset < {count_name})"
             for component, expr in enumerate(value.components):
                 result = emitter.emit(
                     expr, "index", "row", "batch", mask=output_mask
                 )
-                stores.append(
-                    f"tl.store(out{number} + offset + {component * count}, {result}, mask={output_mask})"
+                component_offset = (
+                    f" + {component} * {count_name}" if component else ""
                 )
-        lines.extend("    " + line for line in (*emitter.lines, *stores))
+                stores.append(
+                    f"tl.store(out{number} + offset{component_offset}, {result}, mask={output_mask})"
+                )
+        parameters = [
+            *names.pointer_parameters,
+            *(f"out{i}" for i in range(len(materialized))),
+            "rns_parameters",
+            "PSTRIDE: tl.int64",
+            "PROW_STRIDE: tl.int64",
+            "RADIX: tl.constexpr",
+            "BLOCK: tl.constexpr",
+            *names.scalar_parameters,
+        ]
+        source = (
+            "def fused("
+            + ", ".join(parameters)
+            + "):\n"
+            + "".join(
+                "    " + line + "\n"
+                for line in (*lines, *emitter.lines, *stores)
+            )
+        )
+        if not within_budget(source, kernel_budget):
+            if len(materialized) < 2:
+                raise indivisible_kernel(source, kernel_budget)
+            middle = len(materialized) // 2
+            parts = tuple(
+                cls.build(
+                    replace(graph, outputs=outputs),
+                    dtype=dtype,
+                    kernel_budget=kernel_budget,
+                )
+                for outputs in (materialized[:middle], materialized[middle:])
+            )
+            return cls(graph, materialized, None, length, (), (), dtype, parts)
         return cls(
             graph,
             materialized,
             PreparedKernel(
-                compile_source("\n".join(lines) + "\n"),
+                compile_source(source),
                 ((length + 255) // 256,),
+                source=(compile_source, source),
             ),
             length,
+            tuple(names.inputs),
+            names.scalar_values,
+            dtype,
+        )
+
+    def __reduce__(self):
+        return (
+            _restore_pointwise,
+            (
+                tuple(
+                    _Value(v.root, v.shape, v.view) for v in self.graph.outputs
+                ),
+                tuple(_Value(v.root, v.shape) for v in self.materialized),
+                self.kernel,
+                self.length,
+                self.inputs,
+                self.scalars,
+                self.dtype,
+                self.parts,
+            ),
+        )
+
+    @property
+    def kernel_count(self) -> int:
+        return (
+            sum(part.kernel_count for part in self.parts)
+            if self.parts
+            else int(bool(self.length))
+        )
+
+    def warm(self, parameter_strides: tuple[int, int], radix: int) -> int:
+        """Compile and load complete-output partitions; return new compilations."""
+        if self.parts:
+            return sum(
+                part.warm(parameter_strides, radix) for part in self.parts
+            )
+        if not self.length:
+            return 0
+        return int(
+            self.kernel.warm(
+                *(
+                    [self.dtype]
+                    * (len(self.inputs) + len(self.materialized) + 1)
+                ),
+                *parameter_strides,
+                radix,
+                256,
+                *self.scalars,
+            )
         )
 
     def execute(
@@ -151,22 +273,34 @@ class PointwisePlan:
         parameters: torch.Tensor,
         radix: int,
     ) -> tuple[torch.Tensor, ...]:
-        storage = {
-            v.root: torch.empty(
-                v.shape, dtype=inputs[0].dtype, device=inputs[0].device
-            )
-            for v in self.materialized
-        }
-        if self.length:
+        if self.parts:
+            storage = {
+                value.root: tensor
+                for part in self.parts
+                for value, tensor in zip(
+                    part.graph.outputs,
+                    part.execute(inputs, parameters, radix),
+                    strict=True,
+                )
+            }
+        else:
+            storage = {
+                v.root: torch.empty(
+                    v.shape, dtype=inputs[0].dtype, device=inputs[0].device
+                )
+                for v in self.materialized
+            }
+        if self.length and not self.parts:
             with torch.cuda.device(inputs[0].device):
                 self.kernel(
-                    *inputs,
+                    *(inputs[i] for i in self.inputs),
                     *storage.values(),
                     parameters,
                     parameters.stride(0),
                     parameters.stride(1),
                     radix,
                     256,
+                    *self.scalars,
                     stream=torch.cuda.current_stream(
                         inputs[0].device
                     ).cuda_stream,
@@ -225,15 +359,153 @@ def execution_parameters(
     return parameters, 32 if first.dtype == torch.int32 else 62
 
 
+def declared_layouts(
+    operation: fusion.FusedOp,
+) -> tuple[tuple[tuple[object, ...], ...], bool] | None:
+    """Read input extents, strides, dtype and device from fusion input types.
+
+    Returns ``(descriptions, fixed)``, or None when an extent, dtype or device is unknown. Missing shapes are reconstructed from polynomial state and missing strides are assumed contiguous; either makes the layout not fixed.
+    """
+    from xdsl.dialects.builtin import ArrayAttr, IntegerAttr, StringAttr
+
+    descriptions = []
+    fixed = True
+    for value in operation.inputs:
+        state = getattr(getattr(value.type, "state", None), "data", {})
+        shape, strides = state.get("shape"), state.get("strides")
+        if shape is None:
+            shape = polynomial_shape(value.type)
+            fixed = False
+        dtype, device = state.get("dtype"), state.get("device")
+        if (
+            not isinstance(shape, ArrayAttr)
+            or not all(
+                isinstance(x, IntegerAttr) and x.value.data >= 0 for x in shape
+            )
+            or not isinstance(dtype, StringAttr)
+            or not isinstance(device, StringAttr)
+            or device.data == "unknown"
+        ):
+            return None
+        extents = tuple(int(x.value.data) for x in shape)
+        if isinstance(strides, ArrayAttr) and all(
+            isinstance(x, IntegerAttr) and x.value.data >= 0 for x in strides
+        ):
+            layout = tuple(int(x.value.data) for x in strides)
+        else:
+            fixed = False
+            layout = tuple(
+                prod(extents[axis + 1 :]) for axis in range(len(extents))
+            )
+        descriptions.append(
+            (
+                extents,
+                layout,
+                getattr(torch, dtype.data.removeprefix("torch.")),
+                torch.device(device.data),
+            )
+        )
+    return tuple(descriptions), fixed
+
+
+def _layout_signature(values) -> tuple[object, ...]:
+    return tuple(
+        (tuple(v.shape), tuple(v.stride()), v.dtype, v.device) for v in values
+    )
+
+
+class _Payloads:
+    """Select data operands and key-digit views from fusion operands."""
+
+    __slots__ = ("data", "tables", "keys", "rows")
+
+    def __init__(self, data, tables, keys, rows):
+        self.data, self.tables, self.keys, self.rows = data, tables, keys, rows
+
+    def __reduce__(self):
+        return (_Payloads, (self.data, self.tables, self.keys, self.rows))
+
+    def __call__(self, values):
+        data = tuple(values[index] for index in self.data)
+        if self.keys:
+            rows = self.rows
+            data += tuple(
+                values[self.tables[table]][digit, :, start : start + rows, :]
+                for table, digit, start in self.keys
+            )
+        return data
+
+
+class _NttRun:
+    __slots__ = ("payloads", "plan")
+
+    def __init__(self, payloads, plan):
+        self.payloads, self.plan = payloads, plan
+
+    def __reduce__(self):
+        return (_NttRun, (self.payloads, self.plan))
+
+    def __call__(self, values):
+        return self.plan.execute(
+            self.payloads(values),
+            tuple(values[index] for index in self.payloads.tables),
+        )
+
+
+class _PointwiseRun:
+    __slots__ = ("payloads", "plan", "parameter", "radix")
+
+    def __init__(self, payloads, plan, parameter, radix):
+        self.payloads, self.plan = payloads, plan
+        self.parameter, self.radix = parameter, radix
+
+    def __reduce__(self):
+        return (
+            _PointwiseRun,
+            (self.payloads, self.plan, self.parameter, self.radix),
+        )
+
+    def __call__(self, values):
+        return self.plan.execute(
+            self.payloads(values), values[self.parameter], self.radix
+        )
+
+
+@dataclass(frozen=True)
+class _PointwiseWarm:
+    plan: PointwisePlan
+    strides: tuple[int, int]
+    radix: int
+
+    def __call__(self):
+        compiled = self.plan.warm(self.strides, self.radix)
+        return compiled, self.plan.kernel_count - compiled
+
+
+def _restore_fusion(state):
+    prepared = object.__new__(PreparedFusion)
+    prepared.__dict__.update(state, graph=None, _region=None)
+    return prepared
+
+
 @dataclass
 class PreparedFusion:
+    """Kernel plans of one fusion body, keyed by operand layout.
+
+    One instance serves every dispatch of alpha-equivalent regions; each operand layout signature selects or builds its own plan.
+    """
+
     graph: ExpressionGraph
     name: str = "triton-rns-fused"
     max_ntt_endpoints: int | None = None
+    kernel_budget: KernelBudget = DEFAULT_KERNEL_BUDGET
+    pointwise_kernel_budget: KernelBudget = DEFAULT_POINTWISE_BUDGET
     operation_types: tuple[type[Operation], ...] = (fusion.FusedOp,)
     supports_in_place: bool = False
-    _last_match: Any = field(default=None, repr=False)
-    _last_call: Any = field(default=None, repr=False)
+    _plans: dict[tuple[object, ...], Any] = field(
+        default_factory=dict, repr=False
+    )
+    _last_warm: Any = field(default=None, repr=False)
     _fixed: bool = False
 
     def resource_requirements(
@@ -241,7 +513,36 @@ class PreparedFusion:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
+    def __reduce__(self):
+        state = dict(self.__dict__)
+        state.pop("graph")
+        state.pop("_region", None)
+        return (_restore_fusion, (state,))
+
+    def attach_region(self, linked: Callable[[], PreparedFusion]) -> None:
+        """Obtain the region from ``linked`` when a restored fusion meets a new layout."""
+        if self.graph is None:
+            self._region = linked
+
+    def warm(self) -> tuple[int, int] | None:
+        """Compile and load this fusion's kernels for the prepared layout.
+
+        Returns ``(compiled, reused)`` counts, or ``None`` when the layout is
+        determined only by runtime Tensors and no plan has been prepared.
+        """
+        if self._last_warm is None:
+            return None
+        return self._last_warm()
+
     def _prepare(self, all_inputs: tuple[torch.Tensor, ...]):
+        signature = _layout_signature(all_inputs)
+        run = self._plans.get(signature)
+        if run is None:
+            run, self._last_warm = self._build(all_inputs)
+            self._plans[signature] = run
+        return run
+
+    def _build(self, all_inputs: tuple[torch.Tensor, ...]):
         from ._ntt import NttExecution
 
         data_indices, table_indices = self.graph.input_indices
@@ -250,17 +551,7 @@ class PreparedFusion:
         rows = inputs[0].size(-2)
         key_views = tuple(self.graph.key_inputs)
 
-        def payloads(values):
-            data = tuple(values[index] for index in data_indices)
-            if key_views:
-                data += tuple(
-                    values[table_indices[table]][
-                        digit, :, start : start + rows, :
-                    ]
-                    for table, digit, start in key_views
-                )
-            return data
-
+        payloads = _Payloads(data_indices, table_indices, key_views, rows)
         inputs = payloads(all_inputs)
         layouts = tuple(
             InputLayout(
@@ -283,95 +574,69 @@ class PreparedFusion:
                 # Bound generated IR growth in the HIP coalescing compiler pass.
                 limit = 8
             plan = NttExecution.build(
-                graph, inputs, tables, max_endpoints=limit
+                graph,
+                inputs,
+                tables,
+                max_endpoints=limit,
+                kernel_budget=self.kernel_budget,
             )
-
-            def run(values):
-                return plan.execute(
-                    payloads(values),
-                    tuple(values[index] for index in table_indices),
-                )
-        else:
-            parameters = tables[self.graph.parameter_index]
-            # Reuse the selected implementation's native Tensor ABI check.
-            parameters, radix = execution_parameters(
-                None, inputs, parameters, in_place=False
-            )
-            pointwise = PointwisePlan.build(graph)
-            parameter_index = table_indices[self.graph.parameter_index]
-
-            def run(values):
-                return pointwise.execute(
-                    payloads(values), values[parameter_index], radix
-                )
-
-        namespace: dict[str, Any] = {}
-        conditions = []
-        for index, value in enumerate(all_inputs):
-            namespace[f"shape{index}"] = tuple(value.shape)
-            namespace[f"stride{index}"] = tuple(value.stride())
-            namespace[f"dtype{index}"] = value.dtype
-            namespace[f"device{index}"] = value.device
-            conditions.append(
-                f"values[{index}].shape == shape{index} and values[{index}].stride() == stride{index} and values[{index}].dtype == dtype{index} and values[{index}].device == device{index}"
-            )
-        source = (
-            "def matches(values):\n    return "
-            + " and ".join(conditions)
-            + "\n"
+            return _NttRun(payloads, plan), plan.warm
+        parameters = tables[self.graph.parameter_index]
+        # Reuse the selected implementation's native Tensor ABI check.
+        parameters, radix = execution_parameters(
+            None, inputs, parameters, in_place=False
         )
-        exec(compile(source, "<fhelium-fusion-layout>", "exec"), namespace)
-        self._last_match = namespace["matches"]
-        self._last_call = run
+        pointwise = PointwisePlan.build(
+            graph,
+            dtype=inputs[0].dtype,
+            kernel_budget=self.pointwise_kernel_budget,
+        )
+        run = _PointwiseRun(
+            payloads,
+            pointwise,
+            table_indices[self.graph.parameter_index],
+            radix,
+        )
+        return run, _PointwiseWarm(
+            pointwise, (parameters.stride(0), parameters.stride(1)), radix
+        )
 
     def prepare_layout(self, operation: fusion.FusedOp) -> None:
-        """Prepare known physical layouts without allocating numerical storage."""
-        from torch._subclasses.fake_tensor import FakeTensorMode
-        from xdsl.dialects.builtin import ArrayAttr, IntegerAttr, StringAttr
+        """Prepare kernels from declared Program layouts without numerical storage.
 
-        descriptions = []
-        for value in operation.inputs:
-            state = getattr(getattr(value.type, "state", None), "data", {})
-            shape, strides = state.get("shape"), state.get("strides")
-            dtype, device = state.get("dtype"), state.get("device")
-            if (
-                not isinstance(shape, ArrayAttr)
-                or not isinstance(strides, ArrayAttr)
-                or not all(
-                    isinstance(x, IntegerAttr) and x.value.data >= 0
-                    for x in (*shape, *strides)
-                )
-                or not isinstance(dtype, StringAttr)
-                or not isinstance(device, StringAttr)
-                or device.data == "unknown"
-            ):
-                return
-            descriptions.append(
-                (
-                    tuple(int(x.value.data) for x in shape),
-                    tuple(int(x.value.data) for x in strides),
-                    getattr(torch, dtype.data.removeprefix("torch.")),
-                    torch.device(device.data),
-                )
-            )
+        Polynomial extents follow either the declared shape or the component,
+        batch, prime-row and ring-dimension state. When every shape and stride
+        is declared, the prepared layout is fixed. Otherwise contiguous strides
+        are assumed for preparation and execution re-binds if the runtime
+        layout differs.
+        """
+        from torch._subclasses.fake_tensor import FakeTensorMode
+
+        declared = declared_layouts(operation)
+        if declared is None:
+            return
+        descriptions, fixed = declared
         with FakeTensorMode():
             values = tuple(
                 torch.empty_strided(shape, strides, dtype=dtype, device=device)
                 for shape, strides, dtype, device in descriptions
             )
             self._prepare(values)
-        self._fixed = True
+        self._fixed = fixed
 
     def execute(self, invocation, inputs, resources, *, in_place):
         if in_place:
             raise ValueError("Triton fusion uses out-of-place execution")
-        if self._last_match is None or not self._last_match(inputs):
+        run = self._plans.get(_layout_signature(inputs))
+        if run is None:
             if self._fixed:
                 raise ValueError(
                     "Fusion operands differ from the prepared layout/dtype/device"
                 )
-            self._prepare(inputs)
-        return self._last_call(inputs)
+            if self.graph is None:
+                self.graph = self._region().graph
+            run = self._prepare(inputs)
+        return run(inputs)
 
 
 @dataclass(frozen=True)
@@ -389,17 +654,32 @@ class TritonFusionImplementation:
     ``max_ntt_endpoints`` bounds transform endpoints per generated kernel while
     preserving their stage order. ``None`` selects eight endpoints on HIP to
     limit compiler IR growth and leaves CUDA endpoint merging unbounded.
+
+    ``kernel_budget`` bounds static Montgomery calls, pointer arguments and
+    Python source lines for NTT endpoint kernels. ``pointwise_kernel_budget``
+    applies the same metrics to ordinary expression kernels. Complete output
+    reductions or NTT endpoints are partitioned without changing arithmetic
+    order. ``None`` disables the respective limit; a single oversized endpoint
+    requires a larger budget or an application-selected decomposition.
     """
 
     name: str = "triton-rns-fused"
     include_ntt: bool = False
     max_ntt_endpoints: int | None = None
+    kernel_budget: KernelBudget = DEFAULT_KERNEL_BUDGET
+    pointwise_kernel_budget: KernelBudget = DEFAULT_POINTWISE_BUDGET
     operation_types: tuple[type[Operation], ...] = (fusion.FusedOp,)
     supports_in_place: bool = False
 
     def __post_init__(self):
         if self.max_ntt_endpoints is not None and self.max_ntt_endpoints <= 0:
             raise ValueError("max_ntt_endpoints must be positive")
+        for name in ("kernel_budget", "pointwise_kernel_budget"):
+            budget = getattr(self, name)
+            if budget is not None and (
+                len(budget) != 3 or any(v <= 0 for v in budget)
+            ):
+                raise ValueError(f"{name} requires three positive limits")
 
     def select_ntt_schedule(self, **facts):
         """Select an NTT schedule independently of endpoint decomposition."""
@@ -458,6 +738,20 @@ class TritonFusionImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
+    def preparation_key(self, operation: Operation) -> Hashable | None:
+        """Return the key under which equal fusion regions share one preparation.
+
+        Alpha-equivalent bodies with equal input types and material-view grouping generate the same kernels for each operand layout.
+        """
+        if not isinstance(operation, fusion.FusedOp):
+            return None
+        return (
+            structural_key(operation),
+            material_view_owners(
+                operation, tuple(range(len(operation.inputs)))
+            ),
+        )
+
     def prepare_operation(self, operation: Operation) -> PreparedFusion:
         if not isinstance(operation, fusion.FusedOp):
             raise TypeError(
@@ -483,6 +777,8 @@ class TritonFusionImplementation:
             ExpressionGraph(operation),
             name=self.name,
             max_ntt_endpoints=self.max_ntt_endpoints,
+            kernel_budget=self.kernel_budget,
+            pointwise_kernel_budget=self.pointwise_kernel_budget,
         )
         prepared.prepare_layout(operation)
         return prepared
@@ -574,6 +870,8 @@ class TritonRnsImplementation:
                 )
             )
             roots = {v.root: v for v in (*values, output)}
-            plan = PointwisePlan.build(BoundGraph(layouts, (output,), roots))
+            plan = PointwisePlan.build(
+                BoundGraph(layouts, (output,), roots), dtype=inputs[0].dtype
+            )
             self.plans[key] = plan
         return plan.execute(inputs, parameters, radix)

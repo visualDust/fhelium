@@ -5,11 +5,46 @@ from __future__ import annotations
 from collections.abc import Sequence
 from math import prod
 
+from xdsl.dialects.builtin import ArrayAttr, IntegerAttr
 from xdsl.ir import Operation
 
 from fhelium.ir.dialects import ckks, rns
 
 Shape = tuple[int, ...] | None
+
+
+def polynomial_shape(value_type: object) -> ArrayAttr[IntegerAttr] | None:
+    """Recover polynomial storage extents from represented value state.
+
+    Ciphertexts and RNS bundles store ``[component?, *batch, prime, coefficient]``.
+    Prime identities determine the row extent; component_count (or components)
+    determines whether storage has a component axis. Missing batch or ring
+    facts leave the shape unresolved.
+    """
+    if not isinstance(value_type, (ckks.CiphertextType, rns.RnsBundleType)):
+        return None
+    state = value_type.state.data
+    batch, primes = state.get("batch_shape"), state.get("prime_ids")
+    ring = state.get("ring_dimension")
+    components = state.get("component_count", state.get("components"))
+    if not (
+        isinstance(batch, ArrayAttr)
+        and isinstance(primes, ArrayAttr)
+        and isinstance(ring, IntegerAttr)
+    ):
+        return None
+    if isinstance(value_type, ckks.CiphertextType) and not isinstance(
+        components, IntegerAttr
+    ):
+        return None
+    return ArrayAttr(
+        (
+            *((components,) if isinstance(components, IntegerAttr) else ()),
+            *batch,
+            IntegerAttr(len(primes), 64),
+            ring,
+        )
+    )
 
 
 def result_layout(

@@ -215,25 +215,22 @@ Prepare the complete refresh for one input state and device:
 
 ```python
 from fhelium import compile as fc
-from fhelium.runtime import CudaGraphProgram
 
 prepared = bootstrap.prepare(ciphertext, evaluation_keys=keys)
-reference_output = prepared(ciphertext)
 optimized = fc.compile(prepared)
-optimized.prepare(ciphertext)
-graph = CudaGraphProgram.capture(
-    optimized, example_inputs=(ciphertext,), warmup=1
-)
 try:
-    refreshed = graph.replay(ciphertext, copy_output=True, synchronize=True)
+    reference_output = optimized(ciphertext)
+    optimized.prepare(ciphertext)
+    refreshed = optimized(ciphertext)
+    print("Preparation seconds:", optimized.stats()["prepare_seconds"])
 finally:
-    graph.close()
+    optimized.clear()
     prepared.close()
 ```
 
 Material discovery records each selected key in ordinary dictionaries beside the encoded materials. The prepared callable retains those references, the input signature and selected components; it releases the example payload and temporary result. Adding candidates to `keys`, removing members or clearing it leaves existing prepared bindings unchanged. Prepare again to select different keys. The selected key Tensors remain live, so compatible in-place data changes are visible to both Eager and linked execution.
 
-`PreparedBootstrap` supplies the same entry, core and finish computation to Eager execution and Compile capture. Both paths share the encoded samples. Supply a custom pipeline or Backend through `fc.compile` when needed. For direct control of normalized coordinates, use `entry`, `prepare_core` and `finish`. Close Graphs before their prepared owner; linked executables retain their own material references.
+`PreparedBootstrap` supplies the same entry, core and finish computation to Eager execution and Compile capture. Both paths share the encoded samples. Supply a custom pipeline or Backend through `fc.compile` when needed. For direct control of normalized coordinates, use `entry`, `prepare_core` and `finish`. The default first call runs the reference, `.prepare()` joins compilation, and subsequent calls use prepared execution. Opt into automatic Graph capture with `graph="auto"` or `graph=True` when desired; Graph outputs are owned by default. Clear the compiled callable before closing its prepared owner; linked executables retain their own material references.
 
 ## Validate the selected composition
 

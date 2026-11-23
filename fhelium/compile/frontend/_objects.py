@@ -99,7 +99,7 @@ def _attribute(proxy, name):
         else {}
     )
     if name in instance_fields and descriptor is instance_fields[name]:
-        return capture.substitute(descriptor)
+        return capture.external(descriptor, lambda: getattr(original, name))
     if isinstance(descriptor, types.FunctionType):
         function = capture.function(descriptor)
         return (
@@ -111,7 +111,10 @@ def _attribute(proxy, name):
         name == '__dict__'
         and isinstance(descriptor, types.GetSetDescriptorType)
     ):
-        return capture.substitute(descriptor.__get__(original, type(original)))
+        return capture.external(
+            descriptor.__get__(original, type(original)),
+            lambda: descriptor.__get__(original, type(original)),
+        )
     if hasattr(type(descriptor), '__get__'):
         raise CaptureError(
             f'Callable capture does not support descriptor {type(descriptor).__name__} for {name!r}'
@@ -160,7 +163,8 @@ class StaticMapping(StaticObject):
     def __getitem__(self, key):
         original, capture = _binding(self)
         if type(original) in (dict, types.MappingProxyType):
-            return capture.substitute(original[key])
+            key = capture.unwrapped_key(key)
+            return capture.external(original[key], lambda: original[key])
         return _method(self, '__getitem__', key)
 
     def __iter__(self):
@@ -188,6 +192,10 @@ class StaticMapping(StaticObject):
         )
 
     def __setitem__(self, key, value):
+        original, capture = _binding(self)
+        if type(original) is dict and capture.preparation is not None:
+            capture.preparation.memoize(original, key, value)
+            return
         raise CaptureError(
             'Captured computation cannot mutate bound mapping state'
         )

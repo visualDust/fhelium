@@ -97,6 +97,25 @@ def _ciphertext_result(
     )
 
 
+def weighted_sum_terms(
+    values: Sequence[Ciphertext | Plaintext | CompressedPlaintext]
+    | Ciphertext
+    | Plaintext
+    | CompressedPlaintext,
+) -> tuple[Ciphertext | Plaintext | CompressedPlaintext, ...]:
+    """Return weighted-sum terms from a sequence or the first batch axis of one value."""
+
+    if isinstance(values, (Ciphertext, Plaintext, CompressedPlaintext)):
+        if not values.is_batched:
+            raise ValueError(
+                "A weighted-sum operand value must enumerate terms on its first batch axis"
+            )
+        return tuple(
+            values.select_batch(index) for index in range(values.batch_shape[0])
+        )
+    return tuple(values)
+
+
 def _plaintext_result(
     source: Plaintext,
     data: torch.Tensor,
@@ -3055,13 +3074,19 @@ class Engine:
 
     def _sum_plaintext_product_rows(
         self,
-        ciphertexts: Sequence[Ciphertext],
-        rows: Sequence[Sequence[Plaintext | CompressedPlaintext]],
+        ciphertexts: Sequence[Ciphertext] | Ciphertext,
+        rows: Sequence[
+            Sequence[Plaintext | CompressedPlaintext]
+            | Plaintext
+            | CompressedPlaintext
+        ],
         *,
         grouped: bool,
         implementation: str | None,
         term_chunk_size: int | None,
     ) -> Ciphertext:
+        ciphertexts = weighted_sum_terms(ciphertexts)
+        rows = tuple(weighted_sum_terms(row) for row in rows)
         if (
             not ciphertexts
             or not rows
@@ -3121,8 +3146,10 @@ class Engine:
 
     def sum_plaintext_products(
         self,
-        ciphertexts: Sequence[Ciphertext],
-        plaintexts: Sequence[Plaintext | CompressedPlaintext],
+        ciphertexts: Sequence[Ciphertext] | Ciphertext,
+        plaintexts: Sequence[Plaintext | CompressedPlaintext]
+        | Plaintext
+        | CompressedPlaintext,
         *,
         implementation: str | None = None,
         term_chunk_size: int | None = None,
@@ -3135,7 +3162,9 @@ class Engine:
         y=\sum_{t=0}^{T-1}c_t p_t.
         $$
 
-        Every ciphertext must have the same NTT/Montgomery Q or QP state,
+        Each argument is either a sequence of $T$ terms or one batched value
+        whose first batch axis enumerates the $T$ terms; a batched value is read
+        through storage-sharing views. Every ciphertext must have the same NTT/Montgomery Q or QP state,
         depth, active rows, component shape, and actual scale.  Every prepared
         plaintext must match those rows and have a common actual scale.  The
         result preserves the ciphertext state and has scale
@@ -3145,6 +3174,8 @@ class Engine:
         by representation and device; a named implementation is required as
         requested. ``term_chunk_size`` bounds the fused implementation's
         consecutive term groups without crossing a rescale or key switch.
+        Without either option, Compile captures the sum as one ordered
+        multiply-add loop over the terms rather than $T$ separate products.
         """
 
         return self._sum_plaintext_product_rows(
@@ -3157,8 +3188,12 @@ class Engine:
 
     def sum_plaintext_product_groups(
         self,
-        ciphertexts: Sequence[Ciphertext],
-        plaintext_groups: Sequence[Sequence[Plaintext | CompressedPlaintext]],
+        ciphertexts: Sequence[Ciphertext] | Ciphertext,
+        plaintext_groups: Sequence[
+            Sequence[Plaintext | CompressedPlaintext]
+            | Plaintext
+            | CompressedPlaintext
+        ],
         *,
         implementation: str | None = None,
         term_chunk_size: int | None = None,
@@ -3172,7 +3207,8 @@ class Engine:
         y_g=\sum_{t=0}^{T-1}c_t p_{g,t}.
         $$
 
-        Every operand follows :meth:`sum_plaintext_products`' matching
+        The ciphertexts and each plaintext row are sequences or batched values
+        as in :meth:`sum_plaintext_products`. Every operand follows its matching
         NTT/Montgomery state, depth, row, shape, and scale requirements. Each
         result has scale $\Delta_c\Delta_p$ and preserves the ciphertext
         state. The output inserts the group axis as its first batch axis, so

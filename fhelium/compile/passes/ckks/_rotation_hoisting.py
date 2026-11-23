@@ -107,10 +107,7 @@ class RotationHoistingPass:
 
     @staticmethod
     def _step(rotation: ckks.RotateOp) -> int | None:
-        step = cast(ckks.EvaluationKeyType, rotation.key.type).state.data.get(
-            "rotation_step"
-        )
-        return int(step.value.data) if isinstance(step, IntegerAttr) else None
+        return int(rotation.rotation_step.value.data)
 
     @staticmethod
     def _key_layout(rotation: ckks.RotateOp) -> tuple[object, ...]:

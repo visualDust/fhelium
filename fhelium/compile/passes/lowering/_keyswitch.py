@@ -34,6 +34,69 @@ from ._types import (
 )
 
 
+def galois_tables(
+    compilation,
+    operation: Operation,
+    config: CkksConfig,
+    galois_element: int,
+    device: Attribute | None,
+) -> tuple[tuple[Operation, ...], tuple[SSAValue, SSAValue]]:
+    """Declare the coefficient gather and sign Tensors of $\\sigma_g$."""
+    created: list[Operation] = []
+    values = []
+    for name, dtype in (('source_indices', 'int32'), ('source_sign', 'int8')):
+        state: dict[str, Attribute] = {'dtype': StringAttr(f'torch.{dtype}')}
+        if isinstance(device, StringAttr):
+            state['device'] = device
+        references, value = declare_material(
+            compilation,
+            operation,
+            f'galois/{galois_element}/{name}',
+            core.MessageType().with_state(state),
+            parameter_description(
+                config,
+                'galois_table',
+                galois_element=galois_element,
+                name=name,
+            ),
+            identity=('galois_table', galois_element, name, str(device)),
+        )
+        created.extend(references)
+        values.append(value)
+    return tuple(created), (values[0], values[1])
+
+
+def rebind_galois_tables(
+    compilation,
+    automorphism: rns.CoefficientAutomorphismOp,
+    galois_element: int,
+) -> tuple[Operation, ...]:
+    """Point an attached automorphism at the tables of another Galois element."""
+    created: list[Operation] = []
+    for index in (2, 3):
+        value = automorphism.operands[index]
+        owner = value.owner
+        if not isinstance(owner, core.MaterialRefOp) or owner.symbol is None:
+            raise ValueError('Galois tables must be declared materials')
+        description = dict(
+            compilation.program.material_description(owner.symbol.data) or {}
+        )
+        name = cast(str, description['name'])
+        description['galois_element'] = galois_element
+        device = cast(core.MessageType, value.type).state.data.get('device')
+        references, replacement = declare_material(
+            compilation,
+            automorphism,
+            f'galois/{galois_element}/{name}',
+            value.type,
+            description,
+            identity=('galois_table', galois_element, name, str(device)),
+        )
+        created.extend(references)
+        automorphism.operands[index] = replacement
+    return tuple(created)
+
+
 class _KeySwitchLowering:
     """Build shared key products and caller-composed quotient operations."""
 
@@ -246,6 +309,13 @@ class _KeySwitchLowering:
             and value != StringAttr('unknown')
         }
         ntt_attributes['ckks_config'] = StringAttr(json.dumps(config.dumps()))
+        from ..._origins import origin_store
+
+        self.origins = origin_store(compilation)
+        self._digit_origin = None
+        self._digit_ports = {}
+        self._digit_sequence = 0
+        self.compilation = compilation
         self.config = config
         self.descriptions = descriptions
         self.digits = digits
@@ -264,8 +334,20 @@ class _KeySwitchLowering:
         self.tensors = tensors
         self.value = value
 
-    def emit(self, op: Operation) -> SSAValue:
+    def emit(self, op: Operation, *, role: str | None = None) -> SSAValue:
         self.operations.append(op)
+        if self._digit_origin is not None:
+            self.origins.entries[op] = {
+                **self._digit_origin,
+                "sequence": self._digit_sequence,
+                "role": role or op.name,
+                "port_roles": {
+                    str(index): self._digit_ports[value]
+                    for index, value in enumerate(op.operands)
+                    if value in self._digit_ports
+                },
+            }
+            self._digit_sequence += 1
         return op.results[0]
 
     def polynomial(
@@ -297,7 +379,13 @@ class _KeySwitchLowering:
         )
 
     def transform(
-        self, value: SSAValue, *, inverse: bool, basis: str, typ: Attribute
+        self,
+        value: SSAValue,
+        *,
+        inverse: bool,
+        basis: str,
+        typ: Attribute,
+        role: str | None = None,
     ) -> SSAValue:
         prefix = f"{basis}_{('inverse' if inverse else 'forward')}_"
         supplied = tuple(
@@ -326,7 +414,8 @@ class _KeySwitchLowering:
                 typ,
                 tables=supplied[1:],
                 attributes=self.ntt_attributes,
-            )
+            ),
+            role=role,
         )
 
     def local_tables(self, names):
@@ -353,8 +442,64 @@ class _KeySwitchLowering:
 
     def products(self, source: SSAValue) -> SSAValue:
         """Emit sum_j NTT(ModUp(digit_j(source))) * key_j over QP."""
+
+        def rows(attribute):
+            if isinstance(attribute, IntegerAttr):
+                return int(attribute.value.data)
+            if isinstance(attribute, ArrayAttr):
+                return [rows(item) for item in attribute]
+            return None
+
+        if self.origins is not None:
+            key_state = self.key.type.state.data
+            q_ids = rows(self.q_ids)
+            key_ids = rows(key_state.get("prime_ids"))
+            digit_ids = rows(key_state.get("digit_prime_ids"))
+            self._digit_ports = {
+                source: ["digit_source"],
+                self.key: ["evaluation_key"],
+            }
+            for name, value in self.tensors.items():
+                self._digit_ports.setdefault(value, []).append(
+                    f"material:{name}"
+                )
         accumulator: SSAValue | None = None
         for index, span in enumerate(self.digits):
+            if self.origins is not None:
+                stored_rows = (
+                    None
+                    if digit_ids is None or not 0 <= span[2] < len(digit_ids)
+                    else digit_ids[span[2]]
+                )
+                if accumulator is not None:
+                    self._digit_ports.setdefault(accumulator, []).append(
+                        "accumulator"
+                    )
+                self._digit_origin = {
+                    "source": "lowering",
+                    "schema": "ckks-key-switch-digit/v1",
+                    "occurrence": self.origins.occurrence("key-switch-digit"),
+                    "parameters": {
+                        "active_digit_index": index,
+                        "active_digit_span": list(span),
+                        "stored_digit_index": span[2],
+                        "stored_digit_rows": stored_rows,
+                        "active_prime_ids": None
+                        if q_ids is None or stored_rows is None
+                        else [prime for prime in stored_rows if prime in q_ids],
+                        "q_prime_ids": q_ids,
+                        "qp_prime_ids": rows(self.qp_ids),
+                        "key_prime_ids": key_ids,
+                        "digit_prime_ids": digit_ids,
+                        "key_row_start": int(self.row_start),
+                        "modup_method": self.modup_method,
+                        "has_accumulator": accumulator is not None,
+                    },
+                }
+                parent = self.origins.entries.get(self.operation)
+                if parent is not None:
+                    self._digit_origin["parent"] = parent
+                self._digit_sequence = 0
             coefficient_type = cast(
                 rns.RnsBundleType, self.polynomial(qp=True)
             ).with_state({'residue_representation': StringAttr('montgomery')})
@@ -375,7 +520,8 @@ class _KeySwitchLowering:
                         coefficient_type,
                         digit_index=index,
                         attributes=local_facts,
-                    )
+                    ),
+                    role="modup",
                 )
             else:
                 start, stop, _ = span
@@ -391,7 +537,8 @@ class _KeySwitchLowering:
                 digit = self.emit(
                     rns.SliceRowsOp(
                         source, digit_type, start=start, count=stop - start
-                    )
+                    ),
+                    role="slice",
                 )
                 lifted = self.emit(
                     rns.CrtBasisExtendOp(
@@ -401,13 +548,15 @@ class _KeySwitchLowering:
                             for name in CRT_OPERANDS
                         ),
                         coefficient_type,
-                    )
+                    ),
+                    role="modup",
                 )
             transformed = self.transform(
                 lifted,
                 inverse=False,
                 basis='qp',
                 typ=self.polynomial(qp=True, output_ntt=True),
+                role="ntt",
             )
             product_operation = rns.KeySwitchDigitProductOp(
                 transformed,
@@ -425,7 +574,7 @@ class _KeySwitchLowering:
                     ckks.SwitchKeyOp: 'switch',
                 }[type(self.operation)]
             )
-            product = self.emit(product_operation)
+            product = self.emit(product_operation, role="product")
             accumulator = (
                 product
                 if accumulator is None
@@ -435,9 +584,12 @@ class _KeySwitchLowering:
                         product,
                         self.tensors['qp_parameters'],
                         self.polynomial(qp=True, output_ntt=True, components=2),
-                    )
+                    ),
+                    role="accumulate",
                 )
             )
+        self._digit_origin = None
+        self._digit_ports = {}
         if accumulator is None:
             raise ValueError('Key switching requires at least one digit')
         return accumulator
@@ -518,33 +670,43 @@ class _KeySwitchLowering:
                 return c0, self.transform(
                     c1, inverse=True, basis='q', typ=self.polynomial()
                 )
-            step = cast(
-                IntegerAttr,
-                cast(ckks.EvaluationKeyType, self.key.type).state.data[
-                    'rotation_step'
-                ],
-            ).value.data
-            value = self.emit(
-                rns.CoefficientAutomorphismOp(
-                    value,
-                    self.tensors['q_parameters'],
-                    self.polynomial(components=2),
-                    galois_element=rotation_galois_element(
-                        self.config.N, int(step), self.config.galois_generator
-                    ),
-                )
+            value = self.automorphism(
+                value,
+                rotation_galois_element(
+                    self.config.N,
+                    int(self.operation.rotation_step.value.data),
+                    self.config.galois_generator,
+                ),
             )
         elif isinstance(self.operation, ckks.ConjugateOp):
-            value = self.emit(
-                rns.CoefficientAutomorphismOp(
-                    value,
-                    self.tensors['q_parameters'],
-                    self.polynomial(components=2),
-                    galois_element=2 * self.config.N - 1,
-                )
-            )
+            value = self.automorphism(value, 2 * self.config.N - 1)
         d0, d1 = (self.extract(value, i) for i in range(2))
         return (d0, d1)
+
+    def automorphism(self, value: SSAValue, galois_element: int) -> SSAValue:
+        created, (indices, sign) = galois_tables(
+            self.compilation,
+            self.operation,
+            self.config,
+            galois_element,
+            self.source_type.state.data.get('device'),
+        )
+        self.operations.extend(created)
+        for reference in created:
+            symbol = cast(StringAttr, reference.symbol).data
+            self.descriptions[symbol] = cast(
+                dict[str, object],
+                self.compilation.program.material_description(symbol),
+            )
+        return self.emit(
+            rns.CoefficientAutomorphismOp(
+                value,
+                self.tensors['q_parameters'],
+                indices,
+                sign,
+                self.polynomial(components=2),
+            )
+        )
 
     def lower(self) -> LoweredCkksOperation:
         if (

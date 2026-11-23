@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import inspect
+import time
 from collections.abc import Callable, Iterable, Mapping
 from functools import update_wrapper
+from dataclasses import replace
+from pathlib import Path
 from threading import RLock
 from typing import (
     TYPE_CHECKING,
@@ -18,18 +21,47 @@ from typing import (
 
 from fhelium.ir import Program, value_role
 
-from ._compilation import Compilation
-from ._materials import material_sources, prepare_material_bindings
+from ._compilation import Compilation, DeferredCompilation
+from ._binding_time import PREPARATION, PreparationPlan
+from ._cache import (
+    CacheEntry,
+    CacheIneligible,
+    CompileCache,
+    SourceIdentity,
+    artifact_key,
+    build_manifest,
+    cache_directory,
+    entry_key,
+    relocate_materials,
+    source_identity,
+    runtime_cacheable,
+    structural_entry_key,
+    relocate_structural_materials,
+    trace_entry_key,
+)
+from ._structural_cache import StructuralCache, StructuralEntry
+from ._selection_plan import SelectionPlans
+from ._graph import _GraphExecutor
+from ._context import execution_context
+from ._timing import ExecutionTiming
+from ._streams import PreparedStreams
+from ._materials import (
+    bind_provided_materials,
+    material_sources,
+    prepare_material_bindings,
+    provided_material_selections,
+)
 from ._pipeline import Pipeline
 from ._preparation import (
+    LinkArtifact,
     Specialization,
     _CompiledVariant,
     bind_variant,
     fresh_workspace,
     prepare_variant,
     runtime_names,
+    field_values,
     input_fields,
-    input_values,
 )
 from ._specialization import CallSignature, SpecializationMiss, describe_call
 from ._workspace import CompileWorkspace
@@ -47,6 +79,19 @@ if TYPE_CHECKING:
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+
+
+def _argument_tensors(value: object) -> tuple[Any, ...]:
+    import torch
+
+    from fhelium.serialization import ValueEnvelope
+    from fhelium.values import TensorResident
+
+    if isinstance(value, torch.Tensor):
+        return (value,)
+    if isinstance(value, TensorResident):
+        return tuple(ValueEnvelope.from_value(value).tensors.values())
+    return ()
 
 
 def _capture_origin(compilation: Compilation) -> CapturedCallable[Any] | None:
@@ -103,7 +148,26 @@ def _prepare_argument_binding(signature: inspect.Signature):
     expression = "(" + values + ("," if len(parameters) == 1 else "") + ")"
     source = f"def bind({', '.join(fields)}):\n    return {expression}\n"
     exec(compile(source, "<fhelium-argument-binding>", "exec"), namespace)
-    return namespace["bind"]
+    return namespace.pop("bind")
+
+
+class _CachedProgram:
+    """Produce a Program from its encoded payload, then from the persistent cache entry."""
+
+    def __init__(self, cache: CompileCache, key: str, payload: object) -> None:
+        self._cache, self._key, self._payload = cache, key, payload
+
+    def release(self) -> None:
+        """Drop the retained payload once the cache entry holds it."""
+        self._payload = None
+
+    def __call__(self) -> Program:
+        if isinstance(self._payload, dict):
+            return Program.decode(self._payload, verify=False)
+        entry = self._cache.load(self._key)
+        if entry is None:
+            raise RuntimeError(f"Cached Program {self._key} is unavailable")
+        return cast(Program, entry.program)
 
 
 class CompiledCallable(Generic[_P, _R]):
@@ -129,6 +193,9 @@ class CompiledCallable(Generic[_P, _R]):
         workspace: CompileWorkspace | None = None,
         inputs: Mapping[str, InputSpec] | None = None,
         material_names: Mapping[str, object] | None = None,
+        cache: bool | str | Path = True,
+        graph: Literal["auto"] | bool = False,
+        copy_output: bool = True,
     ) -> None:
         """Record the source and options used to prepare specializations.
 
@@ -144,6 +211,9 @@ class CompiledCallable(Generic[_P, _R]):
             workspace: Shared capture and pass inputs for a Python callable or Program source. A Compilation supplies its own workspace.
             inputs: Input-role declarations selecting the FX frontend for Python capture.
             material_names: Stable symbols for fixed Tensor/value objects encountered during Python capture.
+            cache: Persist prepared Programs across processes. ``True`` uses ``FHELIUM_CACHE_DIR`` or the user cache directory, a path selects a directory, ``False`` disables persistence. Python sources with the default compilation configuration are persisted. Functions within the statically checked subset are found before capture; other sources are captured and found by their captured Program, bound material layouts and call signature, which skips the pass pipeline. Material Tensors never enter the cache.
+            graph: Replay CUDA specializations through CUDA Graphs after their first warm execution. ``"auto"`` and ``True`` both fall back to prepared execution on CPU inputs or capture failure; ``False`` disables capture.
+            copy_output: Return owned copies of Graph outputs. ``False`` returns the graph's retained output storage, which the next replay of that specialization overwrites.
         """
 
         if on_miss not in ("compile", "error"):
@@ -236,10 +306,37 @@ class CompiledCallable(Generic[_P, _R]):
                 )
         self._variants: dict[CallSignature, _CompiledVariant] = {}
         self._prepared: dict[CallSignature, Specialization] = {}
-        self._prepare_lock = RLock()
+        self._ready_streams: dict[CallSignature, PreparedStreams] = {}
         self._bind_arguments = _prepare_argument_binding(self.__signature__)
         self._argument_names = tuple(self.__signature__.parameters)
         self._last_prepared: Specialization | None = None
+        directory = (
+            cache_directory()
+            if cache is True
+            else None
+            if cache is False
+            else Path(cache)
+        )
+        standard = (
+            not isinstance(self._source, Compilation)
+            and pipeline is None
+            and inputs is None
+            and backend is None
+            and workspace is None
+            and not self._resources
+            and not self._keys
+        )
+        self._cache = (
+            CompileCache(directory)
+            if standard and directory is not None
+            else None
+        )
+        self._structures = StructuralCache(directory) if standard else None
+        self._resident_hits = 0
+        self._stages: dict[CallSignature, dict[str, object]] = {}
+        self._execution_lock = RLock()
+        self._graphs = _GraphExecutor(graph=graph, copy_output=copy_output)
+        self._timing = ExecutionTiming()
 
     @property
     def specializations(self) -> tuple[Specialization, ...]:
@@ -261,29 +358,567 @@ class CompiledCallable(Generic[_P, _R]):
     def _capture(self, arguments: Mapping[str, object]) -> Compilation:
         if isinstance(self._source, Compilation):
             return self._source
+        workspace = fresh_workspace(cast(CompileWorkspace, self._workspace))
+        if self._structures is not None:
+            workspace["structural_template_recording"] = True
         return capture_invocation(
             self._source,
             arguments,
             inputs=self.inputs,
             material_names=self._material_names,
-            workspace=fresh_workspace(cast(CompileWorkspace, self._workspace)),
+            workspace=workspace,
         )
 
-    def _prepare(
+    def _source_identity(
+        self, *, structural: bool = False
+    ) -> SourceIdentity | None:
+        if (self._structures if structural else self._cache) is None:
+            return None
+        try:
+            return source_identity(
+                self._source,
+                material_names=self._material_names,
+                structural=structural,
+            )
+        except CacheIneligible as error:
+            self._stages.setdefault("__cache__", {})[
+                "structure_ineligible" if structural else "ineligible"
+            ] = str(error)
+            return None
+
+    def _instantiate_structure(self, entry, arguments, backend):
+        from fhelium.backend.implementation import (
+            OperationImplementationRegistry,
+        )
+
+        bindings, providers, leaves = relocate_structural_materials(
+            self._source, entry.manifest, material_names=self._material_names
+        )
+        workspace = fresh_workspace(cast(CompileWorkspace, self._workspace))
+        workspace[OperationImplementationRegistry] = backend.registry
+        workspace[SelectionPlans] = SelectionPlans.from_dict(entry.plans)
+        workspace["selection_plan_stats"] = {}
+        workspace["local_plan_stats"] = {}
+        descriptor = entry.template.metadata.get("preparation")
+        if descriptor is not None:
+            from ._binding_time import preparation_guards
+
+            if (
+                preparation_guards(arguments)
+                != entry.template.metadata["preparation_guards"]
+            ):
+                return None, ()
+            plan = PreparationPlan.restore(
+                descriptor,
+                source=self._source,
+                arguments=arguments,
+                bindings=bindings,
+                material_names=self._material_names,
+            )
+            bindings.update(plan.bindings)
+            workspace[PREPARATION] = plan
+        source = entry.template.instantiate(
+            arguments,
+            material_bindings=bindings,
+            leaf_states=leaves,
+            workspace=workspace,
+        )
+        if source is None:
+            return None, ()
+        resources = tuple(
+            engine._dispatcher_for(device).device_resources
+            for engine, device in providers
+        )
+        prepare_material_bindings(source, resources=resources)
+        return source, resources
+
+    def _load_structure(self, arguments, signature, stages, identity, backend):
+        """Instantiate a guarded high-level template with current material owners."""
+        if identity is None or self._structures is None:
+            return None, None, ()
+        family = structural_entry_key(identity, signature)
+        stages["structure_key"] = family
+        started = time.perf_counter()
+        entries, layer = self._structures.load(family)
+        stages["structure_load_seconds"] = time.perf_counter() - started
+        stages["structure_layer"] = layer
+        stages["structure"] = "guard-miss" if entries else "miss"
+        started = time.perf_counter()
+        for entry in reversed(entries):
+            try:
+                source, resources = self._instantiate_structure(
+                    entry, arguments, backend
+                )
+                if source is None:
+                    continue
+            except (
+                CacheIneligible,
+                AttributeError,
+                KeyError,
+                IndexError,
+                TypeError,
+                ValueError,
+            ) as error:
+                stages["structure_guard_reason"] = (
+                    f"{type(error).__name__}: {error}"
+                )
+                continue
+            stages["structure"] = "hit"
+            stages["instantiate_seconds"] = time.perf_counter() - started
+            return source, entry, resources
+        stages["instantiate_seconds"] = time.perf_counter() - started
+        return None, None, ()
+
+    def _load_cached(
+        self,
+        arguments: Mapping[str, object],
+        signature: CallSignature,
+        stages: dict[str, object],
+        identity: SourceIdentity | None,
+    ) -> _CompiledVariant | None:
+        """Restore a prepared variant from the persistent cache when eligible."""
+        if identity is None or self._cache is None:
+            return None
+        key = entry_key(identity, signature)
+        stages["cache_key"] = key
+        started = time.perf_counter()
+        entry = self._cache.load(key, decode=False)
+        if entry is None or entry.source_encoding is None:
+            stages["cache_load_seconds"] = time.perf_counter() - started
+            return None
+        try:
+            bindings, providers = relocate_materials(
+                self._source,
+                entry.manifest,
+                material_names=self._material_names,
+            )
+        except (
+            CacheIneligible,
+            AttributeError,
+            KeyError,
+            IndexError,
+            TypeError,
+        ) as error:
+            stages["cache_miss_reason"] = f"{type(error).__name__}: {error}"
+            return None
+        from fhelium.backend.implementation import (
+            OperationImplementationRegistry,
+        )
+        from fhelium.config import CkksConfig
+
+        workspace = fresh_workspace(cast(CompileWorkspace, self._workspace))
+        backend = self.backend
+        if backend is None:
+            from fhelium.backend.execution import OperationBackend
+
+            backend = OperationBackend()
+        workspace[OperationImplementationRegistry] = backend.registry
+        if entry.preparation is not None:
+            plan = PreparationPlan.restore(
+                entry.preparation,
+                source=self._source,
+                arguments=arguments,
+                bindings=bindings,
+                material_names=self._material_names,
+            )
+            bindings.update(plan.bindings)
+            workspace[PREPARATION] = plan
+        program = _CachedProgram(self._cache, key, entry.program)
+        record = self._load_artifact(key, backend, stages)
+        if record is not None:
+            artifact = LinkArtifact(record["payload"], record["selections"])
+            for engine, device in providers:
+                workspace.setdefault(CkksConfig, engine.config)
+                resources = engine._dispatcher_for(device).device_resources
+                bind_provided_materials(
+                    bindings, artifact.selections, (resources,)
+                )
+            if all(symbol in bindings for symbol in artifact.selections):
+                stages["cache_load_seconds"] = time.perf_counter() - started
+                stages["cache"] = "hit"
+                stages["artifact"] = "hit"
+                compilation: Compilation = DeferredCompilation(
+                    program, workspace, material_bindings=bindings
+                )
+                return self._cached_variant(
+                    signature, arguments, entry, compilation, record, artifact
+                )
+            stages["artifact"] = "unbound-materials"
+        compilation = DeferredCompilation(
+            program, workspace, material_bindings=bindings
+        )
+        for engine, device in providers:
+            resources = engine._dispatcher_for(device).device_resources
+            workspace.setdefault(CkksConfig, engine.config)
+            prepare_material_bindings(compilation, resources=resources)
+        stages["cache_load_seconds"] = time.perf_counter() - started
+        stages["cache"] = "hit"
+        return self._cached_variant(signature, arguments, entry, compilation)
+
+    def _cached_variant(
+        self,
+        signature,
+        arguments,
+        entry,
+        compilation,
+        record=None,
+        artifact=None,
+    ) -> _CompiledVariant:
+        def restore_source() -> Compilation:
+            return Compilation(
+                Program.decode(cast(dict, entry.source_encoding)),
+                fresh_workspace(compilation.workspace),
+                material_bindings=dict(compilation.material_bindings),
+            )
+
+        return _CompiledVariant(
+            signature,
+            restore_source,
+            compilation,
+            entry.input_names,
+            entry.output_structure,
+            tuple(type(arguments[a.name]) for a in signature.arguments),
+            (
+                input_fields(compilation.program)
+                if record is None
+                else record["input_fields"]
+            ),
+            artifact,
+        )
+
+    def _load_artifact(
+        self, key: str, backend: OperationBackend, stages: dict[str, object]
+    ) -> dict[str, object] | None:
+        """Read the linked executable recorded for cache entry ``key``."""
+        started = time.perf_counter()
+        linked = self._artifact_target(key, backend, stages)
+        if linked is None:
+            return None
+        record = cast(CompileCache, self._cache).load_artifact(linked)
+        stages["artifact_load_seconds"] = time.perf_counter() - started
+        if record is not None:
+            stages["artifact"] = "loaded"
+        return record
+
+    def _artifact_target(
+        self, key: str, backend: OperationBackend, stages: dict[str, object]
+    ) -> str | None:
+        """Key the linked executable of cache entry ``key``; caller-selected keys are not recorded."""
+        linked = None if self._keys else artifact_key(key, backend.registry)
+        stages["artifact"] = "ineligible" if linked is None else "miss"
+        if linked is not None:
+            stages["artifact_key"] = linked
+        return linked
+
+    def _store_artifact(
+        self,
+        prepared: Specialization,
+        selections: Mapping[str, object] | None,
+        stages: dict[str, object],
+    ) -> None:
+        if stages.get("artifact") != "miss" or selections is None:
+            return
+        from fhelium.backend._artifact import (
+            ArtifactIneligible,
+            export_executable,
+        )
+
+        started = time.perf_counter()
+        variant = prepared._variant
+        try:
+            payload = export_executable(
+                prepared.executable, prepared.backend.registry
+            )
+            cast(CompileCache, self._cache).store_artifact(
+                cast(str, stages["artifact_key"]),
+                {
+                    "payload": payload,
+                    "selections": selections,
+                    "input_names": variant.input_names,
+                    "output_structure": variant.output_structure,
+                    "input_fields": dict(variant.input_fields),
+                },
+            )
+        except ArtifactIneligible as error:
+            stages["artifact"] = f"ineligible: {error}"
+        except OSError as error:
+            stages["artifact"] = (
+                f"write-failed: {type(error).__name__}: {error}"
+            )
+        else:
+            stages["artifact"] = "stored"
+        stages["artifact_store_seconds"] = time.perf_counter() - started
+
+    def _load_traced(
+        self,
+        source: Compilation,
+        arguments: Mapping[str, object],
+        signature: CallSignature,
+        stages: dict[str, object],
+        backend: OperationBackend,
+    ) -> _CompiledVariant | None:
+        """Restore the prepared Program compiled from an identical captured Program."""
+        started = time.perf_counter()
+        try:
+            key = trace_entry_key(
+                source.program, source.material_bindings, signature
+            )
+        except CacheIneligible as error:
+            stages["trace"] = "ineligible"
+            stages["trace_reason"] = str(error)
+            return None
+        finally:
+            stages["trace_key_seconds"] = time.perf_counter() - started
+        stages["trace_key"] = key
+        from fhelium.backend.implementation import (
+            OperationImplementationRegistry,
+        )
+
+        workspace = fresh_workspace(source.workspace)
+        workspace[OperationImplementationRegistry] = backend.registry
+        cache = cast(CompileCache, self._cache)
+        record = self._load_artifact(key, backend, stages)
+        if record is not None:
+            stages["trace"] = "hit"
+
+            return _CompiledVariant(
+                signature,
+                source,
+                DeferredCompilation(
+                    _CachedProgram(cache, key, None),
+                    workspace,
+                    material_bindings=dict(source.material_bindings),
+                ),
+                tuple(record["input_names"]),
+                record["output_structure"],
+                tuple(type(arguments[a.name]) for a in signature.arguments),
+                record["input_fields"],
+                LinkArtifact(record["payload"], record["selections"]),
+            )
+        started = time.perf_counter()
+        entry = cache.load(key, decode=False)
+        if entry is None:
+            stages["trace_load_seconds"] = time.perf_counter() - started
+            stages["trace"] = "miss"
+            return None
+        compilation = DeferredCompilation(
+            _CachedProgram(cache, key, entry.program),
+            workspace,
+            material_bindings=dict(source.material_bindings),
+        )
+        fields = input_fields(compilation.program)
+        stages["trace_load_seconds"] = time.perf_counter() - started
+        stages["trace"] = "hit"
+        return _CompiledVariant(
+            signature,
+            source,
+            compilation,
+            entry.input_names,
+            entry.output_structure,
+            tuple(type(arguments[a.name]) for a in signature.arguments),
+            fields,
+        )
+
+    def _cached_entry(
+        self,
+        variant: _CompiledVariant,
+        stages: dict[str, object],
+        identity: SourceIdentity | None,
+    ) -> CacheEntry | None:
+        """Describe a source-identity cache entry before linking consumes its Program."""
+        compilation = variant.compilation
+        source = (
+            variant.source() if callable(variant.source) else variant.source
+        )
+        try:
+            manifest = build_manifest(
+                cast(SourceIdentity, identity),
+                compilation.material_bindings,
+                compilation.program.material_descriptions,
+            )
+            if manifest is None:
+                stages["cache"] = "unlocatable-materials"
+                return None
+            return CacheEntry(
+                compilation.program.encode(),
+                manifest,
+                variant.output_structure,
+                variant.input_names,
+                source_encoding=source.program.encode(),
+                preparation=(
+                    compilation.workspace[PREPARATION].descriptor(identity)
+                    if PREPARATION in compilation.workspace
+                    else None
+                ),
+            )
+        except (ValueError, CacheIneligible) as error:
+            stages["cache"] = "write-failed"
+            stages["cache_error"] = f"{type(error).__name__}: {error}"
+            return None
+
+    def _warm(
+        self,
+        prepared: Specialization,
+        arguments: Mapping[str, object],
+        stages: dict[str, object],
+    ) -> None:
+        """Compile device kernels of a linked executable ahead of its first call."""
+        devices = {
+            tensor.device
+            for value in arguments.values()
+            for tensor in _argument_tensors(value)
+        }
+        if len(devices) != 1 or next(iter(devices)).type != "cuda":
+            return
+        try:
+            from fhelium.backend.triton import warm_executable
+        except ImportError:
+            return
+        started = time.perf_counter()
+        try:
+            counts = warm_executable(prepared.executable, next(iter(devices)))
+        except Exception as error:
+            stages["warm_error"] = f"{type(error).__name__}: {error}"
+            raise
+        else:
+            stages["warm_kernels"] = counts
+        finally:
+            stages["warm_seconds"] = time.perf_counter() - started
+
+    def _record_structure(
+        self, source, arguments, stages, structure_identity, backend
+    ):
+        """Prepare plan recording for a fresh capture and build its structural template.
+
+        Returns the Compilation to transform, the structural entry to store after preparation, and resources of an instantiated template.
+        """
+        structure_entry = None
+        instance_resources = ()
+        if self._structures is not None:
+            source.workspace[SelectionPlans] = SelectionPlans()
+            source.workspace["selection_plan_stats"] = {}
+            source.workspace["local_plan_stats"] = {}
+        if structure_identity is not None:
+            from ._template import build_template
+
+            started = time.perf_counter()
+            template = build_template(source)
+            plan = source.workspace.get(PREPARATION)
+            if template is not None and plan is not None:
+                from ._binding_time import preparation_guards
+
+                try:
+                    template.metadata["preparation"] = plan.descriptor(
+                        structure_identity
+                    )
+                    template.metadata["preparation_guards"] = (
+                        preparation_guards(arguments)
+                    )
+                except ValueError as error:
+                    stages["structure_ineligible"] = str(error)
+                    template = None
+            if template is not None:
+                manifest = build_manifest(
+                    structure_identity,
+                    source.material_bindings,
+                    source.program.material_descriptions,
+                    structural=True,
+                )
+                if manifest is not None:
+                    structure_entry = StructuralEntry.create(
+                        template, manifest, {}
+                    )
+                else:
+                    stages["structure"] = "unlocatable-materials"
+            else:
+                stages["structure"] = "unsupported"
+            stages["template_seconds"] = time.perf_counter() - started
+            if structure_entry is not None and plan is None:
+                started = time.perf_counter()
+                current_source, instance_resources = (
+                    self._instantiate_structure(
+                        structure_entry, arguments, backend
+                    )
+                )
+                if current_source is None:
+                    structure_entry = None
+                    stages["structure"] = "guard-miss"
+                else:
+                    source = current_source
+                stages["instantiate_seconds"] = (
+                    float(stages.get("instantiate_seconds", 0.0))
+                    + time.perf_counter()
+                    - started
+                )
+        return source, structure_entry, instance_resources
+
+    def _build(
         self, arguments: Mapping[str, object], signature: CallSignature
     ) -> Specialization:
-        with self._prepare_lock:
-            prepared = self._prepared.get(signature)
-            if prepared is not None:
-                return prepared
-            variant = self._variants.get(signature)
-            backend = self.backend
-            if variant is None:
-                source = self._capture(arguments)
-                if backend is None:
-                    from fhelium.backend.execution import OperationBackend
+        """Capture, transform, bind, and link one specialization."""
+        stages: dict[str, object] = {
+            "cache": "disabled" if self._cache is None else "miss"
+        }
+        backend = self.backend
+        if backend is None:
+            from fhelium.backend.execution import OperationBackend
 
-                    backend = OperationBackend()
+            backend = OperationBackend()
+        started = time.perf_counter()
+        identity = (
+            self._source_identity() if runtime_cacheable(arguments) else None
+        )
+        stages["identity_seconds"] = time.perf_counter() - started
+        if self._cache is not None and identity is None:
+            stages["cache"] = "ineligible"
+        variant = self._variants.get(signature)
+        if variant is not None:
+            stages["cache"] = "resident"
+            if signature in self._ready_streams:
+                self._ready_streams[signature].use()
+        if variant is None:
+            variant = self._load_cached(arguments, signature, stages, identity)
+        structure_entry = None
+        structure_identity = None
+        instance_resources = ()
+        if variant is None:
+            started = time.perf_counter()
+            structure_identity = (
+                self._source_identity(structural=True)
+                if runtime_cacheable(arguments)
+                else None
+            )
+            stages["structure_identity_seconds"] = time.perf_counter() - started
+            stages["structure"] = (
+                "ineligible" if self._structures is not None else "disabled"
+            )
+            source, structure_entry, instance_resources = self._load_structure(
+                arguments, signature, stages, structure_identity, backend
+            )
+            traced = None
+            if source is None:
+                started = time.perf_counter()
+                source = self._capture(arguments)
+                stages["capture_seconds"] = time.perf_counter() - started
+                # Sources without a pre-capture identity are keyed by what they captured.
+                if self._cache is not None and identity is None:
+                    traced = self._load_traced(
+                        source, arguments, signature, stages, backend
+                    )
+                if traced is None:
+                    source, structure_entry, instance_resources = (
+                        self._record_structure(
+                            source,
+                            arguments,
+                            stages,
+                            structure_identity,
+                            backend,
+                        )
+                    )
+            if traced is not None:
+                variant = traced
+            else:
+                started = time.perf_counter()
                 variant, backend = prepare_variant(
                     source,
                     arguments,
@@ -292,57 +927,329 @@ class CompiledCallable(Generic[_P, _R]):
                     backend=backend,
                     keys=self._keys,
                 )
-            if self._resources or self._keys:
-                prepare_material_bindings(
-                    variant.compilation,
-                    resources=self._resources,
-                    keys=self._keys,
+                stages["pipeline_seconds"] = time.perf_counter() - started
+                stages["passes"] = tuple(
+                    (report.name, report.seconds)
+                    for report in variant.compilation.reports
                 )
-            prepared = bind_variant(variant, cast("OperationBackend", backend))
-            physical_arguments = input_values(
-                variant.compilation.program, arguments
+                stages["selection_plans"] = variant.compilation.workspace.get(
+                    "selection_plan_stats", {}
+                )
+                stages["local_plans"] = variant.compilation.workspace.get(
+                    "local_plan_stats", {}
+                )
+        started = time.perf_counter()
+        from .frontend._eager_capture import CAPTURED_RESOURCES
+
+        captured = variant.compilation.workspace.get(CAPTURED_RESOURCES, ())
+        resources = (*self._resources, *instance_resources, *captured)
+        if variant.artifact is not None and not bind_provided_materials(
+            variant.compilation.material_bindings,
+            variant.artifact.selections,
+            resources,
+        ):
+            stages["artifact"] = "unbound-materials"
+            variant = replace(variant, artifact=None)
+        if variant.artifact is None and (self._keys or resources):
+            prepare_material_bindings(
+                variant.compilation, resources=resources, keys=self._keys
             )
-            for name, adapter in zip(
-                variant.input_names,
-                prepared.executable._input_adapters,
-                strict=True,
-            ):
-                adapter(physical_arguments[name])
-            self._variants[signature] = variant
-            self._prepared[signature] = prepared
-            return prepared
+        stages["binding_seconds"] = time.perf_counter() - started
+        # Fresh entries are encoded before linking consumes the Program in place.
+        store_trace = stages.get("trace") == "miss"
+        store_cache = stages["cache"] == "miss" and identity is not None
+        if store_cache:
+            self._artifact_target(
+                cast(str, stages["cache_key"]), backend, stages
+            )
+        entry_key_ = cast(
+            "str | None",
+            stages.get("trace_key") if store_trace else stages.get("cache_key"),
+        )
+        compilation = variant.compilation
+        selections = None
+        pending: CacheEntry | None = None
+        reload: _CachedProgram | Callable[[], Program] | None = None
+        if variant.artifact is None:
+            if isinstance(compilation, DeferredCompilation):
+                reload = compilation._load
+                if stages.get("artifact") == "miss":
+                    selections = provided_material_selections(compilation)
+            elif (store_trace or store_cache) and entry_key_ is not None:
+                started = time.perf_counter()
+                if stages.get("artifact") == "miss":
+                    selections = provided_material_selections(compilation)
+                pending = (
+                    CacheEntry(
+                        compilation.program.encode(),
+                        {},
+                        variant.output_structure,
+                        variant.input_names,
+                    )
+                    if store_trace
+                    else self._cached_entry(variant, stages, identity)
+                )
+                if pending is not None:
+                    reload = _CachedProgram(
+                        cast(CompileCache, self._cache),
+                        entry_key_,
+                        pending.program,
+                    )
+                stages["encode_seconds"] = time.perf_counter() - started
+            elif stages.get("artifact") == "miss":
+                selections = provided_material_selections(compilation)
+        plan = variant.compilation.workspace.get(PREPARATION)
+        started = time.perf_counter()
+        if plan is not None:
+            plan.link(self._cache)
+        stages["preparation_link_seconds"] = time.perf_counter() - started
+        started = time.perf_counter()
+        prepared = bind_variant(
+            variant, cast("OperationBackend", backend), reload=reload
+        )
+        variant = prepared._variant
+        loader = getattr(variant.compilation, "_load", None)
+        if isinstance(loader, _CachedProgram) and pending is None:
+            # Later Program requests read the cache entry this Program came from.
+            loader.release()
+        physical_arguments = field_values(variant.input_fields, arguments)
+        for name, adapter in zip(
+            variant.input_names,
+            prepared.executable._input_adapters,
+            strict=True,
+        ):
+            adapter(physical_arguments[name])
+        stages["link_seconds"] = time.perf_counter() - started
+        if stages.get("artifact") == "loaded":
+            stages["artifact"] = "hit"
+        self._warm(prepared, physical_arguments, stages)
+        if pending is not None:
+            started = time.perf_counter()
+            try:
+                cast(CompileCache, self._cache).store(
+                    cast(str, entry_key_), pending
+                )
+            except (OSError, ValueError) as error:
+                status = "write-failed"
+                stages["store_error"] = f"{type(error).__name__}: {error}"
+            else:
+                status = "stored"
+                cast(_CachedProgram, reload).release()
+            stages["trace" if store_trace else "cache"] = status
+            stages[
+                "trace_store_seconds" if store_trace else "cache_store_seconds"
+            ] = time.perf_counter() - started
+        self._store_artifact(prepared, selections, stages)
+        if structure_entry is not None:
+            started = time.perf_counter()
+            try:
+                plans = variant.compilation.workspace[SelectionPlans]
+                self._structures.store(
+                    stages["structure_key"],
+                    structure_entry.with_plans(plans.to_dict()),
+                )
+            except (OSError, ValueError, CacheIneligible) as error:
+                stages["structure_store_error"] = (
+                    f"{type(error).__name__}: {error}"
+                )
+            stages["structure_store_seconds"] = time.perf_counter() - started
+        plan = variant.compilation.workspace.get(PREPARATION)
+        if plan is not None:
+            stages["plaintext_preparation"] = plan.stats()
+        if "binding_time_fallback" in variant.compilation.workspace:
+            stages["binding_time_fallback"] = variant.compilation.workspace[
+                "binding_time_fallback"
+            ]
+        stages["executions"] = 0
+        self._variants[signature] = variant
+        self._stages[signature] = stages
+        return prepared
+
+    def _prepare(
+        self, arguments: Mapping[str, object], signature: CallSignature
+    ) -> Specialization:
+        prepared = self._prepared.get(signature)
+        if prepared is not None:
+            self._resident_hits += 1
+            return self._refresh_prepared(prepared, arguments)
+        prepared = self._build(arguments, signature)
+        self._ready_streams[signature] = PreparedStreams.record(
+            arguments.values(),
+            prepared.compilation.material_bindings.values(),
+        )
+        self._prepared[signature] = prepared
+        return prepared
 
     def prepare(self, *args: _P.args, **kwargs: _P.kwargs) -> Specialization:
-        """Prepare and return the specialization matching these arguments.
+        """Prepare, link, and warm the matching specialization.
 
-        Preparation captures the source when needed, runs its selected pipeline, and links the resulting Program. A matching cached specialization is returned directly. This method populates the cache under either ``on_miss`` policy.
-
-        Device-kernel compilation may occur on first execution after linking. Warm representative calls before measuring steady-state execution or capturing device launches.
+        A matching resident specialization is returned directly. This method populates the resident cache under either ``on_miss`` policy.
         """
+        with self._execution_lock:
+            arguments = self._arguments(args, kwargs)
+            signature = replace(
+                describe_call(arguments), context=execution_context()
+            )
+            return self._prepare(arguments, signature)
 
-        arguments = self._arguments(args, kwargs)
-        return self._prepare(arguments, describe_call(arguments))
+    def _refresh_prepared(self, prepared, arguments, *, force=False):
+        plan = prepared.compilation.workspace.get(PREPARATION)
+        if plan is None:
+            return prepared
+        self._ready_streams[prepared.signature].use()
+        bindings = plan.refresh(arguments, force=force)
+        if bindings is not None:
+            bindings = {**plan.leaves, **bindings}
+            started = time.perf_counter()
+            executable = prepared.executable.rebind_materials(bindings)
+            prepared.compilation.material_bindings.update(bindings)
+            source = prepared._variant.source
+            if isinstance(source, Compilation):
+                source.material_bindings.update(bindings)
+            self._graphs.invalidate(prepared)
+            prepared = replace(prepared, executable=executable)
+            self._prepared[prepared.signature] = prepared
+            self._last_prepared = prepared
+            self._ready_streams[prepared.signature] = PreparedStreams.record(
+                arguments.values(),
+                prepared.compilation.material_bindings.values(),
+            )
+            plan.rebind_seconds += time.perf_counter() - started
+        self._stages[prepared.signature]["plaintext_preparation"] = plan.stats()
+        return prepared
+
+    def refresh_materials(
+        self, *args: _P.args, **kwargs: _P.kwargs
+    ) -> Specialization:
+        """Reexecute preparation after changes not exposed by Tensor versions."""
+        with self._execution_lock:
+            arguments = self._arguments(args, kwargs)
+            signature = replace(
+                describe_call(arguments), context=execution_context()
+            )
+            prepared = self._prepare(arguments, signature)
+            return self._refresh_prepared(prepared, arguments, force=True)
+
+    def _run(self, prepared: Specialization, values: tuple[object, ...]) -> _R:
+        arguments = dict(zip(self._argument_names, values, strict=True))
+        prepared = self._refresh_prepared(prepared, arguments)
+        self._ready_streams[prepared.signature].use()
+        stages = self._stages[prepared.signature]
+        token = self._timing.start(values)
+        plan = prepared.compilation.workspace.get(PREPARATION)
+        result = (
+            prepared._execute(values)
+            if plan is not None and plan.mode == "per_call"
+            else self._graphs.execute(prepared, values)
+        )
+        self._timing.finish(token, steady=cast(int, stages["executions"]) >= 2)
+        stages["executions"] = cast(int, stages["executions"]) + 1
+        if plan is not None and plan.mode == "per_call":
+            released = {symbol: None for symbol in plan.symbols}
+            replacement = replace(
+                prepared,
+                executable=prepared.executable.rebind_materials(released),
+            )
+            for compilation in (prepared.compilation, prepared._variant.source):
+                if isinstance(compilation, Compilation):
+                    for symbol in plan.symbols:
+                        compilation.material_bindings.pop(symbol, None)
+            plan.release()
+            self._prepared[prepared.signature] = replacement
+            self._last_prepared = replacement
+            self._ready_streams[prepared.signature] = PreparedStreams.record(
+                arguments.values(),
+                replacement.compilation.material_bindings.values(),
+            )
+            stages["plaintext_preparation"] = plan.stats()
+        return cast(_R, result)
 
     def __call__(self, *args: _P.args, **kwargs: _P.kwargs) -> _R:
-        """Execute a matching specialization, preparing it on a permitted cache miss."""
+        """Run the matching resident specialization, preparing it on a miss when ``on_miss='compile'``."""
+        with self._execution_lock:
+            return self._call(args, kwargs)
 
+    def _call(self, args: tuple[object, ...], kwargs: dict[str, object]) -> _R:
         values = self._bind_arguments(*args, **kwargs)
+        context = execution_context()
         prepared = self._last_prepared
-        if prepared is not None and prepared._matches(values):
-            return cast(_R, prepared._execute(values))
-        for candidate in self._prepared.values():
-            if candidate is not prepared and candidate._matches(values):
+        if (
+            prepared is not None
+            and prepared.signature.context == context
+            and prepared._matches(values)
+        ):
+            self._resident_hits += 1
+            return self._run(prepared, values)
+        for candidate in tuple(self._prepared.values()):
+            if (
+                candidate is not prepared
+                and candidate.signature.context == context
+                and candidate._matches(values)
+            ):
                 self._last_prepared = candidate
-                return cast(_R, candidate._execute(values))
+                self._resident_hits += 1
+                return self._run(candidate, values)
         if self.on_miss == "error":
             raise SpecializationMiss(
                 "No prepared specialization matches this invocation; "
                 "call prepare with these input conditions first"
             )
         arguments = dict(zip(self._argument_names, values, strict=True))
-        prepared = self._prepare(arguments, describe_call(arguments))
+        signature = replace(describe_call(arguments), context=context)
+        prepared = self._prepare(arguments, signature)
         self._last_prepared = prepared
-        return cast(_R, prepared._execute(values))
+        return self._run(prepared, values)
+
+    def stats(self) -> dict[str, object]:
+        """Snapshot preparation, cache, execution, and Graph observations.
+
+        Stage durations are host wall times. Execution timing uses host completion on CPU and nonblocking CUDA event queries on the invocation's current stream. Pending device observations are counted separately. Steady execution excludes each specialization's first two compiled calls, including its automatic capture attempt.
+        """
+        with self._execution_lock:
+            records = tuple(
+                {"signature": signature, **stages}
+                for signature, stages in self._stages.items()
+                if isinstance(signature, CallSignature)
+            )
+            prepare_total = sum(
+                float(record.get(stage, 0.0))
+                for record in records
+                for stage in (
+                    "capture_seconds",
+                    "pipeline_seconds",
+                    "preparation_link_seconds",
+                    "binding_seconds",
+                    "link_seconds",
+                    "cache_load_seconds",
+                    "cache_store_seconds",
+                    "warm_seconds",
+                    "identity_seconds",
+                    "structure_identity_seconds",
+                    "structure_load_seconds",
+                    "instantiate_seconds",
+                    "template_seconds",
+                    "structure_store_seconds",
+                )
+            )
+            graph_records = self._graphs.stats()
+            capture_total = sum(
+                float(record["capture_attempt_seconds"])
+                for record in graph_records
+            )
+            timings = self._timing.stats()
+            return {
+                "specializations": records,
+                "resident_cache_hits": self._resident_hits,
+                "graphs": graph_records,
+                "prepare_seconds": prepare_total,
+                "graph_capture_seconds": capture_total,
+                "executions": sum(
+                    int(record["executions"]) for record in records
+                ),
+                "execute_seconds": timings["compiled"]["completed_seconds"],
+                "timing": timings,
+                "cache": dict(self._stages.get("__cache__", {})),
+            }
 
     def with_backend(
         self, backend: OperationBackend
@@ -362,21 +1269,71 @@ class CompiledCallable(Generic[_P, _R]):
             workspace=self._workspace,
             inputs=self.inputs,
             material_names=self._material_names,
+            cache=False if self._cache is None else self._cache.directory,
+            graph=self._graphs.graph,
+            copy_output=self._graphs.copy_output,
         )
-        with self._prepare_lock:
-            rebound._variants = dict(self._variants)
+
+        def fork_variant(variant):
+            # A persisted executable is restored only for the registry it was linked with.
+            variant = replace(variant, artifact=None)
+            plan = variant.compilation.workspace.get(PREPARATION)
+            if plan is None:
+                return variant
+            plan = plan.fork()
+
+            def fork_compilation(compilation):
+                work = fresh_workspace(compilation.workspace)
+                work[PREPARATION] = plan
+                if isinstance(compilation, DeferredCompilation):
+                    return DeferredCompilation(
+                        compilation._load,
+                        work,
+                        compilation.reports,
+                        dict(compilation.material_bindings),
+                    )
+                return Compilation(
+                    compilation.program,
+                    work,
+                    compilation.reports,
+                    dict(compilation.material_bindings),
+                )
+
+            source = (
+                variant.source() if callable(variant.source) else variant.source
+            )
+            return replace(
+                variant,
+                source=fork_compilation(source),
+                compilation=fork_compilation(variant.compilation),
+            )
+
+        with self._execution_lock:
+            rebound._variants = {
+                signature: fork_variant(self._variants[signature])
+                for signature in self._prepared
+            }
+            rebound._ready_streams = {
+                signature: self._ready_streams[signature].fork()
+                for signature in self._prepared
+            }
         return rebound
 
     def clear(self) -> None:
-        """Release this callable's specialization cache.
+        """Release this callable's specialization cache, retained Graphs, and pools.
 
-        Call this after changing captured Python constants so the next preparation captures their new values. Changes to input Tensor contents reuse the existing specialization while its recorded input conditions hold. Caller resources and compiled results retained by peers made with ``with_backend`` remain live.
+        Call this after changing captured Python constants so the next preparation captures their new values. Changes to input Tensor contents reuse the existing specialization while its recorded input conditions hold. Caller resources and compiled results retained by peers made with ``with_backend`` remain live. Persistent cache files are not removed.
         """
 
-        with self._prepare_lock:
+        with self._execution_lock:
+            self._graphs.clear()
             self._variants.clear()
             self._prepared.clear()
+            self._ready_streams.clear()
+            self._stages.clear()
             self._last_prepared = None
+            self._resident_hits = 0
+            self._timing.clear()
 
 
 __all__ = ["CompiledCallable"]

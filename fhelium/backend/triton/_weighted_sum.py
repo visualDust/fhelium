@@ -106,7 +106,8 @@ class TritonWeightedSumImplementation:
                 )
             assert total is not None
             plan = PointwisePlan.build(
-                BoundGraph(layouts, (total,), {0: total})
+                BoundGraph(layouts, (total,), {0: total}),
+                dtype=inputs[0].dtype,
             )
             self._plans[key] = plan
         return plan.execute(tuple(inputs), parameters, radix)[0]

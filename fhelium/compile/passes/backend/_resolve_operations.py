@@ -26,13 +26,19 @@ from fhelium.backend.implementation import (
     requested_implementation,
 )
 
+from xdsl.dialects.func import CallOp
+
+from ._link_calls import LinkedFunctions
 from ._operations import executable_operations
 from ._validate_representations import ValidateExecutionRepresentationsPass
 
 
 @dataclass(frozen=True)
 class ResolveBackendOperationsPass:
-    """Require Backend support and build the Program dispatch table."""
+    """Require Backend support and build the Program dispatch table.
+
+    A preparing implementation may expose ``preparation_key(operation)``. Operations with equal non-None keys share one prepared implementation within this Program. A ``func.call`` dispatches to the executable of its callee linked by ``LinkCalledFunctionsPass``.
+    """
 
     registry: OperationImplementationRegistry
     in_place: bool = False
@@ -49,9 +55,20 @@ class ResolveBackendOperationsPass:
             )
 
         dispatches = {}
+        prepared: dict[tuple[int, object], object] = {}
         decisions: list[DecisionRecord] = []
+        linked = shared_data.get(LinkedFunctions, {})
         for operation in operations:
             invocation = operation_invocation(operation)
+            if isinstance(operation, CallOp):
+                called = linked[operation.callee.root_reference.data]
+                dispatches[operation] = OperationDispatch(
+                    invocation, called, (), called.effect
+                )
+                decisions.append(
+                    DecisionRecord(operation.name, called.name, (called.name,))
+                )
+                continue
             implementation = self.registry.resolve(
                 operation,
                 requested=requested_implementation(operation),
@@ -59,7 +76,18 @@ class ResolveBackendOperationsPass:
             )
             prepared_regions = False
             if isinstance(implementation, PreparingOperationImplementation):
-                implementation = implementation.prepare_operation(operation)
+                key_of = getattr(implementation, "preparation_key", None)
+                key = key_of(operation) if key_of is not None else None
+                shared = (
+                    None
+                    if key is None
+                    else prepared.get((id(implementation), key))
+                )
+                if shared is None:
+                    shared = implementation.prepare_operation(operation)
+                    if key is not None:
+                        prepared[(id(implementation), key)] = shared
+                implementation = shared
                 prepared_regions = bool(operation.regions)
             dispatches[operation] = OperationDispatch(
                 invocation,

@@ -8,7 +8,7 @@ from xdsl.ir import Block, Operation
 from xdsl.traits import IsTerminator
 
 from fhelium.ir import DEFAULT_OPERATION_SPECS
-from fhelium.ir.dialects import distributed, fusion
+from fhelium.ir.dialects import ckks, distributed, fusion
 
 
 def known_region_blocks(operation: Operation) -> tuple[Block, ...]:
@@ -19,6 +19,7 @@ def known_region_blocks(operation: Operation) -> tuple[Block, ...]:
         scf.IfOp,
         distributed.AllReduceOp,
         fusion.FusedOp,
+        ckks.RepeatOp,
     ):
         return ()
     return tuple(
@@ -52,10 +53,11 @@ def known_pure(operation: Operation) -> bool:
     ):
         return False
     if operation.regions:
-        if type(operation) is not fusion.FusedOp:
+        if type(operation) not in (fusion.FusedOp, ckks.RepeatOp):
             return False
         return all(
-            type(nested) is fusion.YieldOp or known_pure(nested)
+            type(nested) in (fusion.YieldOp, ckks.RepeatYieldOp)
+            or known_pure(nested)
             for nested in operation.body.block.ops
         )
     return True

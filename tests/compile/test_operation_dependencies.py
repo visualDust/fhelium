@@ -59,7 +59,7 @@ def test_region_dependencies_follow_branches_and_retain_unknown_reads():
     body = Block(arg_types=(value_type, parameters_type))
     x, parameters = body.args
     permuted = rns.CoefficientAutomorphismOp(
-        x, parameters, value_type, galois_element=3
+        x, parameters, parameters, parameters, value_type
     )
     summed = rns.AddStandardOp(x, permuted, parameters, value_type)
     body.add_ops((permuted, summed, fusion.YieldOp((summed.result,))))
