@@ -1,6 +1,6 @@
 """Represent keyed rotation tails and their ordered accumulation once per layout.
 
-The operand table retains each original key reference and coefficient-domain input. Consecutive rows with the same key layout share one body; slot steps and their Galois elements remain per-round attributes, and expansion binds each round's Galois tables. Backend planning expands the selected body without repeating lowering or fusion matching.
+The operand table retains each original key reference and coefficient-domain input. Consecutive rows with the same key layout share one body; slot steps and their Galois elements remain per-round attributes. Each round's Galois tables are declared materials in its operand row, so material binding before linking covers every round. Backend planning expands the selected body without repeating lowering or fusion matching.
 """
 
 from __future__ import annotations
@@ -251,6 +251,50 @@ def specialize_round(compilation, loop, cloned, iteration):
             ):
                 if argument.type != value.type:
                     Rewriter.replace_value_with_new_type(argument, value.type)
+
+
+def round_galois_tables(compilation, loop):
+    """Move the body's Galois tables into the operand table, one declaration per round."""
+    from .passes.lowering._keyswitch import declare_galois_table
+
+    body = loop.body.block
+    tables = dict.fromkeys(
+        operation.operands[index]
+        for operation in body.walk()
+        if isinstance(operation, rns.CoefficientAutomorphismOp)
+        for index in (2, 3)
+    )
+    if not tables:
+        return
+    block = loop.parent_block()
+    shared, carried = loop.shared, loop.carried
+    width, count = loop.table_width.value.data, loop.count.value.data
+    rows = [list(loop.row(index)) for index in range(count)]
+    elements = tuple(
+        int(element.value.data)
+        for element in loop.attributes["rotation_galois_elements"].data
+    )
+    inside = set(body.walk())
+    for table in tables:
+        if table.owner in inside:
+            table.owner.parent_block().detach_op(table.owner)
+            block.insert_op_before(table.owner, loop)
+        argument = body.insert_arg(table.type, 1 + len(shared) + width)
+        width += 1
+        for row, element in zip(rows, elements, strict=True):
+            references, value = declare_galois_table(
+                compilation, loop, table, element
+            )
+            for reference in references:
+                block.insert_op_before(reference, loop)
+            row.append(value)
+        for use in tuple(table.uses):
+            if use.operation in inside:
+                use.operation.operands[use.index] = argument
+        if not table.uses and table not in (v for row in rows for v in row):
+            Rewriter.erase_op(table.owner)
+    loop.operands = (*shared, *(v for row in rows for v in row), *carried)
+    loop.attributes["table_width"] = IntegerAttr(width, 64)
 
 
 def hoist_materials(loop):

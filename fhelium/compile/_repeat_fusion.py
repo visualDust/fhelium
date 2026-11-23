@@ -270,11 +270,13 @@ def prepare_fusion_repeats(compilation):
         hoist_materials,
         is_rotation_repeat,
         normalize_rotation_ports,
+        round_galois_tables,
     )
 
     for loop in loops:
         if is_rotation_repeat(loop):
             normalize_rotation_ports(loop)
+            round_galois_tables(compilation, loop)
             hoist_materials(loop)
             retained += 1
             continue

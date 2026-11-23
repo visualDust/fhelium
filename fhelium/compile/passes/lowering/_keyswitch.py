@@ -66,6 +66,37 @@ def galois_tables(
     return tuple(created), (values[0], values[1])
 
 
+def declare_galois_table(
+    compilation,
+    anchor: Operation,
+    table: SSAValue,
+    galois_element: int,
+) -> tuple[tuple[Operation, ...], SSAValue]:
+    """Declare the table kind of ``table`` for ``galois_element``.
+
+    Returns the created references, which the caller inserts before ``anchor``, and the table value. A table already declared for that element is returned unchanged.
+    """
+    owner = table.owner
+    if not isinstance(owner, core.MaterialRefOp) or owner.symbol is None:
+        raise ValueError('Galois tables must be declared materials')
+    description = dict(
+        compilation.program.material_description(owner.symbol.data) or {}
+    )
+    if description.get('galois_element') == galois_element:
+        return (), table
+    name = cast(str, description['name'])
+    description['galois_element'] = galois_element
+    device = cast(core.MessageType, table.type).state.data.get('device')
+    return declare_material(
+        compilation,
+        anchor,
+        f'galois/{galois_element}/{name}',
+        table.type,
+        description,
+        identity=('galois_table', galois_element, name, str(device)),
+    )
+
+
 def rebind_galois_tables(
     compilation,
     automorphism: rns.CoefficientAutomorphismOp,
@@ -74,23 +105,11 @@ def rebind_galois_tables(
     """Point an attached automorphism at the tables of another Galois element."""
     created: list[Operation] = []
     for index in (2, 3):
-        value = automorphism.operands[index]
-        owner = value.owner
-        if not isinstance(owner, core.MaterialRefOp) or owner.symbol is None:
-            raise ValueError('Galois tables must be declared materials')
-        description = dict(
-            compilation.program.material_description(owner.symbol.data) or {}
-        )
-        name = cast(str, description['name'])
-        description['galois_element'] = galois_element
-        device = cast(core.MessageType, value.type).state.data.get('device')
-        references, replacement = declare_material(
+        references, replacement = declare_galois_table(
             compilation,
             automorphism,
-            f'galois/{galois_element}/{name}',
-            value.type,
-            description,
-            identity=('galois_table', galois_element, name, str(device)),
+            automorphism.operands[index],
+            galois_element,
         )
         created.extend(references)
         automorphism.operands[index] = replacement

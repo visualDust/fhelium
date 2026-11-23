@@ -234,3 +234,54 @@ def test_batched_weighted_sum_captures_one_carried_loop():
         torch.testing.assert_close(
             actual.real, clear * weighted * scale, rtol=0, atol=1e-8
         )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_compiled_rotation_tails_match_eager_on_cuda():
+    preset = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    config = CkksConfig(
+        logN=8,
+        q_depth_groups=tuple((prime,) for prime in preset.q_moduli[:3]),
+        p_moduli=preset.p_moduli[:1],
+        default_scale=preset.default_scale,
+        enforce_security_budget=False,
+    )
+    device = torch.device("cuda")
+    engine = Engine(config, rng_seed=611)
+    secret = engine.create_secret_key(device=device)
+    public = engine.create_public_key(secret, device=device)
+    clear = torch.linspace(
+        -0.02, 0.03, config.num_slots, dtype=torch.float64, device=device
+    )
+    value = engine.encrypt_message(clear, public, device=device)
+    weights = [
+        engine.prepare_plaintext_for_multiplication(
+            engine.encode(
+                torch.full_like(clear, 0.125 * (1 + group)), device=device
+            )
+        )
+        for group in range(4)
+    ]
+    keys = [
+        engine.create_rotation_key(step, secret, device=device)
+        for step in (1, 2, 3)
+    ]
+
+    def evaluator(current):
+        transformed = engine.coefficient_domain_to_ntt_domain(current)
+        groups = []
+        for index, weight in enumerate(weights):
+            partial = engine.ntt_domain_to_coefficient_domain(
+                engine.multiply_plaintext(transformed, weight)
+            )
+            if index:
+                partial = engine.rotate_with_key(partial, keys[index - 1])
+            groups.append(partial)
+        total = groups[0]
+        for partial in groups[1:]:
+            total = engine.add(total, partial)
+        return total
+
+    # Each folded rotation round reads the Galois tables of its own step.
+    compiled = fc.compile(evaluator, cache=False, graph=False)
+    assert torch.equal(compiled(value).data, evaluator(value).data)
