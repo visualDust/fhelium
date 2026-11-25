@@ -10,15 +10,17 @@ FHElium implements the Cheon–Kim–Kim–Song (CKKS) approximate homomorphic e
 | --- | --- | --- |
 | $N=2^{\mathtt{logN}}$ | Polynomial-ring dimension | `config.N` |
 | $S=N/2$ | Complex slot capacity | `engine.num_slots` |
-| $G_d$ | Q group removed by transition $d\to d+1$ when $d<D$ | `config.q_depth_groups[d]` |
-| $G_D$ | Terminal Q group retained at `max_depth` | `config.q_depth_groups[-1]` |
-| $Q_d$ | Product of all Q groups active at depth $d$ | `depth` plus Q `prime_ids` |
+| $q_0,\ldots,q_{L-1}$ | Ordered Q primes | `config.q_moduli` |
+| $B_d$ | Active Q basis at depth $d$, a contiguous interval of the Q order | `config.depth_bases[d]`, `config.q_prime_ids(d)` |
+| $Q_d$ | Product of the primes in $B_d$ | `depth` plus Q `prime_ids` |
+| $D_d$, $R_d$ | Primes dropped and introduced by the rescale $d\to d+1$ | $B_d\setminus B_{d+1}$, $B_{d+1}\setminus B_d$ |
+| $\rho_d$ | Rescale ratio $\prod D_d/\prod R_d$ | `config.transition_ratio(d, d + 1)` |
 | $p_j$ | One special prime | One prime in `config.p_moduli` |
 | $P=\prod_jp_j$ | Special modulus used by hybrid key switching | P portion of a QP basis |
-| $B_d$ | Current modulus product, $Q_d$ or $Q_dP$ | `modulus_basis`, `depth`, and `prime_ids` |
+| $Q_d$ or $Q_dP$ | Current modulus product of a Q or QP value | `modulus_basis`, `depth`, and `prime_ids` |
 | $D$ | Greatest public depth | `config.max_depth` or `engine.max_depth` |
 | $D-d$ | Public rescale transitions remaining | `engine.depth_remaining(value)` |
-| $\Delta_0$ | Default creation and planning scale | `config.default_scale` |
+| $\Delta_d$ | Default creation and planning scale of depth $d$ | `config.scale_at(d)` |
 | $\Delta(v)$ | Actual scale carried by value $v$ | `value.scale` |
 | $s(X)$ | Secret-key polynomial | `SecretKey` |
 | $c(X)=(c_0,\ldots,c_{k-1})$ | Ciphertext component polynomials | Leading component axis |
@@ -26,7 +28,7 @@ FHElium implements the Cheon–Kim–Kim–Song (CKKS) approximate homomorphic e
 | $\operatorname{Rot}_r$ | Signed slot rotation | `rotation_step` |
 | $\operatorname{SRound}$ | Stochastic integer quantization | Encoding quantizer |
 
-A **Q prime** is a prime factor of the ciphertext modulus. Q primes are ordered inside depth groups. A **scaling Q group** is one public group $G_d$; a public rescale removes the complete group. The final Q group is the terminal group at `max_depth`; it remains available for ordinary arithmetic. A **special prime** is a factor of P. `auxiliary basis` describes a temporary basis-conversion role such as QP; it is not a prime kind.
+A **Q prime** is a prime factor of the ciphertext modulus. Q primes have one configured order, and each depth's active Q basis $B_d$ is an interval of that order. A public rescale replaces $B_d$ by $B_{d+1}$ and divides by the rescale ratio $\rho_d$. The basis $B_D$ at `max_depth` is the terminal basis; it remains available for ordinary arithmetic. In a **suffix chain**, every $B_{d+1}$ is a suffix of $B_d$, and the dropped primes $D_d$ form the **Q group** of depth $d$. A **special prime** is a factor of P. `auxiliary basis` describes a temporary basis-conversion role such as QP; it is not a prime kind.
 
 A **slot** is one packed complex message position. Applications decide how vectors, matrices, padding, and masks map to the $S$ slots.
 
@@ -35,7 +37,7 @@ A **slot** is one packed complex message position. Applications decide how vecto
 | Term | Definition |
 | --- | --- |
 | `Preset` | A reviewed named recipe that resolves to a `CkksConfig` containing prime values. Its name records slot capacity, default-scale target, maximum public depth, and the default Engine residue dtype selected by its primes. |
-| `CkksConfig` | The immutable CKKS parameter set: ring, default scale, ordered Q prime groups, P special primes, Galois generator, Gaussian error standard deviation, security category, and budget-enforcement policy. |
+| `CkksConfig` | The immutable CKKS parameter set: ring, ordered Q primes, per-depth active Q bases and default scales, P special primes, Galois generator, Gaussian error standard deviation, security category, and budget-enforcement policy. |
 | `RnsExecutionFormat` | The device-local residue dtype and Montgomery radix selected from the configured prime values, optionally constrained by an expert Engine override. |
 | `fhelium.eager.Engine` | The process-local eager evaluator. It selects an RNS execution format, lazily creates device resources, owns installed keys, and invokes registered implementations. |
 
@@ -54,13 +56,13 @@ A **CKKS value state** is the combination of concrete value type, tensor topolog
 | Residue representation | `standard`, `montgomery` | Ordinary or Montgomery residues |
 | Modulus basis | `Q`, `QP` | Active $Q_d$ rows or active $Q_dP$ rows |
 | `prime_ids` | Ordered parameter-row identifiers | Modulus represented by each physical limb row |
-| Depth | Integer $d$ in $[0,D]$ | Index of the first active Q depth group |
+| Depth | Integer $d$ in $[0,D]$ | Index of the active Q basis $B_d$ in the chain |
 | Depth remaining | $D-d$ | Public rescale transitions still available |
 | Actual scale | Positive finite binary64 $\Delta(v)$ | Per-value encoding factor |
 | Component count | Usually two or three for ciphertexts | Degree of the ciphertext phase in $s(X)$ |
 | Placement | CPU or indexed CUDA device | Tensor storage location |
 
-Each coordinate identifies a different property: QP names a modulus basis; depth locates a Q group in the chain; `prime_ids` identify physical rows; polynomial domain describes the coordinate system within each polynomial; plaintext representation describes the payload's numerical meaning. Placement locates its storage.
+Each coordinate identifies a different property: QP names a modulus basis; depth selects the active Q basis in the chain; `prime_ids` identify physical rows; polynomial domain describes the coordinate system within each polynomial; plaintext representation describes the payload's numerical meaning. Placement locates its storage.
 
 ### Plaintext representation
 
@@ -84,7 +86,7 @@ A coefficient-domain polynomial is indexed by coefficients. An NTT-domain polyno
 
 RNS plaintexts additionally support `(coefficient, montgomery)`. A **Residue Number System (RNS)** represents an integer polynomial by residues modulo pairwise-coprime primes. One residue-polynomial row is a **limb**, and `prime_ids[limb_index]` identifies its modulus. The Chinese remainder theorem identifies that residue vector with a unique integer class modulo the prime product. [Integer-to-RNS conversion and reconstruction](ckks/context-and-modulus-chain.md#integers-rns-and-the-chinese-remainder-theorem) gives the maps and representative conventions.
 
-At depth $d$, Q contains the suffix of configured Q groups beginning at $G_d$. QP appends all P special-prime rows to that Q suffix. One public rescale advances to $d+1$ and divides scale by $\prod_{q\in G_d}q$; modulus switching changes depth while preserving scale. The default scale and the prime widths inside a depth group are independent.
+At depth $d$, Q contains the primes of $B_d$. QP appends all P special-prime rows to those Q rows. One public rescale advances to $d+1$ and divides scale by $\rho_d$; modulus switching to a basis contained in the source basis changes depth while preserving scale. Default scales and prime widths are independent.
 
 ## Tensor and dimension terminology
 
@@ -263,28 +265,28 @@ An unbatched operation-ready plaintext may broadcast over a homogeneous cipherte
 
 ### Rescale and modulus switch
 
-At depth $\ell$, let $G_\ell$ be the leading active Q depth group and $M_\ell=\prod_{q\in G_\ell}q$. **Rescale** computes a rounded quotient on every surviving row:
+At depth $\ell$, let $D_\ell=B_\ell\setminus B_{\ell+1}$ and $R_\ell=B_{\ell+1}\setminus B_\ell$ be the dropped and introduced Q primes, $D=\prod D_\ell$, $R=\prod R_\ell$, and $\rho_\ell=D/R$. **Rescale** computes a rounded quotient on the rows of the next basis:
 
 $$
-c'=\operatorname{Round}\!\left(\frac{c}{M_\ell}\right)
-\pmod{B_{\ell+1}},
+c'=\operatorname{Round}\!\left(\frac{cR}{D}\right)
+\pmod{Q_{\ell+1}},
 \qquad
 \ell'=\ell+1,
 \qquad
-\Delta(c')=\frac{\Delta(c)}{M_\ell}.
+\Delta(c')=\frac{\Delta(c)}{\rho_\ell}.
 $$
 
-`rounding="nearest"` and `rounding="floor"` identify distinct quotient laws. A QP rescale retains P rows, so its output basis is $Q_{\ell+1}P$. The **rescale divisor** is available through `engine.rescale_divisor(depth=...)` for a non-final public depth; it is the product of every prime in the group removed by that transition.
+`rounding="nearest"` and `rounding="floor"` identify distinct quotient laws. A QP rescale retains P rows, so its output basis is $Q_{\ell+1}P$. The **rescale divisor** is available through `engine.rescale_divisor(depth=...)` for a non-final public depth; it returns $\rho_\ell$ as a `Fraction`.
 
-A **modulus switch** restricts rows from $Q_\ell$ or $Q_\ell P$ to target depth $t$'s active rows without dividing coefficients:
+A **modulus switch** to target depth $t$ with $B_t\subseteq B_\ell$ restricts rows from $Q_\ell$ or $Q_\ell P$ to the rows of $B_t$ without dividing coefficients:
 
 $$
-c'=c\pmod{B_t},
+c'=c\pmod{Q_t},
 \qquad
 \Delta(c')=\Delta(c).
 $$
 
-Message preservation requires the centered represented value not to wrap under the smaller target modulus.
+Message preservation requires the centered represented value not to wrap under the smaller target modulus. When $B_t\not\subseteq B_\ell$, the switch multiplies by the integer $k=\operatorname{round}(\Delta_t\rho/\Delta(c))$, where $\rho$ is the ratio of the source and target basis products, and rescales from $B_\ell$ to $B_t$; the result records $\Delta(c')=\Delta_t$.
 
 ### Rotation, automorphism, and hoisting
 
@@ -361,6 +363,18 @@ z_i=
 $$
 
 Here $y_i=\widetilde y\bmod q_i$, and $z_i$ is the resulting Q-basis residue.
+
+#### Basis-conversion methods
+
+Key-switching operations take one `basis_conversion` value that selects how both conversions are evaluated. For a source prime set with product $M=\prod_i m_i$, let $M_i=M/m_i$, $u_i=M_i^{-1}\bmod m_i$, and let $a_i$ be the source residues of one coefficient.
+
+| Value | ModUp of digit $\kappa$ | ModDown remainder |
+| --- | --- | --- |
+| `exact` | $\chi_\kappa\in[0,M_\kappa)$ by mixed-radix decomposition | $\operatorname{rep}_P^{\tau}(\widetilde y)$ by mixed-radix decomposition of the P rows |
+| `crt` | $\sum_i [a_iu_i]_{m_i}M_i$ with $[a_iu_i]_{m_i}\in[0,m_i)$ | same as `exact` |
+| `normalized_crt` | $\sum_i c_iM_i$ with centered $c_i=[a_iu_i]_{m_i}\in[-(m_i-1)/2,(m_i-1)/2]$ | $\sum_j c_jP_j$ with $P_j=P/p_j$ and centered $c_j$ over the removed primes |
+
+The `crt` and `normalized_crt` digit lifts are congruent to $\chi_\kappa$ modulo $M_\kappa$ and differ from it by $kM_\kappa$ with $0\le k<|D_\kappa|$ or $|k|<|D_\kappa|/2$ respectively. The integer $k$ multiplies the key's $M_\kappa$-related noise term, so these lifts change key-switching error but preserve the decrypted message. With `normalized_crt`, the centered sum over removed primes equals $\operatorname{rep}_P^{\mathrm{nearest}}(\widetilde y)+kP$ with $|k|$ smaller than half the number of removed primes; ModDown therefore returns the nearest quotient plus an integer error $-k$, and the `moddown_rounding` selection does not apply. When relinearization rescales in the same quotient, the centered quotient by P is followed by the exact quotient by the dropped Q group $D$ under `rescale_rounding`, so the error $k$ is divided by $D$.
 
 An implementation may evaluate this quotient one P prime at a time, but its tables and residue recurrences must realize the selected map above.
 

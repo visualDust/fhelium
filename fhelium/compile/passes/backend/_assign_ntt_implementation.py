@@ -32,6 +32,7 @@ _NTT_TYPES = tuple(
 _TRANSFORM_TYPES = (*_NTT_TYPES, ckks.ToNttOp, ckks.FromNttOp)
 _COMPOUND_TYPES = (
     ckks.RescaleOp,
+    ckks.ModSwitchOp,
     ckks.RelinearizeOp,
     ckks.SwitchKeyOp,
     ckks.ConjugateOp,
@@ -56,7 +57,6 @@ class AssignNttImplementationPass:
     overwrite: bool = False
     ntt_backend: str | None = None
     algorithm: str | None = None
-    group_width: int | None = None
     radix: int | None = None
     name: str = "assign-ntt-implementation"
 
@@ -70,8 +70,6 @@ class AssignNttImplementationPass:
             )
         if self.algorithm is not None:
             attributes["ntt_algorithm"] = StringAttr(self.algorithm)
-        if self.group_width is not None:
-            attributes["ntt_group_width"] = IntegerAttr(self.group_width, 64)
         if self.radix is not None:
             attributes["ntt_radix"] = IntegerAttr(self.radix, 64)
         matched = transformed = inserted = skipped = 0

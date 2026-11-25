@@ -31,14 +31,6 @@ def _source(value: SSAValue) -> SSAValue:
             parent := value.owner.parent_op(), fusion.FusedOp
         ):
             value = parent.inputs[value.index]
-        elif (
-            isinstance(value, BlockArgument)
-            and isinstance(parent := value.owner.parent_op(), ckks.RepeatOp)
-            and value.index
-        ):
-            value = (*parent.shared, *parent.row(0), *parent.carried)[
-                value.index - 1
-            ]
         else:
             return value
 

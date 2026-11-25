@@ -62,7 +62,7 @@ def test_inventory_retains_object_identity_and_role_views():
     assert len(inventory) == 0 and inventory.rotation_keys == ()
     assert selected[1] is rotation
     with pytest.raises(
-        TypeError, match='rotation, relinearization and conjugation'
+        TypeError, match='rotation, relinearization, conjugation and encapsulation'
     ):
         inventory.add(key(KeySwitchKey))
 
@@ -161,3 +161,49 @@ def test_composed_selection_counts_repeated_primitive_invocations():
     # Composing both offsets uses four switches, including the step-4 key twice.
     assert set(selected) == {3, 5}
     assert selected[3] is direct[0] and selected[5] is direct[1]
+
+
+@pytest.mark.parametrize('source_depth', [0, 3])
+def test_selected_keys_serve_interval_basis_in_default_chain(source_depth):
+    from fhelium import CkksConfig, Preset
+    from fhelium.eager import Engine
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    engine = Engine(CkksConfig.parse(Preset.slots16384_scale40_depth16), rng_seed=17)
+    depth = 3
+    assert engine.config.q_bases[depth] == tuple(range(4, 23))
+    secret = engine.create_secret_key(device=device)
+    public = engine.create_public_key(secret, device=device)
+    inventory = EvaluationKeySet(
+        [
+            engine.create_rotation_key(
+                1, secret, source_depth=source_depth, device=device
+            ),
+            engine.create_conjugation_key(
+                secret, source_depth=source_depth, device=device
+            ),
+        ]
+    )
+    clear = torch.complex(
+        torch.linspace(-1, 1, engine.num_slots, dtype=torch.float64),
+        torch.linspace(1, -1, engine.num_slots, dtype=torch.float64).roll(7),
+    ).to(device)
+    value = engine.encrypt_message(clear, public, depth=depth, device=device)
+    layout = dict(
+        q_prime_ids=value.prime_ids,
+        ring_dimension=engine.config.N,
+        dtype=value.data.dtype,
+        device=value.device,
+    )
+    rotation = inventory.select_rotations((1,), **layout)
+    conjugation = inventory.select_conjugation(**layout)
+    assert rotation is not None and conjugation is not None
+    rotated = engine.rotate_with_key(value, rotation[1])
+    conjugated = engine.conjugate(value, conjugation)
+    for result, expected in (
+        (rotated, clear.roll(1)),
+        (conjugated, clear.conj()),
+    ):
+        assert result.prime_ids == value.prime_ids
+        error = (engine.decrypt_message(result, secret) - expected).abs().max()
+        assert error < 1e-5

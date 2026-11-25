@@ -14,28 +14,6 @@ from fhelium.native.wrapper import ckks_ops
 
 
 @dataclass(frozen=True)
-class NativeSelectBatchImplementation:
-    """Return row ``start`` of the leading batch axis as a view of the source payload."""
-
-    supports_in_place: bool = False
-    name: str = "native-select-batch"
-    operation_types: tuple[type[Operation], ...] = (ckks.SelectBatchOp,)
-
-    def resource_requirements(self, invocation):
-        return ()
-
-    def execute(self, invocation, inputs, resources, *, in_place):
-        del resources, in_place
-        components = invocation.operand_components
-        return (
-            inputs[0].select(
-                int(bool(components and components[0])),
-                cast(int, invocation.attributes["start"]),
-            ),
-        )
-
-
-@dataclass(frozen=True)
 class NativeCiphertextMultiplyImplementation:
     """Execute whole two-component CKKS convolution in one native call."""
 

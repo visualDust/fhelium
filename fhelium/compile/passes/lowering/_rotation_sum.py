@@ -31,6 +31,7 @@ def lower_rotation_sum(operation, config, compilation):
     )
     steps = tuple(int(x.value.data) for x in operation.rotation_steps)
     keys = iter(operation.keys)
+    seeds = iter(operation.key_seeds)
     source_type = operation.values[0].type
     qp_ids, qp_rows = _key_switch_qp_basis(
         source_type, tuple(operation.keys), fields
@@ -74,7 +75,6 @@ def lower_rotation_sum(operation, config, compilation):
             'ckks_config',
             'ntt_backend',
             'ntt_algorithm',
-            'ntt_group_width',
             'ntt_radix',
             'ntt_table_layout',
         }
@@ -152,6 +152,7 @@ def lower_rotation_sum(operation, config, compilation):
                 source.type,
                 rotation_step=step,
                 parameters=rotation_parameters,
+                key_seeds=(next(seeds),) if operation.key_seeds else (),
                 attributes={
                     **key_fields,
                     'parameter_names': ArrayAttr(

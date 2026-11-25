@@ -115,7 +115,7 @@ class RotationHoistingPass:
         rows, digits = state.get("prime_ids"), state.get("digit_prime_ids")
         if rows is None or digits is None:
             return (rotation.key,)
-        return (rows, digits)
+        return (rows, digits, state.get("seed_rounds"))
 
     @staticmethod
     def _signature(rotation: ckks.RotateOp) -> tuple[object, ...]:
@@ -123,7 +123,7 @@ class RotationHoistingPass:
             rotation.value,
             RotationHoistingPass._key_layout(rotation),
             rotation.moddown_rounding,
-            rotation.modup_method,
+            rotation.basis_conversion,
             tuple(rotation.parameters),
             tuple(
                 sorted(
@@ -158,6 +158,9 @@ class RotationHoistingPass:
             first.value,
             tuple(rotation.key for rotation in group),
             tuple(rotation.result.type for rotation in group),
+            key_seeds=tuple(
+                seed for rotation in group for seed in rotation.key_seeds
+            ),
             output_domain=cast(
                 Literal["coefficient", "ntt"], first.output_domain.data
             ),
@@ -169,7 +172,7 @@ class RotationHoistingPass:
                     if name not in {"rotation_step", "input_domain"}
                 },
                 "moddown_rounding": first.moddown_rounding,
-                "modup_method": first.modup_method,
+                "basis_conversion": first.basis_conversion,
                 "rotation_steps": ArrayAttr(
                     IntegerAttr(step, 64) for step in steps
                 ),

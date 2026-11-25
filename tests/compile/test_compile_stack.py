@@ -161,7 +161,7 @@ def test_pass_can_select_ckks_config_after_ckks_ir_exists() -> None:
     def add(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
         return left + right
 
-    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
     caller_value = object()
 
     @dataclass(frozen=True)
@@ -428,7 +428,7 @@ def test_reuse_internal_arithmetic_preserves_materials_rounding_and_returns(
     def rescale(value, table, rounding="nearest"):
         if lowered:
             cast = UnrealizedConversionCastOp.get((value,), (bundle,))
-            operation = rns.RescaleDropLeadingPrimesOp(
+            operation = rns.RescaleOp(
                 cast.outputs[0],
                 (table,),
                 bundle,

@@ -41,19 +41,15 @@ def _cpu_engine(*, p_count: int = 2) -> Engine:
 def _small_config(
     *, p_count: int, max_depth: int, narrow: bool = False
 ) -> CkksConfig:
-    source = CkksConfig.parse(
-        Preset.slots65536_scale25_depth14_int32
-        if narrow
-        else Preset.slots65536_scale30_depth95_int64
-    )
-    config = CkksConfig(
-        default_scale=source.default_scale,
-        q_depth_groups=source.q_depth_groups[: max_depth + 2],
-        p_moduli=source.p_moduli[:p_count],
+    return CkksConfig.catalog_suffix_chain(
         logN=12,
+        scale_bits=25 if narrow else 30,
+        depth=max_depth + 1,
+        p_count=p_count,
+        p_bits=28 if narrow else 60,
+        catalog_logN=17,
         enforce_security_budget=False,
     )
-    return config
 
 
 def test_cpu_rns_and_ckks_vector_and_parameter_strides() -> None:
@@ -146,19 +142,6 @@ def test_cpu_rns_and_ckks_vector_and_parameter_strides() -> None:
     expected = ckks_ops.apply_ntt_galois_automorphism(residues, source_indices)
     actual = ckks_ops.apply_ntt_galois_automorphism(
         residues, _gap_last_axis(source_indices)
-    )
-    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-
-    inverse = torch.tensor([29, 31, 37], dtype=engine.rns_context("cpu").dtype)
-    dropped = torch.remainder(residues[:, 0], moduli[0])
-    expected = ckks_ops.rescale_drop_leading_prime_truncate(
-        residues, inverse, dropped, parameters
-    )
-    actual = ckks_ops.rescale_drop_leading_prime_truncate(
-        residues,
-        _gap_last_axis(inverse),
-        _gap_last_axis(dropped),
-        strided_parameters,
     )
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
@@ -319,7 +302,7 @@ def test_cpu_created_values_remain_valid_after_cuda_transfer() -> None:
         pytest.skip("CUDA is not available")
 
     cpu_engine = Engine(
-        Preset.slots8192_scale40_depth7_int64, rng_seed=911, rng_nonce=4
+        Preset.slots8192_scale40_depth7, rng_seed=911, rng_nonce=4
     )
     secret_key = cpu_engine.create_secret_key(device="cpu")
     public_key = cpu_engine.create_public_key(secret_key, device="cpu")
@@ -330,7 +313,7 @@ def test_cpu_created_values_remain_valid_after_cuda_transfer() -> None:
     cpu_plaintext = cpu_engine.decrypt(ciphertext, secret_key)
 
     cuda_engine = Engine(
-        Preset.slots8192_scale40_depth7_int64,
+        Preset.slots8192_scale40_depth7,
         allow_automatic_key_generation=False,
     )
     cuda_ciphertext = ciphertext.to("cuda:0")
@@ -346,7 +329,9 @@ def test_cpu_created_values_remain_valid_after_cuda_transfer() -> None:
     cuda_coefficients = cuda_engine.ntt_domain_to_coefficient_domain(
         cpu_ntt.to("cuda:0")
     )
-    moduli = torch.tensor(cpu_engine.config.q_moduli)[:, None]
+    moduli = torch.tensor(
+        cpu_engine.config.q_moduli, dtype=ciphertext.data.dtype
+    )[:, None]
     for component in range(ciphertext.data.size(0)):
         torch.testing.assert_close(
             torch.remainder(
@@ -472,7 +457,7 @@ def test_cpu_keyswitch_moddown_supports_more_than_eight_p_rows_and_strides() -> 
     "configuration",
     [
         _small_config(p_count=1, max_depth=2),
-        Preset.slots16384_scale30_depth21_int64,
+        Preset.slots16384_scale30_depth22,
         _small_config(p_count=2, max_depth=2, narrow=True),
         _small_config(p_count=4, max_depth=2),
         _small_config(p_count=6, max_depth=2),

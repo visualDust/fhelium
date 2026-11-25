@@ -12,6 +12,7 @@ from xdsl.dialects.builtin import StringAttr
 from xdsl.ir import Attribute, Operation, SSAValue
 
 from ._dependencies import DependencyDescription, OperationDependencies
+from ._operation_structure import StructureDescription
 
 ValueRole = Literal["encrypted", "message", "plaintext", "static"]
 
@@ -71,6 +72,7 @@ class OperationSpec:
     validator: OperationValidator | None = None
     operation_type: type[Operation] | None = None
     dependencies: DependencyDescription = None
+    structure: StructureDescription | None = None
 
     def resolve_dependencies(
         self, operation: Operation
@@ -260,6 +262,7 @@ def registered_operation_spec(
         validator=validator,
         operation_type=operation_type,
         dependencies=getattr(operation_type, "dependencies", None),
+        structure=getattr(operation_type, "structure", None),
     )
 
 
@@ -282,18 +285,19 @@ def unsupported_attributes(
                 "q_count",
                 "p_count",
                 "key_row_start",
+                "key_p_row_start",
+                "key_q_rows",
                 "galois_generator",
                 "ntt_backend",
                 "ntt_algorithm",
-                "ntt_group_width",
                 "ntt_radix",
                 "ntt_table_layout",
                 "rotation_step",
                 "rotation_steps",
-                "half_primes",
                 "joint_drop_count",
                 "joint_drop_is_prefix",
                 "joint_drop_prime_ids",
+                "joint_target_prime_ids",
             }
         )
     if operation.name in {
@@ -302,7 +306,7 @@ def unsupported_attributes(
         "fhelium_rns.moddown_ntt_qp_to_q",
         "fhelium_rns.moddown_add_rescale",
         "fhelium_rns.key_switch_digit_product",
-        "fhelium_rns.rescale_drop_leading_primes",
+        "fhelium_rns.rescale",
     }:
         common.update(
             {
@@ -311,8 +315,9 @@ def unsupported_attributes(
                 "p_count",
                 "q_count",
                 "key_row_start",
+                "key_p_row_start",
+                "key_q_rows",
                 "ntt_backend",
-                "half_primes",
             }
         )
     return tuple(sorted(set(operation.attributes) - common - set(allowed)))

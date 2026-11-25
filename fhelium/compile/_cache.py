@@ -57,8 +57,7 @@ _LEAVES = (
     RelinearizationKey,
     ConjugationKey,
 )
-_CKKS_LEAVES = (Ciphertext, Plaintext, CompressedPlaintext)
-_SCHEMA = 5
+_SCHEMA = 8
 # Paths are JSON arrays of [operation, argument] steps, never Python expressions.
 _Path = list[list[object]]
 _PURE_BUILTINS = {
@@ -105,10 +104,10 @@ _METADATA = {
     "config",
     "num_slots",
     "max_depth",
-    "default_scale",
+    "scales",
     "N",
     "logN",
-    "q_depth_groups",
+    "q_bases",
     "q_moduli",
     "p_moduli",
     "galois_generator",
@@ -470,11 +469,11 @@ class _Eligibility(ast.NodeVisitor):
             self.module_members.append(self.scan.value(value, path))
         elif isinstance(node.func, ast.Attribute):
             from fhelium.eager import Engine
-            from .frontend._eager_capture import _METHODS
+            from .frontend._eager_capture import _COMPOSITES, _METHODS
 
             receiver = self._external(node.func.value)
             if receiver is not None and type(receiver[0]) is Engine:
-                if node.func.attr not in _METHODS:
+                if node.func.attr not in _METHODS | _COMPOSITES:
                     raise CacheIneligible(
                         f"Unsupported Engine operation: {node.func.attr}"
                     )
@@ -505,11 +504,6 @@ class _Eligibility(ast.NodeVisitor):
 
 @dataclass
 class _Scan:
-    structural: bool = False
-    payload_owners: dict[int, list[tuple[_Path, object, str]]] = field(
-        default_factory=dict
-    )
-    raw_materials: set[int] = field(default_factory=set)
     materials: dict[int, list[tuple[_Path, object]]] = field(
         default_factory=dict
     )
@@ -518,7 +512,7 @@ class _Scan:
     active: set[int] = field(default_factory=set)
     storages: dict[int, int] = field(default_factory=dict)
 
-    def value(self, value: object, path: _Path, *, payload=None) -> object:
+    def value(self, value: object, path: _Path) -> object:
         if type(value) in _SCALARS:
             scalar = value.hex() if type(value) is bytes else _scalar_key(value)
             return [type(value).__name__, scalar]
@@ -531,11 +525,6 @@ class _Scan:
             # Every module use is checked separately by the syntax visitor.
             return ["module", value.__name__]
         identity = id(value)
-        if type(value) is torch.Tensor:
-            if payload is None:
-                self.raw_materials.add(identity)
-            else:
-                self.payload_owners.setdefault(identity, []).append(payload)
         if identity in self.active:
             raise CacheIneligible("Reference cycles are not cached")
         if type(value) in _LEAVES:
@@ -545,16 +534,13 @@ class _Scan:
         reference = self.seen.setdefault(identity, len(self.seen))
         self.active.add(identity)
         try:
-            return ["object", reference, self._value(value, path, payload)]
+            return ["object", reference, self._value(value, path)]
         finally:
             self.active.remove(identity)
 
-    def _value(self, value, path, payload):
+    def _value(self, value, path):
         if type(value) in _LEAVES:
-            layout = _leaf_layout(value, structural=self.structural)
-            if self.structural and payload is not None:
-                _, owner, field_name = payload
-                layout = _payload_layout(owner, field_name, structural=True)
+            layout = _leaf_layout(value)
             if type(value) is torch.Tensor:
                 storage = value.untyped_storage()._cdata
                 return [
@@ -568,13 +554,7 @@ class _Scan:
                 [
                     [
                         name,
-                        self.value(
-                            tensor,
-                            _step(path, "field", name),
-                            payload=(path, value, name)
-                            if _rns_leaf(value)
-                            else None,
-                        ),
+                        self.value(tensor, _step(path, "field", name)),
                     ]
                     for name, tensor in _leaf_tensors(value).items()
                 ],
@@ -717,54 +697,7 @@ def _tensor_layout(tensor: torch.Tensor) -> list[object]:
     ]
 
 
-def _rns_leaf(value: object) -> bool:
-    return type(value) in _CKKS_LEAVES and (
-        type(value) is not Plaintext or value.representation == "rns"
-    )
-
-
-def _row_layout(layout: list[object], row_axis: int) -> list[object]:
-    """Normalize a standard dense row extent and its dependent strides.
-
-    Nonstandard strides retain their full physical layout. A stride is treated as row-dependent only when the complete stride tuple matches dense contiguous storage.
-    """
-    shape, strides = list(layout[0]), list(layout[1])
-    axis = len(shape) + row_axis
-    if (
-        axis < 0
-        or not shape[axis]
-        or any(dimension <= 0 for dimension in shape)
-    ):
-        return layout
-    expected = []
-    extent = 1
-    for dimension in reversed(shape):
-        expected.append(extent)
-        extent *= dimension
-    if strides != list(reversed(expected)):
-        return layout
-    rows = shape[axis]
-    shape[axis] = "active-prime-rows"
-    strides = [
-        ["active-prime-rows", stride // rows] if index < axis else stride
-        for index, stride in enumerate(strides)
-    ]
-    return [shape, strides, *layout[2:]]
-
-
-def _payload_layout(
-    owner: object, name: str, *, structural: bool
-) -> list[object]:
-    tensor = _leaf_tensors(owner)[name]
-    layout = _tensor_layout(tensor)
-    if structural and _rns_leaf(owner):
-        axis = -1 if name == "implicit_data" else -2
-        if tensor.ndim >= -axis and tensor.shape[axis] == len(owner.prime_ids):
-            return _row_layout(layout, axis)
-    return layout
-
-
-def _leaf_layout(value: object, *, structural: bool = False) -> object:
+def _leaf_layout(value: object) -> object:
     if type(value) not in _LEAVES:
         raise CacheIneligible("Custom material classes are not cached")
     if type(value) is torch.Tensor:
@@ -773,12 +706,9 @@ def _leaf_layout(value: object, *, structural: bool = False) -> object:
         from .frontend._eager_values import value_state
 
         layout = dict(value_state(value))
-        if structural and _rns_leaf(value):
-            for name in ("depth", "scale", "prime_ids"):
-                layout.pop(name)
         layout["tensors"] = {
-            name: _payload_layout(value, name, structural=structural)
-            for name in _leaf_tensors(value)
+            name: _tensor_layout(tensor)
+            for name, tensor in _leaf_tensors(value).items()
         }
     else:
         from ._materials import key_description
@@ -790,9 +720,9 @@ def _leaf_layout(value: object, *, structural: bool = False) -> object:
 
 
 def engine_identity(engine: Any) -> dict[str, object]:
-    from .frontend._eager_capture import _METHODS
+    from .frontend._eager_capture import _COMPOSITES, _METHODS
 
-    if any(name in vars(engine) for name in _METHODS):
+    if any(name in vars(engine) for name in _METHODS | _COMPOSITES):
         raise CacheIneligible("Engine operation overrides are not cached")
     return {
         "config": engine.config.dumps(),
@@ -820,44 +750,24 @@ class SourceIdentity:
     key: str
     materials: dict[int, list[tuple[_Path, object]]]
     engines: dict[int, tuple[_Path, object]]
-    payload_owners: dict[int, list[tuple[_Path, object, str]]] = field(
-        default_factory=dict
-    )
-    raw_materials: frozenset[int] = frozenset()
 
 
 def source_identity(
     function: Any,
     *,
     material_names: Mapping[str, object] | None,
-    structural: bool = False,
 ) -> SourceIdentity:
     if type(function) is not types.FunctionType:
         raise CacheIneligible("Only ordinary Python functions are cached")
     if material_names is not None and type(material_names) is not dict:
         raise CacheIneligible("Material names require an ordinary dictionary")
-    scan = _Scan(structural=structural)
+    scan = _Scan()
     root = scan.value(function, [["root", "fn"]])
     names = scan.value(material_names or {}, [["root", "names"]])
-    if structural:
-        # An additional raw reference remains fixed even when the same Tensor was
-        # first encountered through a CKKS owner and assigned an alias token.
-        raw_layouts = [
-            [
-                scan.seen[identity],
-                _tensor_layout(scan.materials[identity][0][1]),
-            ]
-            for identity in sorted(
-                scan.raw_materials, key=scan.seen.__getitem__
-            )
-        ]
-        root = ["structural", root, raw_layouts]
     return SourceIdentity(
         _digest([environment_identity(), root, names]),
         scan.materials,
         scan.engines,
-        scan.payload_owners,
-        frozenset(scan.raw_materials),
     )
 
 
@@ -904,18 +814,6 @@ def trace_entry_key(
     )
 
 
-def preparation_artifact_key(source) -> str:
-    """Key the linked executable of a plaintext-preparation Program or its recorded recipe."""
-    from fhelium.ir import Program
-    from fhelium.ir._structure import program_digest
-
-    if isinstance(source, Program):
-        content = ["program", program_digest(source.module)]
-    else:
-        content = ["recipe", source.digest()]
-    return _digest(["preparation", environment_identity(), *content])
-
-
 def artifact_key(entry: str, registry) -> str | None:
     """Key the linked executable of a cached Program for one implementation registry.
 
@@ -925,42 +823,6 @@ def artifact_key(entry: str, registry) -> str | None:
 
     identity = registry_identity(registry)
     return None if identity is None else _digest(["linked", entry, identity])
-
-
-def structural_entry_key(
-    identity: SourceIdentity, signature: CallSignature
-) -> str:
-    """Group RNS CKKS requests while retaining fixed arguments and execution modes."""
-    arguments = []
-    for argument in signature.arguments:
-        fields = dict(argument.properties)
-        is_rns = argument.kind in {"Ciphertext", "CompressedPlaintext"} or (
-            argument.kind == "Plaintext"
-            and fields.get("representation") == "rns"
-        )
-        if is_rns:
-            rows = len(fields["prime_ids"])
-            for prefix, axis in (("", -2), ("implicit_", -1)):
-                shape, strides = (
-                    fields.get(prefix + "shape"),
-                    fields.get(prefix + "strides"),
-                )
-                if (
-                    shape is not None
-                    and strides is not None
-                    and len(shape) >= -axis
-                    and shape[axis] == rows
-                ):
-                    normalized = _row_layout([shape, strides], axis)
-                    fields[prefix + "shape"], fields[prefix + "strides"] = (
-                        normalized
-                    )
-            for name in ("depth", "scale", "prime_ids"):
-                fields.pop(name, None)
-        arguments.append([argument.name, argument.kind, list(fields.items())])
-    return _digest(
-        ["structural", identity.key, list(signature.context), arguments]
-    )
 
 
 def _leaf_tensors(leaf: object) -> dict[str, torch.Tensor]:
@@ -980,7 +842,11 @@ def _leaf_tensors(leaf: object) -> dict[str, torch.Tensor]:
             for name in ("data", "implicit_data")
             if (tensor := getattr(leaf, name)) is not None
         }
-    return {"data": leaf.data}
+    return {
+        name: tensor
+        for name in ("data", "seed")
+        if (tensor := getattr(leaf, name, None)) is not None
+    }
 
 
 def _resolve_path(roots: Mapping[str, object], path: _Path) -> object:
@@ -1046,33 +912,17 @@ def build_manifest(
     identity: SourceIdentity,
     bindings: Mapping[str, torch.Tensor],
     descriptions: Mapping[str, Mapping[str, object]],
-    *,
-    structural: bool = False,
 ) -> dict[str, object] | None:
-    """Locate bound materials and optionally retain their CKKS owner paths."""
+    """Locate bound materials by their paths from the source function."""
     located: dict[int, list[dict[str, object]]] = {}
-    owners: dict[int, list[tuple[object, str]]] = {}
     for occurrences in identity.materials.values():
         for path, leaf in occurrences:
-            if (
-                structural
-                and type(leaf) is torch.Tensor
-                and id(leaf) in identity.payload_owners
-                and id(leaf) not in identity.raw_materials
-            ):
-                # The owning envelope provides both physical and mathematical
-                # state; its recursive Tensor observation is not an extra input.
-                continue
-            dependent = structural and _rns_leaf(leaf)
             for name, tensor in _leaf_tensors(leaf).items():
                 origin = {
                     "path": path,
                     "field": name,
-                    "owner_layout": _leaf_layout(leaf, structural=dependent),
+                    "owner_layout": _leaf_layout(leaf),
                 }
-                if dependent:
-                    origin["ckks_owner"] = type(leaf).__name__
-                    owners.setdefault(id(tensor), []).append((leaf, name))
                 located.setdefault(id(tensor), []).append(origin)
     materials: dict[str, object] = {}
     aliases: dict[int, int] = {}
@@ -1081,42 +931,17 @@ def build_manifest(
             continue
         origins = located.get(id(tensor))
         if origins is not None:
-            owner_entries = owners.get(id(tensor), ())
-            if owner_entries:
-                owner, field_name = owner_entries[0]
-                # One material symbol must have one interpretation of CKKS state.
-                if any(
-                    type(other) is not type(owner)
-                    or name != field_name
-                    or _leaf_layout(other) != _leaf_layout(owner)
-                    for other, name in owner_entries[1:]
-                ):
-                    return None
-                if any(
-                    "ckks_owner" not in origin and origin["field"] != ""
-                    for origin in origins
-                ):
-                    return None
-            dependent = (
-                bool(owner_entries) and id(tensor) not in identity.raw_materials
-            )
             entry = {
                 "origins": origins,
-                "layout": (
-                    _payload_layout(owner, field_name, structural=True)
-                    if dependent
-                    else _tensor_layout(tensor)
-                ),
+                "layout": _tensor_layout(tensor),
                 "alias": aliases.setdefault(id(tensor), len(aliases)),
             }
-            if dependent:
-                entry["dependent_layout"] = True
         elif (
             descriptions.get(symbol, {}).get("kind") in _RESOURCE_KINDS
             and len(identity.engines) == 1
         ):
-            # The template regenerates current table requirements. Retain only
-            # the provider location, never the old numerical description/state.
+            # Linking regenerates current table requirements. Retain only the
+            # provider location, never the old numerical description/state.
             entry = {
                 "engine": next(iter(identity.engines.values()))[0],
                 "resource": str(tensor.device),
@@ -1127,19 +952,18 @@ def build_manifest(
     return materials
 
 
-def _relocate_materials(
+def relocate_materials(
     function: Any,
     manifest: Mapping[str, Any],
-    material_names: Mapping[str, object] | None,
     *,
-    structural: bool,
-):
+    material_names: Mapping[str, object] | None = None,
+) -> tuple[dict[str, torch.Tensor], list[tuple[object, torch.device]]]:
+    """Resolve current material objects and providers for an instance Program."""
     roots = {"fn": function, "names": material_names or {}}
     bindings: dict[str, torch.Tensor] = {}
     providers: dict[tuple[int, str], tuple[object, torch.device]] = {}
     aliases: dict[int, torch.Tensor] = {}
     reverse_aliases: dict[int, int] = {}
-    leaf_states: dict[str, object] = {}
     for symbol, entry in manifest.items():
         if "resource" in entry:
             from fhelium.eager import Engine
@@ -1151,56 +975,17 @@ def _relocate_materials(
             providers.setdefault((id(engine), str(device)), (engine, device))
             continue
         tensors = []
-        owner = None
-        fixed_owner = None
-        field_name = None
         for origin in entry["origins"]:
             leaf = _resolve_path(roots, origin["path"])
-            dependent = structural and "ckks_owner" in origin
-            if dependent:
-                if (
-                    not _rns_leaf(leaf)
-                    or type(leaf).__name__ != origin["ckks_owner"]
-                ):
-                    raise CacheIneligible(
-                        f"{symbol}: CKKS material role changed"
-                    )
-                if owner is not None and (
-                    _leaf_layout(owner) != _leaf_layout(leaf)
-                    or field_name != origin["field"]
-                ):
-                    raise CacheIneligible(
-                        f"{symbol}: aliased CKKS owners disagree"
-                    )
-                owner, field_name = leaf, origin["field"]
-            if (
-                _leaf_layout(leaf, structural=dependent)
-                != origin["owner_layout"]
-            ):
+            if _leaf_layout(leaf) != origin["owner_layout"]:
                 raise CacheIneligible(f"{symbol}: material state changed")
-            if structural and isinstance(
-                leaf, (SecretKey, PublicKey, KeySwitchKey)
-            ):
-                if fixed_owner is not None and (
-                    type(fixed_owner) is not type(leaf)
-                    or _leaf_layout(fixed_owner) != _leaf_layout(leaf)
-                ):
-                    raise CacheIneligible(
-                        f"{symbol}: aliased key owners disagree"
-                    )
-                fixed_owner = leaf
             tensors.append(_leaf_tensors(leaf)[origin["field"]])
         if not tensors or any(tensor is not tensors[0] for tensor in tensors):
             raise CacheIneligible(f"{symbol}: material aliases changed")
         tensor = tensors[0]
-        layout = _tensor_layout(tensor)
-        if structural and entry.get("dependent_layout"):
-            if owner is None:
-                raise CacheIneligible(f"{symbol}: missing CKKS owner")
-            layout = _payload_layout(owner, field_name, structural=True)
         alias = entry["alias"]
         if (
-            layout != entry["layout"]
+            _tensor_layout(tensor) != entry["layout"]
             or aliases.setdefault(alias, tensor) is not tensor
             or reverse_aliases.setdefault(id(tensor), alias) != alias
         ):
@@ -1208,48 +993,7 @@ def _relocate_materials(
                 f"{symbol}: material layout or aliases changed"
             )
         bindings[symbol] = tensor
-        if owner is not None:
-            leaf_states[symbol] = (
-                tensor if field_name == "implicit_data" else owner
-            )
-        elif fixed_owner is not None:
-            leaf_states[symbol] = fixed_owner
-    return bindings, list(providers.values()), leaf_states
-
-
-def relocate_materials(
-    function: Any,
-    manifest: Mapping[str, Any],
-    *,
-    material_names: Mapping[str, object] | None = None,
-) -> tuple[dict[str, torch.Tensor], list[tuple[object, torch.device]]]:
-    """Resolve current material objects and providers for an instance Program."""
-    bindings, providers, _ = _relocate_materials(
-        function,
-        manifest,
-        material_names,
-        structural=False,
-    )
-    return bindings, providers
-
-
-def relocate_structural_materials(
-    function: Any,
-    manifest: Mapping[str, Any],
-    *,
-    material_names: Mapping[str, object] | None = None,
-) -> tuple[
-    dict[str, torch.Tensor],
-    list[tuple[object, torch.device]],
-    dict[str, object],
-]:
-    """Resolve current bindings and states for a structural candidate.
-
-    Main CKKS and key payloads retain their owning envelopes. An implicit compressed-plaintext payload supplies its Tensor state because its Program operand is a plain MessageType.
-    """
-    return _relocate_materials(
-        function, manifest, material_names, structural=True
-    )
+    return bindings, list(providers.values())
 
 
 @dataclass(frozen=True)
@@ -1376,7 +1120,6 @@ class CompileCache:
 __all__ = [
     "CacheEntry",
     "artifact_key",
-    "preparation_artifact_key",
     "CacheIneligible",
     "CompileCache",
     "SourceIdentity",
@@ -1384,9 +1127,7 @@ __all__ = [
     "cache_directory",
     "entry_key",
     "relocate_materials",
-    "relocate_structural_materials",
     "runtime_cacheable",
     "source_identity",
-    "structural_entry_key",
     "trace_entry_key",
 ]

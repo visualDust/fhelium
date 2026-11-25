@@ -1,9 +1,8 @@
-"""Prime-group quotient execution for represented RNS polynomials."""
+"""Rational rescale execution for represented RNS polynomials."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
 
 import torch
 from xdsl.ir import Operation
@@ -17,20 +16,18 @@ from fhelium.native.wrapper import rns_ops
 
 @dataclass(frozen=True)
 class NativeRescaleImplementation:
-    r"""Divide by the leading prime group in coefficient or NTT form.
+    r"""Rescale from basis $B$ to $B'$ in coefficient or NTT form.
 
-    Each dropped prime $q$ maps the remaining rows to
-    $\lfloor (x + h)/q \rfloor$ with $h = (q - 1)/2$ for nearest rounding
-    and $h = 0$ for truncation. NTT inputs invert only the dropped rows and
-    add the forward transform of the coefficient correction to the remaining
-    rows multiplied by the inverse prefix product.
+    With $D=B\setminus B'$ and $R=B'\setminus B$, each coefficient maps to
+    $\lfloor (xR+H)/D \rfloor$ through one mixed-radix division by $D$,
+    with $H=(D-1)/2$ for nearest rounding and $H=0$ for floor rounding.
+    NTT inputs invert only the dropped rows and add the forward transform of
+    the coefficient correction to the target rows multiplied by $D^{-1}$.
     """
 
     name: str = "native-rescale"
-    supports_in_place: bool = True
-    operation_types: tuple[type[Operation], ...] = (
-        rns.RescaleDropLeadingPrimesOp,
-    )
+    supports_in_place: bool = False
+    operation_types: tuple[type[Operation], ...] = (rns.RescaleOp,)
 
     def resource_requirements(
         self, invocation: OperationInvocation
@@ -45,20 +42,16 @@ class NativeRescaleImplementation:
         *,
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
-        del resources
+        del resources, in_place
         attributes = invocation.attributes
-        arguments = (
-            values[0],
-            *named_tables(attributes["parameter_names"], values[1:]),
-            int(cast(int, attributes["drop_count"])),
-            list(cast(tuple[int, ...], attributes["half_primes"])),
-            str(attributes.get("rounding", "nearest")),
-            str(attributes.get("input_domain", "coefficient")),
-            str(attributes.get("ntt_backend", "")),
+        return (
+            rns_ops.rational_rescale(
+                values[0],
+                *named_tables(attributes["parameter_names"], values[1:]),
+                str(attributes.get("input_domain", "coefficient")),
+                str(attributes.get("ntt_backend", "")),
+            ),
         )
-        if in_place:
-            return (rns_ops.rescale_drop_leading_primes_(*arguments),)
-        return (rns_ops.rescale_drop_leading_primes(*arguments),)
 
 
 __all__ = ["NativeRescaleImplementation"]

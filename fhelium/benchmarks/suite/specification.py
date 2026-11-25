@@ -11,13 +11,16 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 
-from fhelium.config import CkksConfig, Preset
+from fhelium.config import CkksConfig
 
 from .polynomial import METHODS, POLYNOMIAL, definition as polynomial_definition
 
-CONFIGURATIONS = (
-    Preset.slots32768_scale50_depth27_int64,
-)
+CONFIGURATIONS = {
+    "slots32768-scale50-depth27-int64": dict(
+        logN=16, scale_bits=50, depth=27, p_count=4
+    ),
+}
+"""Suite configurations: single-prime 50-bit suffix chains from the prime catalog."""
 BATCHES = (1, 2, 4, 8, 16)
 MATRIX_SIZES = (16, 32, 64)
 OPERATIONS = (
@@ -27,7 +30,7 @@ OPERATIONS = (
     "multiply_coefficient", "advance_depth",
 )
 MATRIX_WORKLOADS = ("matrix_ptct", "matrix_ctct")
-NTT_PLANS = ("radix2_indexed", "radix2_compact_group8_smem8")
+NTT_PLANS = ("radix2_indexed", "radix2_compact")
 PRIMITIVE_WORKLOADS = (
     "ntt_forward", "ntt_inverse", "key_switch", "rns_add", "rns_multiply",
 )
@@ -54,7 +57,10 @@ class SuiteCell:
 
 
 def configurations() -> dict[str, CkksConfig]:
-    return {preset.value: CkksConfig.parse(preset) for preset in CONFIGURATIONS}
+    return {
+        name: CkksConfig.catalog_suffix_chain(**options)
+        for name, options in CONFIGURATIONS.items()
+    }
 
 
 def entry_depths(config: CkksConfig) -> tuple[int, ...]:
@@ -148,7 +154,7 @@ def specification() -> dict[str, object]:
             "ntt_inverse": "bit-reversed NTT/Montgomery -> coefficient/standard",
             "ntt_plans": {
                 "radix2_indexed": "sixteen sequential radix-2 stages at logN=16; CUDA launch per stage; CPU stage barriers",
-                "radix2_compact_group8_smem8": "compact twiddles; three radix-2 stages per global kernel and compiled shared-memory tail; CUDA only",
+                "radix2_compact": "compact twiddles; two passes of eight radix-2 stages at logN=16; GPU only",
             },
             "ntt_oracle": "a_b(X)=(b+1)+X-X^2; independent modular evaluation at psi^(2*bit_reverse(k)+1); inverse input is this analytic transform, not a forward-under-test result",
             "rns_add": "standard residues a=q-k, b=3k+1; expected (a+b) mod q",

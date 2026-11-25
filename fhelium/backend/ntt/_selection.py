@@ -15,7 +15,7 @@ from fhelium.config.ntt import (
 
 
 def algorithm_name(policy: NttBackendPolicy) -> str:
-    """Identify the algorithm independently of its stage grouping."""
+    """Identify the algorithm independently of its table encoding."""
     if isinstance(policy, IndexedRadix2Policy):
         return "radix2_indexed"
     if isinstance(policy, CompactRadix2Policy):
@@ -48,7 +48,6 @@ def select_policy(
     *,
     selected: str | None = None,
     algorithm: str | None = None,
-    group_width: int | None = None,
     radix: int | None = None,
     tables: str | None = None,
     device_type: str | None = None,
@@ -70,11 +69,6 @@ def select_policy(
         if algorithm is not None and algorithm_name(policy) != algorithm:
             continue
         if tables is not None and table_layout(policy) != tables:
-            continue
-        if group_width is not None and (
-            not isinstance(policy, CompactRadix2Policy)
-            or policy.group_width != group_width
-        ):
             continue
         if radix is not None and (
             not isinstance(policy, CompactFixedRadixPolicy)
@@ -102,7 +96,6 @@ def select_policy(
         device_type is None
         and algorithm is None
         and tables is None
-        and group_width is None
         and radix is None
     ):
         return None
@@ -145,7 +138,6 @@ def select_operation_policy(operation, *, log_n):
     return select_policy(
         selected=text("ntt_backend"),
         algorithm=text("ntt_algorithm"),
-        group_width=integer("ntt_group_width"),
         radix=integer("ntt_radix"),
         tables=text("ntt_table_layout"),
         device_type=device.data.split(":", 1)[0]

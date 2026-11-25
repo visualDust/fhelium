@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from fhelium.compile._compilation import Compilation
 
 
-from ..._materials import material_symbol
+from ..._materials import key_placeholder, material_symbol
 from ..._pipeline import (
     PassResult,
     PassStats,
@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from xdsl.dialects.builtin import IntegerAttr, StringAttr
 
 from fhelium.config import CkksConfig
-from fhelium.ir.dialects import ckks, core, logical
+from fhelium.ir.dialects import ckks, logical
 
 from .._operation_transforms import (
     cast_before,
@@ -129,24 +129,21 @@ class ResolveRotationKeyOperandsPass:
             symbol = material_symbol(
                 operation, f"rotation-key:{normalized_step}"
             )
-            program.set_material_description(
+            key = key_placeholder(
                 symbol,
                 {"kind": "RotationKey", "rotation_step": normalized_step},
-            )
-
-            key_type = ckks.EvaluationKeyType().with_state(
-                {
+                program,
+                state={
                     "kind": StringAttr("rotation-key"),
                     "ring_dimension": IntegerAttr(2 * slot_count, 64),
-                }
-            )
-            key = core.MaterialRefOp(
-                key_type,
-                symbol=symbol,
+                },
             )
             key.value.name_hint = f"rotation_key_{normalized_step}"
             rotation = ckks.RotateOp(
-                typed, key.value, typed.type, rotation_step=normalized_step
+                typed,
+                key.value,
+                typed.type,
+                rotation_step=normalized_step,
             )
             rotation.result.name_hint = operation.result.name_hint
             _replace_with_result_cast(
@@ -155,7 +152,7 @@ class ResolveRotationKeyOperandsPass:
                 rotation.result,
             )
             transformed += 1
-            inserted += 3 + len(transitions)
+            inserted += 4 + len(transitions)
 
         return PassResult(
             program,

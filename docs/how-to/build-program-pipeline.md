@@ -40,7 +40,7 @@ Role-declared capture describes which input is encrypted without first allocatin
 import torch
 import fhelium as fh
 
-config = fh.CkksConfig.parse(fh.Preset.slots8192_scale40_depth7_int64)
+config = fh.CkksConfig.parse(fh.Preset.slots8192_scale40_depth7)
 
 def rotated_sum(x: torch.Tensor) -> torch.Tensor:
     return x + torch.roll(x, shifts=1, dims=-1)
@@ -120,4 +120,4 @@ The result contains `0.5, 1.5, ..., 7.5`. The semantic public addition becomes a
 
 To execute, [supply materials and link](persist-compiled-program.md), then call `executable.run(...)`. To use a function interface over this same Compilation, construct `fc.compile(compilation, backend=backend, pipeline=recipe)`. To inspect graph structure, [render a selected Program](visualize-mixed-level-ir.md). To extend the transformation, [write a Compilation pass](write-compilation-pass.md).
 
-`examples/12_compile_pipeline.py` demonstrates a complete encrypted rotation-and-square schedule, caller-generated keys, material preparation, linking, and decoded validation. `examples/13_compile_textual_ir.py` demonstrates textual round trips and a partial pipeline without execution. See [Compilation and passes](../developer/compilation-and-passes.md) for representation and pass mechanisms.
+`examples/13_compile_pipeline.py` demonstrates a complete encrypted rotation-and-square schedule, caller-generated keys, material preparation, linking, and decoded validation. `examples/14_compile_textual_ir.py` demonstrates textual round trips and a partial pipeline without execution. See [Compilation and passes](../developer/compilation-and-passes.md) for representation and pass mechanisms.

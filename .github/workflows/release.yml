@@ -193,9 +193,9 @@ jobs:
           "$verification_python" -I -m pytest -q
           "$verification_python" -I -m pytest \
             packaging/test_release_repository.py -q
-          "$verification_python" examples/12_compile_pipeline.py
-          "$verification_python" examples/14_compile_custom_pass.py
-          "$verification_python" examples/15_compile_python_codegen.py
+          "$verification_python" examples/13_compile_pipeline.py
+          "$verification_python" examples/15_compile_custom_pass.py
+          "$verification_python" examples/16_compile_python_codegen.py
           npm --prefix docs ci
           npm --prefix docs run build
           git diff --check

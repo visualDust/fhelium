@@ -46,6 +46,19 @@ from .._operation_catalog import (
     registered_operation_spec,
 )
 from ._common import OpenStateType
+from .._operation_structure import (
+    OperationStructure,
+    elementwise,
+    key_product,
+    pack,
+    permute,
+    plaintext_product,
+    plaintext_sum,
+    reduce_rows,
+    select_component,
+    tensor_product,
+    weighted_sum,
+)
 from .._dependencies import (
     DependencyKind,
     OperationDependencies,
@@ -87,6 +100,13 @@ class AddStandardOp(IRDLOperation):
     parameters = operand_def()
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
+
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return elementwise("add", 2)
 
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
@@ -139,6 +159,13 @@ class SubtractStandardOp(IRDLOperation):
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
 
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return elementwise("subtract", 2)
+
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
         return operand_relations(
@@ -185,6 +212,13 @@ class NegateStandardOp(IRDLOperation):
     parameters = operand_def()
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
+
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return elementwise("negate", 1)
 
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
@@ -304,6 +338,13 @@ class AddPlaintextOp(_CiphertextPlaintextOp):
         StringAttr, default_value=StringAttr("coefficient")
     )
 
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return plaintext_sum(attributes.get("polynomial_domain") == "ntt")
+
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
         return operand_relations(
@@ -337,6 +378,13 @@ class MultiplyPlaintextOp(_CiphertextPlaintextOp):
     the CKKS result scale is the product of operand scales."""
 
     name = "fhelium_rns.multiply_plaintext"
+
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return plaintext_product()
 
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
@@ -416,6 +464,10 @@ class MontgomeryWeightedSumOp(IRDLOperation):
     ``plaintext_layouts`` selects dense, cyclic, contiguous or strided-sparse
     indexing; omitting it means dense. Sparse rows have shape ``[*batch, limb]``.
     ``term_chunk_size`` optionally bounds generated expressions.
+    With ``plaintext_term_axis=0``, one plaintext bundle of shape
+    ``[T, *batch, limb, coefficient]`` follows the ciphertexts and its row
+    $t$ is $p_t$; ``plaintext_layouts`` then holds the common dense, cyclic
+    or contiguous layout of all rows.
 
     Every term uses the same component and batch shape, depth, prime rows,
     ciphertext scale, and plaintext scale.  ``term_count`` separates the two
@@ -431,7 +483,15 @@ class MontgomeryWeightedSumOp(IRDLOperation):
     term_count = attr_def(IntegerAttr)
     plaintext_layouts = opt_attr_def(ArrayAttr[StringAttr])
     term_chunk_size = opt_attr_def(IntegerAttr)
+    plaintext_term_axis = opt_attr_def(IntegerAttr)
     traits = traits_def(Pure())
+
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe the ordered term reduction for residue code generation."""
+        return weighted_sum(operand_count, attributes)
 
     def dependencies(self) -> OperationDependencies:
         """Map dense/compact plaintext coordinates and shared ciphertext components."""
@@ -475,6 +535,7 @@ class MontgomeryWeightedSumOp(IRDLOperation):
         plaintext_layouts: Sequence[str] = (),
         implicit_plaintexts: tuple[SSAValue | Operation, ...] = (),
         term_chunk_size: int | None = None,
+        plaintext_term_axis: int | None = None,
     ) -> None:
         super().__init__(
             operands=(
@@ -487,11 +548,37 @@ class MontgomeryWeightedSumOp(IRDLOperation):
                 **_weighted_layout_attributes(
                     plaintext_layouts, term_chunk_size
                 ),
+                **(
+                    {}
+                    if plaintext_term_axis is None
+                    else {
+                        "plaintext_term_axis": IntegerAttr(
+                            plaintext_term_axis, 64
+                        )
+                    }
+                ),
             },
         )
 
     def verify_(self) -> None:
-        _verify_weighted_layouts(self, int(self.term_count.value.data), 1)
+        if self.plaintext_term_axis is None:
+            _verify_weighted_layouts(self, int(self.term_count.value.data), 1)
+            return
+        layouts = self.plaintext_layouts
+        if (
+            self.plaintext_term_axis.value.data != 0
+            or len(self.terms) != int(self.term_count.value.data) + 1
+            or layouts is not None
+            and (
+                len(layouts) != 1
+                or layouts.data[0].data
+                not in {"dense", "cyclic", "contiguous"}
+            )
+        ):
+            raise VerifyException(
+                "A stacked weighted sum takes one dense, cyclic or contiguous "
+                "plaintext bundle whose leading axis enumerates the terms"
+            )
 
 
 @irdl_op_definition
@@ -598,29 +685,36 @@ class MontgomeryWeightedSumsOp(IRDLOperation):
 
 
 @irdl_op_definition
-class RescaleDropLeadingPrimesOp(IRDLOperation):
-    r"""Divide-round by the product of a leading prime group and remove its rows.
+class RescaleOp(IRDLOperation):
+    r"""Rescale an RNS polynomial from basis $B$ to basis $B'$ by $D/R$.
 
-    For the first ``drop_count`` primes, let $M$ be their product and
-    $r=x\bmod M$ in $[0,M)$. Floor quotient uses $t=r$; nearest quotient
-    uses $t=r-M$ when $r>M/2$, otherwise $t=r$. Each surviving row is
-    $y_i=(x_i-t)M^{-1}\bmod q_i$. Component count and polynomial domain
-    are preserved. NTT/Montgomery input may retain surviving evaluations
-    while constructing the rounded coefficient correction from dropped rows.
-    The caller supplies resulting CKKS depth and scale; this RNS operation
-    describes a row-group quotient, not a count of CKKS transitions."""
+    With $D=\prod_{q\in B\setminus B'} q$ and $R=\prod_{r\in B'\setminus B} r$,
+    each coefficient $x$ over $B$ maps to $y=\lfloor (xR+H)/D\rfloor$ over
+    $B'$, where $H=(D-1)/2$ for nearest rounding and $H=0$ for floor
+    rounding. One mixed-radix division by $D$ computes the quotient. A
+    suffix-chain step has $R=1$ and drops the leading rows. Component count
+    and polynomial domain are preserved; NTT/Montgomery input keeps the
+    surviving evaluations and transforms only the dropped rows and the
+    coefficient correction. ``parameters`` hold the tables of this basis
+    transition; the caller supplies resulting CKKS depth and scale."""
 
-    name = "fhelium_rns.rescale_drop_leading_primes"
+    name = "fhelium_rns.rescale"
     value = operand_def(RnsBundleType)
     parameters = var_operand_def()
     result = result_def(RnsBundleType)
-    drop_count = attr_def(IntegerAttr, default_value=IntegerAttr(1, 64))
     rounding = opt_attr_def(StringAttr)
     input_domain = attr_def(StringAttr, default_value=StringAttr("coefficient"))
     output_domain = attr_def(
         StringAttr, default_value=StringAttr("coefficient")
     )
     traits = traits_def(Pure())
+
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Each target row reads all source rows at its coefficient; ``parameters`` hold the transition tables."""
+        return reduce_rows(operand_count, attributes)
 
     def dependencies(self) -> OperationDependencies:
         """Describe the rounded quotient in its represented polynomial domain."""
@@ -651,13 +745,11 @@ class RescaleDropLeadingPrimesOp(IRDLOperation):
         parameters: Sequence[SSAValue | Operation],
         result_type: Attribute,
         *,
-        drop_count: int = 1,
         rounding: str | StringAttr = "nearest",
         polynomial_domain: Literal["coefficient", "ntt"] = "coefficient",
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         attrs: dict[str, Attribute | None] = dict(attributes or {})
-        attrs["drop_count"] = IntegerAttr(drop_count, 64)
         attrs["rounding"] = (
             StringAttr(rounding) if isinstance(rounding, str) else rounding
         )
@@ -672,8 +764,6 @@ class RescaleDropLeadingPrimesOp(IRDLOperation):
     def verify_(self) -> None:
         """Accept only the represented CKKS quotient-rounding rules."""
 
-        if self.drop_count.value.data < 1:
-            raise VerifyException("RNS rescale drop_count must be positive")
         if self.rounding is not None and self.rounding.data not in {
             "nearest",
             "floor",
@@ -703,6 +793,13 @@ class ExtractComponentOp(IRDLOperation):
     result = result_def(RnsBundleType)
     component = attr_def(IntegerAttr)
     traits = traits_def(Pure())
+
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return select_component(int(attributes["component"]))
 
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
@@ -756,6 +853,13 @@ class PackTwoComponentsOp(IRDLOperation):
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
 
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return pack(2)
+
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
         return operand_relations(
@@ -802,6 +906,13 @@ class PackThreeComponentsOp(IRDLOperation):
     component2 = operand_def(RnsBundleType)
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
+
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return pack(3)
 
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
@@ -859,6 +970,13 @@ class MontgomeryMultiplyOp(IRDLOperation):
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
 
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return elementwise("multiply", 2)
+
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
         return operand_relations(
@@ -884,6 +1002,49 @@ class MontgomeryMultiplyOp(IRDLOperation):
                 },
             },
         )
+
+    def __init__(
+        self,
+        lhs: SSAValue | Operation,
+        rhs: SSAValue | Operation,
+        parameters: SSAValue | Operation,
+        result_type: Attribute,
+    ) -> None:
+        super().__init__(
+            operands=[lhs, rhs, parameters],
+            result_types=[result_type],
+        )
+
+
+@irdl_op_definition
+class TensorProductOp(IRDLOperation):
+    r"""Form the three-component product of two NTT/Montgomery ciphertext bundles.
+
+    For components $(a_0,a_1)$ and $(b_0,b_1)$ at active prime $q_i$, the result is $(a_0b_0R_i^{-1},\ a_0b_1R_i^{-1}+a_1b_0R_i^{-1},\ a_1b_1R_i^{-1})$. The middle component keeps the lazy range $[0,2q_i)$; the outer components are reduced. Prime rows, batch axes, depth and the product scale follow the result type."""
+
+    name = "fhelium_rns.tensor_product"
+    lhs = operand_def(RnsBundleType)
+    rhs = operand_def(RnsBundleType)
+    parameters = operand_def()
+    result = result_def(RnsBundleType)
+    traits = traits_def(Pure())
+
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return tensor_product()
+
+    def dependencies(self) -> OperationDependencies:
+        """Describe result reads in this operation's value coordinates."""
+        relation = {
+            'coefficient': 'element',
+            'limb': 'element',
+            'component': 'reindexed',
+            'batch': 'element',
+        }
+        return operand_relations(self, {0: relation, 1: relation, 2: relation})
 
     def __init__(
         self,
@@ -964,16 +1125,27 @@ class KeySwitchDigitProductOp(IRDLOperation):
     $(d k_{d,0},d k_{d,1})$ in every active QP prime row.  Products use
     Montgomery pointwise multiplication and remain NTT/Montgomery.  The operation
     forms one summand of hybrid key switching and leaves CKKS depth and scale
-    unchanged."""
+    unchanged. For a seeded key, ``key`` holds $k_{d,0}$ only, the optional
+    ``key_seed`` operand holds the key's seed rows ``[key_digit, 6]``, and
+    $k_{d,1}$ is generated from seed row ``key_digit_index`` with
+    ``key_rounds`` ChaCha rounds at each stored key row."""
 
     name = "fhelium_rns.key_switch_digit_product"
     digit = operand_def(RnsBundleType)
     key = operand_def()
     parameters = operand_def()
+    key_seed = opt_operand_def()
     result = result_def(RnsBundleType)
     key_digit_index = attr_def(IntegerAttr)
     key_role = opt_attr_def(StringAttr)
     traits = traits_def(Pure())
+
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return key_product(operand_count > 3)
 
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
@@ -1004,14 +1176,26 @@ class KeySwitchDigitProductOp(IRDLOperation):
         *,
         key_digit_index: int,
         key_row_start: int = 0,
+        key_p_row_start: int = -1,
+        key_q_rows: tuple[int, ...] = (),
+        key_seed: SSAValue | Operation | None = None,
+        key_rounds: int = 0,
     ) -> None:
+        attributes: dict[str, Attribute] = {
+            "key_digit_index": IntegerAttr(key_digit_index, 64),
+            "key_row_start": IntegerAttr(key_row_start, 64),
+            "key_p_row_start": IntegerAttr(key_p_row_start, 64),
+        }
+        if key_q_rows:
+            attributes["key_q_rows"] = ArrayAttr(
+                IntegerAttr(i, 64) for i in key_q_rows
+            )
+        if key_seed is not None:
+            attributes["key_rounds"] = IntegerAttr(key_rounds, 64)
         super().__init__(
-            operands=[digit, key, parameters],
+            operands=[digit, key, parameters, [] if key_seed is None else [key_seed]],
             result_types=[result_type],
-            attributes={
-                "key_digit_index": IntegerAttr(key_digit_index, 64),
-                "key_row_start": IntegerAttr(key_row_start, 64),
-            },
+            attributes=attributes,
         )
 
     def verify_(self) -> None:
@@ -1036,6 +1220,13 @@ class AddMontgomeryLazyOp(IRDLOperation):
     parameters = operand_def()
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
+
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return elementwise("add_lazy", 2)
 
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
@@ -1084,7 +1275,10 @@ class ModDownQpToQOp(IRDLOperation):
     $\lfloor(x+H)/P\rfloor$ or $\lfloor x/P\rfloor$ respectively.
     This is the ModDown stage of hybrid
     key switching; key construction supplies the factor P, so CKKS message scale
-    and depth do not change."""
+    and depth do not change. With ``basis_conversion="normalized_crt"`` the
+    remainder is the centered CRT sum $\sum_j c_jP/p_j$ of the P rows, which
+    equals the nearest remainder plus $kP$ with $|k|$ below half the number of
+    P rows, and ``rounding`` does not apply."""
 
     name = "fhelium_rns.moddown_qp_to_q"
     value = operand_def(RnsBundleType)
@@ -1092,6 +1286,13 @@ class ModDownQpToQOp(IRDLOperation):
     result = result_def(RnsBundleType)
     rounding = opt_attr_def(StringAttr, default_value=StringAttr("nearest"))
     traits = traits_def(Pure())
+
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Each Q row reads all QP rows at its coefficient; ``parameters`` hold the P-removal constants."""
+        return reduce_rows(operand_count, attributes)
 
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
@@ -1138,7 +1339,7 @@ class ModDownQpToQOp(IRDLOperation):
 class ModDownAddRescaleOp(IRDLOperation):
     r"""Divide-round $v+Pa$ by auxiliary P and one complete Q group D.
 
-    For $H_P=0$ or $(P-1)/2$ and $H_D=0$ or $(D-1)/2$, compute $\lfloor(v+Pa+H_P+PH_D)/(PD)\rfloor$ modulo the surviving Q primes. Inputs v and a are NTT/Montgomery; v contains the accumulator alone, and a supplies the corresponding prefix of component polynomials in Q. Actual ordered rows and both rounding offsets are supplied by numerical Tensor operands. The result contains only Q minus D in the requested polynomial domain and residue representation.
+    For $H_P=0$ or $(P-1)/2$ and $H_D=0$ or $(D-1)/2$, compute $\lfloor(v+Pa+H_P+PH_D)/(PD)\rfloor$ modulo the surviving Q primes. Inputs v and a are NTT/Montgomery; v contains the accumulator alone, and a supplies the corresponding prefix of component polynomials in Q. Actual ordered rows and both rounding offsets are supplied by numerical Tensor operands. With ``basis_conversion="normalized_crt"`` the quotient by P uses the centered CRT remainder of the P rows, which is nearest up to an integer error smaller than half the number of P rows, and $H_P$ does not apply; the following quotient by D is exact with $H_D$. The result contains only Q minus D in the requested polynomial domain and residue representation.
     """
 
     name = "fhelium_rns.moddown_add_rescale"
@@ -1179,6 +1380,13 @@ class ModDownAddRescaleOp(IRDLOperation):
                 "rescale_rounding": StringAttr(rescale_rounding),
             },
         )
+
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Each surviving Q row reads all QP rows of the accumulator and the Q rows of ``base``; ``parameters`` hold the P and group constants."""
+        return reduce_rows(operand_count, attributes)
 
     def dependencies(self) -> OperationDependencies:
         """Read matching components and batches, with coefficient/prime mixing."""
@@ -1221,6 +1429,9 @@ class ModDownNttQpToQOp(IRDLOperation):
     $[-(P-1)/2,(P-1)/2]$ for nearest, reconstructed from
     $\operatorname{INTT}_P(\widehat{x}_P)$. The result is
     $\widehat{x}_Q P^{-1}+\operatorname{NTT}_Q(-rP^{-1})\bmod q_i$.
+    With ``basis_conversion="normalized_crt"``, $r$ is the centered CRT sum
+    of the P rows, the nearest remainder plus $kP$ with $|k|$ below half the
+    number of P rows.
     This equals coefficient-domain ModDown followed by forward NTT, without
     inverting the Q rows. Output drops P, preserves active Q rows and N,
     and remains in Montgomery representation. It does not rescale CKKS values.
@@ -1237,6 +1448,13 @@ class ModDownNttQpToQOp(IRDLOperation):
     result = result_def(RnsBundleType)
     rounding = opt_attr_def(StringAttr, default_value=StringAttr("nearest"))
     traits = traits_def(Pure())
+
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Each Q row reads all QP rows; the P-row correction passes through coefficient-axis transforms supplied by ``parameters``."""
+        return reduce_rows(operand_count, attributes)
 
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
@@ -1306,6 +1524,13 @@ class CoefficientAutomorphismOp(IRDLOperation):
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
 
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Coefficient $j$ reads ``source_indices[j]`` with sign ``source_sign[j]``; ``parameters`` hold $2q_i$."""
+        return permute(2)
+
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
         return operand_relations(
@@ -1363,6 +1588,13 @@ class StandardToMontgomeryOp(_ResidueConversionOp):
 
     name = "fhelium_rns.standard_to_montgomery"
 
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return elementwise("to_montgomery", 1)
+
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
         return operand_relations(
@@ -1388,6 +1620,13 @@ class MontgomeryToStandardOp(_ResidueConversionOp):
 
     name = "fhelium_rns.montgomery_to_standard"
 
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return elementwise("from_montgomery", 1)
+
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
         return operand_relations(
@@ -1405,12 +1644,12 @@ class MontgomeryToStandardOp(_ResidueConversionOp):
 
 @irdl_op_definition
 class RestrictDepthOp(IRDLOperation):
-    r"""Select the suffix of prime rows belonging to a later depth.
+    r"""Select the rows of a later depth whose basis is a subset of the source basis.
 
-    If depth $\ell$ uses active rows $(q_\ell,\ldots,q_L)$, restriction to
-    $t\ge\ell$ discards $(q_\ell,\ldots,q_{t-1})$ and copies the remaining
-    rows.  No division or rounding occurs, so the actual scale and every surviving
-    residue are unchanged.  P rows remain when the modulus basis is QP."""
+    For source basis $B_d$ and target basis $B_t\subseteq B_d$, the result
+    copies the rows of $B_t$, which form one contiguous interval of the
+    source rows.  No division or rounding occurs, so the actual scale and every
+    surviving residue are unchanged.  P rows remain when the modulus basis is QP."""
 
     name = "fhelium_rns.restrict_depth"
     value = operand_def(RnsBundleType)
@@ -1507,15 +1746,16 @@ class CrtBasisExtendOp(IRDLOperation):
 
     Source a_i is coefficient/standard. For D=product(q_i), D_i=D/q_i,
     and u_i=D_i^{-1} mod q_i, raw lift chooses sum(a_i D_i u_i).
-    A nonempty source-normalizer operand first applies a_i*u_i mod q_i,
-    and its matrix chooses sum((a_i*u_i mod q_i) D_i). Neither lift
-    promises the least nonnegative representative modulo D.
+    A nonempty source-normalizer operand selects the centered residue
+    c_i=[a_i*u_i]_{q_i} in [-(q_i-1)/2, (q_i-1)/2], and the normalized lift
+    chooses sum(c_i D_i). Neither lift promises the least nonnegative
+    representative modulo D.
 
     Numerical operands are source parameters, target parameters, the matrix,
-    target reciprocals, source normalizers and source reciprocals. The matrix
-    contains one target Montgomery factor; output is canonical Montgomery
-    [*batch, target row, coefficient] with fresh storage. Empty normalizers
-    and reciprocals select the raw matrix. All source and table operands are
+    target reciprocals, source normalizers, source reciprocals and target
+    offsets. The matrix contains one target Montgomery factor; output is
+    canonical Montgomery [*batch, target row, coefficient] with fresh storage.
+    Empty normalizers, reciprocals and offsets select the raw matrix. All source and table operands are
     live and read-only. Ordered prime rows and their parameter data belong
     to the supplied operands, not to an implicit key-switch configuration.
     """
@@ -1532,9 +1772,9 @@ class CrtBasisExtendOp(IRDLOperation):
         )
 
     def verify_(self) -> None:
-        if len(self.parameters) != 6:
+        if len(self.parameters) != 7:
             raise VerifyException(
-                "CRT lift requires six numerical Tensor operands"
+                "CRT lift requires seven numerical Tensor operands"
             )
 
     def dependencies(self) -> OperationDependencies:
@@ -1675,11 +1915,12 @@ _RNS_OPERATION_TYPES = (
     MultiplyPlaintextOp,
     MontgomeryWeightedSumOp,
     MontgomeryWeightedSumsOp,
-    RescaleDropLeadingPrimesOp,
+    RescaleOp,
     ExtractComponentOp,
     PackTwoComponentsOp,
     PackThreeComponentsOp,
     MontgomeryMultiplyOp,
+    TensorProductOp,
     HybridModUpDigitOp,
     KeySwitchDigitProductOp,
     AddMontgomeryLazyOp,
@@ -1709,27 +1950,27 @@ _RNS_ATTRIBUTES: dict[type[Operation], tuple[str, ...]] = {
         "plaintext_layouts",
         "term_chunk_size",
     ),
-    RescaleDropLeadingPrimesOp: (
-        "drop_count",
+    RescaleOp: (
         "rounding",
         "input_domain",
         "output_domain",
     ),
     ExtractComponentOp: ("component",),
     HybridModUpDigitOp: ("digit_index",),
-    KeySwitchDigitProductOp: ("key_digit_index", "key_role"),
-    ModDownQpToQOp: ("rounding",),
-    ModDownNttQpToQOp: ("rounding",),
+    KeySwitchDigitProductOp: ("key_digit_index", "key_role", "key_rounds"),
+    ModDownQpToQOp: ("rounding", "basis_conversion"),
+    ModDownNttQpToQOp: ("rounding", "basis_conversion"),
     ModDownAddRescaleOp: (
+        "basis_conversion",
         "output_domain",
         "moddown_rounding",
         "rescale_rounding",
         "joint_drop_count",
         "joint_drop_is_prefix",
         "joint_drop_prime_ids",
+        "joint_target_prime_ids",
         "ckks_config",
         "ntt_algorithm",
-        "ntt_group_width",
         "ntt_radix",
         "ntt_table_layout",
     ),
@@ -1785,6 +2026,7 @@ __all__ = [
     "ModDownAddRescaleOp",
     "MontgomeryToStandardOp",
     "MontgomeryMultiplyOp",
+    "TensorProductOp",
     "MontgomeryWeightedSumOp",
     "MontgomeryWeightedSumsOp",
     "MultiplyPlaintextOp",
@@ -1793,7 +2035,7 @@ __all__ = [
     "PackThreeComponentsOp",
     "SubtractStandardOp",
     "FHEliumRns",
-    "RescaleDropLeadingPrimesOp",
+    "RescaleOp",
     "RestrictDepthOp",
     "ReinterpretScaleOp",
     "RnsBundleType",

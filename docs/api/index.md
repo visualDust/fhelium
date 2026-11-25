@@ -23,7 +23,8 @@ The Python reference follows the non-private Python module tree. It is generated
 | Coordinate processes and collectives | [`fhelium.distributed`](fhelium/distributed.md) | [SPMD model](../concepts/distributed/spmd-model.md) |
 | Inspect native-extension availability and ABI diagnostics | [`fhelium.native`](fhelium/native.md) | [Inspect runtime, memory, and CUDA topology](../how-to/inspect-runtime-and-cuda.md) |
 | Inspect CUDA devices and peer topology programmatically | [`fhelium.native.cuda`](fhelium/native/cuda.md) | [Inspect runtime, memory, and CUDA topology](../how-to/inspect-runtime-and-cuda.md) |
-| Use experimental CKKS facilities | [`fhelium.experimental.bootstrap`](fhelium/experimental/bootstrap.md) and [`fhelium.experimental.mpc`](fhelium/experimental/mpc.md) | [Bootstrapping semantics and range requirements](../concepts/ckks/composable-bootstrapping.md) and [multiparty supported security scope](../how-to/use-multiparty-ckks.md) |
+| Refresh ciphertexts by bootstrapping | [`fhelium.bootstrap`](fhelium/bootstrap.md) and [`fhelium.algorithms`](fhelium/algorithms.md) | [Bootstrapping semantics and range requirements](../concepts/ckks/composable-bootstrapping.md) |
+| Use experimental multiparty CKKS | [`fhelium.experimental.mpc`](fhelium/experimental/mpc.md) | [Multiparty supported security scope](../how-to/use-multiparty-ckks.md) |
 
 ## Generation rule
 

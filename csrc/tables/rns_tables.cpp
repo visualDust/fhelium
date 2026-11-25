@@ -190,7 +190,7 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> mixed_radix_tables(
           to_tensor(extension, dtype, static_cast<int64_t>(p.size()))};
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 crt_basis_extension_tables(at::IntArrayRef source,
                            at::IntArrayRef target,
                            bool normalized,
@@ -227,10 +227,54 @@ crt_basis_extension_tables(at::IntArrayRef source,
     }
     return to_tensor(values, at::kLong);
   };
+  // Centered lift: -sum_i ((q_i - 1)/2) D_i R mod p_t.
+  std::vector<uint64_t> offsets;
+  if (normalized) {
+    for (size_t t = 0; t < p.size(); ++t) {
+      uint64_t sum = 0;
+      for (size_t i = 0; i < s.size(); ++i) {
+        sum = (sum + host::mul_mod((s[i] - 1) / 2 % p[t], matrix[i][t], p[t])) %
+              p[t];
+      }
+      offsets.push_back((p[t] - sum) % p[t]);
+    }
+  }
   const std::vector<uint64_t> none;
   return {to_tensor(matrix, dtype, static_cast<int64_t>(p.size())),
           reciprocals(p), to_tensor(normalized ? inverses : none, dtype),
-          reciprocals(normalized ? s : none)};
+          reciprocals(normalized ? s : none), to_tensor(offsets, dtype)};
+}
+
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+crt_quotient_tables(at::IntArrayRef source,
+                    at::IntArrayRef target,
+                    at::IntArrayRef divisor,
+                    at::ScalarType dtype) {
+  auto [unused_matrix, target_reciprocals, source_normalizers,
+        source_reciprocals, unused_offsets] =
+      crt_basis_extension_tables(source, target, true, dtype);
+  const auto s = to_u64(source);
+  const auto p = to_u64(target);
+  const auto e = to_u64(divisor);
+  check_moduli(e, montgomery_radix_bits(dtype), "crt_quotient_tables");
+  std::vector<std::vector<uint64_t>> matrix(s.size(),
+                                            std::vector<uint64_t>(p.size()));
+  std::vector<uint64_t> offsets(p.size());
+  for (size_t t = 0; t < p.size(); ++t) {
+    const uint64_t divisor_mod = host::product_mod(e, p[t]);
+    uint64_t sum = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+      const uint64_t inverse = host::inv_mod(
+          host::mul_mod(s[i] % p[t], divisor_mod, p[t]), p[t]);
+      matrix[i][t] = (p[t] - inverse) % p[t];
+      sum = (sum + host::mul_mod((s[i] - 1) / 2 % p[t], matrix[i][t], p[t])) %
+            p[t];
+    }
+    offsets[t] = (p[t] - sum) % p[t];
+  }
+  return {to_tensor(matrix, dtype, static_cast<int64_t>(p.size())),
+          target_reciprocals, source_normalizers, source_reciprocals,
+          to_tensor(offsets, dtype)};
 }
 
 at::Tensor trailing_quotient_inverses(at::IntArrayRef moduli,

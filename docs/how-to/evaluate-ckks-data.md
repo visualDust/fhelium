@@ -13,7 +13,7 @@ import torch
 import fhelium as fh
 from fhelium.eager import Engine
 
-config = fh.CkksConfig.parse(fh.Preset.slots8192_scale40_depth7_int64)
+config = fh.CkksConfig.parse(fh.Preset.slots8192_scale40_depth7)
 engine = Engine(config)
 device = "cpu"
 secret = engine.create_secret_key(device=device)
@@ -40,10 +40,10 @@ triplet = engine.multiply(a, b)
 product = engine.rescale_to_next_depth(engine.relinearize(triplet))
 ```
 
-Addition requires compatible value states and preserves depth and scale. Multiplication in NTT representation produces three ciphertext components and scale $\Delta_x\Delta_y$ at the input depth. Relinearization reduces three components to two using the supplied key. Rescaling advances one depth and divides the actual scale by the entire dropped Q group's product:
+Addition requires compatible value states and preserves depth and scale. Multiplication in NTT representation produces three ciphertext components and scale $\Delta_x\Delta_y$ at the input depth. Relinearization reduces three components to two using the supplied key. Rescaling advances one depth and divides the actual scale by the rescale ratio $\rho_d$, the product of the Q primes leaving the active basis over the product of those entering it:
 
 $$
-\Delta_{\mathrm{out}}=\frac{\Delta_x\Delta_y}{\prod_{q\in G_d}q}.
+\Delta_{\mathrm{out}}=\frac{\Delta_x\Delta_y}{\rho_d},\qquad \rho_d=\frac{\prod_{q\in B_d\setminus B_{d+1}}q}{\prod_{q\in B_{d+1}\setminus B_d}q}.
 $$
 
 The group may contain multiple primes. Use the configuration's divisor rather than interpreting a depth transition as one prime-width subtraction.

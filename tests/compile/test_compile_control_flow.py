@@ -51,7 +51,7 @@ def test_ckks_lowering_enters_known_scf_region() -> None:
             _compile.CompileWorkspace(
                 {
                     CkksConfig: CkksConfig.parse(
-                        Preset.slots8192_scale40_depth7_int64
+                        Preset.slots8192_scale40_depth7
                     )
                 }
             ),
@@ -153,7 +153,7 @@ def test_ckks_lowering_enters_collective_combine_region() -> None:
             _compile.CompileWorkspace(
                 {
                     CkksConfig: CkksConfig.parse(
-                        Preset.slots8192_scale40_depth7_int64
+                        Preset.slots8192_scale40_depth7
                     )
                 }
             ),

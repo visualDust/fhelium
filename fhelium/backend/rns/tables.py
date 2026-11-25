@@ -1,17 +1,15 @@
 """RNS quotient tables and depth-indexed rescaling data."""
 
 from __future__ import annotations
-from dataclasses import dataclass, field
-from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fhelium.backend.ntt.context import NttContext
-from typing import Mapping
 import torch
 from fhelium.native.wrapper import rns_ops
 
 from .context import RnsContext
+from .crt import CRT_OPERANDS, centered_quotient_tables
 
 
 def centered_basis_extension_tables(
@@ -71,14 +69,6 @@ def centered_basis_extension_tables(
     }
 
 
-def rescale_inverse_matrix(rns_context: RnsContext) -> torch.Tensor:
-    r"""Return the ``[dropped, remaining]`` matrix of $q_d^{-1}R\bmod q_i$."""
-
-    return rns_ops.rescale_inverse_matrix(
-        list(rns_context.config.moduli), rns_context.dtype
-    ).to(rns_context.device)
-
-
 def trailing_quotient_inverses(
     moduli: tuple[int, ...],
     drop_count: int,
@@ -99,164 +89,125 @@ def trailing_quotient_inverses(
 def moddown_inverse_tables(
     rns_context: RnsContext,
 ) -> tuple[torch.Tensor, ...]:
-    config = rns_context.config
-    montgomery = rns_context.montgomery_parameters
-    depth0_prime_ids = rns_context.rns_layout.prime_ids(0, include_p=True)
-    base = trailing_quotient_inverses(
-        tuple(montgomery.moduli[i] for i in depth0_prime_ids),
-        config.num_p_primes,
-        dtype=rns_context.dtype,
-        device=rns_context.device,
-    )
-    base_rows = [
-        base[j, : len(depth0_prime_ids) - j - 1]
-        for j in range(config.num_p_primes)
-    ]
-    tables = []
-    for depth in range(config.max_depth + 1):
-        start = rns_context.basis_parameters(depth).parameter_row_start
-        rows = [row[start:] for row in base_rows]
-        packed = torch.zeros(
-            (len(rows), max(row.numel() for row in rows)),
+    """Return the trailing-quotient P inverses over each depth's QP basis."""
+
+    moduli = rns_context.montgomery_parameters.moduli
+    return tuple(
+        trailing_quotient_inverses(
+            tuple(
+                moduli[i]
+                for i in rns_context.rns_layout.prime_ids(depth, include_p=True)
+            ),
+            rns_context.config.num_p_primes,
             dtype=rns_context.dtype,
             device=rns_context.device,
         )
-        for row_index, row in enumerate(rows):
-            packed[row_index, : row.numel()] = row
-        tables.append(packed)
-    return tuple(tables)
-
-
-@dataclass(frozen=True)
-class RescaleTables:
-    """Own pairwise and prefix-product inverses used by RNS rescaling."""
-
-    rns_context: RnsContext
-    dropped_prime_inverses_montgomery: torch.Tensor
-    _active_views: Mapping[
-        tuple[int, bool], tuple[torch.Tensor, torch.Tensor, int]
-    ] = field(init=False, repr=False, compare=False)
-    _prefix_inverses: dict[tuple[int, int, bool], torch.Tensor] = field(
-        default_factory=dict, init=False, repr=False, compare=False
+        for depth in range(rns_context.config.max_depth + 1)
     )
 
-    def __post_init__(self) -> None:
-        table = self.dropped_prime_inverses_montgomery
-        prime_count = len(self.rns_context.montgomery_parameters.moduli)
-        if tuple(table.shape) != (prime_count, prime_count):
-            raise ValueError(
-                "Rescale inverse matrix shape differs from the modulus set"
+
+RESCALE_TABLE_NAMES = (
+    "source_parameters",
+    "target_parameters",
+    "dropped_parameters",
+    "ordered_parameters",
+    "drop_positions",
+    "keep_positions",
+    "inverses",
+    "dropped_offset",
+    "target_offset",
+)
+"""Rational rescale tables; ``restore`` and ``target_keep_positions`` are
+added when primes enter the basis."""
+
+
+def rescale_tables(
+    context: RnsContext,
+    source_prime_ids: tuple[int, ...],
+    target_prime_ids: tuple[int, ...],
+    *,
+    rounding: str = "nearest",
+    ntt_context: NttContext | None = None,
+) -> tuple[dict[str, torch.Tensor], dict[str, object]]:
+    r"""Prepare the tables of one rational rescale from basis $B$ to $B'$.
+
+    ``source_prime_ids`` and ``target_prime_ids`` list the rows of $B$ and
+    $B'$ in their stored order. With $D=B\setminus B'$ and $R=B'\setminus B$,
+    the tables describe $\lfloor (xR+H)/D \rfloor$ over $B'$, where $H=(D-1)/2$
+    for nearest rounding and $H=0$ for floor rounding. ``restore`` and
+    ``target_keep_positions`` are present only when $R$ is nonempty; otherwise
+    the retained rows are $B'$ in order. Supplying ``ntt_context`` adds the dropped
+    inverse and target forward NTT schedules and $D^{-1}\bmod b'$ for NTT
+    input.
+    """
+
+    if rounding not in {"nearest", "floor"}:
+        raise ValueError("rescale rounding must be nearest or floor")
+    source, target = tuple(source_prime_ids), tuple(target_prime_ids)
+    source_set, target_set = set(source), set(target)
+    dropped = tuple(i for i in source if i not in target_set)
+    restored = tuple(i for i in target if i not in source_set)
+    kept = tuple(i for i in source if i in target_set)
+    if not dropped:
+        raise ValueError("Rescaling must drop at least one prime")
+    moduli = context.config.moduli
+    D = [moduli[i] for i in dropped]
+    R = [moduli[i] for i in restored]
+    dtype, device = context.dtype, context.device
+    ordered = (*target, *dropped)
+
+    def positions(ids: tuple[int, ...], basis: tuple[int, ...]) -> torch.Tensor:
+        return torch.tensor(
+            tuple(basis.index(i) for i in ids), dtype=torch.long, device=device
+        )
+
+    def offset(ids: tuple[int, ...]) -> torch.Tensor:
+        return (
+            rns_ops.quotient_offset_residues(
+                [], D, False, rounding == "nearest", [moduli[i] for i in ids], dtype
             )
-        views: dict[
-            tuple[int, bool], tuple[torch.Tensor, torch.Tensor, int]
-        ] = {}
-        for depth in range(self.rns_context.q_row_stop - 1):
-            for include_p in (False, True):
-                stop = (
-                    self.rns_context.qp_row_stop
-                    if include_p
-                    else self.rns_context.q_row_stop
-                )
-                row_count = stop - depth
-                remaining_ids = tuple(range(depth + 1, stop))
-                views[(row_count, include_p)] = (
-                    self.rns_context.rns_parameters_for_prime_ids(
-                        remaining_ids
-                    ),
-                    table[depth, depth + 1 : stop],
-                    int(self.rns_context.montgomery_parameters.moduli[depth]),
-                )
-        object.__setattr__(self, "_active_views", MappingProxyType(views))
+            .to(device)
+            .view(-1, 1)
+            .expand(-1, context.config.N)
+        )
 
-    @property
-    def device(self) -> torch.device:
-        return self.rns_context.device
-
-    def active_views(
-        self,
-        row_count: int,
-        *,
-        include_p: bool,
-    ) -> tuple[torch.Tensor, torch.Tensor, int]:
-        """Return preselected parameters, inverses, and dropped modulus."""
-
-        try:
-            return self._active_views[(row_count, include_p)]
-        except KeyError:
-            raise ValueError(
-                "Rescale requires a complete Q or QP basis with another "
-                "active Q row"
-            ) from None
-
-    def prefix_inverse(
-        self, row_count: int, drop_count: int, *, include_p: bool
-    ) -> torch.Tensor:
-        r"""Return $M^{-1}R\bmod q_i$ for each surviving prime.
-
-        $M$ is the product of the leading ``drop_count`` active primes. The
-        resource retains the vector for reuse with the same prime interval.
-        """
-
-        if drop_count == 1:
-            return self.active_views(row_count, include_p=include_p)[1]
-        key = (row_count, drop_count, include_p)
-        if key not in self._prefix_inverses:
-            context = self.rns_context
-            stop = context.qp_row_stop if include_p else context.q_row_stop
-            start = stop - row_count
-            moduli = context.montgomery_parameters.moduli
-            self._prefix_inverses[key] = rns_ops.product_residues(
-                moduli[start : start + drop_count],
-                moduli[start + drop_count : stop],
-                -1,
-                True,
-                context.dtype,
-            ).to(context.device)
-        return self._prefix_inverses[key]
-
-    def tensor_operands(
-        self,
-        row_count: int,
-        drop_count: int,
-        *,
-        include_p: bool,
-        ntt_context: NttContext | None = None,
-    ) -> tuple[dict[str, torch.Tensor], dict[str, object]]:
-        """Expose quotient tables and scalar rounding offsets for one group."""
-        tensors: dict[str, torch.Tensor] = {}
-        half_primes = []
-        for step in range(drop_count):
-            parameters, inverse, prime = self.active_views(
-                row_count - step, include_p=include_p
-            )
-            tensors[f"step{step}_parameters"] = parameters
-            tensors[f"step{step}_inverse"] = inverse
-            half_primes.append(prime // 2)
-        facts: dict[str, object] = {
-            "drop_count": drop_count,
-            "half_primes": tuple(half_primes),
-        }
-        if ntt_context is not None:
-            stop = (
-                self.rns_context.qp_row_stop
-                if include_p
-                else self.rns_context.q_row_stop
-            )
-            start = stop - row_count
-            for basis, ids, inverse in (
-                ("dropped", tuple(range(start, start + drop_count)), True),
-                ("remaining", tuple(range(start + drop_count, stop)), False),
+    tensors: dict[str, torch.Tensor] = {
+        "source_parameters": context.rns_parameters_for_prime_ids(source),
+        "target_parameters": context.rns_parameters_for_prime_ids(target),
+        "dropped_parameters": context.rns_parameters_for_prime_ids(dropped),
+        "ordered_parameters": context.rns_parameters_for_prime_ids(ordered),
+        "drop_positions": positions(dropped, source),
+        "keep_positions": positions(kept, source),
+        "inverses": trailing_quotient_inverses(
+            tuple(moduli[i] for i in ordered),
+            len(dropped),
+            dtype=dtype,
+            device=device,
+        ),
+        "dropped_offset": offset(dropped),
+        "target_offset": offset(target),
+    }
+    if restored:
+        tensors["target_keep_positions"] = positions(kept, target)
+        tensors["restore"] = rns_ops.product_residues(
+            R, [moduli[i] for i in source], 1, True, dtype
+        ).to(device)
+    facts: dict[str, object] = {}
+    if ntt_context is not None:
+        for basis, ids, inverse in (
+            ("dropped", dropped, True),
+            ("target", target, False),
+        ):
+            direction = "inverse" if inverse else "forward"
+            for index, tensor in enumerate(
+                ntt_context.tensor_operands(ids, inverse=inverse)
             ):
-                direction = "inverse" if inverse else "forward"
-                for index, tensor in enumerate(
-                    ntt_context.tensor_operands(ids, inverse=inverse)
-                ):
-                    tensors[f"{basis}_{direction}_{index}"] = tensor
-            tensors["prefix_inverse"] = self.prefix_inverse(
-                row_count, drop_count, include_p=include_p
-            )
-            facts["ntt_backend"] = ntt_context.ntt_backend_name
-        return tensors, facts
+                tensors[f"{basis}_{direction}_{index}"] = tensor
+        tensors["product_inverse"] = rns_ops.product_residues(
+            D, [moduli[i] for i in target], -1, True, dtype
+        ).to(device)
+        facts["ntt_backend"] = ntt_context.ntt_backend_name
+    return tensors, facts
 
 
 MODDOWN_RESCALE_TABLE_NAMES = (
@@ -271,6 +222,25 @@ MODDOWN_RESCALE_TABLE_NAMES = (
     "joint_drop_positions",
     "joint_remaining_positions",
 )
+"""Fused ModDown/rescale tables; a restored prime set adds ``joint_restore``,
+``joint_product_parameters``, and ``joint_target_keep_positions``."""
+
+MODDOWN_RESTORE_TABLE_NAMES = (
+    "joint_restore",
+    "joint_product_parameters",
+    "joint_target_keep_positions",
+)
+
+
+def centered_moddown_rescale_names(rescale_rounding: str) -> tuple[str, ...]:
+    """Name the tables of the centered P quotient followed by exact rescaling."""
+    return (
+        *(f"joint_crt_{part}_{name}" for part in ("d", "t") for name in CRT_OPERANDS),
+        "joint_crt_p_inverse",
+        "joint_crt_inverses",
+        "joint_crt_ordered_parameters",
+        *(("joint_crt_half",) if rescale_rounding == "nearest" else ()),
+    )
 
 
 def moddown_rescale_tables(
@@ -279,12 +249,14 @@ def moddown_rescale_tables(
     p_prime_ids: tuple[int, ...],
     drop_prime_ids: tuple[int, ...],
     *,
+    target_prime_ids: tuple[int, ...] | None = None,
     moddown_rounding: str = "nearest",
     rescale_rounding: str = "nearest",
+    basis_conversion: str = "exact",
 ) -> dict[str, torch.Tensor]:
-    r"""Prepare the exact quotient of $v+Pa+H_P+PH_D$ by $PD$.
+    r"""Prepare the quotient of $R(v+Pa)+H_P+PH_D$ by $PD$.
 
-    Q and P identify actual ordered input rows; D identifies the complete group consumed by rescaling. The remaining Q rows retain their input order. All returned values are ordinary numerical Tensors on this RNS context's device.
+    Q and P identify actual ordered input rows; D identifies the complete Q set consumed by rescaling. ``target_prime_ids`` orders the output basis $B'$, which defaults to the remaining Q rows in their input order; its rows outside Q form the restored set $R$, and $R=1$ when that set is empty. ``basis_conversion="normalized_crt"`` adds ``joint_crt_`` tables for a centered quotient by P followed by the exact quotient by D with ``rescale_rounding``; ``moddown_rounding`` then does not apply. All returned values are ordinary numerical Tensors on this RNS context's device.
     """
     if moddown_rounding not in {"nearest", "floor"} or rescale_rounding not in {
         "nearest",
@@ -297,12 +269,17 @@ def moddown_rescale_tables(
             "The rescale group must be a nonempty subset of Q rows"
         )
     remaining = tuple(i for i in q if i not in d)
-    if not remaining:
-        raise ValueError("Rescaling must retain Q rows")
-    dropped, ordered = (*d, *p), (*remaining, *d, *p)
+    target = remaining if target_prime_ids is None else tuple(target_prime_ids)
+    if not target or not set(remaining) <= set(target):
+        raise ValueError("The rescale target must contain the remaining Q rows")
+    restored = tuple(i for i in target if i not in q)
+    if not restored and target != remaining:
+        raise ValueError("A rescale target without restored primes keeps the Q order")
+    dropped, ordered = (*d, *p), (*target, *d, *p)
     moduli = context.config.moduli
     P = [moduli[i] for i in p]
     D = [moduli[i] for i in d]
+    R = [moduli[i] for i in restored]
     dtype, device = context.dtype, context.device
 
     def tensor(values, dtype=None):
@@ -327,9 +304,9 @@ def moddown_rescale_tables(
             .expand(-1, context.config.N)
         )
 
-    return {
+    tables = {
         "joint_remaining_parameters": context.rns_parameters_for_prime_ids(
-            remaining
+            target
         ),
         "joint_dropped_parameters": context.rns_parameters_for_prime_ids(
             dropped
@@ -338,7 +315,7 @@ def moddown_rescale_tables(
             ordered
         ),
         "joint_p_times_base": rns_ops.product_residues(
-            P, [moduli[i] for i in q], 1, True, dtype
+            P + R, [moduli[i] for i in q], 1, True, dtype
         ).to(device),
         "joint_inverses": trailing_quotient_inverses(
             tuple(moduli[i] for i in ordered),
@@ -347,10 +324,10 @@ def moddown_rescale_tables(
             device=device,
         ),
         "joint_product_inverse": rns_ops.product_residues(
-            P + D, [moduli[i] for i in remaining], -1, True, dtype
+            P + D, [moduli[i] for i in target], -1, True, dtype
         ).to(device),
         "joint_dropped_offset": offset(dropped),
-        "joint_remaining_offset": offset(remaining),
+        "joint_remaining_offset": offset(target),
         "joint_drop_positions": tensor(
             tuple(q.index(i) for i in d), torch.long
         ),
@@ -358,3 +335,40 @@ def moddown_rescale_tables(
             tuple(q.index(i) for i in remaining), torch.long
         ),
     }
+    if basis_conversion == "normalized_crt":
+        target_d = (*target, *d)
+        tables.update(
+            centered_quotient_tables(context, p, d, "joint_crt_d_"),
+            **centered_quotient_tables(
+                context, p, target, "joint_crt_t_", divisor_prime_ids=d
+            ),
+            joint_crt_p_inverse=rns_ops.product_residues(
+                P, D, -1, True, dtype
+            ).to(device),
+            joint_crt_inverses=trailing_quotient_inverses(
+                tuple(moduli[i] for i in target_d),
+                len(d),
+                dtype=dtype,
+                device=device,
+            ),
+            joint_crt_ordered_parameters=context.rns_parameters_for_prime_ids(
+                target_d
+            ),
+        )
+        if rescale_rounding == "nearest":
+            tables["joint_crt_half"] = rns_ops.half_product_residues(
+                D, [moduli[i] for i in target_d], dtype
+            ).to(device)
+    if restored:
+        tables.update(
+            joint_restore=rns_ops.product_residues(
+                R, [moduli[i] for i in (*q, *p)], 1, True, dtype
+            ).to(device),
+            joint_product_parameters=context.rns_parameters_for_prime_ids(
+                (*q, *p)
+            ),
+            joint_target_keep_positions=tensor(
+                tuple(target.index(i) for i in remaining), torch.long
+            ),
+        )
+    return tables

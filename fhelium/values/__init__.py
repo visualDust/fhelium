@@ -6,9 +6,11 @@ from fhelium.values.compressed_plaintext import (
 )
 from fhelium.values.keys import (
     ConjugationKey,
+    EncapsulationKey,
     EvaluationKeyRequirements,
     EvaluationKeySet,
     KeySwitchKey,
+    SeedSpec,
     PublicKey,
     RelinearizationKey,
     RotationKey,
@@ -30,9 +32,11 @@ __all__ = [
     "CompressedPlaintext",
     "CompressedPlaintextLayout",
     "ConjugationKey",
+    "EncapsulationKey",
     "EvaluationKeyRequirements",
     "EvaluationKeySet",
     "KeySwitchKey",
+    "SeedSpec",
     "ModulusBasis",
     "Plaintext",
     "PlaintextRepresentation",

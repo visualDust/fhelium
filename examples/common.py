@@ -37,7 +37,7 @@ def parse_preset(name: str) -> Preset:
 def add_engine_args(
     parser: argparse.ArgumentParser,
     *,
-    default_preset: str = Preset.slots32768_scale40_depth34_int64.value,
+    default_preset: str = Preset.slots32768_scale40_depth34.value,
     initial_device: str = "cpu",
 ) -> None:
     parser.add_argument(

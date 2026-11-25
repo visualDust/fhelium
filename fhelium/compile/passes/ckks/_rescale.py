@@ -31,6 +31,7 @@ from fhelium.ir import Program
 from fhelium.ir.dialects import ckks
 from fhelium.config import CkksConfig
 from fhelium.config._derived import config_from_text
+from fhelium.ir.ckks_state import depth_prime_ids, quotient_scale
 from .._operation_transforms import (
     ciphertext_type,
     display_name,
@@ -209,22 +210,27 @@ def _materialize_rescale(
         result_state["depth"] = IntegerAttr(depth.value.data + 1, 64)
         prime_ids = result_state.get("prime_ids")
         if isinstance(prime_ids, ArrayAttr):
-            drop_count = (
-                len(config.q_depth_groups[source_depth])
-                if config is not None
-                else None
-            )
-            if drop_count is None:
+            if config is None:
                 result_state.pop("prime_ids")
             else:
+                basis = result_state.get("basis")
                 result_state["prime_ids"] = ArrayAttr(
-                    prime_ids.data[drop_count:]
+                    IntegerAttr(i, 64)
+                    for i in depth_prime_ids(
+                        config,
+                        source_depth + 1,
+                        "QP"
+                        if isinstance(basis, StringAttr) and basis.data == "QP"
+                        else "Q",
+                    )
                 )
         scale = result_state.get("scale")
         if isinstance(scale, FloatAttr) and config is not None:
             result_state["scale"] = FloatAttr(
-                float(scale.value.data)
-                / float(config.rescale_divisor(source_depth)),
+                quotient_scale(
+                    float(scale.value.data),
+                    config.rescale_divisor(source_depth),
+                ),
                 Float64Type(),
             )
         elif scale is not None:

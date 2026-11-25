@@ -1,15 +1,15 @@
 # Customize a Compile pass and pipeline
 
-**Example source:** [`examples/14_compile_custom_pass.py`](https://github.com/VisualDust/fhelium/blob/main/examples/14_compile_custom_pass.py)
+**Example source:** [`examples/15_compile_custom_pass.py`](https://github.com/VisualDust/fhelium/blob/main/examples/15_compile_custom_pass.py)
 
-Example 14 implements a caller-defined Compile pass that recognizes a captured `torch.matmul` with a compile-time square matrix and rewrites it as a baby-step/giant-step (BSGS) encrypted matrix-vector schedule. The source applies an illustrative elementwise square after the linear result, adding one ciphertext-ciphertext multiplication. Caller-selected passes then place relinearization and rescales, assign depths and actual scales, lower the schedule into RNS/NTT operations, link materials and evaluation keys, and execute it through the Backend.
+Example 15 implements a caller-defined Compile pass that recognizes a captured `torch.matmul` with a compile-time square matrix and rewrites it as a baby-step/giant-step (BSGS) encrypted matrix-vector schedule. The source applies an illustrative elementwise square after the linear result, adding one ciphertext-ciphertext multiplication. Caller-selected passes then place relinearization and rescales, assign depths and actual scales, lower the schedule into RNS/NTT operations, link materials and evaluation keys, and execute it through the Backend.
 
 The example demonstrates a transformation and execution architecture. Its CPU execution validates the selected matrix-multiplication schedule for the shown inputs.
 
 ## Run the example
 
 ```bash
-python examples/14_compile_custom_pass.py
+python examples/15_compile_custom_pass.py
 ```
 
 The output presents three Programs:
@@ -143,7 +143,7 @@ Dynamic matrices, rectangular matrices, batched matmul, transposed layouts, and 
 
 ::: details Source
 
-<<< @/../examples/14_compile_custom_pass.py
+<<< @/../examples/15_compile_custom_pass.py
 
 :::
 

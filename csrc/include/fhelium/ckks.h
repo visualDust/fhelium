@@ -10,8 +10,7 @@
 #include <optional>
 
 //! CKKS ciphertext arithmetic on RNS residue Tensors: ciphertext products,
-//! plaintext addition, rescaling, Galois automorphisms, and key-switching
-//! steps.
+//! plaintext addition, Galois automorphisms, and key-switching steps.
 //!
 //! A residue operand has shape `[*batch, limb, index]`, where limb $j$ holds
 //! residues modulo the prime $q_j$ described by column $j$ of `rns_params`
@@ -116,50 +115,6 @@ FHELIUM_API void add_strided_plaintext_component_(
     const at::Tensor& implicit_plaintext,
     const at::Tensor& rns_params);
 
-/// Divides by a dropped prime and rounds to the nearest integer.
-///
-/// `remaining_residues` holds coefficient-domain standard residues $x_j$ of an
-/// integer $X$ for the remaining primes $q_j$, and `dropped_residue`, of shape
-/// `[*batch, N]`, holds $d = X \bmod q_\ell$ for the dropped prime $q_\ell$.
-/// `drop_prime_inverse_mont` is the per-limb vector $q_\ell^{-1} R \bmod q_j$,
-/// and `half_drop_prime` is $\lfloor q_\ell / 2 \rfloor$. The result is $(x_j -
-/// d)\, q_\ell^{-1} + [d > \lfloor q_\ell/2 \rfloor] \bmod q_j$, the residue of
-/// $X / q_\ell$ rounded to the nearest integer, as a standard residue in $[0,
-/// q_j)$.
-FHELIUM_API at::Tensor rescale_drop_leading_prime_nearest(
-    const at::Tensor& remaining_residues,
-    const at::Tensor& drop_prime_inverse_mont,
-    const at::Tensor& dropped_residue,
-    const at::Tensor& rns_params,
-    int64_t half_drop_prime);
-
-/// In-place form of `rescale_drop_leading_prime_nearest`; the quotient replaces
-/// `remaining_residues`.
-FHELIUM_API void rescale_drop_leading_prime_nearest_(
-    at::Tensor& remaining_residues,
-    const at::Tensor& drop_prime_inverse_mont,
-    const at::Tensor& dropped_residue,
-    const at::Tensor& rns_params,
-    int64_t half_drop_prime);
-
-/// Divides by a dropped prime and rounds down.
-///
-/// Computes $(x_j - d)\, q_\ell^{-1} \bmod q_j$, the residue of $\lfloor X /
-/// q_\ell \rfloor$, with the operands of `rescale_drop_leading_prime_nearest`.
-FHELIUM_API at::Tensor rescale_drop_leading_prime_truncate(
-    const at::Tensor& remaining_residues,
-    const at::Tensor& drop_prime_inverse_mont,
-    const at::Tensor& dropped_residue,
-    const at::Tensor& rns_params);
-
-/// In-place form of `rescale_drop_leading_prime_truncate`; the quotient
-/// replaces `remaining_residues`.
-FHELIUM_API void rescale_drop_leading_prime_truncate_(
-    at::Tensor& remaining_residues,
-    const at::Tensor& drop_prime_inverse_mont,
-    const at::Tensor& dropped_residue,
-    const at::Tensor& rns_params);
-
 /// Applies a Galois automorphism $\sigma_g: X \mapsto X^g$ to
 /// coefficient-domain residues.
 ///
@@ -182,6 +137,18 @@ FHELIUM_API at::Tensor apply_coefficient_galois_automorphism(
 /// are preserved.
 FHELIUM_API at::Tensor apply_ntt_galois_automorphism(
     const at::Tensor& residues_ntt, const at::Tensor& source_indices);
+
+/// Adds a Galois automorphism of NTT-domain residues to `target`, in place.
+///
+/// With $\sigma$ the permutation of `apply_ntt_galois_automorphism`, each
+/// target evaluation $t_k$ becomes $t_k + r_{\mathtt{source\_indices}[k]}$
+/// reduced to $[0, 2q_j)$ for lazy inputs in $[0, 2q_j)$. `target` and
+/// `residues_ntt` share shape, dtype and device and do not alias;
+/// `rns_params` describes their rows.
+FHELIUM_API void add_ntt_galois_automorphism_(at::Tensor& target,
+                                              const at::Tensor& residues_ntt,
+                                              const at::Tensor& source_indices,
+                                              const at::Tensor& rns_params);
 
 /// Divides a QP-basis value by $P$ and returns its Q-basis residues.
 ///
@@ -209,12 +176,20 @@ FHELIUM_API at::Tensor keyswitch_moddown_qp_to_q(
 ///
 /// `extended_digit_ntt_qp` and both accumulators have shape `[*batch, rows, N]`
 /// with NTT-domain Montgomery residues. `key_switch_key_digit` has shape `[2,
-/// key_rows, N]`, and digit row $r$ uses key row `key_digit_row_start + r`. For
+/// key_rows, N]`. With $q$ the active Q row count, digit row $r < q$ uses key
+/// row `key_digit_row_start + r` and auxiliary row $r \ge q$ uses key row
+/// `key_p_row_start + r - q`, where the auxiliary rows are the trailing
+/// `key_rows - key_p_row_start` key rows. A negative `key_p_row_start` reads
+/// every digit row from `key_digit_row_start + r`. For
 /// each component $c \in \{0, 1\}$, the function computes $\mathrm{acc}_c
 /// \mathrel{+}= d_{\pi(k)} \cdot k_c\, R^{-1} \bmod q_r$ in the lazy range,
 /// where $\pi$ is the int32 permutation `source_indices` when supplied and the
 /// identity otherwise. Supplying `source_indices` applies an NTT-domain Galois
-/// automorphism to the digit within the same pass.
+/// automorphism to the digit within the same pass. A seeded key digit has
+/// shape `[1, key_rows, N]` holding $k_0$, and `key_seed` is its int64 seed
+/// row `[6]`; $k_1$ at key row $j$ is then the value of
+/// `fhelium::random::expand_seeded_key` at stored row $j$ for ChaCha
+/// `key_rounds`, generated within the product.
 FHELIUM_API void keyswitch_accumulate_digit_products_(
     at::Tensor& accumulator0_qp,
     at::Tensor& accumulator1_qp,
@@ -222,22 +197,37 @@ FHELIUM_API void keyswitch_accumulate_digit_products_(
     const at::Tensor& key_switch_key_digit,
     const at::Tensor& rns_params,
     int64_t key_digit_row_start,
-    const std::optional<at::Tensor>& source_indices = std::nullopt);
+    int64_t key_p_row_start = -1,
+    const std::optional<at::Tensor>& source_indices = std::nullopt,
+    const std::optional<at::Tensor>& key_seed = std::nullopt,
+    int64_t key_rounds = 0);
 
-/// Accumulates the products of several extended digits with their
-/// key-switching-key digits.
+/// Writes the key-switching products of one set of extended digits for each
+/// of several keys.
 ///
-/// `extended_digits_ntt_qp` lists between 1 and 16 digits, and `key_switch_key`
-/// has shape `[digit, 2, key_rows, N]`. The result equals calling
-/// `keyswitch_accumulate_digit_products_` for every digit $t$ with key digit
-/// `key_switch_key[t]`, accumulated in one pass.
+/// `extended_digits_ntt_qp` lists between 1 and 16 digits $d_t$. Entry $r$ of
+/// `key_switch_keys` has shape `[digit, 2, key_rows, N]`; all entries share one
+/// layout. For each rotation $r$ the kernel overwrites
+/// `accumulators0_qp[r]` and `accumulators1_qp[r]` with
+/// $\sum_t d_t[\pi_r(i)] \cdot k_{r,t,c}[i]$ for $c = 0, 1$ (Montgomery
+/// products, lazy sums in $[0, 2q)$), which equals zero-initialized
+/// `keyswitch_accumulate_digit_products_` calls for every digit $t$. An empty
+/// `source_indices` uses $\pi_r(i) = i$; otherwise entry $r$ supplies the NTT
+/// automorphism gather $\pi_r$. Each launch reads the digits once for up to
+/// 16 rotations. Seeded keys have shape `[digit, 1, key_rows, N]`, and entry
+/// $r$ of `key_seeds` holds the int64 seed rows `[digit, 6]` of key $r$; their
+/// $k_1$ is generated as in `keyswitch_accumulate_digit_products_`. An empty
+/// `key_seeds` reads dense keys.
 FHELIUM_API void keyswitch_accumulate_products_(
-    at::Tensor& accumulator0_qp,
-    at::Tensor& accumulator1_qp,
+    at::TensorList accumulators0_qp,
+    at::TensorList accumulators1_qp,
     at::TensorList extended_digits_ntt_qp,
-    const at::Tensor& key_switch_key,
+    at::TensorList key_switch_keys,
     const at::Tensor& rns_params,
     int64_t key_digit_row_start,
-    const std::optional<at::Tensor>& source_indices = std::nullopt);
+    int64_t key_p_row_start = -1,
+    at::TensorList source_indices = {},
+    at::TensorList key_seeds = {},
+    int64_t key_rounds = 0);
 
 }  // namespace fhelium::ckks

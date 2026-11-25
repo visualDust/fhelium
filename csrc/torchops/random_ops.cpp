@@ -32,6 +32,9 @@ TORCH_LIBRARY_FRAGMENT(fhelium_random_ops, m) {
   m.def(
       "stochastic_round(Tensor seed, Tensor values, int word_stride=1) -> "
       "Tensor");
+  m.def(
+      "expand_seeded_key(Tensor seed_rows, Tensor moduli, "
+      "int ring_dimension, int rounds) -> Tensor");
 }
 
 // Host functions without Tensor arguments run for every dispatch key.
@@ -56,6 +59,7 @@ TORCH_LIBRARY_IMPL(fhelium_random_ops, CPU, m) {
   m.impl("sample_ternary", &fhelium::random::sample_ternary);
   m.impl("add_discrete_gaussian_", &fhelium::random::add_discrete_gaussian_);
   m.impl("stochastic_round", &fhelium::random::stochastic_round);
+  m.impl("expand_seeded_key", &fhelium::random::expand_seeded_key);
 }
 #endif
 
@@ -70,5 +74,6 @@ TORCH_LIBRARY_IMPL(fhelium_random_ops, CUDA, m) {
   m.impl("sample_ternary", &fhelium::random::sample_ternary);
   m.impl("add_discrete_gaussian_", &fhelium::random::add_discrete_gaussian_);
   m.impl("stochastic_round", &fhelium::random::stochastic_round);
+  m.impl("expand_seeded_key", &fhelium::random::expand_seeded_key);
 }
 #endif

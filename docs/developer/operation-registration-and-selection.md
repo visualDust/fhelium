@@ -103,9 +103,7 @@ from fhelium.backend import OperationBackend
 
 backend = OperationBackend()
 ntt_selection = fc.Pipeline((
-    fc.AssignNttImplementationPass(
-        algorithm="radix2_compact", group_width=8
-    ),
+    fc.AssignNttImplementationPass(algorithm="radix2_compact"),
     fc.SelectNttImplementationsPass(backend.registry),
 ))
 ```

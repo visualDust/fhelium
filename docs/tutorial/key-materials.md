@@ -2,10 +2,10 @@
 
 **Example source:** [`examples/02_eager_key_materials.py`](https://github.com/VisualDust/fhelium/blob/main/examples/02_eager_key_materials.py)
 
-Example 02 creates keys from one secret, installs selected evaluator capabilities, and inspects their layouts. File persistence and artifact generations are covered by [09](value-memory-and-persistence.md) and [10](artifact-store.md).
+Example 02 creates keys from one secret, installs selected evaluator capabilities, and inspects their layouts. File persistence and artifact generations are covered by [10](value-memory-and-persistence.md) and [11](artifact-store.md).
 
 ```bash
-python examples/02_eager_key_materials.py --preset slots8192-scale40-depth7-int64 --rotations=-4,-1,1,2,4
+python examples/02_eager_key_materials.py --preset slots8192-scale40-depth7 --rotations=-4,-1,1,2,4
 ```
 
 ## 1. Create typed keys

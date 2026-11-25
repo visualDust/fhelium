@@ -1,120 +1,68 @@
 # Bootstrap a full-slot CKKS ciphertext
 
-**Example source:** [`examples/25_experimental_bootstrap.py`](https://github.com/VisualDust/fhelium/blob/main/examples/25_experimental_bootstrap.py)
+**Example source:** [`examples/09_algorithms_bootstrap.py`](https://github.com/VisualDust/fhelium/blob/main/examples/09_algorithms_bootstrap.py)
 
-FHElium composes bootstrapping from modulus raising, Fourier transforms and periodic reduction. A configured `FullSlotBootstrap` is callable, exposes its depth and scale schedule, and supports prepared execution. `cosine_bootstrap` assembles common component combinations; its profiles are starting points that can be replaced or customized.
+`fhelium.bootstrap` refreshes a CKKS ciphertext through modulus raising, CoeffsToSlots, periodic reduction (EvalMod) and SlotsToCoeffs, all executed as ordinary Eager operations. `bootstrap.plan` returns a `BootstrapPlan` that records every component choice and its depth placement; `create_evaluation_keys` provisions the keys the plan requires; `bootstrap` refreshes a ciphertext; and `prepare` returns a `PreparedBootstrap` for repeated execution, `fhelium.compile` capture and CUDA Graph replay.
 
-This tutorial constructs both centered raising and **sparse-secret encapsulation**, then uses the same key inventory, execution and verification workflow. The [composition guide](../how-to/compose-bootstrap-circuit) covers component replacement. The [mathematical model](../concepts/ckks/composable-bootstrapping) defines the coordinates and state transitions.
+This tutorial uses a built-in bootstrap preset, inspects its plan, provisions keys, refreshes a ciphertext and prepares compiled execution. The [composition guide](../how-to/compose-bootstrap-circuit) covers component replacement. The [mathematical model](../concepts/ckks/composable-bootstrapping) defines the coordinates and state transitions.
 
-## 1. Choose the construction
+## 1. Choose a chain and a plan
 
-The complete refresh follows:
+The `-boot` presets reserve a 16-depth bootstrap segment at the start of the chain and place the application depths after it. A ciphertext refreshed at the maximum depth returns at depth 16 with the remaining depths available to the application:
 
-```text
-entry coordinates → modulus raising → CoeffsToSlots
-                  → periodic reduction → SlotsToCoeffs → output compensation
-```
+| Preset | N | Scale bits | Maximum depth | Application depths after refresh | Q/P rows |
+|---|---:|---:|---:|---:|---|
+| `slots32768-scale40-depth20-boot4` | 65536 | 40 | 20 | 4 | 38/22 |
+| `slots32768-scale40-depth24-boot8` | 65536 | 40 | 24 | 8 | 44/16 |
+| `slots32768-scale40-depth29-boot13` | 65536 | 40 | 29 | 13 | 50/10 |
+| `slots32768-scale50-depth24-boot8` | 65536 | 50 | 24 | 8 | 47/13 |
+| `slots32768-scale50-depth28-boot12` | 65536 | 50 | 28 | 12 | 53/7 |
 
-`CenteredModRaise` extends the centered CRT representative of each component under the main secret. `EncapsulatedModRaise` switches to an intermediate secret in a low basis, extends the centered components and returns to the main secret before the Fourier transforms. A sparse intermediate secret changes the integer phase range that the subsequent periodic reduction must handle.
-
-The cosine profiles select the following circuit components:
-
-| Profile | Raw coordinate bound B | Seed degree | Double-angle iterations | CoeffsToSlots stages | SlotsToCoeffs stages | Default polynomial evaluation |
-|---|---:|---:|---:|---:|---:|---|
-| `7/44` | 1024 | 44 | 7 | 2 | 2 | Blocked |
-| `8/28` | 1024 | 28 | 8 | 2 | 2 | Binary |
-| `8/28-s2c3` | 1024 | 28 | 8 | 2 | 3 | Binary |
-| `3/30` | 32 | 30 | 3 | 4 | 3 | Even decomposition with Blocked evaluation |
-
-A profile does not choose the secret distribution or generate keys. Select the modulus chain, raising relation, coordinate range and scale schedule together. The degree-30 profile uses a narrower range; selecting its name alone does not enable sparse-secret encapsulation.
-
-### Centered raising
-
-The following configuration uses int64 residues, generator five and a default scale of approximately $2^{50}$:
+All five use int32 residues and Galois generator 5, which full-slot bootstrapping requires. Their prime catalogs use 1731–1747 of the 1747 QP bits that the 128-bit security table allows for $N=2^{16}$; depth bases are ordered subsets of that catalog, so primes of the bootstrap segment reappear in application depths.
 
 ```python
 import torch
 import fhelium as fh
+from fhelium import bootstrap
 from fhelium.eager import Engine
-from fhelium.experimental import bootstrap as bs
-from fhelium.values import EvaluationKeySet
 
 torch.set_default_device("cuda:0")
-config = fh.CkksConfig.parse(
-    fh.Preset.slots32768_scale50_depth27_int64,
-    galois_generator=5,
-)
+config = fh.CkksConfig.parse(fh.Preset.slots32768_scale40_depth29_boot13)
 engine = Engine(config, allow_automatic_key_generation=False)
 secret_key = engine.create_secret_key()
-bootstrap = bs.cosine_bootstrap(engine)
-```
-
-The default `7/44` composition uses Blocked Chebyshev evaluation and aggregate giant-step quotients. Its default source basis is the terminal Q group; entry begins at the preceding group and uses integer scale lifting followed by rescale.
-
-### Sparse-secret encapsulation
-
-For an executable example from the repository root:
-
-```bash
-python examples/25_experimental_bootstrap.py --encapsulated
-```
-
-The example compiles the complete prepared callable by default and provisions all required direct rotations. `--eager` selects Eager execution; `--core-graph` selects the normalized-core Graph example. The cosine composition selects weighted-product implementations with `"auto"` and a chunk size of 16. CUDA contexts use the group-16 compact Montgomery NTT policy unless the caller supplies another policy.
-
-The example defines prime groups and per-depth scale targets in `examples/_bootstrap_encapsulation_parameters.py`. It uses $N=65536$, int32 residues, 51 main Q primes, 11 main P primes, and a two-prime source Q basis. The `profile="3/30"` choice specifies the approximation profile; the example supplies these modulus and scale parameters separately.
-
-From the repository root, the same construction can be assembled as follows. This block replaces the centered configuration above; the remaining tutorial steps apply to either choice.
-
-```python
-from examples._bootstrap_encapsulation_parameters import parameters
-
-config, auxiliary, target_scales = parameters()
-engine = Engine(
-    config,
-    rns_dtype=torch.int32,
-    allow_automatic_key_generation=False,
-)
-secret_key = engine.create_secret_key(hamming_weight=config.N // 2)
-intermediate = engine.create_secret_key(hamming_weight=32)
-low_key, return_key = engine.create_encapsulation_keys(
-    secret_key, intermediate, **auxiliary
-)
-raising = bs.EncapsulatedModRaise(low_key, return_key, **auxiliary)
-del intermediate
-
-bootstrap = bs.cosine_bootstrap(
-    engine,
-    profile="3/30",
-    modulus_raising=raising,
-    input_depth=engine.max_depth,
-    target_scales=target_scales,
-    product_implementation="auto",
-)
-```
-
-The low switch changes the relation from main secret $s$ to intermediate secret $t$. The return hint is encrypted under $s$, so the Fourier transforms, polynomial evaluation and output again use $s$. `EncapsulatedModRaise` retains the two evaluation-key values, not either secret. An intermediate secret need not be regenerated for every refresh; the supplied evaluation material can be reused.
-
-`hamming_weight=h` samples exactly $h$ nonzero coefficients on a uniformly selected support, with independent signs. Omitting it retains independent ternary sampling. The example's weight 32 is one choice: `--intermediate-secret-weight` changes it, and the reducer range must be assessed for the resulting construction. The low Q/P relation, return hint and their joint publication determine the relevant security assumptions. The main QP budget check alone does not assign a security level to that combination; see [Sparse-secret encapsulation](../developer/security#sparse-secret-encapsulation).
-
-The degree-30 seed is even after a coordinate shift. `EvenChebyshevEvaluator` uses $T_{2j}(x)=T_j(T_2(x))$ to evaluate it through a degree-15 inner polynomial. The profile places the Fourier factor and slot-count normalization in the last forward stage, and uses the supplied scale targets for subsequent arithmetic.
-
-## 2. Provision the shared evaluation keys
-
-After selecting either construction, create the encryption key and populate an application-owned inventory for the bootstrap:
-
-```python
 public_key = engine.create_public_key(secret_key)
-evaluation_keys = EvaluationKeySet()
-bootstrap.create_evaluation_keys(
-    secret_key,
-    into=evaluation_keys,
-    device=secret_key.device,
-)
+
+plan = bootstrap.plan(engine, intermediate_weight=48)
+for stage in plan.stages():
+    print(stage.name, stage.input_depth, "->", stage.output_depth)
+print("refresh window:", plan.refresh_window)
 ```
 
-`EvaluationKeySet` retains ordinary rotation, relinearization and conjugation key values. Its constructor accepts an iterable, and `add` and `update` retain references with object-identity deduplication. Several consumers can share the inventory, and multiple layouts or devices for one rotation step can coexist. The application keeps the members within the intended parameter context and secret relation.
+The default `"3/38"` profile uses raw coordinate bound $B=33$, four CoeffsToSlots stages with the slot-count normalization folded into the last, a degree-38 cosine seed expanded in Chebyshev form, three double-angle iterations evaluated by `RecursiveChebyshevPlan`, and three SlotsToCoeffs stages. It consumes 16 depths: the raise targets depth 0, CoeffsToSlots occupies depths 0→4, EvalMod 4→13 and SlotsToCoeffs 13→16. Key switching uses `basis_conversion="normalized_crt"`.
 
-The provisioning helper returns the supplied inventory. It reuses compatible existing groups and creates missing keys, considering additional storage across the composition's consumers. A broader key can serve several stages; generating a separate compact key for every depth can require more total storage. Consumer selection checks actual digit supports, QP rows, ring dimension, dtype and device, including the compatibility of an entire hoisted rotation group.
+`intermediate_weight=h` selects `Encapsulated` modulus raising. The raise switches the source-basis ciphertext to an intermediate secret of Hamming weight $h$ in a small auxiliary basis, extends the centered components and returns to the main secret before CoeffsToSlots. The overflow polynomial then has coefficients bounded by $h+1$ rather than by a function of $N$, which is what allows $B=33$. `plan.modulus_raise_bound` reports that worst-case bound. Without `intermediate_weight`, the raise is `Centered` and extends the centered CRT representative under the main secret.
+
+The other named profiles (`"7/44"`, `"8/28"`, `"8/28-s2c3"`, `"3/30"`) select wider coordinate bounds or different stage counts:
+
+| Profile | Raw coordinate bound B | Seed degree | Double-angle iterations | CoeffsToSlots stages | SlotsToCoeffs stages | Polynomial evaluation |
+|---|---:|---:|---:|---:|---:|---|
+| `3/38` | 33 | 38 | 3 | 4 | 3 | Recursive Chebyshev |
+| `3/30` | 32 | 30 | 3 | 4 | 3 | Even decomposition with Blocked evaluation |
+| `7/44` | 1024 | 44 | 7 | 2 | 2 | Blocked |
+| `8/28` | 1024 | 28 | 8 | 2 | 2 | Binary |
+| `8/28-s2c3` | 1024 | 28 | 8 | 2 | 3 | Binary |
+
+A profile selects the approximation and stage structure. The chain, the raising relation and the secret distributions are separate choices; the wide-range profiles suit a centered raise on a chain whose terminal Q group is large relative to the scale, such as `CkksConfig.catalog_suffix_chain(logN=16, scale_bits=50, depth=27, p_count=4, galois_generator=5)` with `"7/44"`.
+
+The encapsulated raise publishes two additional key-switch keys: the low key switches from the main secret $s$ to the intermediate secret $t$ in the auxiliary basis, and the return key is a hint of $t$ encrypted under $s$. The security of publishing them with the remaining evaluation keys depends on $h$, the auxiliary basis and the main parameters; the main QP budget check alone does not assign a security level to that combination. See [Sparse-secret encapsulation](../developer/security#sparse-secret-encapsulation).
+
+## 2. Provision the evaluation keys
+
+```python
+keys = bootstrap.create_evaluation_keys(engine, plan, secret_key)
+```
+
+The function returns an `EvaluationKeySet`. Pass `into=` to add the keys to an application-owned inventory; compatible keys already present are reused. Each consumed depth receives a key whose prime/digit layout is chosen by `CkksConfig.key_layout(depth)`, which minimizes the key-switch cost over the auxiliary P primes available in the catalog. With `Encapsulated`, the function also samples the intermediate secret, adds the low and return keys and discards the intermediate secret.
 
 The default rotation-key strategy is `all_required`. The available strategies are:
 
@@ -124,134 +72,78 @@ The default rotation-key strategy is `all_required`. The available strategies ar
 | `signed_power_of_two_with_baby_steps` | Signed-power coverage plus direct baby steps for the selected BSGS partitions |
 | `all_required` | Direct keys for every required logical transform rotation |
 
-Inspect `bootstrap.key_steps(strategy)` and `bootstrap.evaluation_key_requirements(strategy)` before generation. Key coverage and baby-rotation hoisting are separate choices. Encapsulation's low and return hints belong to the raising component; rotation, relinearization and conjugation keys in `evaluation_keys` use the main secret. Generate or load these values before preparation or capture.
+`plan.key_steps(strategy)` and `plan.key_requirements(strategy)` describe the material before generation.
 
 ## 3. Refresh and verify a ciphertext
 
-An application supplies a ciphertext at `bootstrap.input_depth`. For a standalone numerical check, encrypt directly at that depth and the configured input scale:
-
 ```python
-values = torch.linspace(-0.05, 0.05, engine.num_slots, dtype=torch.float64)
-ciphertext = engine.encrypt_message(
-    values,
-    public_key,
-    depth=bootstrap.input_depth,
-    scale=bootstrap.input_scale,
-)
-refreshed = bootstrap(ciphertext, evaluation_keys=evaluation_keys)
-decoded = engine.decrypt_message(refreshed, secret_key, is_real=True)
-error = (decoded - values).abs()
+generator = torch.Generator(device="cpu").manual_seed(0)
+real, imag = torch.rand(2, engine.num_slots, generator=generator, dtype=torch.float64, device="cpu")
+values = (2 * real - 1) + 1j * (2 * imag - 1)
+ciphertext = engine.encrypt_message(values, public_key, depth=plan.source_depth)
 
-print("entry depth:", bootstrap.input_depth)
-print("output depth:", refreshed.depth)
-print("remaining depth:", bootstrap.remaining_depth)
-print("refresh window:", bootstrap.refresh_window)
-print("output actual scale:", refreshed.scale)
+refreshed = bootstrap.bootstrap(engine, ciphertext, plan, keys=keys)
+error = (engine.decrypt_message(refreshed, secret_key).cpu() - values).abs()
+print("depth:", ciphertext.depth, "->", refreshed.depth)
 print("max error:", error.max().item())
-print("mean error:", error.mean().item())
 ```
 
-Input and output are two-component coefficient-domain, standard-residue Q ciphertexts with axes `[component, *batch, limb, coefficient]`. The output records its active `prime_ids` and actual scale. Online evaluation uses ciphertexts, evaluation keys and numerical materials; the secret key is used here only to verify the result.
+Input and output are two-component coefficient-domain, standard-residue Q ciphertexts. An input below `plan.source_depth` first reaches the source basis through `mod_switch_to_depth`. The source-basis value at actual scale $\Delta_b$ is evaluated in coordinates of scale $\Delta_0=$ `plan.input_scale`; an input with $\Delta_b<\Delta_0$ is first multiplied by the integer $\max(1,\operatorname{round}(\Delta_0/\Delta_b))$. The output at `plan.output_depth` records actual scale $s_{out}\Delta_b k/\Delta_0$, so it represents the input message rather than the coordinate.
 
-Let the terminal depth be $D$, the entry depth $d_{in}$ and the output depth $d_{out}$. `remaining_depth` is $D-d_{out}$; `refresh_window` is $d_{in}-d_{out}$. Each transition removes a complete Q group, which may contain several primes. Eighteen remaining Q rows therefore do not imply eighteen multiplication depths.
-
-For preceding-group entry, integer multiplication and rescale produce an actual source scale $\Delta_b$. Direct source-basis entry uses the existing actual scale. The core interprets the source payload at `input_scale` $\Delta_0$, and `finish` compensates the output scale by $\Delta_b/\Delta_0$. Within the circuit, every rescale retains its actual quotient scale.
-
-The raw reduction coordinate $r$ and normalized polynomial coordinate $x=r/B$ are distinct. `reference(values)` consumes normalized coordinates, with target $\rho_B(x)=\sin(\pi Bx)/\pi$. The original slot amplitude alone does not establish the raw-coordinate bound or the complete refresh error. Check the intended message class, approximation range, actual scales and downstream precision requirements together.
+Depth is the consumed-depth index: depth 0 holds the full Q basis and each transition removes one depth group, which may contain several primes. `plan.refresh_window` is the difference between the source and output depths. The raw reduction coordinate $r$ and the normalized polynomial coordinate $x=r/B$ are distinct; the slot amplitude alone does not establish the raw-coordinate bound required by EvalMod.
 
 ## 4. Prepare Eager and compiled execution
-
-Prepare the complete refresh once. Material discovery uses the example's state and device to select key references and encode diagonals and constants, recording the results in ordinary dictionaries. The returned `PreparedBootstrap` includes entry, normalized core and output scale compensation. It retains the selected references and releases the example payload and temporary result. New encodings consume the rounding RNG once; repeated execution and callable capture reuse those samples.
 
 ```python
 from fhelium import compile as fc
 
-prepared = bootstrap.prepare(ciphertext, evaluation_keys=evaluation_keys)
-optimized = fc.compile(prepared)
+prepared = bootstrap.prepare(engine, plan, ciphertext, keys=keys)
+graphed = fc.compile(prepared, graph=True)
 try:
-    refreshed_eager = optimized(ciphertext)
-    optimized.prepare(ciphertext)
-    refreshed = optimized(ciphertext)
-    print("Preparation seconds:", optimized.stats()["prepare_seconds"])
+    refreshed = graphed(ciphertext)
 finally:
-    optimized.clear()
+    graphed.clear()
     prepared.close()
 ```
 
-Eager and Compile use the same prepared Python computation. Compile represents it as ordinary CKKS, RNS, NTT and Tensor operations with live material operands. Adding or removing inventory entries after preparation leaves these bindings unchanged; prepare a new callable to select other keys. In-place writes to selected key Tensors remain visible under the prepared layout and synchronization contract. Compilation consumes existing keys and encoded samples.
+`prepare` fixes the input signature of `like` (depth, scale, batch shape and device), encodes the plan's constants and CoeffsToSlots/SlotsToCoeffs diagonals and selects its keys once. Calling the `PreparedBootstrap` refreshes an input without encoding or key selection, so Eager execution, `fhelium.compile` capture and CUDA Graph replay read only the prepared materials. New encodings consume the rounding stream once; repeated execution and capture reuse those samples. Call `prepare` before Graph capture, clear compiled callables before closing the prepared owner, and drop or close the owner to release its materials.
 
-The first call uses the prepared Python reference while Compile preparation starts in the background. `.prepare()` waits for completion, and subsequent calls execute the linked function. Prepared execution is the default (`graph=False`). To opt into automatic capture, construct with `graph="auto"` or `graph=True`; a call after the first prepared execution attempts capture. Graph outputs are owned by default (`copy_output=True`), and statistics report capture or prepared fallback. Clear the compiled callable before closing its prepared owner. A linked executable retains its bound Tensors until released; clearing the shared inventory releases only its own references.
-
-The callable can also be source-inlined inside a larger `fc.compile` function. Select a custom Backend or caller-composed pipeline through the ordinary Compile arguments. For applications that manage normalized coordinates directly, `entry`, `prepare_core` and `finish` remain available; the full prepared callable is the common entry.
+The step functions `modulus_raise`, `coeffs_to_slots`, `split_real_imag`, `eval_mod`, `merge_real_imag` and `slots_to_coeffs` evaluate one stage each for custom compositions.
 
 ## 5. Choose component and storage policies
 
-`FullSlotBootstrap` accepts independent Fourier compilers and evaluators, a periodic-reduction component and a modulus-raising component. Use it directly when a named profile does not describe the desired construction. The [composition guide](../how-to/compose-bootstrap-circuit) shows the constructor and replacement points.
+`bootstrap.plan` accepts keyword arguments that replace individual choices, and `dataclasses.replace` on the returned plan changes any field afterwards:
 
 | Choice | Control | Effect |
 |---|---|---|
-| Raising relation | `modulus_raising` and its supplied keys | Centered extension or intermediate-secret encapsulation |
-| Entry and scale schedule | `source_depth`, `input_depth`, `input_scale`, `target_scales` | Coordinate conversion, coefficient-product targets and available depth |
-| Fourier decomposition | Stage counts and `scale_stage` on transform compilers | Rotation workload, factor placement and group consumption |
-| Polynomial evaluation | Binary, Blocked or Even evaluator | Shared basis, multiplication/relinearization schedule and rounding |
-| Giant-step quotient | `aggregate` or `independent` | One shared QP quotient or per-giant transitions; different workspace and rounding |
-| Weighted products | `product_implementation`, `product_chunk_size` | Native or selected generated implementation and expression extent |
-| Key inventory | Shared `EvaluationKeySet` and `create_evaluation_keys` | Reuse existing groups and provision missing material across the composition |
-| Key-switch lift | `modup_method` | Default exact lift or CRT alternatives requiring a compatible noise budget |
-| Material reuse | `retain_diagonals`, `retain_constants` | Resident storage versus repeated preparation |
+| Raising relation | `modulus_raise`, `intermediate_weight` | Centered extension or intermediate-secret encapsulation |
+| Entry and scale schedule | `input_scale`, `target_scales` | Coordinate conversion and per-depth arithmetic targets |
+| Fourier decomposition | `coeffs_to_slots_plan`, `slots_to_coeffs_plan` | Rotation workload, factor placement and depth consumption |
+| Periodic reduction | `eval_mod`, `polynomial_plan` | Approximation and polynomial-evaluation schedule |
+| Giant-step quotient | `giant_step_reduction` | One shared QP quotient or per-giant quotients |
+| Weighted products | `product_implementation`, `product_chunk_size` | Native or generated implementation and expression extent |
+| Key-switch basis conversion | `basis_conversion` | Exact conversion or CRT alternatives with a larger noise term |
 | Diagonal storage | `compress_diagonals` | Lossless compression of eligible encoded integers |
-| Slot semantics | `message_domain` | Complex branches or generator-five real-slot reconstruction |
+| Slot semantics | `message_domain` | Complex branches or real-slot reconstruction |
 
-Changing a polynomial evaluator preserves the selected coefficients; changing a profile can change the polynomial, Fourier stages and raw bound together. Fixed-weight secrets and auxiliary primes are separate choices from both. No profile automatically searches this design space or chooses a security target for the caller.
+No profile searches this design space or chooses a security target for the caller.
 
 ## 6. Performance and material footprint
 
-These measurements were collected on October 31, 2026, on an **NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition**, with $N=65536$, 32768 complex slots and one ciphertext per request. All configurations use the same random unit-modulus complex message and main-secret coefficients, source-basis entry, compressed diagonals and `product_implementation="auto"` with chunk size 16. The measured 3/30 coefficient-to-slot baby steps are 8192, 512, 32 and 4.
+These measurements were collected on November 24, 2026, on an **NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition** (300 W power limit) at 2272 MHz SM clock, with $N=65536$, 32768 complex slots, int32 residues, a uniform ternary main secret, `intermediate_weight=48`, `basis_conversion="normalized_crt"` and one ciphertext per request. Inputs are uniformly random complex messages with $|\Re z|,|\Im z|\le1$ encrypted at the preset's maximum depth. Every configuration refreshes to depth 16.
 
-The first five rows use Binary evaluation and independent giant-step quotients. The two Blocked rows and both sparse-secret rows use aggregate quotients. The sparse-secret profile evaluates its even seed through a degree-15 Blocked schedule. Each configuration provisions an initially empty `EvaluationKeySet` through `create_evaluation_keys`, allowing full and active-basis keys to share storage across consumers. The final row selects `modup_method="normalized_crt"`; every other row uses the exact lift.
+| Preset | Depth transition | Graph latency (ms) | Max absolute error | Keys (GiB) | Graph peak allocated (GiB) |
+|---|---|---:|---:|---:|---:|
+| `slots32768-scale40-depth20-boot4` | 20 → 16 | 25.15 | 2.56e-06 | 2.10 | 3.07 |
+| `slots32768-scale40-depth24-boot8` | 24 → 16 | 31.96 | 2.34e-06 | 2.99 | 4.21 |
+| `slots32768-scale40-depth29-boot13` | 29 → 16 | 41.71 | 2.82e-06 | 5.15 | 6.58 |
+| `slots32768-scale50-depth24-boot8` | 24 → 16 | 36.06 | 2.6e-06 | 3.75 | 5.11 |
+| `slots32768-scale50-depth28-boot12` | 28 → 16 | 49.75 | 2.6e-06 | 6.92 | 8.45 |
 
-| Construction | Rotation-key strategy | Remaining depths | Ordinary latency (ms) | Graph latency (ms) | Max absolute error | Keys (GiB) | Diagonals (GiB) | Ordinary peak allocated (GiB) | Ordinary peak reserved (GiB) | Graph peak allocated (GiB) | Graph peak reserved (GiB) |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Centered 7/44 · Binary · int64 | Signed power | 8 | 335.8 | 325.1 | 1.035e-03 | 6.221 | 4.1596 | 11.821 | 12.564 | 11.821 | 12.662 |
-| Centered 7/44 · Binary · int64 | Power + babies | 8 | 265.5 | 256.5 | 1.033e-03 | 10.473 | 4.1596 | 16.083 | 16.932 | 16.084 | 16.961 |
-| Centered 7/44 · Binary · int64 | All required | 8 | 235.5 | 228.1 | 1.026e-03 | 14.383 | 4.1596 | 20.011 | 20.857 | 20.012 | 20.887 |
-| Centered 8/28 · Binary · int64 | Power + babies | 8 | 229.7 | 221.9 | 1.030e-03 | 10.473 | 4.1596 | 16.084 | 16.662 | 16.085 | 16.723 |
-| Centered 8/28 · Binary · int64 · three STC stages | Power + babies | 7 | 204.3 | 198.2 | 1.049e-03 | 10.373 | 3.6637 | 15.500 | 16.010 | 15.501 | 16.039 |
-| Centered 7/44 · Blocked · int64 | All required | 8 | 161.9 | 156.0 | 1.027e-03 | 15.335 | 4.1596 | 21.010 | 21.355 | 21.005 | 21.922 |
-| Centered 7/44 · Blocked · int32 | All required | 8 | 157.0 | 151.2 | 1.013e-03 | 14.427 | 4.1596 | 20.071 | 20.387 | 20.067 | 20.979 |
-| Sparse-secret 3/30 · int32 · exact lift | All required | 8 | 67.3 | 64.6 | 8.240e-06 | 6.133 | 0.3905 | 7.410 | 7.699 | 7.410 | 7.740 |
-| Sparse-secret 3/30 · int32 · normalized CRT lift | All required | 8 | 62.8 | 60.0 | 8.864e-06 | 6.133 | 0.3905 | 7.411 | 7.701 | 7.411 | 7.742 |
-
-### Parameters and depth
-
-The int64 centered configurations use `slots32768_scale50_depth27_int64` with generator five: 28 Q primes in single-prime depth groups, four P primes and seven key digits. The int32 centered configuration uses 56 Q primes in two-prime groups, eight P primes and seven key digits. Both centered configurations use input scale $2^{50}$. These digit counts describe their configured full-basis keys. Fresh compact keys partition the active Q suffix, and the shared inventory depends on the stage schedule and reuse opportunities.
-
-The sparse-secret configuration uses the example's 51 Q primes, 11 main P primes and five key digits, plus the low and return hints. Its intermediate secret has weight 32; the main secret shared by all cases has weight $N/2$. The source basis contains two primes, and input scale is their product divided by 32, approximately $2^{50.226}$. Its output contains 18 Q rows and eight remaining depth transitions. The int32 centered output also contains 18 rows and eight remaining transitions; the int64 7/44 output contains nine rows and eight transitions. The three-STC 8/28 variant leaves seven transitions.
-
-Every measured callable sets `input_depth=engine.max_depth`, so entry starts directly from its source Q basis. The table's refresh windows therefore equal the remaining-depth counts. The introductory centered example instead uses the default preceding-group entry, which consumes an additional transition before the normalized core.
-
-### Timing and memory scope
-
-Measurements were taken on October 31, 2026, using an AMD Ryzen Threadripper PRO 9965WX, PyTorch 2.13, CUDA 13.0 and driver 580.196.07. PyTorch retained 24 intra-op and 24 inter-op threads. Each configuration ran in three fresh processes, with three warm-ups and twenty timed samples per execution mode. Ordinary execution preceded Graph capture. All cases used `radix2_compact_group8_smem8` with Montgomery twiddle tables. The table reports the median of the three process medians; the complete study contains 27 processes and 1080 timed samples.
-
-Both modes execute the same prepared Eager entry/core/finish callable on a fixed resident input. Ordinary latency measures the call followed by synchronization; Graph latency measures replay followed by synchronization. Key generation, material preparation, input copying and Graph capture are outside the timed interval. The first output was checked against the configured output depth, Q rows, shape, representation and entry/core/finish scale equations. Repeated ordinary output, warmed Graph output and the final output after each timing series matched that result exactly. Inputs were checked unchanged after timing. Within each configuration, input, evaluation-key, encoded-material and qualification-output hashes also matched across the three processes. The six int64 centered cases shared the same input ciphertext.
-
-Keys and diagonals are retained Tensor payloads. The complete application inventory remains resident, including keys shared across consumers; encapsulation includes the low and return hints. Each memory column gives the maximum corresponding peak across the three processes. Ordinary peaks come from a separate post-warm-up complete call; Graph peaks cover capture and replay. Allocated memory includes numerical tables, input/output, workspace and resident client verification keys and contexts. Reserved memory additionally includes allocator-held capacity.
-
-### Numerical interpretation
-
-On this message, the centered configurations have maximum absolute error near $10^{-3}$. Their polynomial references, evaluated from the actual reduction inputs and propagated through SlotsToCoeffs, have errors between $1.023\times10^{-3}$ and $1.037\times10^{-3}$. Execution residuals relative to those references range from $3.557\times10^{-5}$ to $1.042\times10^{-4}$. Because the reference starts at the actual reduction input, it retains preceding input, modulus-raising and Fourier errors. The residual measures subsequent reduction and SlotsToCoeffs differences. Each reported maximum is evaluated separately.
-
-The sparse-secret exact-lift configuration has maximum error $8.24\times10^{-6}$, polynomial-reference error $8.203\times10^{-6}$ and execution residual $1.853\times10^{-6}$. The normalized-CRT configuration gives $8.864\times10^{-6}$, $8.217\times10^{-6}$ and $1.87\times10^{-6}$ respectively. Both passed the $10^{-4}$ absolute-error screen. Centered configurations retained the model-relative screen $4\max(10^{-4},\epsilon_{\rm reference})$.
-
-The centered and sparse-secret constructions change the raising relation, source-modulus/scale ratio, Fourier stages, polynomial and key material together. The table reports each complete configuration's speed, precision and storage; its secret distributions and auxiliary relations remain part of the selected security model.
+Graph latency is the median of five single replays of the captured `PreparedBootstrap`, separated by one second of idle time; key generation, preparation, input copying and capture are outside the timed interval. Under back-to-back replay this GPU reaches its power limit and lowers its clock, and the boot13 replay then takes 45.8–46.2 ms. Keys are the retained payloads of the complete bootstrap inventory, including the two encapsulation keys. Peak allocated memory covers capture and replay and includes keys, encoded diagonals and constants, input/output and workspace. The error is the maximum over all slots of $|\mathrm{decrypt}-z|$ for the Graph output.
 
 ## Example sources
 
 ::: details Complete runner
-<<< @/../examples/25_experimental_bootstrap.py
-:::
-
-::: details Sparse-secret encapsulation parameters
-<<< @/../examples/_bootstrap_encapsulation_parameters.py
+<<< @/../examples/09_algorithms_bootstrap.py
 :::

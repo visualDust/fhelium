@@ -17,10 +17,11 @@ from fhelium.errors import (
 
 
 def _config(**overrides: object) -> CkksConfig:
-    base = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    base = CkksConfig.parse(Preset.slots8192_scale40_depth7)
     parameters: dict[str, object] = {
-        "default_scale": base.default_scale,
-        "q_depth_groups": base.q_depth_groups,
+        "q_moduli": base.q_moduli,
+        "q_bases": base.q_bases,
+        "scales": base.scales,
         "p_moduli": base.p_moduli,
         "logN": base.logN,
     }
@@ -246,7 +247,7 @@ def test_assessment_is_immutable() -> None:
 
 
 def test_config_convenience_assesses_the_exact_complete_qp_product() -> None:
-    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
 
     assessment = assess_config_security(config)
 
@@ -257,12 +258,8 @@ def test_config_convenience_assesses_the_exact_complete_qp_product() -> None:
 
 
 def test_engine_enforces_security_budget_at_construction() -> None:
-    source = CkksConfig.parse(Preset.slots32768_scale30_depth45_int64)
-    config = CkksConfig(
-        default_scale=source.default_scale,
-        q_depth_groups=source.q_depth_groups[:13],
-        p_moduli=source.p_moduli[:1],
-        logN=14,
+    config = CkksConfig.catalog_suffix_chain(
+        logN=14, scale_bits=30, depth=12, p_count=1, catalog_logN=16
     )
     assert config.security_assessment.status == "exceeds"
 

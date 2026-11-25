@@ -17,6 +17,7 @@ def iter_rotations(
     tensors: Mapping[str, torch.Tensor],
     attributes: Mapping[str, object],
     *,
+    seeds: Sequence[torch.Tensor | None] | None = None,
     output_ntt: bool = False,
 ) -> Iterator[torch.Tensor]:
     """Yield direct rotations from one shared decomposition of component one.
@@ -24,7 +25,8 @@ def iter_rotations(
     ``source`` is a coefficient standard CT2. A None key denotes the identity.
     Outputs own their payloads; consuming one does not retain previous
     outputs. The hoisted digits (``rotation_digits``) live only until the
-    iterator completes or is closed.
+    iterator completes or is closed. Seeded keys have entries in ``seeds``
+    and the round count ``attributes["key_rounds"]``.
     """
     names, tables = mapping_tables(tensors)
     options = key_switch_options(attributes)
@@ -42,7 +44,8 @@ def iter_rotations(
         if output_ntt
         else source[0]
     )
-    for key, step in zip(keys, steps, strict=True):
+    seeds = [None] * len(keys) if seeds is None else seeds
+    for key, step, seed in zip(keys, steps, seeds, strict=True):
         if key is None:
             yield (
                 ntt_ops.transform(
@@ -54,5 +57,11 @@ def iter_rotations(
         else:
             assert digits is not None
             yield ckks_ops.rotate_hoisted(
-                c0, digits, key, int(step), names, tables, **options
+                c0,
+                digits,
+                key,
+                int(step),
+                names,
+                tables,
+                **{**options, "key_seeds": [] if seed is None else [seed]},
             )

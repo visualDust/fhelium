@@ -134,7 +134,7 @@ def test_generated_material_requests_reuse_references_after_program_restore():
     from fhelium.ir import Program
     from fhelium.ir.dialects import core
 
-    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
     physical = {"dtype": StringAttr("torch.int64"), "device": StringAttr("cpu")}
     typ = core.MessageType().with_state(physical)
     rns_description = parameter_description(
@@ -146,7 +146,7 @@ def test_generated_material_requests_reuse_references_after_program_restore():
         prime_ids=[0, 1],
         direction="forward",
         index=1,
-        ntt_backend="radix2_compact_group16_smem8",
+        ntt_backend="radix2_compact",
     )
     for description, identity in (
         (rns_description, rns_parameter_identity(config, (0, 1), physical)),

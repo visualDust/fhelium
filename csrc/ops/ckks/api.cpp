@@ -99,58 +99,6 @@ void add_strided_plaintext_component_(at::Tensor& ciphertext_component,
                            rns_params);
 }
 
-at::Tensor rescale_drop_leading_prime_nearest(
-    const at::Tensor& remaining_residues,
-    const at::Tensor& drop_prime_inverse_mont,
-    const at::Tensor& dropped_residue,
-    const at::Tensor& rns_params,
-    int64_t half_drop_prime) {
-  FHELIUM_DISPATCH_CPU_GPU(rescale_drop_leading_prime_nearest,
-                           remaining_residues,
-                           drop_prime_inverse_mont,
-                           dropped_residue,
-                           rns_params,
-                           half_drop_prime);
-}
-
-void rescale_drop_leading_prime_nearest_(
-    at::Tensor& remaining_residues,
-    const at::Tensor& drop_prime_inverse_mont,
-    const at::Tensor& dropped_residue,
-    const at::Tensor& rns_params,
-    int64_t half_drop_prime) {
-  FHELIUM_DISPATCH_CPU_GPU(rescale_drop_leading_prime_nearest_,
-                           remaining_residues,
-                           drop_prime_inverse_mont,
-                           dropped_residue,
-                           rns_params,
-                           half_drop_prime);
-}
-
-at::Tensor rescale_drop_leading_prime_truncate(
-    const at::Tensor& remaining_residues,
-    const at::Tensor& drop_prime_inverse_mont,
-    const at::Tensor& dropped_residue,
-    const at::Tensor& rns_params) {
-  FHELIUM_DISPATCH_CPU_GPU(rescale_drop_leading_prime_truncate,
-                           remaining_residues,
-                           drop_prime_inverse_mont,
-                           dropped_residue,
-                           rns_params);
-}
-
-void rescale_drop_leading_prime_truncate_(
-    at::Tensor& remaining_residues,
-    const at::Tensor& drop_prime_inverse_mont,
-    const at::Tensor& dropped_residue,
-    const at::Tensor& rns_params) {
-  FHELIUM_DISPATCH_CPU_GPU(rescale_drop_leading_prime_truncate_,
-                           remaining_residues,
-                           drop_prime_inverse_mont,
-                           dropped_residue,
-                           rns_params);
-}
-
 at::Tensor apply_coefficient_galois_automorphism(
     const at::Tensor& residues,
     const at::Tensor& source_indices,
@@ -167,6 +115,17 @@ at::Tensor apply_ntt_galois_automorphism(const at::Tensor& residues_ntt,
                                          const at::Tensor& source_indices) {
   FHELIUM_DISPATCH_CPU_GPU(
       apply_ntt_galois_automorphism, residues_ntt, source_indices);
+}
+
+void add_ntt_galois_automorphism_(at::Tensor& target,
+                                  const at::Tensor& residues_ntt,
+                                  const at::Tensor& source_indices,
+                                  const at::Tensor& rns_params) {
+  FHELIUM_DISPATCH_CPU_GPU(add_ntt_galois_automorphism_,
+                           target,
+                           residues_ntt,
+                           source_indices,
+                           rns_params);
 }
 
 at::Tensor keyswitch_moddown_qp_to_q(
@@ -192,7 +151,10 @@ void keyswitch_accumulate_digit_products_(
     const at::Tensor& key_switch_key_digit,
     const at::Tensor& rns_params,
     int64_t key_digit_row_start,
-    const std::optional<at::Tensor>& source_indices) {
+    int64_t key_p_row_start,
+    const std::optional<at::Tensor>& source_indices,
+    const std::optional<at::Tensor>& key_seed,
+    int64_t key_rounds) {
   FHELIUM_DISPATCH_CPU_GPU(keyswitch_accumulate_digit_products_,
                            accumulator0_qp,
                            accumulator1_qp,
@@ -200,25 +162,34 @@ void keyswitch_accumulate_digit_products_(
                            key_switch_key_digit,
                            rns_params,
                            key_digit_row_start,
-                           source_indices);
+                           key_p_row_start,
+                           source_indices,
+                           key_seed,
+                           key_rounds);
 }
 
 void keyswitch_accumulate_products_(
-    at::Tensor& accumulator0_qp,
-    at::Tensor& accumulator1_qp,
+    at::TensorList accumulators0_qp,
+    at::TensorList accumulators1_qp,
     at::TensorList extended_digits_ntt_qp,
-    const at::Tensor& key_switch_key,
+    at::TensorList key_switch_keys,
     const at::Tensor& rns_params,
     int64_t key_digit_row_start,
-    const std::optional<at::Tensor>& source_indices) {
+    int64_t key_p_row_start,
+    at::TensorList source_indices,
+    at::TensorList key_seeds,
+    int64_t key_rounds) {
   FHELIUM_DISPATCH_GPU(keyswitch_accumulate_products_,
-                       accumulator0_qp,
-                       accumulator1_qp,
+                       accumulators0_qp,
+                       accumulators1_qp,
                        extended_digits_ntt_qp,
-                       key_switch_key,
+                       key_switch_keys,
                        rns_params,
                        key_digit_row_start,
-                       source_indices);
+                       key_p_row_start,
+                       source_indices,
+                       key_seeds,
+                       key_rounds);
 }
 
 }  // namespace fhelium::ckks

@@ -18,16 +18,16 @@ from xdsl.ir import Block, Operation
 
 from fhelium import compile as fh_compile
 from fhelium import ir
-from fhelium.config import CkksConfig, Preset
+from fhelium.config import CkksConfig
 
 
 def _config() -> CkksConfig:
-    source = CkksConfig.parse(Preset.slots16384_scale50_depth12_int64)
-    return CkksConfig(
-        default_scale=source.default_scale,
-        q_depth_groups=source.q_depth_groups[:6],
-        p_moduli=source.p_moduli,
+    return CkksConfig.catalog_suffix_chain(
         logN=12,
+        scale_bits=50,
+        depth=5,
+        p_count=2,
+        catalog_logN=15,
         enforce_security_budget=False,
     )
 
@@ -145,7 +145,7 @@ def test_rescale_analysis_preserves_ntt_montgomery_output() -> None:
     lowered = next(
         operation
         for operation in program.single_block().ops
-        if isinstance(operation, ir.dialects.rns.RescaleDropLeadingPrimesOp)
+        if isinstance(operation, ir.dialects.rns.RescaleOp)
     )
     assert lowered.input_domain == StringAttr("ntt")
     assert lowered.output_domain == StringAttr("ntt")
@@ -153,11 +153,11 @@ def test_rescale_analysis_preserves_ntt_montgomery_output() -> None:
 
 def test_rescale_lowering_preserves_the_requested_prime_group() -> None:
     source = _config()
-    grouped = CkksConfig(
-        default_scale=source.default_scale,
+    grouped = CkksConfig.suffix_chain(
+        scale=source.scale_at(0),
         q_depth_groups=(
-            (*source.q_depth_groups[0], *source.q_depth_groups[1]),
-            *source.q_depth_groups[2:],
+            source.q_moduli[:2],
+            *((q,) for q in source.q_moduli[2:]),
         ),
         p_moduli=source.p_moduli,
         logN=source.logN,
@@ -186,12 +186,15 @@ def test_rescale_lowering_preserves_the_requested_prime_group() -> None:
         )
     )
 
-    drops = [
+    (lowered,) = [
         operation
         for operation in program.single_block().ops
-        if isinstance(operation, ir.dialects.rns.RescaleDropLeadingPrimesOp)
+        if isinstance(operation, ir.dialects.rns.RescaleOp)
     ]
-    assert sum(drop.drop_count.value.data for drop in drops) == 2
+    assert [
+        int(item.value.data)
+        for item in lowered.result.type.state.data["prime_ids"]
+    ] == list(range(2, grouped.num_q_primes))
 
 
 def test_multiply_transition_reuses_one_ntt_value_across_consumers() -> None:
@@ -480,11 +483,14 @@ def test_rotation_sum_assigns_complete_depth_group_and_key_requirements(
     rescale,
 ):
     source = _config()
-    config = CkksConfig(
+    config = CkksConfig.suffix_chain(
         logN=source.logN,
-        q_depth_groups=(source.q_moduli[:2], *source.q_depth_groups[2:]),
+        q_depth_groups=(
+            source.q_moduli[:2],
+            *((q,) for q in source.q_moduli[2:]),
+        ),
         p_moduli=source.p_moduli,
-        default_scale=source.default_scale,
+        scale=source.scale_at(0),
         enforce_security_budget=False,
     )
     ciphertext = _ciphertext_type("coefficient", "standard").with_state(

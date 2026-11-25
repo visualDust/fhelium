@@ -101,7 +101,6 @@ inline void validate_indexed_tables(const torch::Tensor& residues,
 inline void validate_compact_tables(const torch::Tensor& residues,
                                     const torch::Tensor& twiddles,
                                     const torch::Tensor& rns_params,
-                                    const int64_t grouped_stage_count,
                                     const bool shoup32_supported = false) {
   validate_residues_and_parameters(residues, twiddles, rns_params);
   const bool montgomery = twiddles.dim() == 2;
@@ -114,8 +113,6 @@ inline void validate_compact_tables(const torch::Tensor& residues,
               "on supported CUDA int32 kernels, [prime, N, 2] Shoup32 pairs");
   // The int32 arithmetic ABI requires q < 2^30 and residues in [0, 2q).
   // Shoup pairs hold w in [0,q) and the uint32 word floor(w*2^32/q).
-  TORCH_CHECK(grouped_stage_count >= 2 && grouped_stage_count <= 4,
-              "grouped_stage_count must be 2, 3, or 4");
 }
 
 inline void validate_shared_memory_log_n(const int64_t shared_memory_log_n) {

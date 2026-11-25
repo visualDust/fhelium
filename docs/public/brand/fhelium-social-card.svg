@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
   <title id="title">FHElium social card</title>
-  <desc id="desc">FHElium, FHE built from the tensor up, with Python, PyTorch, CPU, and CUDA.</desc>
+  <desc id="desc">FHElium, FHE built from the tensor up, with Python, PyTorch, CPU, CUDA, and ROCm.</desc>
   <defs>
     <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#0b0d13"/>
@@ -67,13 +67,15 @@
       <rect x="130" y="0" width="132" height="46" rx="23"/>
       <rect x="276" y="0" width="91" height="46" rx="23"/>
       <rect x="381" y="0" width="107" height="46" rx="23"/>
+      <rect x="502" y="0" width="112" height="46" rx="23"/>
     </g>
     <g fill="#dbe0ee" font-size="18" font-weight="560" text-anchor="middle">
       <text x="134" y="532">Python</text>
       <text x="272" y="532">PyTorch</text>
       <text x="397.5" y="532">CPU</text>
       <text x="510.5" y="532">CUDA</text>
+      <text x="634" y="532">ROCm</text>
     </g>
-    <text x="78" y="592" fill="#77819a" font-size="17" font-weight="500" letter-spacing="0.4">fhelium.550w.host</text>
+    <text x="78" y="592" fill="#77819a" font-size="17" font-weight="500" letter-spacing="0.4">github.com/visualDust/fhelium</text>
   </g>
 </svg>

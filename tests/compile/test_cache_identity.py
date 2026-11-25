@@ -18,17 +18,13 @@ from fhelium.compile._cache import (
     build_manifest,
     entry_key,
     relocate_materials,
-    relocate_structural_materials,
     runtime_cacheable,
     source_identity,
-    structural_entry_key,
 )
-from fhelium.compile._specialization import CallSignature, describe_call
+from fhelium.compile._specialization import CallSignature
 from fhelium.ir import Program
 from fhelium.values import (
-    Ciphertext,
     CompressedPlaintext,
-    Plaintext,
     RotationKey,
 )
 
@@ -203,7 +199,7 @@ def test_engine_loop_with_closure_plaintexts_and_global_keys(tmp_path):
     from fhelium import CkksConfig, Preset
     from fhelium.eager import Engine
 
-    engine = Engine(CkksConfig.parse(Preset.slots8192_scale40_depth7_int64))
+    engine = Engine(CkksConfig.parse(Preset.slots8192_scale40_depth7))
     key = RotationKey(
         torch.zeros((1, 2, 2, 8), dtype=torch.int64),
         (0, 1),
@@ -288,150 +284,3 @@ def test_atomic_entry_keeps_program_and_manifest_together_and_corruption_misses(
     assert cache.load("ab123") is None
     files[0].write_text("{")
     assert cache.load("ab123") is None
-
-
-def _ckks_leaf(kind, rows, depth, scale, *, batch=(), dtype=torch.int64):
-    primes = tuple(range(depth, depth + rows))
-    if kind is Ciphertext:
-        return Ciphertext(
-            torch.zeros((2, *batch, rows, 8), dtype=dtype), depth, scale, primes
-        )
-    if kind is Plaintext:
-        return Plaintext(
-            None,
-            depth,
-            scale,
-            torch.zeros((*batch, rows, 8), dtype=dtype),
-            "rns",
-            "coefficient",
-            "Q",
-            "standard",
-            primes,
-        )
-    return CompressedPlaintext(
-        torch.zeros((*batch, rows, 2), dtype=dtype),
-        8,
-        "strided_sparse",
-        depth,
-        scale,
-        "ntt",
-        "Q",
-        "montgomery",
-        primes,
-        torch.zeros((*batch, rows), dtype=dtype),
-    )
-
-
-@pytest.mark.parametrize("kind", [Ciphertext, Plaintext, CompressedPlaintext])
-def test_structural_ckks_identity_and_relocation_use_current_owner(kind):
-    first = _ckks_leaf(kind, 4, 0, 16.0, batch=(3,))
-    current = _ckks_leaf(kind, 2, 2, 32.0, batch=(3,))
-    old_source, new_source = (
-        _weighted([first, first]),
-        _weighted([current, current]),
-    )
-    old = source_identity(old_source, material_names=None, structural=True)
-    new = source_identity(new_source, material_names=None, structural=True)
-    assert old.key == new.key
-    assert _identity(old_source).key != _identity(new_source).key
-    assert structural_entry_key(
-        old, describe_call({"value": first})
-    ) == structural_entry_key(new, describe_call({"value": current}))
-    bindings = {"main": first.data}
-    if kind is CompressedPlaintext:
-        bindings["implicit"] = first.implicit_data
-    manifest = build_manifest(old, bindings, {}, structural=True)
-    assert manifest is not None
-    rebound, providers, states = relocate_structural_materials(
-        new_source, json.loads(json.dumps(manifest))
-    )
-    assert rebound["main"] is current.data and states["main"] is current
-    assert providers == []
-    if kind is CompressedPlaintext:
-        assert rebound["implicit"] is current.implicit_data
-        assert states["implicit"] is current.implicit_data
-    changed_batch = _ckks_leaf(kind, 2, 2, 32.0, batch=(4,))
-    changed_dtype = _ckks_leaf(kind, 2, 2, 32.0, batch=(3,), dtype=torch.int32)
-    for other in (changed_batch, changed_dtype):
-        other_identity = source_identity(
-            _weighted([other, other]), material_names=None, structural=True
-        )
-        assert new.key != other_identity.key
-        assert structural_entry_key(
-            new, describe_call({"value": current})
-        ) != structural_entry_key(new, describe_call({"value": other}))
-        with pytest.raises(CacheIneligible):
-            relocate_structural_materials(_weighted([other, other]), manifest)
-
-
-def test_structural_keys_scalars_and_raw_tensor_aliases_remain_fixed():
-    first = RotationKey(
-        torch.zeros((1, 2, 3, 8), dtype=torch.int64),
-        (0, 1, 2),
-        ((0,),),
-        rotation_step=1,
-    )
-    current = replace(first, data=torch.ones_like(first.data))
-    different_layout = replace(current, digit_prime_ids=((0, 1),))
-
-    def identity(value):
-        return source_identity(
-            _weighted([value, 2]), material_names=None, structural=True
-        )
-
-    old, new = identity(first), identity(current)
-    assert old.key == new.key and new.key != identity(different_layout).key
-    assert structural_entry_key(
-        new, describe_call({"key": current})
-    ) != structural_entry_key(new, describe_call({"key": different_layout}))
-    assert structural_entry_key(
-        new, describe_call({"scalar": 2})
-    ) != structural_entry_key(new, describe_call({"scalar": 3}))
-    manifest = build_manifest(old, {"key": first.data}, {}, structural=True)
-    assert manifest is not None
-    rebound, _, states = relocate_structural_materials(
-        _weighted([current, 2]), manifest
-    )
-    assert rebound["key"] is current.data and states["key"] is current
-    with pytest.raises(CacheIneligible):
-        relocate_structural_materials(
-            _weighted([different_layout, 2]), manifest
-        )
-    before = _ckks_leaf(CompressedPlaintext, 4, 0, 16.0)
-    after = _ckks_leaf(CompressedPlaintext, 2, 2, 32.0)
-    # The raw reference follows the wrapper, exercising already-assigned alias tokens.
-    raw_before = source_identity(
-        _weighted([before, before.data]), material_names=None, structural=True
-    )
-    raw_after = source_identity(
-        _weighted([after, after.data]), material_names=None, structural=True
-    )
-    assert raw_before.key != raw_after.key
-    assert structural_entry_key(
-        new, describe_call({"raw": before.data})
-    ) != structural_entry_key(new, describe_call({"raw": after.data}))
-
-
-def test_structural_nonstandard_layout_is_a_candidate_miss_not_a_rejection():
-    first = _ckks_leaf(Plaintext, 4, 0, 16.0)
-    current = _ckks_leaf(Plaintext, 2, 2, 32.0)
-    first = replace(first, data=torch.zeros((8, 4), dtype=torch.int64).t())
-    current = replace(current, data=torch.zeros((8, 2), dtype=torch.int64).t())
-    old_source, new_source = (
-        _weighted([first, first]),
-        _weighted([current, current]),
-    )
-    old = source_identity(old_source, material_names=None, structural=True)
-    new = source_identity(new_source, material_names=None, structural=True)
-    assert old.key != new.key
-    manifest = build_manifest(old, {"plain": first.data}, {}, structural=True)
-    assert manifest is not None
-    same_state = replace(first, data=first.data.clone())
-    bindings, _, states = relocate_structural_materials(
-        _weighted([same_state, same_state]), manifest
-    )
-    assert (
-        bindings["plain"] is same_state.data and states["plain"] is same_state
-    )
-    with pytest.raises(CacheIneligible):
-        relocate_structural_materials(new_source, manifest)

@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 // Torch operator schemas for CKKS key generation. Each adapter builds the
@@ -20,24 +21,24 @@ using fhelium::TensorTable;
 using fhelium::ckks::KeySwitchKeyLayout;
 
 #define FHELIUM_KEY_LAYOUT_SCHEMA                                     \
-  "Tensor seed, Tensor cdt_table, str ntt_backend, int q_row_start, " \
+  "Tensor seed, Tensor cdt_table, str ntt_backend, int[] q_rows, "    \
   "int[] digit_sizes, int[] p_rows, Tensor? uniform_by_digit, "       \
   "Tensor? error_by_digit"
 
 #define FHELIUM_KEY_LAYOUT_PARAMETERS                        \
   const at::Tensor &seed, const at::Tensor &cdt_table,       \
-      std::string_view ntt_backend, int64_t q_row_start,     \
+      std::string_view ntt_backend, c10::IntArrayRef q_rows, \
       c10::IntArrayRef digit_sizes, c10::IntArrayRef p_rows, \
       const std::optional<at::Tensor>&uniform_by_digit,      \
       const std::optional<at::Tensor>&error_by_digit
 
 KeySwitchKeyLayout layout(std::string_view ntt_backend,
-                          int64_t q_row_start,
+                          c10::IntArrayRef q_rows,
                           c10::IntArrayRef digit_sizes,
                           c10::IntArrayRef p_rows) {
   KeySwitchKeyLayout result;
   result.ntt_backend = std::string(ntt_backend);
-  result.q_row_start = q_row_start;
+  result.q_rows = q_rows.vec();
   result.digit_sizes = digit_sizes.vec();
   result.p_rows = p_rows.vec();
   return result;
@@ -82,50 +83,83 @@ at::Tensor create_public_key_op(
                                           error_coefficients);
 }
 
-at::Tensor create_key_switch_key_op(const at::Tensor& source_secret_key,
+using KeyTuple =
+    std::tuple<at::Tensor, std::optional<at::Tensor>, std::vector<int64_t>,
+               int64_t>;
+
+KeyTuple key_tuple(const fhelium::ckks::KeySwitchKey& key) {
+  return {key.data, key.seed_rows, key.spec.moduli, key.spec.rounds};
+}
+
+fhelium::ckks::KeySwitchKey key_value(const at::Tensor& data,
+                                      const at::Tensor& seed_rows,
+                                      c10::IntArrayRef moduli,
+                                      std::string_view prf,
+                                      int64_t rounds) {
+  return {data, seed_rows,
+          {std::string(prf), rounds, std::vector<int64_t>(moduli.begin(), moduli.end())}};
+}
+
+at::Tensor expand_key_switch_key_op(const at::Tensor& data,
+                                    const at::Tensor& seed_rows,
+                                    c10::IntArrayRef moduli,
+                                    std::string_view prf,
+                                    int64_t rounds) {
+  return fhelium::ckks::expand(key_value(data, seed_rows, moduli, prf, rounds)).data;
+}
+
+at::Tensor compact_key_switch_key_op(const at::Tensor& data,
+                                     const at::Tensor& seed_rows,
+                                     c10::IntArrayRef moduli,
+                                     std::string_view prf,
+                                     int64_t rounds) {
+  return fhelium::ckks::compact(key_value(data, seed_rows, moduli, prf, rounds)).data;
+}
+
+KeyTuple create_key_switch_key_op(const at::Tensor& source_secret_key,
                                     const at::Tensor& destination_secret_key,
                                     const std::vector<std::string>& names,
                                     at::TensorList tables,
                                     FHELIUM_KEY_LAYOUT_PARAMETERS) {
-  return fhelium::ckks::create_key_switch_key(
+  return key_tuple(fhelium::ckks::create_key_switch_key(
       source_secret_key,
       destination_secret_key,
       TensorTable(names, tables),
       seed,
       cdt_table,
-      layout(ntt_backend, q_row_start, digit_sizes, p_rows),
+      layout(ntt_backend, q_rows, digit_sizes, p_rows),
       uniform_by_digit,
-      error_by_digit);
+      error_by_digit));
 }
 
-at::Tensor create_relinearization_key_op(const at::Tensor& secret_key,
+KeyTuple create_relinearization_key_op(const at::Tensor& secret_key,
                                          const std::vector<std::string>& names,
                                          at::TensorList tables,
                                          FHELIUM_KEY_LAYOUT_PARAMETERS) {
-  return fhelium::ckks::create_relinearization_key(
+  return key_tuple(fhelium::ckks::create_relinearization_key(
       secret_key,
       TensorTable(names, tables),
       seed,
       cdt_table,
-      layout(ntt_backend, q_row_start, digit_sizes, p_rows),
+      layout(ntt_backend, q_rows, digit_sizes, p_rows),
       uniform_by_digit,
-      error_by_digit);
+      error_by_digit));
 }
 
-at::Tensor create_galois_key_op(const at::Tensor& secret_key,
+KeyTuple create_galois_key_op(const at::Tensor& secret_key,
                                 int64_t galois_element,
                                 const std::vector<std::string>& names,
                                 at::TensorList tables,
                                 FHELIUM_KEY_LAYOUT_PARAMETERS) {
-  return fhelium::ckks::create_galois_key(
+  return key_tuple(fhelium::ckks::create_galois_key(
       secret_key,
       galois_element,
       TensorTable(names, tables),
       seed,
       cdt_table,
-      layout(ntt_backend, q_row_start, digit_sizes, p_rows),
+      layout(ntt_backend, q_rows, digit_sizes, p_rows),
       uniform_by_digit,
-      error_by_digit);
+      error_by_digit));
 }
 
 at::Tensor convert_secret_key_op(const at::Tensor& secret_key,
@@ -153,14 +187,22 @@ TORCH_LIBRARY_FRAGMENT(fhelium_ckks_ops, m) {
   m.def(
       "create_key_switch_key(Tensor source_secret_key, "
       "Tensor destination_secret_key, str[] table_names, Tensor[] "
-      "tables, " FHELIUM_KEY_LAYOUT_SCHEMA ") -> Tensor");
+      "tables, " FHELIUM_KEY_LAYOUT_SCHEMA
+      ") -> (Tensor, Tensor?, int[], int)");
   m.def(
       "create_relinearization_key(Tensor secret_key, str[] table_names, "
-      "Tensor[] tables, " FHELIUM_KEY_LAYOUT_SCHEMA ") -> Tensor");
+      "Tensor[] tables, " FHELIUM_KEY_LAYOUT_SCHEMA
+      ") -> (Tensor, Tensor?, int[], int)");
   m.def(
       "create_galois_key(Tensor secret_key, int galois_element, "
       "str[] table_names, Tensor[] tables, " FHELIUM_KEY_LAYOUT_SCHEMA
-      ") -> Tensor");
+      ") -> (Tensor, Tensor?, int[], int)");
+  m.def(
+      "expand_key_switch_key(Tensor data, Tensor seed_rows, int[] moduli, "
+      "str prf, int rounds) -> Tensor");
+  m.def(
+      "compact_key_switch_key(Tensor data, Tensor seed_rows, int[] moduli, "
+      "str prf, int rounds) -> Tensor");
   m.def(
       "convert_secret_key(Tensor secret_key, str[] table_names, "
       "Tensor[] tables, str ntt_backend) -> Tensor");
@@ -173,5 +215,7 @@ TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CompositeImplicitAutograd, m) {
   m.impl("create_key_switch_key", &create_key_switch_key_op);
   m.impl("create_relinearization_key", &create_relinearization_key_op);
   m.impl("create_galois_key", &create_galois_key_op);
+  m.impl("expand_key_switch_key", &expand_key_switch_key_op);
+  m.impl("compact_key_switch_key", &compact_key_switch_key_op);
   m.impl("convert_secret_key", &convert_secret_key_op);
 }

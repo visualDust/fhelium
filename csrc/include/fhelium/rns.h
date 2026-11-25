@@ -235,6 +235,7 @@ FHELIUM_API void crt_basis_extend_out_(
     const at::Tensor& target_reciprocals,
     const std::optional<at::Tensor>& source_normalizers,
     const std::optional<at::Tensor>& source_reciprocals,
+    const std::optional<at::Tensor>& target_offsets,
     at::Tensor& output);
 
 /// Extends standard residues to a target basis by a supplied CRT lift matrix.
@@ -244,9 +245,11 @@ FHELIUM_API void crt_basis_extend_out_(
 /// `source_parameters`. Let $D = \prod_i q_i$, $D_i = D/q_i$, and $u_i =
 /// D_i^{-1} \bmod q_i$. Without normalizers, `matrix[i][t]` $= D_i u_i R \bmod
 /// p_t$ and the result is $\sum_i a_i D_i u_i R \bmod p_t$. With
-/// `source_normalizers` $u_i$ and `source_reciprocals`, each source row is
-/// first replaced by $a_i u_i \bmod q_i$, and `matrix[i][t]` $= D_i R \bmod
-/// p_t$. The output has shape `[*batch, target_limb, coefficient]` with reduced
+/// `source_normalizers` $u_i$, `source_reciprocals` and `target_offsets`, each
+/// source row becomes the centered residue $c_i = [a_i u_i]_{q_i}$ in
+/// $[-(q_i-1)/2, (q_i-1)/2]$, `matrix[i][t]` $= D_i R \bmod p_t$,
+/// `target_offsets[t]` $= -\sum_i \frac{q_i-1}{2} D_i R \bmod p_t$, and the
+/// result is $\sum_i c_i D_i R \bmod p_t$. The output has shape `[*batch, target_limb, coefficient]` with reduced
 /// Montgomery residues for the target primes described by `target_parameters`.
 /// Neither lift selects the least nonnegative representative modulo $D$.
 ///
@@ -262,7 +265,8 @@ FHELIUM_API at::Tensor crt_basis_extend(
     const at::Tensor& matrix,
     const at::Tensor& target_reciprocals,
     const std::optional<at::Tensor>& source_normalizers = std::nullopt,
-    const std::optional<at::Tensor>& source_reciprocals = std::nullopt);
+    const std::optional<at::Tensor>& source_reciprocals = std::nullopt,
+    const std::optional<at::Tensor>& target_offsets = std::nullopt);
 
 /// Extends source residues to a target basis through mixed-radix digits in one
 /// fused pass.

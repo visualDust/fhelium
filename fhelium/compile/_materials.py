@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import weakref
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, cast
 
@@ -46,26 +47,39 @@ def material_sources(resources):
     )
 
 
+_ALLOCATED_SYMBOLS: weakref.WeakKeyDictionary[Operation, set[str]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
 def material_symbol(operation, prefix: str) -> str:
-    """Allocate a symbol in the containing Program without renumbering old ones."""
+    """Allocate a symbol in the containing Program without renumbering old ones.
+
+    A symbol is in use when a reference in the Program or a material description names it. The references are collected once per root operation; later allocations in that root are added to the same set, so passes that declare many materials do not rescan the Program. Program clones have their own root and collect their references again.
+    """
     from xdsl.dialects.builtin import DictionaryAttr
 
     root = operation
     while root.parent_op() is not None:
         root = root.parent_op()
-    used = {
-        op.symbol.data
-        for op in root.walk()
-        if isinstance(op, core.MaterialRefOp) and op.symbol is not None
-    }
+    used = _ALLOCATED_SYMBOLS.get(root)
+    if used is None:
+        used = {
+            op.symbol.data
+            for op in root.walk()
+            if isinstance(op, core.MaterialRefOp) and op.symbol is not None
+        }
+        _ALLOCATED_SYMBOLS[root] = used
     descriptions = root.attributes.get("fhelium.material_descriptions")
-    if isinstance(descriptions, DictionaryAttr):
-        used.update(descriptions.data)
+    described = (
+        descriptions.data if isinstance(descriptions, DictionaryAttr) else {}
+    )
     result = prefix
     index = 2
-    while result in used:
+    while result in used or result in described:
         result = f"{prefix}_{index}"
         index += 1
+    used.add(result)
     return result
 
 
@@ -206,7 +220,8 @@ def parameter_description(
     return {
         "kind": kind,
         "ring_dimension": config.N,
-        "q_depth_groups": [list(group) for group in config.q_depth_groups],
+        "q_moduli": list(config.q_moduli),
+        "q_bases": [list(basis) for basis in config.q_bases],
         "p_moduli": list(config.p_moduli),
         "galois_generator": config.galois_generator,
         **fields,
@@ -226,10 +241,37 @@ def key_description(
     }
     if isinstance(key, KeySwitchKey):
         result["digit_prime_ids"] = [list(rows) for rows in key.digit_prime_ids]
+        if not key.is_expanded:
+            result["seed_rounds"] = key.generated_rounds
     step = getattr(key, "rotation_step", None)
     if step is not None:
         result["rotation_step"] = step
     return result
+
+
+def key_placeholder(
+    symbol: str,
+    description: Mapping[str, object],
+    descriptions: dict[str, dict[str, object]] | Program,
+    state: Mapping[str, Attribute] | None = None,
+) -> core.MaterialRefOp:
+    """Return a key placeholder declaring an expanded key.
+
+    The declared form is that of Engine-generated keys: both components are
+    resident. Linking a compact key conflicts with this declaration.
+    ``state`` adds key type state.
+    """
+    from fhelium.ir.dialects import ckks
+
+    key = core.MaterialRefOp(
+        ckks.EvaluationKeyType().with_state(dict(state or {})),
+        symbol=symbol,
+    )
+    if isinstance(descriptions, dict):
+        descriptions[symbol] = dict(description)
+    else:
+        descriptions.set_material_description(symbol, dict(description))
+    return key
 
 
 def named_material_tensors(
@@ -243,9 +285,7 @@ def named_material_tensors(
         elif isinstance(value, TensorResident):
             tensors = value._resident_tensors
             for index, tensor in enumerate(tensors):
-                result[id(tensor)] = (
-                    name if len(tensors) == 1 else f"{name}.{index}"
-                )
+                result[id(tensor)] = name if index == 0 else f"{name}.{index}"
         else:
             raise TypeError(
                 "Material names refer to Tensors or TensorResident values"
@@ -281,6 +321,7 @@ def prepare_material_bindings(
     cache: dict[tuple[object, ...], object] = {}
     missing: list[str] = []
     seen: set[str] = set()
+    selected_keys: dict[str, object] = {}
     for operation in compilation.program.walk():
         if (
             not isinstance(operation, core.MaterialRefOp)
@@ -292,10 +333,23 @@ def prepare_material_bindings(
             continue
         seen.add(symbol)
         description = descriptions.get(symbol, {})
+        if description.get("kind") == "KeySeed":
+            # A seed row accompanies the key bound to its key symbol; an
+            # unbound key is reported under its own symbol.
+            owner = selected_keys.get(cast(str, description["key"]))
+            if owner is None:
+                continue
+            seed = owner.generated_seed
+            if seed is None:
+                missing.append(symbol)
+            else:
+                compilation.material_bindings[symbol] = seed
+            continue
         selected = _key_for_symbol(compilation, operation, description, keys)
         if selected is not None:
             _represent_key_layout(compilation, symbol, selected)
             compilation.material_bindings[symbol] = _key_tensor(selected)
+            selected_keys[symbol] = selected
             continue
         selection = _provider_selection(operation, description)
         tensor = (
@@ -604,12 +658,7 @@ def _inventory_key_for_symbol(
                     and config is not None
                     and isinstance(depth, IntegerAttr)
                 ):
-                    q_ids = tuple(
-                        range(
-                            config.q_row_start(int(depth.value.data)),
-                            config.num_q_primes,
-                        )
-                    )
+                    q_ids = config.q_prime_ids(int(depth.value.data))
                 ring = state.get("ring_dimension")
                 dtype = state.get("dtype")
                 device = state.get("device")
@@ -1022,9 +1071,8 @@ def _provider_tensor(
     )
     from fhelium.backend.ckks.tables import KeySwitchTables
     from fhelium.backend.rns.tables import (
-        RescaleTables,
         moddown_inverse_tables,
-        rescale_inverse_matrix,
+        rescale_tables,
     )
     from fhelium.backend.ntt.context import NttContext
     from fhelium.backend.rns.context import RnsContext
@@ -1188,23 +1236,69 @@ def _provider_tensor(
         q_ids = tuple(cast(Iterable[int], description["q_prime_ids"]))
         p_ids = tuple(cast(Iterable[int], description["p_prime_ids"]))
         drop_ids = tuple(cast(Iterable[int], description["drop_prime_ids"]))
+        target_ids = tuple(cast(Iterable[int], description["target_prime_ids"]))
         rp, rd = (
             str(description.get("moddown_rounding", "nearest")),
             str(description.get("rescale_rounding", "nearest")),
         )
-        token = (id(context), "joint_quotient", q_ids, p_ids, drop_ids, rp, rd)
+        conversion = str(description.get("basis_conversion", "exact"))
+        token = (
+            id(context),
+            "joint_quotient",
+            q_ids,
+            p_ids,
+            drop_ids,
+            target_ids,
+            rp,
+            rd,
+            conversion,
+        )
         if token not in cache:
             cache[token] = moddown_rescale_tables(
                 context,
                 q_ids,
                 p_ids,
                 drop_ids,
+                target_prime_ids=target_ids,
                 moddown_rounding=rp,
                 rescale_rounding=rd,
+                basis_conversion=conversion,
             )
         return cast(dict[str, torch.Tensor], cache[token]).get(
             str(description["name"])
         )
+    if kind == "rescale_table":
+        source = tuple(cast(Iterable[int], description["source_prime_ids"]))
+        target = tuple(cast(Iterable[int], description["target_prime_ids"]))
+        rounding = str(description.get("rounding", "nearest"))
+        if isinstance(provider, CkksDeviceResources):
+            tensors, _ = provider.rescale_operands(
+                source,
+                target,
+                rounding=rounding,
+                input_domain=cast(
+                    str, description.get("input_domain", "coefficient")
+                ),
+            )
+        else:
+            token = (
+                id(context),
+                "rescale",
+                source,
+                target,
+                rounding,
+                needs_ntt,
+            )
+            if token not in cache:
+                cache[token] = rescale_tables(
+                    context,
+                    source,
+                    target,
+                    rounding=rounding,
+                    ntt_context=ntt if needs_ntt else None,
+                )[0]
+            tensors = cast(dict[str, torch.Tensor], cache[token])
+        return tensors.get(str(description["name"]))
     if "depth" not in description or "name" not in description:
         return None
     depth = int(cast(int, description["depth"]))
@@ -1324,7 +1418,7 @@ def _provider_tensor(
             key_digits,
             bool(description.get("rescale", False)),
             description.get("rounding", "nearest"),
-            description.get("modup_method", "exact"),
+            description.get("basis_conversion", "exact"),
         )
         if token not in cache:
             base_token = (id(context), "key_switch_rns")
@@ -1341,7 +1435,9 @@ def _provider_tensor(
                 depth,
                 rescale=bool(description.get("rescale", False)),
                 rounding=str(description.get("rounding", "nearest")),
-                modup_method=str(description.get("modup_method", "exact")),
+                basis_conversion=str(
+                    description.get("basis_conversion", "exact")
+                ),
                 key_prime_ids=key_rows,
                 digit_prime_ids=key_digits,
             ).tensor_operands()
@@ -1356,7 +1452,10 @@ def _provider_tensor(
                 config.galois_generator,
             )
         if (
-            name in {"moddown_inverses", "p_inverse", "moddown_half"}
+            (
+                name in {"moddown_inverses", "p_inverse", "moddown_half"}
+                or name.startswith("moddown_crt_")
+            )
             and "q_prime_ids" in description
             and "p_prime_ids" in description
         ):
@@ -1367,6 +1466,9 @@ def _provider_tensor(
                     tuple(cast(Iterable[int], description["p_prime_ids"])),
                     rounding="nearest" if name == "moddown_half" else "floor",
                     depth=depth,
+                    basis_conversion=str(
+                        description.get("basis_conversion", "exact")
+                    ),
                 )
                 .get(name)
             )
@@ -1378,7 +1480,7 @@ def _provider_tensor(
                     "nearest" if name == "moddown_half" else "floor",
                 )
             ),
-            modup_method=str(description.get("modup_method", "exact")),
+            basis_conversion=str(description.get("basis_conversion", "exact")),
             rescale=bool(description.get("rescale", False)),
             rescale_rounding=str(
                 description.get("rescale_rounding", "nearest")
@@ -1404,31 +1506,7 @@ def _provider_tensor(
         ]:
             return None
         return tensors.get(name)
-    include_p = description.get("basis", "Q") == "QP"
-    rows = context.rns_layout.row_count(depth, include_p=include_p)
-    count = len(config.q_depth_groups[depth])
-    if isinstance(provider, CkksDeviceResources):
-        tensors, _ = provider.rescale_operands(
-            rows,
-            count,
-            include_p=include_p,
-            input_domain=cast(
-                str, description.get("input_domain", "coefficient")
-            ),
-        )
-    else:
-        token = (id(context), "rescale")
-        if token not in cache:
-            cache[token] = RescaleTables(
-                context, rescale_inverse_matrix(context)
-            )
-        tensors, _ = cast(RescaleTables, cache[token]).tensor_operands(
-            rows,
-            count,
-            include_p=include_p,
-            ntt_context=ntt if needs_ntt else None,
-        )
-    return tensors.get(name)
+    return None
 
 
 __all__ = ["prepare_material_bindings"]

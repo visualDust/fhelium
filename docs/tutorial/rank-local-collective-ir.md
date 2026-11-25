@@ -1,13 +1,13 @@
 # Transform rank-local collective IR
 
-**Example source:** [`examples/24_distributed_collective_ir.py`](https://github.com/VisualDust/fhelium/blob/main/examples/24_distributed_collective_ir.py)
+**Example source:** [`examples/25_distributed_collective_ir.py`](https://github.com/VisualDust/fhelium/blob/main/examples/25_distributed_collective_ir.py)
 
-Example 24 constructs a rank-local Program containing collective operations and applies a caller-selected Compile pass to expose a generic reduction region. It compares two valid representations of ciphertext-add all-reduce without launching distributed execution.
+Example 25 constructs a rank-local Program containing collective operations and applies a caller-selected Compile pass to expose a generic reduction region. It compares two valid representations of ciphertext-add all-reduce without launching distributed execution.
 
 ## Run the example
 
 ```bash
-python examples/24_distributed_collective_ir.py
+python examples/25_distributed_collective_ir.py
 ```
 
 The script requires neither a process group nor multiple devices because it only builds and transforms IR.
@@ -79,7 +79,7 @@ Neither choice becomes a permanent framework-wide lowering policy.
 
 ::: details Source
 
-<<< @/../examples/24_distributed_collective_ir.py
+<<< @/../examples/25_distributed_collective_ir.py
 
 :::
 

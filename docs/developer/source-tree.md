@@ -28,7 +28,9 @@ fhelium/
   serialization/   versioned public-value and Compilation persistence
   artifacts/       logical artifact references, generations, and repository policy
   residency/       live-value ownership, accounting, admission, plans, and lifetimes
-  experimental/    opt-in bootstrap and multiparty CKKS
+  algorithms/      polynomial evaluation and linear transforms over Eager arithmetic
+  bootstrap/       CKKS full-slot bootstrapping plans, keys, preparation, and steps
+  experimental/    opt-in multiparty CKKS
   benchmarks/      benchmark definitions, evidence schemas, and built-in runners
   utils/           narrowly shared algorithms such as rotation decomposition
   _cli/            command-line entry points
@@ -197,7 +199,8 @@ Run `python scripts/generate_native_wrappers.py` after changing a native schema 
 | Residency requests, policy, plans, and controller | `fhelium/residency/request.py`, `policy.py`, `plan.py`, `controller.py` |
 | Leases and tensor-free snapshots | `fhelium/residency/lease.py`, `fhelium/residency/snapshot.py` |
 | Versioned value and Compilation serialization | `fhelium/serialization/value.py`, `fhelium/serialization/compilation.py` |
-| Composable bootstrapping and presets | `fhelium/experimental/bootstrap/` |
+| Polynomial evaluation and linear transforms | `fhelium/algorithms/polynomial/`, `fhelium/algorithms/linear/` |
+| Bootstrapping plans, keys, and periodic reduction | `fhelium/bootstrap/` |
 | Multiparty CKKS | `fhelium/experimental/mpc/` |
 
 ## Focused test entry points

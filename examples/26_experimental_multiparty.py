@@ -68,7 +68,7 @@ def fixed_ternary(engine, *, shift: int) -> torch.Tensor:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_engine_args(parser, default_preset="slots8192-scale40-depth7-int64")
+    add_engine_args(parser, default_preset="slots8192-scale40-depth7")
     args = parser.parse_args()
 
     engine = make_engine(args)

@@ -151,7 +151,6 @@ class SelectNttImplementationsPass:
                 selected = choose(
                     selected=_text(operation, "ntt_backend"),
                     algorithm=_text(operation, "ntt_algorithm"),
-                    group_width=_integer(operation, "ntt_group_width"),
                     radix=_integer(operation, "ntt_radix"),
                     tables=_text(operation, "ntt_table_layout"),
                     device_type=device_type,

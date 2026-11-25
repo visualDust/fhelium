@@ -24,7 +24,7 @@ from fhelium.compile.passes.backend import (
 
 backend = OperationBackend()
 ntt_selection = fc.Pipeline((
-    AssignNttImplementationPass(algorithm="radix2_compact", group_width=8),
+    AssignNttImplementationPass(algorithm="radix2_compact"),
     SelectNttImplementationsPass(backend.registry),
 ))
 ```
@@ -33,9 +33,9 @@ This example constrains compact radix-2 transforms. The other native algorithm f
 
 `SelectNttImplementationsPass` consults the selected implementation's schedule selection function. Existing assignments remain constraints. Native selection uses represented placement, transform size, algorithm choices and table layout; it applies a stable default rather than timing candidates. Missing facts can leave a choice unresolved. It does not fill an unknown device or move operands.
 
-When a selected transform requires additional tables, the pass introduces ordinary material references. Supply these separately through `Compilation.material_bindings`, optionally using `prepare_material_bindings` with an existing resource provider. Supplied table operands are not discarded or regenerated. Compact radix-2 group sizes share a table layout, so selecting a different group can retain the same table Tensors. Other layouts are not silently substituted.
+When a selected transform requires additional tables, the pass introduces ordinary material references. Supply these separately through `Compilation.material_bindings`, optionally using `prepare_material_bindings` with an existing resource provider. Supplied table operands are not discarded or regenerated. The two compact radix-2 policies differ in twiddle encoding and therefore in table layout; selection never substitutes one layout for another.
 
-Capture retains the table layout chosen by an Eager data provider. Compile may select grouping when the Engine used its default; a caller-supplied `ntt_backend` constrains the schedule. Context transforms and registered native operations use the same prepared numerical calls. The Context owns table provision, while execution consumes the supplied Tensor operands.
+Capture retains the table layout chosen by an Eager data provider. Compile completes the schedule when the Engine used its default; a caller-supplied `ntt_backend` constrains the schedule. Context transforms and registered native operations use the same prepared numerical calls. The Context owns table provision, while execution consumes the supplied Tensor operands.
 
 ## Fusion representation
 

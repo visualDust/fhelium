@@ -21,15 +21,24 @@ from fhelium.ir import (
     EXECUTION_IMPLEMENTATION_ATTRIBUTE,
     operation_dependencies,
 )
-from fhelium.ir.dialects import ckks, core, fusion, rns
+from fhelium.ir.dialects import ckks, core, fusion, ntt
+
+
+def _transform(operation: Operation) -> bool:
+    structure = generated_structure(operation)
+    return structure is not None and structure.layout == "transform"
+
+
+_INVERSE_TRANSFORMS = (
+    ntt.NttMontgomeryToCoefficientStandardOp,
+    ntt.NttMontgomeryToCoefficientMontgomeryOp,
+)
 
 from ._expressions import (
-    NTT_OPS,
-    ARITHMETIC_OPS,
-    SUPPORTED_OPERATIONS,
     component_axis,
 )
 from ._layout import (
+    generated_structure,
     Shape,
     check_ntt_extent,
     check_ntt_layouts,
@@ -42,12 +51,6 @@ def _outer(value: SSAValue) -> SSAValue:
         parent = value.owner.parent_op()
         if isinstance(parent, fusion.FusedOp):
             return _outer(parent.inputs[value.index])
-        if isinstance(parent, ckks.RepeatOp) and value.index:
-            return _outer(
-                (*parent.shared, *parent.row(0), *parent.carried)[
-                    value.index - 1
-                ]
-            )
     return value
 
 
@@ -66,6 +69,73 @@ def _integers(value: object) -> tuple[int, ...] | None:
     return tuple(result)
 
 
+@dataclass(frozen=True)
+class _TypeFacts:
+    """Region-compatibility facts read from one value type's state."""
+
+    facts: tuple[tuple[str, object], ...]
+    prime_ids: tuple[int, ...] | None
+    device: torch.device | None
+
+
+_TYPE_FACTS: dict[int, tuple[object, _TypeFacts | None]] = {}
+
+
+def _type_facts(value_type: object) -> _TypeFacts | None:
+    """Return the basis, prime, ring, dtype and device facts of ``value_type``.
+
+    ``None`` marks a type that cannot enter a region: a non-integer residue dtype, an empty prime basis, or a declared non-CUDA device. Results are cached by type identity because one ciphertext type is shared by many operands.
+    """
+    entry = _TYPE_FACTS.get(id(value_type))
+    if entry is not None and entry[0] is value_type:
+        return entry[1]
+    state = getattr(getattr(value_type, "state", None), "data", {})
+    facts: list[tuple[str, object]] = []
+    result: _TypeFacts | None = None
+    for field in ("basis", "prime_ids", "ring_dimension", "dtype"):
+        fact = state.get(field)
+        if fact is None or fact == StringAttr("unknown"):
+            continue
+        if field == "dtype" and isinstance(fact, StringAttr):
+            fact = fact.data.removeprefix("torch.")
+            if fact not in ("int32", "int64"):
+                break
+        if field == "prime_ids":
+            ids = _integers(fact)
+            if ids is not None and not ids:
+                break
+        facts.append((field, fact))
+    else:
+        device = None
+        declared = state.get("device")
+        valid = True
+        if isinstance(declared, StringAttr) and declared.data != "unknown":
+            try:
+                device = torch.device(declared.data)
+            except RuntimeError:
+                valid = False
+            else:
+                valid = device.type == "cuda"
+        if valid:
+            result = _TypeFacts(tuple(facts), _integers(state.get("prime_ids")), device)
+    _TYPE_FACTS[id(value_type)] = (value_type, result)
+    return result
+
+
+_TYPE_SHAPES: dict[int, tuple[object, Shape]] = {}
+
+
+def _type_shape(value_type: object) -> Shape:
+    """Return the declared storage shape of ``value_type``, cached by type identity."""
+    entry = _TYPE_SHAPES.get(id(value_type))
+    if entry is not None and entry[0] is value_type:
+        return entry[1]
+    state = getattr(getattr(value_type, "state", None), "data", {})
+    shape = _integers(state.get("shape"))
+    _TYPE_SHAPES[id(value_type)] = (value_type, shape)
+    return shape
+
+
 def _layout_resolver():
     @cache
     def layout(value: SSAValue) -> tuple[Shape, bool]:
@@ -79,26 +149,18 @@ def _layout_resolver():
             # Storage is shared, but the result type determines which axis
             # represents ciphertext components rather than ordinary batches.
             return shape, component_axis(value.type)
-        if isinstance(owner, SUPPORTED_OPERATIONS + NTT_OPS):
-            operands = (
-                owner.operands[:1]
-                if isinstance(owner, NTT_OPS + (rns.KeySwitchDigitProductOp,))
-                else owner.operands[:-1]
-                if isinstance(owner, ARITHMETIC_OPS)
-                else owner.operands
-            )
-            facts = [layout(v) for v in operands]
+        structure = (
+            generated_structure(owner) if isinstance(owner, Operation) else None
+        )
+        if structure is not None:
+            facts = [
+                layout(owner.operands[i])
+                for i in structure.operands("data", "compact")
+            ]
             return result_layout(
-                type(owner),
-                [f[0] for f in facts],
-                [f[1] for f in facts],
-                component=(
-                    int(owner.component.value.data)
-                    if isinstance(owner, rns.ExtractComponentOp)
-                    else None
-                ),
+                structure, [f[0] for f in facts], [f[1] for f in facts]
             )
-        return _integers(_state(value).get("shape")), component_axis(value.type)
+        return _type_shape(value.type), component_axis(value.type)
 
     return layout
 
@@ -129,41 +191,27 @@ def _supported_dependencies(operation: Operation) -> bool:
         or spec.effect != "pure"
     ):
         return False
+    structure = generated_structure(operation)
+    # Generated key products address the active Q rows as one stored slice.
+    if structure is None or "key_q_rows" in operation.attributes:
+        return False
     dependencies = operation_dependencies(operation)
-    if isinstance(operation, NTT_OPS):
-        payload_indices = (0,)
-    elif isinstance(operation, rns.KeySwitchDigitProductOp):
-        payload_indices = (0, 1)
-    elif isinstance(operation, ARITHMETIC_OPS):
-        payload_indices = tuple(range(len(operation.operands) - 1))
-    else:
-        payload_indices = tuple(range(len(operation.operands)))
+    payload = structure.operands("data", "compact", "key")
     for result_index in range(len(operation.results)):
-        for operand_index in payload_indices:
+        for operand_index in payload:
+            role = structure.roles[operand_index]
             position = dependencies.kind(
                 result_index, operand_index, "coefficient"
             )
             limb = dependencies.kind(result_index, operand_index, "limb")
-            if isinstance(operation, NTT_OPS):
+            if structure.layout == "transform":
                 allowed_positions = ("mixing",)
-            elif (
-                isinstance(
-                    operation,
-                    (
-                        ckks.AddCompressedPlaintextOp,
-                        ckks.MultiplyCompressedPlaintextOp,
-                    ),
-                )
-                and operand_index > 0
-            ):
+            elif role == "compact":
                 allowed_positions = ("element", "reindexed")
             else:
                 allowed_positions = ("element",)
             allowed_limbs = (
-                ("element", "reindexed")
-                if isinstance(operation, rns.KeySwitchDigitProductOp)
-                and operand_index == 1
-                else ("element",)
+                ("element", "reindexed") if role == "key" else ("element",)
             )
             if position not in allowed_positions or limb not in allowed_limbs:
                 return False
@@ -196,10 +244,8 @@ class OperationRecipe:
 
 def recipe_dependencies(operation: Operation) -> tuple:
     """Return state reads used while constructing the dependency recipe."""
-    if isinstance(
-        operation,
-        (ckks.AddCompressedPlaintextOp, ckks.MultiplyCompressedPlaintextOp),
-    ):
+    structure = generated_structure(operation)
+    if structure is not None and "compact" in structure.roles:
         from fhelium.ir._dependencies import string_fact
 
         return (string_fact(operation, "compression_layout"),)
@@ -214,21 +260,29 @@ def operation_recipe(operation: Operation) -> OperationRecipe:
         if len(operation.operands) == len(operation.results) == 1:
             return OperationRecipe("cast", (0,))
         return OperationRecipe("reject")
-    if not isinstance(operation, SUPPORTED_OPERATIONS + NTT_OPS):
+    structure = generated_structure(operation)
+    if (
+        structure is None
+        or not structure.accepted
+        or not _supported_dependencies(operation)
+    ):
         return OperationRecipe("reject")
-    if not _supported_dependencies(operation):
-        return OperationRecipe("reject")
-    if isinstance(operation, NTT_OPS):
-        return OperationRecipe("ntt", (0,), 1)
-    if isinstance(operation, rns.KeySwitchDigitProductOp):
-        return OperationRecipe("digit", (0,), len(operation.operands) - 1)
-    if isinstance(operation, ARITHMETIC_OPS):
-        return OperationRecipe(
-            "arithmetic",
-            tuple(range(len(operation.operands) - 1)),
-            len(operation.operands) - 1,
-        )
-    return OperationRecipe("structural", tuple(range(len(operation.operands))))
+    parameters = structure.operands("parameters")
+    return OperationRecipe(
+        _RECIPE_KINDS[structure.layout],
+        structure.operands("data", "compact"),
+        parameters[0] if parameters else None,
+    )
+
+
+_RECIPE_KINDS = {
+    "same": "arithmetic",
+    "select": "structural",
+    "pack": "structural",
+    "key_product": "digit",
+    "component_product": "arithmetic",
+    "transform": "ntt",
+}
 
 
 @dataclass(frozen=True)
@@ -256,10 +310,8 @@ class OperationAnalysis:
     def __init__(
         self,
         recipe: Callable[[Operation], OperationRecipe] = operation_recipe,
-        stats: dict | None = None,
     ):
         self.recipe = recipe
-        self.stats = stats
         self.layout = _layout_resolver()
         self.boundary = cache(lambda value: _boundary(value, self.layout))
         self.facts: dict[Operation, OperationFacts] = {}
@@ -269,43 +321,42 @@ class OperationAnalysis:
 
     @staticmethod
     def _compact(value: SSAValue) -> bool:
-        return isinstance(value.type, ckks.CompressedPlaintextType) or any(
-            isinstance(
-                use.operation,
-                (
-                    ckks.AddCompressedPlaintextOp,
-                    ckks.MultiplyCompressedPlaintextOp,
-                ),
-            )
-            and use.index in (1, 2)
-            and use.index < len(use.operation.operands) - 1
-            for use in value.uses
-        )
+        if isinstance(value.type, ckks.CompressedPlaintextType):
+            return True
+        # Compressed rows are plaintexts; a component axis rules them out
+        # without visiting every consumer of a widely shared ciphertext.
+        if component_axis(value.type):
+            return False
+        for use in value.uses:
+            structure = generated_structure(use.operation)
+            if (
+                structure is not None
+                and use.index < len(structure.roles)
+                and structure.roles[use.index] == "compact"
+            ):
+                return True
+        return False
 
     def operation(self, operation: Operation) -> OperationFacts:
         facts = self.facts.get(operation)
         if facts is not None:
-            if self.stats is not None:
-                self.stats["facts_hits"] += 1
             return facts
-        if self.stats is not None:
-            self.stats["facts_misses"] += 1
-        try:
-            facts = self._evaluate(operation)
-        except (ValueError, TypeError, IndexError):
-            facts = OperationFacts(False)
+        facts = self._facts(operation)
         self.facts[operation] = facts
         return facts
+
+    def _facts(self, operation: Operation) -> OperationFacts:
+        try:
+            return self._evaluate(operation)
+        except (ValueError, TypeError, IndexError):
+            return OperationFacts(False)
 
     def _evaluate(self, operation: Operation) -> OperationFacts:
         if EXECUTION_IMPLEMENTATION_ATTRIBUTE in operation.attributes:
             return OperationFacts(False)
         if not isinstance(
-            operation,
-            SUPPORTED_OPERATIONS
-            + NTT_OPS
-            + (core.MaterialRefOp, UnrealizedConversionCastOp),
-        ):
+            operation, (core.MaterialRefOp, UnrealizedConversionCastOp)
+        ) and generated_structure(operation) is None:
             return OperationFacts(False)
         if isinstance(operation, core.MaterialRefOp):
             return OperationFacts(True)
@@ -341,13 +392,11 @@ class RegionMatcher:
     """
 
     def __init__(self, *, include_ntt: bool):
-        self.supported = SUPPORTED_OPERATIONS + (NTT_OPS if include_ntt else ())
+        self.include_ntt = include_ntt
 
         self.analysis: OperationAnalysis | None = None
         self.layout = _layout_resolver()
         self.boundary = cache(self._boundary)
-        self.whole_transform = cache(self._whole_transform)
-        self.check_mac = True
         self.compact = OperationAnalysis._compact
         self.reset()
 
@@ -361,7 +410,7 @@ class RegionMatcher:
         if (
             not facts.valid
             or facts.anchors
-            and NTT_OPS[0] not in self.supported
+            and not self.include_ntt
         ):
             self._permanent_rejection = True
             return False
@@ -436,59 +485,7 @@ class RegionMatcher:
                 count = mapping.get(key, 0) + delta
                 self._set(mapping, key, count if count else None)
 
-    def _whole_transform(self, operation):
-        from fhelium.backend.ntt._selection import select_operation_policy
-        from fhelium.backend.ntt._stages import endpoint_stages
-
-        shape, _ = self.layout(operation.operands[0])
-        log_n = shape[-1].bit_length() - 1 if shape is not None else None
-        policy = select_operation_policy(operation, log_n=log_n)
-        stages = (
-            endpoint_stages(policy, log_n, isinstance(operation, NTT_OPS[2:]))
-            if policy is not None
-            else None
-        )
-        return stages is None or stages.whole
-
     def _check_operation(self, operation: Operation) -> bool:
-        if (
-            self.check_mac
-            and isinstance(operation, NTT_OPS)
-            and self.whole_transform(operation)
-        ):
-            if self.known.get("carried_mac"):
-                return False
-            self.known["whole_transform"] = True
-        if isinstance(operation, ckks.RepeatOp):
-            from ._mac import mac_body
-
-            if (
-                operation.carried
-                and mac_body(operation) is None
-                or not operation.carried
-                and operation.body.block.args[0].uses
-            ):
-                return False
-            if operation.carried:
-                if self.known.get("whole_transform"):
-                    return False
-                self.known["carried_mac"] = True
-            before_count, before_anchors = self.count, self.anchors
-            for op in tuple(operation.body.block.ops)[:-1]:
-                if not self._check_operation(op):
-                    return False
-            count = operation.count.value.data - 1
-            self.count += count * (self.count - before_count)
-            self.anchors += count * (self.anchors - before_anchors)
-            return True
-        if isinstance(operation, ckks.SelectBatchOp):
-            # Round-indexed rows of a MAC body become indexed loads.
-            from ._mac import round_rows
-
-            parent = operation.parent_op()
-            return isinstance(parent, ckks.RepeatOp) and operation in (
-                round_rows(parent) or ()
-            )
         if self.analysis is not None:
             return self._check_facts(self.analysis.operation(operation))
         return self._check_operation_uncached(operation)
@@ -514,17 +511,17 @@ class RegionMatcher:
                 return False
         elif isinstance(operation, core.MaterialRefOp):
             return True
-        elif isinstance(operation, self.supported):
-            if recipe is None and not _supported_dependencies(operation):
+        elif (structure := generated_structure(operation)) is not None and (
+            self.include_ntt or structure.layout != "transform"
+        ):
+            if recipe is None:
+                recipe = operation_recipe(operation)
+            if recipe.kind == "reject":
                 return False
-            # The generated plaintext-add expression accepts NTT operands.
-            if (
-                isinstance(operation, rns.AddPlaintextOp)
-                and operation.polynomial_domain.data != "ntt"
-            ):
-                return False
-            self.count += 1
-            if isinstance(operation, NTT_OPS):
+            # Natively a tensor product takes five kernels, so one product
+            # alone meets the minimum region size.
+            self.count += 2 if structure.layout == "component_product" else 1
+            if structure.layout == "transform":
                 self.anchors += 1
         else:
             return False
@@ -547,55 +544,23 @@ class RegionMatcher:
         numeric_values = (
             tuple(operation.operands[index] for index in recipe.numeric_indices)
             if recipe is not None
-            else operation.operands[:1]
-            if isinstance(operation, NTT_OPS + (rns.KeySwitchDigitProductOp,))
-            else operation.operands[:-1]
-            if isinstance(operation, ARITHMETIC_OPS)
             else operation.operands
         )
-        if recipe is not None:
-            if recipe.parameter_index is not None:
-                self._parameter(
-                    _outer(operation.operands[recipe.parameter_index])
-                )
-        elif isinstance(operation, NTT_OPS):
-            self._parameter(_outer(operation.operands[1]))
-        elif isinstance(operation, ARITHMETIC_OPS):
-            self._parameter(_outer(operation.operands[-1]))
-        elif isinstance(operation, rns.KeySwitchDigitProductOp):
-            self._parameter(_outer(operation.parameters))
+        if recipe is not None and recipe.parameter_index is not None:
+            self._parameter(_outer(operation.operands[recipe.parameter_index]))
         for value in (*numeric_values, *operation.results):
-            state = _state(value)
-            for field in ("basis", "prime_ids", "ring_dimension", "dtype"):
-                fact = state.get(field)
-                if fact is None or fact == StringAttr("unknown"):
-                    continue
-                if field == "dtype" and isinstance(fact, StringAttr):
-                    fact = fact.data.removeprefix("torch.")
-                    if fact not in ("int32", "int64"):
-                        return False
-                if field == "prime_ids":
-                    ids = _integers(fact)
-                    if ids is not None and (
-                        not ids
-                        or ids != tuple(range(ids[0], ids[0] + len(ids)))
-                    ):
-                        return False
+            type_facts = _type_facts(value.type)
+            if type_facts is None:
+                return False
+            for field, fact in type_facts.facts:
                 if field in self.known and self.known[field] != fact:
                     return False
                 self.known[field] = fact
-            declared_device = state.get("device")
-            if (
-                isinstance(declared_device, StringAttr)
-                and declared_device.data != "unknown"
-            ):
-                try:
-                    current = torch.device(declared_device.data)
-                    if devices is not None:
-                        devices[1].append(current)
-                except RuntimeError:
-                    return False
-                if current.type != "cuda" or (
+            current = type_facts.device
+            if current is not None:
+                if devices is not None:
+                    devices[1].append(current)
+                if (
                     self.device is not None
                     and self.device.index is not None
                     and current.index is not None
@@ -615,7 +580,7 @@ class RegionMatcher:
                 if "extent" in self.known and self.known["extent"] != extent:
                     return False
                 self.known["extent"] = extent
-                ids = _integers(state.get("prime_ids"))
+                ids = type_facts.prime_ids
                 if ids is not None and len(ids) != shape[-2]:
                     return False
         return True
@@ -635,12 +600,8 @@ class RegionMatcher:
                 self._set(self.remaining, operand, remaining - 1)
                 if remaining == 1:
                     self._change_boundary(operand, -1)
-        if isinstance(operation, NTT_OPS):
+        if _transform(operation):
             self._change_boundary(operation.operands[0], 1)
-        elif isinstance(operation, ckks.RepeatOp):
-            for op in operation.body.block.ops:
-                if isinstance(op, NTT_OPS):
-                    self._change_boundary(op.operands[0], 1)
         if not isinstance(operation, core.MaterialRefOp):
             for value in operation.results:
                 remaining = sum(
@@ -714,14 +675,6 @@ def match_region(
 ) -> int | None:
     """Return supported computational-op count, zero for plumbing, or None."""
     matcher = RegionMatcher(include_ntt=include_ntt)
-    matcher.check_mac = any(
-        isinstance(operation, ckks.RepeatOp)
-        and any(
-            isinstance(nested, ckks.RepeatOp) and nested.carried
-            for nested in operation.walk()
-        )
-        for operation in operations
-    )
     for operation in operations:
         matcher.append(operation)
     return matcher._result()

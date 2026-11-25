@@ -18,7 +18,7 @@ def test_decryption_phase_matches_across_input_domains(
     component_count: int,
 ) -> None:
     engine = Engine(
-        fh.Preset.slots8192_scale40_depth7_int64,
+        fh.Preset.slots8192_scale40_depth7,
         rng_seed=20260905,
         rng_nonce=component_count,
     )
@@ -86,9 +86,9 @@ def test_delayed_rescale_decrypts_actual_scale_independently_of_default(
 ) -> None:
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
+    base = fh.CkksConfig.parse(fh.Preset.slots16384_scale30_depth22)
     config = fh.CkksConfig.parse(
-        fh.Preset.slots16384_scale25_depth29_int32,
-        default_scale=2.0**16,
+        base.dumps(), scales=(2.0**16,) * len(base.scales)
     )
     engine = Engine(config, rng_seed=91, rng_nonce=3)
     secret = engine.create_secret_key(device=device)

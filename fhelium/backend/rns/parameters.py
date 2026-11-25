@@ -13,7 +13,7 @@ from fhelium.native.wrapper import rns_ops
 
 @dataclass(frozen=True)
 class RnsRowParameters:
-    r"""Device tables for one contiguous ``prime_ids`` interval.
+    r"""Device tables for one ordered ``prime_ids`` sequence.
 
     Every tensor is integral on one execution device. One-dimensional tables
     have shape ``[limb]`` in ``prime_ids`` order. ``montgomery_r2[j]`` is
@@ -30,8 +30,10 @@ class RnsRowParameters:
     native consumers.
 
     ``parameter_row_start`` identifies the first row in the context's
-    depth-zero QP order. ``native_parameters`` is the cached zero-copy
-    ``[parameter, limb]`` view consumed by native RNS kernels.
+    depth-zero QP order. ``native_parameters`` is the cached
+    ``[parameter, limb]`` table consumed by native RNS kernels; it is a
+    zero-copy view when ``prime_ids`` is one interval and a gathered copy
+    otherwise.
     """
 
     prime_ids: tuple[int, ...]
@@ -49,20 +51,15 @@ class RnsRowParameters:
     basis_extension_coefficients: torch.Tensor | None = None
     mixed_radix_propagation_coefficients: torch.Tensor | None = None
 
-    @property
-    def parameter_row_stop(self) -> int:
-        """Exclusive end of this parameter-row interval."""
-
-        return self.parameter_row_start + len(self.prime_ids)
 
 
 class RnsParameterStore:
     r"""Build context-owned parameter views for RNS basis extension.
 
     Each store belongs to one device-local context with ``[Q | P]`` prime
-    order. The configured depth-group boundaries select active Q suffixes;
-    a QP basis appends the fixed P suffix. Views retain the source table
-    storage and preserve its row order.
+    order. The configured depth bases select active Q intervals; a QP basis
+    appends the fixed P rows. Interval selections are views of the source
+    table storage; other selections gather rows in the requested order.
     """
 
     def __init__(
@@ -87,7 +84,6 @@ class RnsParameterStore:
         self.device = device
         self.torch_dtype = torch_dtype
         self.basis_count = rns_layout.chain.basis_count
-        self.basis_row_starts = rns_layout.chain.basis_row_starts
         self.qp_row_stop = rns_layout.chain.total_modulus_count
         self.q_row_stop = rns_layout.chain.num_q_primes
         self.montgomery_reduction_parameter_tables = (
@@ -101,30 +97,24 @@ class RnsParameterStore:
         self.moduli = tuple(moduli)
 
         self._row_parameters = {
-            key: self._build_row_parameters(key[0], key[-1] + 1)
+            key: self._build_row_parameters(key)
             for key in self._required_row_keys()
         }
         self._attach_basis_extension_coefficients()
 
-    def _active_range(self, depth: int, include_p: bool) -> tuple[int, int]:
-        stop = self.qp_row_stop if include_p else self.q_row_stop
-        return self.basis_row_starts[depth], stop
-
     def row_parameters(self, key) -> RnsRowParameters:
-        """Prepare parameter and mixed-radix tables for a contiguous prime interval."""
+        """Prepare parameter and mixed-radix tables for ordered prime ids."""
         key = tuple(key)
         if (
             not key
-            or key != tuple(range(key[0], key[-1] + 1))
-            or not 0 <= key[0] <= key[-1] < self.qp_row_stop
+            or len(set(key)) != len(key)
+            or any(not 0 <= i < self.qp_row_stop for i in key)
         ):
             raise ValueError(
-                "RNS row parameters require a nonempty contiguous prime interval"
+                "RNS row parameters require distinct context prime ids"
             )
         if key not in self._row_parameters:
-            self._row_parameters[key] = self._build_row_parameters(
-                key[0], key[-1] + 1
-            )
+            self._row_parameters[key] = self._build_row_parameters(key)
         result = self._row_parameters[key]
         self._attach_digit_coefficients(result)
         return result
@@ -147,35 +137,39 @@ class RnsParameterStore:
         return list(self.basis_parameters(depth, include_p=include_p).moduli)
 
     def _build_row_parameters(
-        self, row_start: int, row_stop: int
+        self, prime_ids: tuple[int, ...]
     ) -> RnsRowParameters:
         modulus_lo, modulus_hi, neg_inv_modulus_lo, neg_inv_modulus_hi = (
             self.montgomery_reduction_parameter_tables
         )
+        start = prime_ids[0]
+        if prime_ids == tuple(range(start, start + len(prime_ids))):
+            rows: slice | torch.Tensor = slice(start, start + len(prime_ids))
+        else:
+            rows = torch.tensor(
+                prime_ids, dtype=torch.long, device=self.native_parameter_tensor.device
+            )
         return RnsRowParameters(
-            prime_ids=tuple(range(row_start, row_stop)),
-            parameter_row_start=row_start,
-            modulus_tensor=self.modulus_tensor[row_start:row_stop],
-            native_parameters=self.native_parameter_tensor[
-                :, row_start:row_stop
-            ],
+            prime_ids=prime_ids,
+            parameter_row_start=start,
+            modulus_tensor=self.modulus_tensor[rows],
+            native_parameters=self.native_parameter_tensor[:, rows],
             montgomery_reduction_parameters=(
-                modulus_lo[row_start:row_stop],
-                modulus_hi[row_start:row_stop],
-                neg_inv_modulus_lo[row_start:row_stop],
-                neg_inv_modulus_hi[row_start:row_stop],
+                modulus_lo[rows],
+                modulus_hi[rows],
+                neg_inv_modulus_lo[rows],
+                neg_inv_modulus_hi[rows],
             ),
-            montgomery_r2=self.montgomery_r2[row_start:row_stop],
-            scaled_montgomery_r2=self.scaled_montgomery_r2[row_start:row_stop],
-            twice_modulus=self.twice_modulus[row_start:row_stop],
-            moduli=self.moduli[row_start:row_stop],
+            montgomery_r2=self.montgomery_r2[rows],
+            scaled_montgomery_r2=self.scaled_montgomery_r2[rows],
+            twice_modulus=self.twice_modulus[rows],
+            moduli=tuple(self.moduli[i] for i in prime_ids),
         )
 
     def _active_basis_key(
         self, depth: int, *, include_p: bool
     ) -> tuple[int, ...]:
-        start, stop = self._active_range(depth, include_p)
-        return tuple(range(start, stop))
+        return self.rns_layout.prime_ids(depth, include_p=include_p)
 
     def _required_row_keys(self) -> list[tuple[int, ...]]:
         full_rows = len(self.rns_layout.prime_ids(0, include_p=True))

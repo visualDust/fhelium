@@ -1,6 +1,7 @@
 """Repeated callable execution preserves Python and CKKS behavior."""
 
 import collections
+import copy
 
 from typing import Any
 
@@ -55,7 +56,7 @@ def test_callable_where_preserves_tensor_type_checks_and_live_inputs():
 def test_callable_plaintext_arguments_and_static_variants(device):
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
     engine = Engine(config, rng_seed=89)
     secret = engine.create_secret_key(device=device)
     public = engine.create_public_key(secret, device=device)
@@ -82,6 +83,23 @@ def test_callable_plaintext_arguments_and_static_variants(device):
             expected.prime_ids,
         )
     assert len(compiled.specializations) == 2
+
+
+def test_callable_shallow_copy_and_scale_assignment_match_eager():
+    engine = Engine(Preset.slots8192_scale40_depth7, rng_seed=91)
+    public = engine.create_public_key(engine.create_secret_key())
+    message = torch.linspace(-0.02, 0.03, engine.num_slots, dtype=torch.float64)
+    encrypted = engine.encrypt_message(message, public)
+
+    def source(x):
+        small = copy.copy(x)
+        small.scale = x.scale * 16
+        return engine.multiply_integer_scalar(small, 16)
+
+    actual = fc.compile(source, cache=False, graph=False)(encrypted)
+    expected = source(encrypted)
+    torch.testing.assert_close(actual.data, expected.data, rtol=0, atol=0)
+    assert actual.scale == expected.scale
 
 
 @pytest.mark.parametrize("on_miss", ["compile", "error"])
@@ -111,7 +129,7 @@ def test_callable_key_switch_regions_keep_live_key_and_ciphertext_data(device):
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
     engine = Engine(
-        CkksConfig.parse(Preset.slots8192_scale40_depth7_int64), rng_seed=97
+        CkksConfig.parse(Preset.slots8192_scale40_depth7), rng_seed=97
     )
     secret = engine.create_secret_key(device=device)
     public = engine.create_public_key(secret, device=device)
@@ -146,7 +164,7 @@ def test_callable_batch_views_reduction_and_supplied_hoisted_keys(device):
         pytest.skip("CUDA is unavailable")
     from fhelium import Ciphertext, Plaintext
 
-    engine = Engine(Preset.slots8192_scale40_depth7_int64, rng_seed=103)
+    engine = Engine(Preset.slots8192_scale40_depth7, rng_seed=103)
     secret = engine.create_secret_key(device=device)
     public = engine.create_public_key(secret)
     keys = [engine.create_rotation_key(step, secret) for step in (1, 2)]
@@ -189,7 +207,7 @@ def test_callable_fuses_ciphertext_products_after_batch_storage_views(device):
     from fhelium import Ciphertext
     from fhelium.ir.dialects import fusion, rns
 
-    engine = Engine(Preset.slots8192_scale40_depth7_int64, rng_seed=107)
+    engine = Engine(Preset.slots8192_scale40_depth7, rng_seed=107)
     secret = engine.create_secret_key(device=device)
     public = engine.create_public_key(secret)
     x = engine.coefficient_domain_to_ntt_domain(
@@ -217,13 +235,12 @@ def test_callable_fuses_ciphertext_products_after_batch_storage_views(device):
         x = engine.add(x, x)
 
     if device.startswith("cuda"):
-        # Lowering must actually fuse the component convolution, not leave
-        # separate products and a materialized component pack behind.
+        # The component convolution executes inside a fused region.
         program = compiled.specializations[0].compilation.program
         assert any(
             isinstance(op, fusion.FusedOp)
             and any(
-                isinstance(nested, rns.PackThreeComponentsOp)
+                isinstance(nested, rns.TensorProductOp)
                 for nested in op.body.block.ops
             )
             for op in program.single_block("main").ops
@@ -236,7 +253,7 @@ def test_callable_multiplies_live_batched_compressed_plaintexts(device):
         pytest.skip("CUDA is unavailable")
     from fhelium import Ciphertext, CompressedPlaintext
 
-    engine = Engine(Preset.slots8192_scale40_depth7_int64, rng_seed=109)
+    engine = Engine(Preset.slots8192_scale40_depth7, rng_seed=109)
     secret = engine.create_secret_key(device=device)
     public = engine.create_public_key(secret)
     message = torch.linspace(
@@ -285,7 +302,7 @@ def test_compressed_preparation_and_sparse_storage_capture(device, tmp_path):
         pytest.skip("CUDA is unavailable")
     import fhelium as fh
 
-    engine = Engine(Preset.slots8192_scale40_depth7_int64, rng_seed=113)
+    engine = Engine(Preset.slots8192_scale40_depth7, rng_seed=113)
     period = torch.linspace(-0.02, 0.03, 32, dtype=torch.float64, device=device)
     secret = engine.create_secret_key(device=device)
     public = engine.create_public_key(secret)
@@ -360,11 +377,12 @@ def test_compressed_grouped_products_and_ntt_addition(device):
         pytest.skip("CUDA is unavailable")
     import fhelium as fh
 
-    engine = Engine(Preset.slots8192_scale40_depth7_int64, rng_seed=193)
+    engine = Engine(Preset.slots8192_scale40_depth7, rng_seed=193)
     message = torch.linspace(
         -0.01, 0.02, 128, dtype=torch.float64, device=device
     )
-    key = engine.create_public_key(engine.create_secret_key(device=device))
+    secret = engine.create_secret_key(device=device)
+    key = engine.create_public_key(secret)
     x = engine.encrypt_message(message, key, device=device)
     x = engine.coefficient_domain_to_ntt_domain(x)
     compact = engine.prepare_compressed_plaintext(message, device=device)
@@ -392,6 +410,26 @@ def test_compressed_grouped_products_and_ntt_addition(device):
             ].executable.dispatch_table.operations.values()
         )
 
+    # A batched plaintext supplies the terms as one stacked operand.
+    other = engine.prepare_compressed_plaintext(message.flip(0), device=device)
+    terms = [compact, other, compact]
+    stacked = fh.CompressedPlaintext.stack_batch(terms)
+    y = engine.add(x, x)
+
+    def products(a, b, p):
+        return engine.sum_plaintext_products([a, b, a], p)
+
+    compiled = fc.compile(products, cache=False, graph=False)
+    expected = engine.sum_plaintext_products(
+        [x, y, x], [t.to_plaintext() for t in terms]
+    )
+    torch.testing.assert_close(
+        compiled(x, y, stacked).data % moduli,
+        expected.data % moduli,
+        rtol=0,
+        atol=0,
+    )
+
     target = x.clone()
     alias = target.data
     engine.add_plaintext_(target, compact)
@@ -413,7 +451,7 @@ def test_rotation_hoisting_shares_interleaved_inputs_and_keeps_live_keys(
         pytest.skip("CUDA is unavailable")
     from fhelium.ir.dialects import ckks
 
-    engine = Engine(Preset.slots8192_scale40_depth7_int64, rng_seed=149)
+    engine = Engine(Preset.slots8192_scale40_depth7, rng_seed=149)
     secret = engine.create_secret_key(device=device)
     public = engine.create_public_key(secret, device=device)
     keys = [
@@ -463,9 +501,9 @@ def test_rotation_hoisting_shares_interleaved_inputs_and_keeps_live_keys(
             )
         x = engine.negate(x)
         for step, key in zip((1, 2, 3), keys, strict=True):
-            key.data.copy_(
-                engine.create_rotation_key(step, secret, device=device).data
-            )
+            replacement = engine.create_rotation_key(step, secret, device=device)
+            key.data.copy_(replacement.data)
+            key.seed.copy_(replacement.seed)
     operations = tuple(compiled.specializations[0].compilation.program.walk())
     assert sum(isinstance(op, ckks.RotateManyOp) for op in operations) == 2
     assert not any(isinstance(op, ckks.RotateOp) for op in operations)
@@ -476,7 +514,7 @@ def test_rotation_hoisting_shares_interleaved_inputs_and_keeps_live_keys(
 def test_callable_batch_reduction_uses_one_reduction(device):
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
     engine = Engine(config, rng_seed=97)
     secret = engine.create_secret_key(device=device)
     public = engine.create_public_key(secret, device=device)
@@ -516,15 +554,15 @@ def test_callable_batch_reduction_uses_one_reduction(device):
 
 
 @pytest.mark.parametrize(
-    "policy", ["radix2_compact_group8_smem8", "radix4_compact"]
+    "policy", ["radix2_compact", "radix4_compact"]
 )
 def test_callable_ntt_chain_preserves_fanout_and_live_inputs(policy):
     if not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
     preset = {
-        "radix8_compact": Preset.slots16384_scale40_depth16_int64,
-        "radix16_compact": Preset.slots32768_scale40_depth34_int64,
-    }.get(policy, Preset.slots8192_scale40_depth7_int64)
+        "radix8_compact": Preset.slots16384_scale40_depth16,
+        "radix16_compact": Preset.slots32768_scale40_depth34,
+    }.get(policy, Preset.slots8192_scale40_depth7)
     engine = Engine(
         preset,
         ntt_backend=policy,
@@ -585,7 +623,7 @@ def test_callable_ntt_chain_preserves_fanout_and_live_inputs(policy):
 @pytest.mark.parametrize(
     "policy",
     [
-        "radix2_compact_group8_smem8",
+        "radix2_compact",
         "radix4_compact",
         "radix8_compact",
         "radix16_compact",
@@ -595,9 +633,9 @@ def test_callable_ntt_join_preserves_branch_outputs(policy):
     if not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
     preset = {
-        "radix8_compact": Preset.slots16384_scale40_depth16_int64,
-        "radix16_compact": Preset.slots32768_scale40_depth34_int64,
-    }.get(policy, Preset.slots8192_scale40_depth7_int64)
+        "radix8_compact": Preset.slots16384_scale40_depth16,
+        "radix16_compact": Preset.slots32768_scale40_depth34,
+    }.get(policy, Preset.slots8192_scale40_depth7)
     from fhelium import Ciphertext
 
     engine = Engine(preset, ntt_backend=policy)
@@ -617,7 +655,7 @@ def test_callable_ntt_join_preserves_branch_outputs(policy):
     x = Ciphertext(
         data,
         depth=0,
-        scale=engine.config.default_scale,
+        scale=engine.config.scale_at(0),
         prime_ids=tuple(range(engine.config.num_q_primes)),
     )
     y = engine.add(x, x)
@@ -657,7 +695,7 @@ def test_callable_preserves_key_switch_rounding(device):
     """Capture and execution retain each requested ModDown quotient rule."""
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
     engine = Engine(config, rng_seed=211)
     secret = engine.create_secret_key(device=device)
     public = engine.create_public_key(secret, device=device)
@@ -738,11 +776,12 @@ def test_callable_weighted_sum_keeps_requested_backend_and_sparse_operands(
 
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    base = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
-    config = CkksConfig.parse(
-        base.dumps(),
+    config = CkksConfig.catalog_suffix_chain(
         logN=8,
-        q_depth_groups=base.q_depth_groups[:2],
+        scale_bits=40,
+        depth=1,
+        p_count=1,
+        catalog_logN=14,
         enforce_security_budget=False,
     )
     engine = Engine(config)
@@ -807,12 +846,12 @@ def test_aggregate_rotation_sum_preserves_decoded_values_and_live_keys(device):
         pytest.skip("CUDA is unavailable")
     from fhelium.backend import OperationBackend
 
-    standard = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
-    config = CkksConfig(
+    config = CkksConfig.catalog_suffix_chain(
         logN=8,
-        q_depth_groups=standard.q_depth_groups,
-        p_moduli=standard.p_moduli,
-        default_scale=standard.default_scale,
+        scale_bits=40,
+        depth=7,
+        p_count=1,
+        catalog_logN=14,
         enforce_security_budget=False,
     )
     engine = Engine(config, rng_seed=137, allow_automatic_key_generation=False)
@@ -829,7 +868,7 @@ def test_aggregate_rotation_sum_preserves_decoded_values_and_live_keys(device):
     identity = engine.prepare_plaintext_for_multiplication(
         engine.encode(
             torch.ones_like(message),
-            scale=float(config.q_depth_groups[0][0]),
+            scale=float(config.q_moduli[0]),
             device=device,
         )
     )
@@ -907,6 +946,7 @@ def test_aggregate_rotation_sum_preserves_decoded_values_and_live_keys(device):
         )
         replacement = engine.create_rotation_key(1, secret, device=device)
         keys[0].data.copy_(replacement.data)
+        keys[0].seed.copy_(replacement.seed)
 
     positive = high.clone()
     negative = engine.negate(positive)
@@ -985,7 +1025,7 @@ def test_aggregate_rotation_sum_preserves_decoded_values_and_live_keys(device):
 def test_modulus_raise_uses_live_encapsulation_keys(device):
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    config = CkksConfig(
+    config = CkksConfig.suffix_chain(
         logN=8,
         q_depth_groups=(
             (254279681, 253493249),
@@ -993,7 +1033,7 @@ def test_modulus_raise_uses_live_encapsulation_keys(device):
             (205651969, 204865537),
         ),
         p_moduli=(257949697, 258605057),
-        default_scale=2.0**40,
+        scale=2.0**40,
         galois_generator=5,
         enforce_security_budget=False,
     )

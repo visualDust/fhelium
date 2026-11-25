@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 from typing import cast
 
+
 import torch
 
 from fhelium.config import CkksConfig
@@ -17,6 +18,7 @@ from fhelium.values import (
     RelinearizationKey,
     RotationKey,
     SecretKey,
+    SeedSpec,
 )
 from ..rotation._galois import rotation_galois_element
 from fhelium.errors import (
@@ -153,8 +155,13 @@ class CkksKeyGenerator:
     ``[key_digit, key_component, limb, ntt_index]``. Returned keys are always
     NTT/Montgomery/lazy at depth zero in the stated Q or QP basis and own their
     payload storage. Local ``digit_index`` is resolved to stable
-    ``key_digit_index`` before key tensor indexing.
+    ``key_digit_index`` before key tensor indexing. Generated key-switching
+    keys carry a seed; ``expand_keys`` selects whether they also hold the
+    expanded uniform component.
     """
+
+    def __init__(self, *, expand_keys: bool = True) -> None:
+        self.expand_keys = expand_keys
 
     @staticmethod
     def _prime_ids(tensor: torch.Tensor, *, limb_axis: int) -> tuple[int, ...]:
@@ -465,7 +472,7 @@ class CkksKeyGenerator:
         if digit_prime_ids is None:
             digit_prime_ids = _partition_q_digits(
                 active_q,
-                resources.config.q_moduli[active_q[0] :],
+                tuple(resources.config.q_moduli[i] for i in active_q),
                 p_moduli,
             )
         elif (
@@ -482,10 +489,9 @@ class CkksKeyGenerator:
                 "Key-switch error coefficients must have shape "
                 f"[{len(digit_prime_ids)}, {resources.config.N}]"
             )
+        all_rows = resources.rns_context.rns_layout.prime_ids(0, include_p=True)
         tables = {
-            **resources.tables(
-                resources.rns_context.rns_layout.prime_ids(0, include_p=True)
-            ),
+            **resources.tables(all_rows),
             "source_product": resources.source_product(
                 p_moduli, source_multiplier
             ),
@@ -496,7 +502,7 @@ class CkksKeyGenerator:
             resources.rng.seed,
             resources.rng.cdt_table,
             resources.ntt_backend,
-            active_q[0],
+            list(active_q),
             [len(rows) for rows in digit_prime_ids],
             list(selected_p),
             uniform_component_by_key_digit,
@@ -511,15 +517,30 @@ class CkksKeyGenerator:
         }
         return arguments, metadata
 
-    @staticmethod
-    def _advance_key_switch(
+    def _key(
+        self,
+        cls: type[KeySwitchKey],
         resources: KeyGenerationResource,
-        metadata: dict[str, object],
+        result: tuple[torch.Tensor, torch.Tensor | None, list[int], int],
         arguments: tuple[object, ...],
-    ) -> None:
+        metadata: dict[str, object],
+        **extra: object,
+    ) -> KeySwitchKey:
+        """Wrap a native key, advance the stream, and compact it unless expanded."""
+        data, seed, moduli, rounds = result
         digits = len(cast(tuple, metadata["digit_prime_ids"]))
-        sampled = (arguments[-2] is None) + (arguments[-1] is None)
-        advance_(resources.rng.seed, digits * sampled)
+        advance_(
+            resources.rng.seed,
+            (arguments[-2] is None) + digits * (arguments[-1] is None),
+        )
+        if seed is not None:
+            metadata = {
+                **metadata,
+                "seed": seed,
+                "seed_spec": SeedSpec(moduli=tuple(moduli), rounds=rounds),
+            }
+        key = cls(data=data, **metadata, **extra)
+        return key if self.expand_keys or seed is None else key.compact()
 
     def create_key_switch_key(
         self,
@@ -573,11 +594,10 @@ class CkksKeyGenerator:
             uniform_component_by_key_digit=uniform_component_by_key_digit,
             error_coefficients_by_key_digit=error_coefficients_by_key_digit,
         )
-        data = ckks_ops.create_key_switch_key(
+        result = ckks_ops.create_key_switch_key(
             source_secret_key.data, destination_secret_key.data, *arguments
         )
-        self._advance_key_switch(resources, metadata, arguments)
-        return KeySwitchKey(data=data, **metadata)
+        return self._key(KeySwitchKey, resources, result, arguments, metadata)
 
     def create_encapsulation_keys(
         self,
@@ -661,9 +681,11 @@ class CkksKeyGenerator:
             uniform_component_by_key_digit=None,
             error_coefficients_by_key_digit=None,
         )
-        data = ckks_ops.create_relinearization_key(secret_key.data, *arguments)
-        self._advance_key_switch(resources, metadata, arguments)
-        return RelinearizationKey(data=data, **metadata)
+        result = ckks_ops.create_relinearization_key(secret_key.data, *arguments)
+        return cast(
+            RelinearizationKey,
+            self._key(RelinearizationKey, resources, result, arguments, metadata),
+        )
 
     def create_rotation_key(
         self,
@@ -702,7 +724,7 @@ class CkksKeyGenerator:
             uniform_component_by_key_digit=uniform_component_by_key_digit,
             error_coefficients_by_key_digit=None,
         )
-        data = ckks_ops.create_galois_key(
+        result = ckks_ops.create_galois_key(
             secret_key.data,
             rotation_galois_element(
                 resources.config.N,
@@ -711,8 +733,17 @@ class CkksKeyGenerator:
             ),
             *arguments,
         )
-        self._advance_key_switch(resources, metadata, arguments)
-        return RotationKey(data=data, rotation_step=rotation_step, **metadata)
+        return cast(
+            RotationKey,
+            self._key(
+                RotationKey,
+                resources,
+                result,
+                arguments,
+                metadata,
+                rotation_step=rotation_step,
+            ),
+        )
 
     def create_conjugation_key(
         self,
@@ -743,8 +774,10 @@ class CkksKeyGenerator:
             uniform_component_by_key_digit=None,
             error_coefficients_by_key_digit=None,
         )
-        data = ckks_ops.create_galois_key(
+        result = ckks_ops.create_galois_key(
             secret_key.data, 2 * resources.config.N - 1, *arguments
         )
-        self._advance_key_switch(resources, metadata, arguments)
-        return ConjugationKey(data=data, **metadata)
+        return cast(
+            ConjugationKey,
+            self._key(ConjugationKey, resources, result, arguments, metadata),
+        )

@@ -3,6 +3,7 @@
 #include "../../common/cuda/kernel_support.cuh"
 #include "../../common/montgomery.hpp"
 #include "../../common/rns_batch.h"
+#include "../../common/rns_parameters.h"
 #include "../backends.h"
 
 namespace {
@@ -44,6 +45,23 @@ __global__ void ntt_galois_automorphism_kernel(
   const int source = source_indices[destination];
   CUDA_KERNEL_ASSERT(source >= 0 && source < residues.size(2));
   out[batch][row][destination] = residues[batch][row][source];
+}
+
+template <typename scalar_t>
+__global__ void add_ntt_galois_automorphism_kernel(
+    CudaTensorAccessor32<scalar_t, 3> target,
+    const CudaTensorAccessor32<scalar_t, 3> residues,
+    const CudaTensorAccessor32<int32_t, 1> source_indices,
+    const CudaTensorAccessor32<scalar_t, 2> params) {
+  const int row = blockIdx.x;
+  const int destination = blockIdx.y * blockDim.x + threadIdx.x;
+  const int batch = blockIdx.z;
+  if (destination >= residues.size(2)) return;
+  const int source = source_indices[destination];
+  target[batch][row][destination] =
+      add_lazy_residues(target[batch][row][destination],
+                        residues[batch][row][source],
+                        params[RNS_PARAM_TWICE_MODULUS][row]);
 }
 
 void validate_automorphism(const torch::Tensor& residues,
@@ -118,6 +136,39 @@ torch::Tensor apply_ntt_galois_automorphism_cuda(
   return out;
 }
 
+void add_ntt_galois_automorphism_cuda(torch::Tensor& target,
+                                     const torch::Tensor residues_ntt,
+                                     const torch::Tensor source_indices,
+                                     const torch::Tensor rns_params) {
+  const auto input = view_rns_batch_3d(residues_ntt, "residues_ntt");
+  auto output = view_rns_batch_3d(target, "target");
+  validate_automorphism(input, source_indices, "add_ntt_galois_automorphism_");
+  TORCH_CHECK(target.sizes() == residues_ntt.sizes() &&
+                  target.scalar_type() == residues_ntt.scalar_type() &&
+                  target.device() == residues_ntt.device() &&
+                  source_indices.scalar_type() == torch::kInt32 &&
+                  source_indices.device() == residues_ntt.device() &&
+                  rns_params.device() == residues_ntt.device() &&
+                  rns_params.dim() == 2 && rns_params.size(1) == input.size(1),
+              "add_ntt_galois_automorphism_ requires matching target and "
+              "residues, int32 indices and one parameter column per row");
+  const int device = residues_ntt.device().index();
+  cudaSetDevice(device);
+  auto stream = at::cuda::getCurrentCUDAStream(device);
+  dim3 grid(input.size(1),
+            (input.size(2) + kCudaBlockSize - 1) / kCudaBlockSize,
+            input.size(0));
+  AT_DISPATCH_INTEGRAL_TYPES(
+      residues_ntt.scalar_type(), "add_ntt_galois_automorphism_", [&] {
+        add_ntt_galois_automorphism_kernel<scalar_t>
+            <<<grid, kCudaBlockSize, 0, stream>>>(
+                FHELIUM_CUDA_ACCESSOR32(output, scalar_t, 3),
+                FHELIUM_CUDA_ACCESSOR32(input, scalar_t, 3),
+                FHELIUM_CUDA_ACCESSOR32(source_indices, int32_t, 1),
+                FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2));
+      });
+}
+
 }  // namespace
 
 namespace fhelium::ckks::gpu {
@@ -134,6 +185,14 @@ at::Tensor apply_coefficient_galois_automorphism(
 at::Tensor apply_ntt_galois_automorphism(const at::Tensor& residues_ntt,
                                          const at::Tensor& source_indices) {
   return ::apply_ntt_galois_automorphism_cuda(residues_ntt, source_indices);
+}
+
+
+void add_ntt_galois_automorphism_(at::Tensor& target,
+                                  const at::Tensor& residues_ntt,
+                                  const at::Tensor& source_indices,
+                                  const at::Tensor& rns_params) {
+  ::add_ntt_galois_automorphism_cuda(target, residues_ntt, source_indices, rns_params);
 }
 
 }  // namespace fhelium::ckks::gpu

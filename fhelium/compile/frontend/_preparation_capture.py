@@ -732,7 +732,7 @@ class PreparationRecorder:
             if node.op != "call_function":
                 raise CaptureError(f"Unsupported preparation FX node {node.op}")
             target = (
-                "aten." + str(node.target).removeprefix("aten.")
+                "ops." + str(node.target)
                 if isinstance(node.target, torch._ops.OpOverload)
                 else targets.get(node.target)
             )

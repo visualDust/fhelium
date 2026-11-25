@@ -10,7 +10,7 @@ Start with the 8,192-slot, 40-bit-scale baseline:
 
 ```bash
 python examples/07_eager_batching.py \
-  --preset slots8192-scale40-depth7-int64 \
+  --preset slots8192-scale40-depth7 \
   --depth 0 \
   --batch-sizes 1,4,8 \
   --warmup 2 \
@@ -21,10 +21,10 @@ Then compare the two ends of the 32,768-slot, 40-bit-scale chain:
 
 ```bash
 python examples/07_eager_batching.py \
-  --preset slots32768-scale40-depth34-int64 --depth 0 --batch-sizes 1,4,8
+  --preset slots32768-scale40-depth34 --depth 0 --batch-sizes 1,4,8
 
 python examples/07_eager_batching.py \
-  --preset slots32768-scale40-depth34-int64 --depth 30 --batch-sizes 1,4,8
+  --preset slots32768-scale40-depth34 --depth 30 --batch-sizes 1,4,8
 ```
 
 The second command measures the smaller active RNS row count at depth 30, which changes both arithmetic work and the size of each NTT/key-switch working set.

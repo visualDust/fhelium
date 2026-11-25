@@ -75,24 +75,24 @@ class RnsLayout:
             tuple(spec.component_row_ids for spec in specs)
             for specs in self._digit_specs_by_depth
         )
+        counts = [self.row_count(depth) for depth in range(chain.basis_count)]
         self._depth_by_row_count = {
             include_p: {
-                self.row_count(depth, include_p=include_p): depth
-                for depth in range(self.chain.basis_count)
+                count + (chain.num_p_primes if include_p else 0): depth
+                for depth, count in enumerate(counts)
+                if counts.count(count) == 1
             }
             for include_p in (False, True)
         }
 
     @classmethod
     def from_config(cls, config: CkksConfig) -> RnsLayout:
-        """Build Q depth-group rows and hybrid digits from CKKS parameters."""
+        """Build Q depth bases and hybrid digits from CKKS parameters."""
 
         chain = RnsChain(
             num_q_primes=config.num_q_primes,
             num_p_primes=config.num_p_primes,
-            q_depth_group_sizes=tuple(
-                len(group) for group in config.q_depth_groups
-            ),
+            basis_rows=config.q_bases,
         )
         return cls(
             chain,
@@ -100,7 +100,10 @@ class RnsLayout:
         )
 
     def _build_digit_specs(self, depth: int) -> tuple[RnsDigitSpec, ...]:
-        start_row = self.chain.basis_row_starts[depth]
+        position = {
+            prime_id: index
+            for index, prime_id in enumerate(self.chain.q_prime_ids_at_depth(depth))
+        }
         return tuple(
             RnsDigitSpec(
                 depth=depth,
@@ -108,7 +111,7 @@ class RnsLayout:
                 key_digit_index=digit.key_digit_index,
                 prime_ids=digit.prime_ids,
                 component_row_ids=tuple(
-                    prime_id - start_row for prime_id in digit.prime_ids
+                    position[prime_id] for prime_id in digit.prime_ids
                 ),
             )
             for digit_index, digit in enumerate(
@@ -141,10 +144,10 @@ class RnsLayout:
     ) -> int:
         """Return the chain position represented by one complete active basis.
 
-        Configured Q depth groups have distinct cumulative row starts, so a
-        complete Q or QP tensor's row count identifies its chain position. A
-        partial group, digit, or arbitrary prime interval cannot use this
-        lookup.
+        A complete Q or QP tensor's row count identifies its chain position
+        when no other depth basis has the same row count. A digit, an
+        arbitrary prime interval, or a basis whose row count is shared cannot
+        use this lookup; those callers supply prime ids.
         """
 
         if type(row_count) is not int or row_count <= 0:
@@ -156,10 +159,6 @@ class RnsLayout:
                 f"rows={row_count}, include_p={include_p}"
             )
         return depth
-
-    def start_row(self, depth: int) -> int:
-        self._check_depth(depth)
-        return self.chain.basis_row_starts[depth]
 
     def parameter_rows(self, depth: int, *, include_p: bool = False) -> slice:
         return self.chain.parameter_rows(depth, include_p=include_p)

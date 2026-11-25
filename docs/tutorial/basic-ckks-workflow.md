@@ -10,7 +10,7 @@ This example encrypts dense tensor messages, evaluates independent addition, mul
 import fhelium as fh
 from fhelium.eager import Engine
 
-engine = Engine(fh.Preset.slots8192_scale40_depth7_int64)
+engine = Engine(fh.Preset.slots8192_scale40_depth7)
 ```
 
 An eager `Engine` is process-local and creates device-specific arithmetic resources when they are first needed. Source and material factories use PyTorch's default device unless the call supplies `device=`. Distributed execution is expressed separately through `fhelium.distributed` collectives. Passing `device="cuda:0"` to a boundary or factory call places that result on CUDA; ordinary homomorphic operations dispatch from their operands. Key material must already be on the operation device unless the Engine was created with `allow_automatic_key_replication=True`.

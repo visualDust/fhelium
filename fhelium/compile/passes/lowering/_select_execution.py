@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 from typing import cast
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+import time
 
 from xdsl.dialects.builtin import StringAttr
 from xdsl.ir import Block, Operation
@@ -27,15 +28,7 @@ from fhelium.config import CkksConfig
 from fhelium.config._derived import config_from_text
 from fhelium.ir import EXECUTION_IMPLEMENTATION_ATTRIBUTE, Program
 
-from ..._local_plans import local_plan_scope
 from ..._pipeline import DecisionRecord, PassResult, PassStats
-from ..._selection_plan import (
-    GuardMemo,
-    SelectionPlans,
-    graph_guard,
-    plan_event,
-    selection_policy,
-)
 from .._operation_transforms import program_operations
 from ..backend._operations import (
     _STRUCTURAL_OPERATION_TYPES,
@@ -50,6 +43,29 @@ from ..._material_requirements import (
     key_reference_scope,
     resolve_material_requirements,
 )
+
+
+class SelectionDecisions:
+    """Selection outcomes keyed by local signature: the selecting pass configuration, operation type, attributes other than ``rotation_step``, and operand types.
+
+    A rotation step selects Galois tables but not the lowered expression, so rotations differing only in step share a decision. Operations with one signature receive one probe; later occurrences reuse its decision and are lowered directly. Operand types carry depth, scale and prime rows, so one entry applies to one depth. The workspace entry is shared by the compilations that use the workspace; ``workspace["selection_decision_cache"] = False`` disables it.
+    """
+
+    def __init__(self) -> None:
+        self.entries: dict[object, tuple[bool, str, tuple[str, ...]]] = {}
+        self.hits = 0
+        self.misses = 0
+        self.key_seconds = 0.0
+        self.probe_seconds = 0.0
+
+    def stats(self) -> dict[str, object]:
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "entries": len(self.entries),
+            "key_seconds": self.key_seconds,
+            "probe_seconds": self.probe_seconds,
+        }
 
 
 @dataclass(frozen=True)
@@ -70,7 +86,7 @@ class SelectExecutionLoweringsPass:
     the whole operation. Missing estimates retain the fusion-coverage decision.
     Implementation assignments always take precedence over this callback.
 
-    With the default lowering registry, accepted key switches in function bodies that agree in operation type, attributes other than ``rotation_step``, and operand and result types are lowered once into a private function and replaced by calls carrying their own Galois tables. Set ``workspace['shared_key_switch_bodies']`` to False to lower each key switch in place.
+    With the default lowering registry, accepted key switches in function bodies that agree in operation type, attributes other than ``rotation_step``, and operand and result types are lowered once into a private function and replaced by calls carrying their own Galois tables. Set ``workspace['shared_key_switch_bodies']`` to False to lower each key switch in place. Probe outcomes are reused through :class:`SelectionDecisions`.
     """
 
     implementations: OperationImplementationRegistry
@@ -108,6 +124,53 @@ class SelectExecutionLoweringsPass:
                     previous
                 )
 
+    def _apply(
+        self,
+        operation,
+        config,
+        compilation,
+        candidates,
+        accepted,
+        reason,
+        cost_details,
+        share,
+        deferred,
+    ) -> tuple[DecisionRecord, int, int, int]:
+        """Record one decision and lower an accepted operation; returns (record, skipped, transformed, inserted)."""
+        if not accepted:
+            return (
+                DecisionRecord(
+                    operation.name, "preserve", candidates, (reason, *cost_details)
+                ),
+                1,
+                0,
+                0,
+            )
+        inserted = 0
+        if (
+            share
+            and config is not None
+            and isinstance(operation, KEY_SWITCH_OPERATIONS)
+            and isinstance(operation.parent_op(), FuncOp)
+        ):
+            deferred.append((operation, config))
+        else:
+            lowered = apply_lowering(
+                operation, config, compilation, registry=self.lowerings
+            )
+            inserted = len(lowered.operations)
+        return (
+            DecisionRecord(
+                operation.name,
+                self.lowerings.resolve(type(operation)).name,
+                candidates,
+                (reason, *cost_details),
+            ),
+            0,
+            1,
+            inserted,
+        )
+
     def _run(self, compilation: "Compilation") -> PassResult:
         program = compilation.program
         shared_data = compilation.workspace
@@ -116,27 +179,16 @@ class SelectExecutionLoweringsPass:
         diagnostics: list[str] = []
         implementation_registry(compilation, self.implementations)
         fallback_config = shared_data.get(CkksConfig)
-        plans = shared_data.get(SelectionPlans)
-        policy = None
-        policy_reason = ""
-        if isinstance(plans, SelectionPlans):
-            try:
-                policy = selection_policy(
-                    self.implementations,
-                    self.fusion_implementations,
-                    self.lowerings,
-                    self.execution_cost,
-                    self.allow_partial_fusion,
-                )
-            except ValueError as error:
-                policy_reason = str(error)
-        local_plans = local_plan_scope(shared_data, policy)
-        guard_memo = GuardMemo()
         share = (
             self.lowerings is DEFAULT_CKKS_LOWERINGS
             and shared_data.get("shared_key_switch_bodies") is not False
         )
         deferred: list[tuple[Operation, CkksConfig]] = []
+        cache = (
+            shared_data.setdefault(SelectionDecisions, SelectionDecisions())
+            if shared_data.get("selection_decision_cache", True)
+            else None
+        )
         for operation in program_operations(program):
             requirements = resolve_material_requirements(
                 compilation, (operation,), self.implementations
@@ -168,6 +220,39 @@ class SelectExecutionLoweringsPass:
                 if isinstance(fallback_config, CkksConfig)
                 else None
             )
+            key = None
+            if cache is not None:
+                started = time.perf_counter()
+                key = (
+                    self.implementations,
+                    self.lowerings,
+                    tuple(self.fusion_implementations),
+                    self.allow_partial_fusion,
+                    self.execution_cost,
+                    type(operation),
+                    tuple(
+                        item
+                        for item in operation.attributes.items()
+                        if item[0] != "rotation_step"
+                    ),
+                    tuple(value.type for value in operation.operands),
+                )
+                cache.key_seconds += time.perf_counter() - started
+                entry = cache.entries.get(key)
+                if entry is not None:
+                    cache.hits += 1
+                    accepted, reason, cost_details = entry
+                    decision = self._apply(
+                        operation, config, compilation, candidates,
+                        accepted, reason, cost_details, share, deferred,
+                    )
+                    decisions.append(decision[0])
+                    skipped += decision[1]
+                    transformed += decision[2]
+                    inserted += decision[3]
+                    continue
+                cache.misses += 1
+            probe_started = time.perf_counter()
             whole = self.implementations.supports(operation)
             if whole:
                 implementation = self.implementations.resolve(
@@ -189,119 +274,84 @@ class SelectExecutionLoweringsPass:
                 probe_block, tuple(v.type for v in probe.results)
             )
             probe_workspace = CompileWorkspace(shared_data)
-            probe_workspace.pop(SelectionPlans, None)
-            probe_workspace.pop("selection_plan_stats", None)
-            probe_workspace.pop("local_plan_stats", None)
             probe_compilation = Compilation(probe_program, probe_workspace)
-            plan_key = None
-            cached = None
-            if isinstance(plans, SelectionPlans):
-                if policy is not None:
-                    try:
-                        plan_key = "selection:" + graph_guard(
-                            probe_block,
-                            stage="selection",
-                            policy=policy,
-                            config=config,
-                            memo=guard_memo,
-                        )
-                        cached = plans.entries.get(plan_key)
-                        plan_event(
-                            shared_data,
-                            "selection",
-                            cached is not None,
-                            "guard matched"
-                            if cached is not None
-                            else "operation guard miss",
-                        )
-                    except ValueError as error:
-                        plan_event(shared_data, "selection", False, str(error))
-                else:
-                    plan_event(shared_data, "selection", False, policy_reason)
             expression = None
-            reusable = True
             accepted = not whole
             reason = "no whole-operation coverage"
             cost_details: tuple[str, ...] = ()
             attached = False
             cost_eligible = False
             try:
-                if cached is not None:
-                    accepted = cached["accepted"]
-                    reason = cached["reason"]
-                else:
-                    expression = apply_lowering(
-                        probe,
-                        config,
-                        probe_compilation,
-                        registry=self.lowerings,
+                expression = apply_lowering(
+                    probe,
+                    config,
+                    probe_compilation,
+                    registry=self.lowerings,
+                )
+                attached = True
+                if whole:
+                    accepted = any(
+                        (
+                            count := candidate.match_fusion(
+                                expression.operations
+                            )
+                        )
+                        is not None
+                        and count > 0
+                        for candidate in self.fusion_implementations
                     )
-                    attached = True
-                    if whole:
-                        accepted = any(
-                            (
-                                count := candidate.match_fusion(
-                                    expression.operations
-                                )
+                    reason = (
+                        "registered fusion supports the lowered expression"
+                        if accepted
+                        else "whole operation retained"
+                    )
+                    if not accepted and self.allow_partial_fusion:
+                        regions = [
+                            region
+                            for region in _fusion_segments(
+                                expression.operations,
+                                self.fusion_implementations,
                             )
+                            if region[2] >= 2
+                            and (count := region[1].match_fusion(region[0]))
                             is not None
-                            and count > 0
-                            for candidate in self.fusion_implementations
-                        )
-                        reason = (
-                            "registered fusion supports the lowered expression"
-                            if accepted
-                            else "whole operation retained"
-                        )
-                        if not accepted and self.allow_partial_fusion:
-                            regions = [
-                                region
-                                for region in _fusion_segments(
-                                    expression.operations,
-                                    self.fusion_implementations,
-                                    local_plans=local_plans,
-                                )
-                                if region[2] >= 2
-                                and (count := region[1].match_fusion(region[0]))
-                                is not None
-                                and count >= 2
-                            ]
-                            covered = {
-                                op for ops, _, _ in regions for op in ops
-                            }
-                            remaining = [
-                                nested
-                                for op in expression.operations
-                                if op not in covered
-                                for nested in op.walk()
-                                if not isinstance(
-                                    nested, _STRUCTURAL_OPERATION_TYPES
-                                )
-                            ]
-                            accepted = bool(regions) and all(
-                                self._independent_support(op)
-                                for op in remaining
+                            and count >= 2
+                        ]
+                        covered = {
+                            op for ops, _, _ in regions for op in ops
+                        }
+                        remaining = [
+                            nested
+                            for op in expression.operations
+                            if op not in covered
+                            for nested in op.walk()
+                            if not isinstance(
+                                nested, _STRUCTURAL_OPERATION_TYPES
                             )
-                            if accepted:
-                                reason = (
-                                    f"lowering covered by {len(regions)} fusion regions "
-                                    f"and {len(remaining)} independent operations"
-                                )
-                        cost_eligible = self.execution_cost is not None and (
-                            accepted
-                            or all(
-                                self._independent_support(nested)
-                                for item in expression.operations
-                                for nested in item.walk()
-                                if not isinstance(
-                                    nested, _STRUCTURAL_OPERATION_TYPES
-                                )
+                        ]
+                        accepted = bool(regions) and all(
+                            self._independent_support(op)
+                            for op in remaining
+                        )
+                        if accepted:
+                            reason = (
+                                f"lowering covered by {len(regions)} fusion regions "
+                                f"and {len(remaining)} independent operations"
+                            )
+                    cost_eligible = self.execution_cost is not None and (
+                        accepted
+                        or all(
+                            self._independent_support(nested)
+                            for item in expression.operations
+                            for nested in item.walk()
+                            if not isinstance(
+                                nested, _STRUCTURAL_OPERATION_TYPES
                             )
                         )
+                    )
             except ValueError as error:
                 # A partial Program need not yet have the mathematical facts
                 # required by a lowering. Linking still checks execution readiness.
-                reusable = False
                 accepted = False
                 reason = str(error)
                 diagnostics.append(f"{operation.name}: {reason}")
@@ -333,43 +383,17 @@ class SelectExecutionLoweringsPass:
                     for item in reversed(expression.operations):
                         item.drop_all_references()
                 probe_program.module.drop_all_references()
-            if plan_key is not None and cached is None and reusable:
-                plans.entries[plan_key] = {
-                    "accepted": accepted,
-                    "reason": reason,
-                }
-            if not accepted:
-                skipped += 1
-                decisions.append(
-                    DecisionRecord(
-                        operation.name,
-                        "preserve",
-                        candidates,
-                        (reason, *cost_details),
-                    )
-                )
-                continue
-            transformed += 1
-            if (
-                share
-                and config is not None
-                and isinstance(operation, KEY_SWITCH_OPERATIONS)
-                and isinstance(operation.parent_op(), FuncOp)
-            ):
-                deferred.append((operation, config))
-            else:
-                lowered = apply_lowering(
-                    operation, config, compilation, registry=self.lowerings
-                )
-                inserted += len(lowered.operations)
-            decisions.append(
-                DecisionRecord(
-                    operation.name,
-                    self.lowerings.resolve(type(operation)).name,
-                    candidates,
-                    (reason, *cost_details),
-                )
+            if cache is not None:
+                cache.probe_seconds += time.perf_counter() - probe_started
+                cache.entries[key] = (accepted, reason, cost_details)
+            decision = self._apply(
+                operation, config, compilation, candidates,
+                accepted, reason, cost_details, share, deferred,
             )
+            decisions.append(decision[0])
+            skipped += decision[1]
+            transformed += decision[2]
+            inserted += decision[3]
         if deferred:
             inserted += lower_shared_key_switches(
                 compilation, deferred, self.lowerings
@@ -387,4 +411,4 @@ class SelectExecutionLoweringsPass:
         )
 
 
-__all__ = ["SelectExecutionLoweringsPass"]
+__all__ = ["SelectExecutionLoweringsPass", "SelectionDecisions"]

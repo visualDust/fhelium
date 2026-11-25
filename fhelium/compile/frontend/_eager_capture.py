@@ -25,7 +25,6 @@ from xdsl.dialects.builtin import (
     ArrayAttr,
     DictionaryAttr,
     FloatAttr,
-    IndexType,
     IntegerAttr,
     StringAttr,
     UnrealizedConversionCastOp,
@@ -66,17 +65,12 @@ from .._compilation import Compilation
 from .._errors import CaptureError
 from .._materials import (
     key_description,
+    key_placeholder,
     named_material_tensors,
     parameter_description,
 )
 from .._workspace import CompileWorkspace
 from ._captured_callable import CapturedCallable
-from ._template_provenance import (
-    METADATA,
-    RECORDING,
-    TemplateProvenance,
-    json_value,
-)
 from fhelium.ir.dialects._common import state_attribute
 
 from ._eager_values import state_attributes, value_type
@@ -102,6 +96,24 @@ class _Value:
     def __init__(self, value: SSAValue, capture: _Capture) -> None:
         self.value = value
         self.capture = capture
+
+    def __copy__(self) -> _Value:
+        # A shallow Ciphertext copy shares its payload; the copy names the same SSA value.
+        result = _Value(self.value, self.capture)
+        result.__dict__.update(self.__dict__)
+        return result
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == 'scale':
+            # Assigning a Ciphertext scale reinterprets its residues at that scale.
+            engine = next(iter(self.capture.engines.values()), None)
+            if engine is None:
+                raise CaptureError(
+                    'Ciphertext scale assignment requires an Engine in the captured computation'
+                )
+            value = cast(_Value, engine.reinterpret_at_scale(self, value)).value
+            name = 'value'
+        object.__setattr__(self, name, value)
 
     @classmethod
     def __torch_function__(cls, function, types, args=(), kwargs=None):
@@ -376,21 +388,17 @@ class _Value:
                 )
             return step
         if name in _VALUE_METADATA:
-            with capture.adapter_scope():
-                result = self._metadata(name)
+            result = self._metadata(name)
         else:
             # Other fields depend only on the value type; repeated reads of one type share a result.
             typ = self.value.type
             found = capture.metadata.get((id(typ), name))
             if found is None:
-                with capture.adapter_scope():
-                    found = capture.metadata[(id(typ), name)] = (
-                        typ,
-                        self._metadata(name),
-                    )
+                found = capture.metadata[(id(typ), name)] = (
+                    typ,
+                    self._metadata(name),
+                )
             result = found[1]
-        if capture.provenance is not None:
-            capture.provenance.read(self.value, name, result)
         return result
 
     def _metadata(self, name: str) -> Any:
@@ -437,7 +445,6 @@ class _Value:
                     "Tensor access requires an attached captured value"
                 )
             block.add_op(operation)
-            self.capture.template_options(operation, cast="tensor_data")
             return _Value(value, self.capture)
         field = {"modulus_basis": "basis", "component_count": "components"}.get(
             name, name
@@ -489,6 +496,16 @@ def _result_type(source: _Value, **updates: object) -> OpenStateType:
     return type(typ)().with_state(fields)
 
 
+def _stacked_terms(values: object) -> bool:
+    """Return whether a batched plaintext supplies weighted-sum terms as one operand."""
+    if not isinstance(values, (Plaintext, CompressedPlaintext)):
+        return False
+    return values.is_batched and not (
+        isinstance(values, CompressedPlaintext)
+        and values.compression_layout == "strided_sparse"
+    )
+
+
 def _symbolic(value: object) -> _Value:
     if not isinstance(value, _Value):
         raise CaptureError(
@@ -521,7 +538,7 @@ _METHODS = frozenset(
         "sum_rotated_plaintext_product_groups",
         "zero_plaintext_like",
         "add_scalar",
-        "multiply_scalar",
+        "_multiply_scalar",
         "multiply_integer_scalar",
         "coefficient_domain_to_ntt_domain",
         "ntt_domain_to_coefficient_domain",
@@ -552,6 +569,9 @@ _METHODS = frozenset(
 )
 
 
+# Engine methods implemented only through other captured Engine methods.
+_COMPOSITES = frozenset({"multiply_constant", "multiply_by_monomial"})
+
 # Engine methods whose emission is a function of operand types and static parameters.
 _PLANNED = frozenset(
     {
@@ -581,7 +601,6 @@ class _EmissionPlan:
     attributes: dict[str, Attribute]
     properties: dict[str, Attribute]
     generated: tuple[SSAValue, ...]
-    options: dict[str, object]
 
 
 class _EngineCalls:
@@ -642,6 +661,9 @@ class _EngineCalls:
             "depth_remaining",
         }:
             return getattr(self.engine, name)
+        if name in _COMPOSITES:
+            # Compositions of captured Engine methods run with this proxy as self.
+            return types.MethodType(getattr(Engine, name), self)
         if name not in _METHODS:
             raise CaptureError(
                 f"Engine.{name} is outside the callable frontend's operation set; "
@@ -650,12 +672,6 @@ class _EngineCalls:
         method = getattr(Engine, name)
 
         def emit(*args: object, **kwargs: object) -> object:
-            provenance = self.capture.provenance
-            origin = (
-                provenance.emission(sys._getframe(1), f"Engine.{name}")
-                if provenance is not None and provenance.record_origins
-                else None
-            )
             signature = _SIGNATURES.get(name)
             if signature is None:
                 signature = _SIGNATURES[name] = inspect.signature(method)
@@ -673,16 +689,7 @@ class _EngineCalls:
                         weighted_sum_terms(row)
                         for row in cast(Any, parameters["plaintext_groups"])
                     )
-                elif self._round_rows(parameters):
-                    # Row 0 initializes the sum; the loop reads later rows of
-                    # one batched operand by round index.
-                    batched = cast(Any, parameters["plaintexts"])
-                    parameters["plaintexts"] = (
-                        batched.select_batch(0),
-                        batched,
-                    )
-                    parameters["round_rows"] = True
-                else:
+                elif not _stacked_terms(parameters["plaintexts"]):
                     parameters["plaintexts"] = weighted_sum_terms(
                         cast(Any, parameters["plaintexts"])
                     )
@@ -713,10 +720,7 @@ class _EngineCalls:
             prior_config = self.capture.active_config
             self.capture.active_config = self.engine.config
             try:
-                with (
-                    self.capture.adapter_scope(),
-                    recorder.pause() if recorder is not None else nullcontext(),
-                ):
+                with recorder.pause() if recorder is not None else nullcontext():
                     result = self._emit(name, parameters)
             finally:
                 self.capture.active_config = prior_config
@@ -725,21 +729,14 @@ class _EngineCalls:
                 if before is None
                 else before.next_op
             )
-            if provenance is not None and provenance.record_origins:
-                provenance.record_emission(operation, origin)
             configuration = self.config_attribute
             if configuration is None:
                 configuration = self.config_attribute = StringAttr(
                     json.dumps(self.engine.config.dumps(), sort_keys=True)
                 )
             while operation is not None:
-                for item in (
-                    operation.walk() if operation.regions else (operation,)
-                ):
-                    if item.name.startswith("fhelium_ckks.") and not isinstance(
-                        item, (ckks.RepeatOp, ckks.RepeatYieldOp)
-                    ):
-                        item.attributes["ckks_config"] = configuration
+                if operation.name.startswith("fhelium_ckks."):
+                    operation.attributes["ckks_config"] = configuration
                 operation = operation.next_op
             return result
 
@@ -748,7 +745,19 @@ class _EngineCalls:
     def _weighted_sum(self, p, *, grouped):
         c = self.capture
         ciphertexts = tuple(_symbolic(x) for x in p["ciphertexts"])
-        rows = p["plaintext_groups"] if grouped else (p["plaintexts"],)
+        # One batched plaintext stays one operand whose leading axis holds the terms.
+        stacked = (
+            None
+            if grouped or isinstance(p["plaintexts"], (tuple, list))
+            else _symbolic(p["plaintexts"])
+        )
+        rows = (
+            ((stacked,) * stacked.batch_shape[0],)
+            if stacked is not None
+            else p["plaintext_groups"]
+            if grouped
+            else (p["plaintexts"],)
+        )
         rows = tuple(tuple(_symbolic(x) for x in row) for row in rows)
         if (
             not ciphertexts
@@ -758,6 +767,8 @@ class _EngineCalls:
             raise CaptureError("Weighted sums require nonempty matching rows")
         source = ciphertexts[0]
         plaintexts = tuple(x for row in rows for x in row)
+        if stacked is not None:
+            plaintexts = (stacked,)
         for value in ciphertexts[1:]:
             self._matching_operands(source, value, scale=True)
         for value in plaintexts:
@@ -769,11 +780,6 @@ class _EngineCalls:
             if isinstance(x.value.type, ckks.CompressedPlaintextType)
             else "dense"
             for x in plaintexts
-        )
-        selected = self.engine.plaintext_product_implementation(
-            source.device,
-            compressed=any(x != "dense" for x in layouts),
-            implementation=p.get("implementation"),
         )
         parameters = self.engine._dispatcher_for(
             source.device
@@ -803,10 +809,16 @@ class _EngineCalls:
                         )
                     },
                 }
-            operation, result = UnrealizedConversionCastOp.cast_one(
-                value.value, rns.RnsBundleType().with_state(state)
-            )
-            c.block.add_op(operation)
+            typ = rns.RnsBundleType().with_state(state)
+            # Rotation results feed many sums; each value is cast once.
+            key = (value.value, typ)
+            result = c.bundles.get(key)
+            if result is None:
+                operation, result = UnrealizedConversionCastOp.cast_one(
+                    value.value, typ
+                )
+                c.block.add_op(operation)
+                c.bundles[key] = result
             return result
 
         implicit = tuple(
@@ -827,6 +839,8 @@ class _EngineCalls:
             implicit_plaintexts=implicit,
             term_chunk_size=p.get("term_chunk_size"),
         )
+        if stacked is not None:
+            kwargs["plaintext_term_axis"] = 0
         if grouped:
             kwargs["group_count"] = len(rows)
         operation = (
@@ -840,166 +854,20 @@ class _EngineCalls:
             bundle_type,
             **kwargs,
         )
-        operation.attributes[EXECUTION_IMPLEMENTATION_ATTRIBUTE] = StringAttr(
-            selected
-        )
+        if p.get("implementation") is not None:
+            # A requested implementation is fixed; otherwise Compile selects one.
+            operation.attributes[EXECUTION_IMPLEMENTATION_ATTRIBUTE] = StringAttr(
+                self.engine.plaintext_product_implementation(
+                    source.device,
+                    compressed=any(x != "dense" for x in layouts),
+                    implementation=p.get("implementation"),
+                )
+            )
         c.block.add_op(operation)
         cast_op, _ = UnrealizedConversionCastOp.cast_one(
             operation.result, result_type
         )
         return c.emit(cast_op)
-
-    def _round_rows(self, parameters: dict[str, object]) -> bool:
-        """Accept one batched prepared plaintext whose rows a carried loop can index."""
-        plaintexts = parameters["plaintexts"]
-        return (
-            isinstance(plaintexts, (Plaintext, CompressedPlaintext))
-            and plaintexts.is_batched
-            and plaintexts.batch_shape[0] >= 3
-            and getattr(plaintexts, "implicit_data", None) is None
-            and parameters.get("implementation") is None
-            and parameters.get("term_chunk_size") is None
-            and self.capture.workspace.get("ckks_repeat") is not False
-            # Ciphertext terms are already enumerated by the caller.
-            and len(cast(Any, parameters["ciphertexts"]))
-            == plaintexts.batch_shape[0]
-        )
-
-    def _select_row(self, batched: _Value, row: int) -> _Value:
-        return self.capture.emit(ckks.SelectBatchOp(batched.value, start=row))
-
-    def _ordered_products(
-        self,
-        ciphertexts: Sequence[_Value],
-        plaintexts: Sequence[_Value],
-        batched: _Value | None = None,
-    ) -> object:
-        """Emit c_0 p_0 followed by one carried multiply-add loop over the remaining terms.
-
-        The loop has the form produced by folding the expanded sequence: table row t holds (c_t, p_t), the carry is the running sum, and only the final sum is a result. With ``batched``, plaintext row t is selected from that one shared operand by round index instead of occupying a table column. Terms with differing types, or emissions that need more than one product and one addition, remain expanded.
-        """
-        block = self.capture.block
-        result = self._emit(
-            "multiply_plaintext",
-            {"ciphertext": ciphertexts[0], "plaintext": plaintexts[0]},
-        )
-        count = len(ciphertexts) - 1
-
-        def row(term):
-            if batched is None:
-                return plaintexts[term]
-            return self._select_row(batched, term)
-
-        def expanded(total, first):
-            for term in range(first, count + 1):
-                product = self._emit(
-                    "multiply_plaintext",
-                    {"ciphertext": ciphertexts[term], "plaintext": row(term)},
-                )
-                total = self._emit("add", {"lhs": total, "rhs": product})
-            return total
-
-        if (
-            count < 2
-            or self.capture.workspace.get("ckks_repeat") is False
-            or type(result) is not _Value
-            or any(
-                type(x) is not _Value
-                or x.value.type != ciphertexts[1].value.type
-                for x in ciphertexts[1:]
-            )
-            or batched is None
-            and any(
-                type(y) is not _Value
-                or y.value.type != plaintexts[1].value.type
-                for y in plaintexts[1:]
-            )
-        ):
-            return expanded(result, 1)
-        x, y = ciphertexts[1], row(1)
-        remaining = (
-            tuple((value,) for value in ciphertexts[2:])
-            if batched is not None
-            else tuple(zip(ciphertexts[2:], plaintexts[2:], strict=True))
-        )
-        initial = cast(_Value, result)
-        product = self._emit(
-            "multiply_plaintext", {"ciphertext": x, "plaintext": y}
-        )
-        total = self._emit("add", {"lhs": initial, "rhs": product})
-        multiply = cast(_Value, product).value.owner
-        add = cast(_Value, total).value.owner
-        carried = (
-            type(total) is _Value
-            and isinstance(multiply, Operation)
-            and add is block.last_op
-            and multiply.next_op is add
-            and tuple(add.operands[:2]) == (initial.value, multiply.results[0])
-            and tuple(multiply.operands[:2]) == (x.value, y.value)
-            and add.results[0].type == initial.value.type
-        )
-        if not carried:
-            return expanded(total, 2)
-        shared = tuple(
-            dict.fromkeys(
-                (
-                    *(() if batched is None else (batched.value,)),
-                    *multiply.operands[2:],
-                    *add.operands[2:],
-                )
-            )
-        )
-        columns = (x.value,) if batched is not None else (x.value, y.value)
-        body = Block(
-            arg_types=(
-                IndexType(),
-                *(value.type for value in shared),
-                *(value.type for value in columns),
-                initial.value.type,
-            )
-        )
-        arguments = tuple(body.args)
-        ports = dict(zip(shared, arguments[1 : 1 + len(shared)], strict=True))
-        ports.update(zip(columns, arguments[1 + len(shared) : -1], strict=True))
-        ports[initial.value] = arguments[-1]
-        loop = ckks.RepeatOp(
-            shared,
-            tuple(
-                value.value
-                for term in (
-                    (x,) if batched is not None else (x, y),
-                    *remaining,
-                )
-                for value in term
-            ),
-            (initial.value,),
-            (add.results[0].type,),
-            body,
-            count=count,
-            yield_count=0,
-        )
-        block.insert_op_before(loop, multiply)
-        if batched is not None:
-            # The selected row moves into the body and follows the round index.
-            selection = cast(Operation, y.value.owner)
-            indexed = ckks.SelectBatchOp(
-                ports[batched.value], start=1, index=arguments[0]
-            )
-            indexed.attributes.update(selection.attributes)
-            body.add_op(indexed)
-            ports[y.value] = Rewriter.replace_value_with_new_type(
-                indexed.result, y.value.type
-            )
-        for operation in (multiply, add):
-            block.detach_op(operation)
-            operation.operands = tuple(
-                ports.get(value, value) for value in operation.operands
-            )
-            body.add_op(operation)
-        if batched is not None:
-            Rewriter.erase_op(selection)
-        body.add_op(ckks.RepeatYieldOp((add.results[0],)))
-        return _Value(loop.outputs[0], self.capture)
 
     def _plan_key(
         self, name: str, p: dict[str, object]
@@ -1048,16 +916,12 @@ class _EngineCalls:
             for value in generated
         ):
             return None
-        provenance = self.capture.provenance
         return _EmissionPlan(
             type(operation),
             operation.results[0].type,
             dict(operation.attributes),
             dict(operation.properties),
             generated,
-            dict(provenance.options.get(operation, {}))
-            if provenance is not None
-            else {},
         )
 
     def _emit(self, name: str, p: dict[str, object]) -> object:
@@ -1082,8 +946,6 @@ class _EngineCalls:
             attributes=dict(plan.attributes),
             properties=dict(plan.properties),
         )
-        if plan.options:
-            c.template_options(operation, **plan.options)
         c.block.add_op(operation)
         return _Value(operation.results[0], c)
 
@@ -1114,16 +976,7 @@ class _EngineCalls:
                 )
             )
         if name == "sum_plaintext_products":
-            ciphertexts = cast(Sequence[_Value], p["ciphertexts"])
-            plaintexts = cast(Sequence[_Value], p["plaintexts"])
-            if p.get("round_rows"):
-                first, batched = plaintexts
-                return self._ordered_products(ciphertexts, (first,), batched)
-            if not ciphertexts or len(ciphertexts) != len(plaintexts):
-                raise CaptureError(
-                    "Weighted sum requires matching nonempty operands"
-                )
-            return self._ordered_products(ciphertexts, plaintexts)
+            return self._weighted_sum(p, grouped=False)
         if name == "sum_plaintext_product_groups":
             groups = cast(Sequence[Sequence[_Value]], p["plaintext_groups"])
             if not groups:
@@ -1153,7 +1006,7 @@ class _EngineCalls:
                             "keys": [key for key in keys if key is not None],
                             "output_domain": "ntt",
                             "use_hoisting": True,
-                            "modup_method": p.get("modup_method", "exact"),
+                            "basis_conversion": p.get("basis_conversion", "exact"),
                             "moddown_rounding": p.get(
                                 "moddown_rounding", "nearest"
                             ),
@@ -1287,7 +1140,7 @@ class _EngineCalls:
             )
             depth = int(cast(int, p["depth"]))
             scale = coerce_scale(
-                self.engine.config.default_scale
+                self.engine.config.scale_at(depth)
                 if p["scale"] is None
                 else p["scale"],
                 value_name="encode scale",
@@ -1386,7 +1239,7 @@ class _EngineCalls:
             resources = self.engine._dispatcher_for(target).device_resources
             depth = int(cast(int, p["depth"]))
             scale = float(
-                self.engine.config.default_scale
+                self.engine.config.scale_at(depth)
                 if p["scale"] is None
                 else cast(float, p["scale"])
             )
@@ -1524,7 +1377,7 @@ class _EngineCalls:
                             "keys": [key for key in keys if key is not None],
                             "use_hoisting": True,
                             "output_domain": p["output_domain"],
-                            "modup_method": p.get("modup_method", "exact"),
+                            "basis_conversion": p.get("basis_conversion", "exact"),
                             "moddown_rounding": p.get(
                                 "moddown_rounding", "nearest"
                             ),
@@ -1594,7 +1447,6 @@ class _EngineCalls:
                 }.items()
                 if (attribute := state_attribute(value)) is not None
             }
-            c.generated_attributes(attributes)
             operands = tuple(
                 c.generated_material(
                     tensor,
@@ -1614,11 +1466,14 @@ class _EngineCalls:
                     attributes=attributes,
                 )
             else:
+                low_key = c.key_reference(p["low_key"], role="switch")
+                return_key = c.key_reference(p["return_key"], role="switch")
                 operation = ckks.EncapsulatedModulusRaiseOp(
                     source.value,
-                    c.key_reference(p["low_key"], role="switch"),
-                    c.key_reference(p["return_key"], role="switch"),
+                    low_key,
+                    return_key,
                     typ,
+                    key_seeds=c.key_seeds((low_key, return_key)),
                     target_depth=depth,
                     low_p_moduli=low_p,
                     return_prime=guard,
@@ -1634,7 +1489,17 @@ class _EngineCalls:
                 raise CaptureError("Rotation sum requires at least one term")
             sources = tuple(_symbolic(value) for value, _ in terms)
             source = sources[0]
-            if any(value.value.type != source.value.type for value in sources):
+            # Results of earlier operations carry no allocation layout facts.
+            state = allocation_state(
+                dict(cast(OpenStateType, source.value.type).state.data)
+            )
+            if any(
+                allocation_state(
+                    dict(cast(OpenStateType, value.value.type).state.data)
+                )
+                != state
+                for value in sources
+            ):
                 raise CaptureError(
                     "Rotation-sum terms require matching states and shapes"
                 )
@@ -1661,7 +1526,7 @@ class _EngineCalls:
                 source,
                 rounding,
                 keys=tuple(key for _, key in terms if key is not None),
-                modup_method=str(p.get("modup_method", "exact")),
+                basis_conversion=str(p.get("basis_conversion", "exact")),
             )
             layout = self._key_layout(
                 tuple(key for _, key in terms if key is not None)
@@ -1673,7 +1538,7 @@ class _EngineCalls:
                     int(source.depth),
                     rescale=rescale,
                     rounding=rounding,
-                    modup_method=str(p.get("modup_method", "exact")),
+                    basis_conversion=str(p.get("basis_conversion", "exact")),
                     **layout,
                 )
                 extras = {
@@ -1712,7 +1577,7 @@ class _EngineCalls:
                             name=name,
                             rescale=rescale,
                             rounding=rounding,
-                            modup_method=str(p.get("modup_method", "exact")),
+                            basis_conversion=str(p.get("basis_conversion", "exact")),
                             **layout,
                         ),
                     )
@@ -1743,13 +1608,6 @@ class _EngineCalls:
                         ),
                     }
                 )
-            c.generated_attributes(
-                {
-                    name: value
-                    for name, value in attributes.items()
-                    if name.startswith("sum_") or name == "parameter_names"
-                }
-            )
             steps = tuple(
                 0 if key is None else int(key.rotation_step) for _, key in terms
             )
@@ -1764,6 +1622,7 @@ class _EngineCalls:
                     keys,
                     steps,
                     typ,
+                    key_seeds=c.key_seeds(keys),
                     rescale=rescale,
                     input_domain=str(source.polynomial_domain),
                     rounding=rounding,
@@ -1787,7 +1646,7 @@ class _EngineCalls:
                         moddown_rounding=str(
                             p.get("moddown_rounding", "nearest")
                         ),
-                        modup_method=str(p.get("modup_method", "exact")),
+                        basis_conversion=str(p.get("basis_conversion", "exact")),
                     )
                     for key in keys
                 ]
@@ -1803,21 +1662,21 @@ class _EngineCalls:
                 source,
                 str(p.get("moddown_rounding", "nearest")),
                 keys=keys,
-                modup_method=str(p.get("modup_method", "exact")),
+                basis_conversion=str(p.get("basis_conversion", "exact")),
             )
             attributes["rotation_steps"] = ArrayAttr(
                 IntegerAttr(int(key.rotation_step), 64) for key in keys
             )
+            key_values = tuple(
+                c.key_reference(key, role="rotation", step=int(key.rotation_step))
+                for key in keys
+            )
             operation = ckks.RotateManyOp(
                 source.value,
-                tuple(
-                    c.key_reference(
-                        key, role="rotation", step=int(key.rotation_step)
-                    )
-                    for key in keys
-                ),
+                key_values,
                 tuple(typ for _ in keys),
                 parameters=parameters,
+                key_seeds=c.key_seeds(key_values),
                 output_domain=domain,
                 attributes=attributes,
             )
@@ -1859,7 +1718,7 @@ class _EngineCalls:
                         moddown_rounding=str(
                             p.get("moddown_rounding", "nearest")
                         ),
-                        modup_method=str(p.get("modup_method", "exact")),
+                        basis_conversion=str(p.get("basis_conversion", "exact")),
                     )
                     for step in steps
                 ]
@@ -1881,23 +1740,25 @@ class _EngineCalls:
                         self.engine._keys.rotation_keys.get(step)
                         for step in nonzero
                     ),
-                    modup_method=str(p.get("modup_method", "exact")),
+                    basis_conversion=str(p.get("basis_conversion", "exact")),
                 )
                 attributes["rotation_steps"] = ArrayAttr(
                     IntegerAttr(step, 64) for step in nonzero
                 )
+                key_values = tuple(
+                    c.key_reference(
+                        self.engine._keys.rotation_keys.get(step),
+                        role="rotation",
+                        step=step,
+                    )
+                    for step in nonzero
+                )
                 op = ckks.RotateManyOp(
                     source.value,
-                    tuple(
-                        c.key_reference(
-                            self.engine._keys.rotation_keys.get(step),
-                            role="rotation",
-                            step=step,
-                        )
-                        for step in nonzero
-                    ),
+                    key_values,
                     tuple(typ for _ in nonzero),
                     parameters=parameters,
+                    key_seeds=c.key_seeds(key_values),
                     attributes=attributes,
                 )
                 c.emit(op)
@@ -1935,7 +1796,16 @@ class _EngineCalls:
                 "negate": ckks.NegateOp,
             }[name]
             if name != "negate":
-                self._matching_operands(source, _symbolic(p["rhs"]), scale=True)
+                rhs = _symbolic(p["rhs"])
+                self._matching_operands(
+                    source, rhs, scale=True, components=name == "subtract"
+                )
+                typ = _result_type(
+                    source,
+                    components=max(
+                        int(source.component_count), int(rhs.component_count)
+                    ),
+                )
         elif name in {"multiply", "multiply_plaintext", "add_plaintext"}:
             rhs = _symbolic(p["rhs"] if name == "multiply" else p["plaintext"])
             self._matching_operands(
@@ -2004,7 +1874,7 @@ class _EngineCalls:
                     )
         elif name in {
             "add_scalar",
-            "multiply_scalar",
+            "_multiply_scalar",
             "multiply_integer_scalar",
         }:
             if name == "multiply_integer_scalar":
@@ -2029,12 +1899,12 @@ class _EngineCalls:
                     if name == "add_scalar"
                     else ckks.MultiplyScalarOp
                 )
-                if name == "multiply_scalar":
+                if name == "_multiply_scalar":
                     typ = _result_type(
                         source,
                         scale=coerce_scale(
                             product_scale(float(source.scale), scale),
-                            value_name="multiply_scalar result",
+                            value_name="multiply_constant result",
                         ),
                     )
         elif name in {
@@ -2095,9 +1965,9 @@ class _EngineCalls:
                 torch.device(source.device)
             )
             tensors, facts = dispatcher.device_resources.rescale_operands(
-                len(source.prime_ids),
-                len(config.q_depth_groups[depth]),
-                include_p=source.modulus_basis == "QP",
+                tuple(source.prime_ids),
+                rows,
+                rounding=cast(str, p["rounding"]),
                 input_domain=source.polynomial_domain,
             )
             attrs = {
@@ -2108,7 +1978,6 @@ class _EngineCalls:
                 }.items()
                 if (attribute := state_attribute(value)) is not None
             }
-            c.generated_attributes(attrs)
             return c.emit(
                 ckks.RescaleOp(
                     source.value,
@@ -2120,8 +1989,9 @@ class _EngineCalls:
                             parameter_description(
                                 config,
                                 "rescale_table",
-                                depth=depth,
-                                basis=source.modulus_basis,
+                                source_prime_ids=list(source.prime_ids),
+                                target_prime_ids=list(rows),
+                                rounding=cast(str, p["rounding"]),
                                 input_domain=source.polynomial_domain,
                                 ntt_backend=facts.get("ntt_backend"),
                                 name=name,
@@ -2173,7 +2043,7 @@ class _EngineCalls:
                 source,
                 str(p.get("moddown_rounding", "nearest")),
                 keys=(key,),
-                modup_method=str(p.get("modup_method", "exact")),
+                basis_conversion=str(p.get("basis_conversion", "exact")),
                 rescale=rescale,
                 rescale_rounding=rescale_rounding,
                 output_domain=domain,
@@ -2192,9 +2062,7 @@ class _EngineCalls:
                     )
                 else:
                     depth = int(source.depth)
-                    divisor = math.prod(
-                        self.engine.config.q_depth_groups[depth]
-                    )
+                    divisor = self.engine.config.rescale_divisor(depth)
                     typ = _result_type(
                         source,
                         components=2,
@@ -2202,7 +2070,7 @@ class _EngineCalls:
                         prime_ids=depth_prime_ids(
                             self.engine.config, depth + 1, "Q"
                         ),
-                        scale=source.scale / divisor
+                        scale=quotient_scale(source.scale, divisor)
                         if source.scale is not None
                         else None,
                         polynomial_domain=domain,
@@ -2211,9 +2079,12 @@ class _EngineCalls:
             attrs["output_domain"] = StringAttr(domain)
             key_value = c.key_reference(key, role=name)
             return c.emit(
-                op_type.create(
-                    operands=(source.value, key_value, *parameters),
-                    result_types=(typ,),
+                op_type(
+                    source.value,
+                    key_value,
+                    typ,
+                    parameters=tuple(parameters),
+                    key_seeds=c.key_seeds((key_value,)),
                     attributes=attrs,
                 )
             )
@@ -2236,7 +2107,7 @@ class _EngineCalls:
                     cast(PolynomialDomain, p["output_domain"]),
                     key=key,
                     moddown_rounding=str(p.get("moddown_rounding", "nearest")),
-                    modup_method=str(p.get("modup_method", "exact")),
+                    basis_conversion=str(p.get("basis_conversion", "exact")),
                 )
             step = RotationKey.normalize_step(
                 integer_index(cast(int, p["rotation_step"])),
@@ -2247,7 +2118,7 @@ class _EngineCalls:
                 step,
                 "coefficient",
                 moddown_rounding=str(p.get("moddown_rounding", "nearest")),
-                modup_method=str(p.get("modup_method", "exact")),
+                basis_conversion=str(p.get("basis_conversion", "exact")),
             )
         else:
             raise CaptureError(f"Unsupported Engine method {name}")
@@ -2330,7 +2201,6 @@ class _EngineCalls:
                 for name, value in facts.items()
                 if (attribute := state_attribute(value)) is not None
             }
-            c.generated_attributes(generated)
             attrs.update(generated)
         elif op_type in {ckks.ToNttOp, ckks.FromNttOp}:
             source = operands[0]
@@ -2377,27 +2247,22 @@ class _EngineCalls:
             result_types=[typ],
             attributes=attrs,
         )
-        if name in {"add_scalar", "multiply_scalar"}:
-            c.template_options(
-                operation, scalar_scale_from_input=p["scalar_scale"] is None
-            )
-        if name == "reinterpret_at_scale":
-            c.template_options(
-                operation, max_relative_change=p["max_relative_change"]
-            )
         return c.emit(operation)
 
     @staticmethod
     def _matching_operands(
-        lhs: _Value, rhs: _Value, *, scale: bool, plaintext: bool = False
+        lhs: _Value,
+        rhs: _Value,
+        *,
+        scale: bool,
+        plaintext: bool = False,
+        components: bool = True,
     ) -> None:
         fields = ("depth", "prime_ids", "modulus_basis")
         if not plaintext:
-            fields += (
-                "polynomial_domain",
-                "residue_representation",
-                "component_count",
-            )
+            fields += ("polynomial_domain", "residue_representation")
+            if components:
+                fields += ("component_count",)
         if scale:
             fields += ("scale",)
         for field in fields:
@@ -2411,18 +2276,22 @@ class _EngineCalls:
     ) -> _Value:
         if depth < int(source.depth):
             raise CaptureError("ModSwitch cannot restore removed Q rows")
+        config = self.engine.config
         rows = depth_prime_ids(
-            self.engine.config, depth, cast(ModulusBasis, source.modulus_basis)
+            config, depth, cast(ModulusBasis, source.modulus_basis)
         )
-        typ = _result_type(source, depth=depth, prime_ids=rows)
+        typ = _result_type(
+            source,
+            depth=depth,
+            prime_ids=rows,
+            scale=source.scale
+            if config.is_subbasis(int(source.depth), depth)
+            else config.scale_at(depth),
+        )
         operation = ckks.ModSwitchOp(
             source.value,
             typ,
             attributes={"target_depth": IntegerAttr(depth, 64)},
-        )
-        self.capture.template_options(
-            operation,
-            depth_offset=depth - int(source.depth) if relative else None,
         )
         return self.capture.emit(operation)
 
@@ -2460,7 +2329,7 @@ class _EngineCalls:
         self,
         source: _Value,
         moddown_rounding: str = "nearest",
-        modup_method: str = "exact",
+        basis_conversion: str = "exact",
         rescale: bool = False,
         rescale_rounding: str = "nearest",
         output_domain: str = "coefficient",
@@ -2469,21 +2338,21 @@ class _EngineCalls:
     ) -> tuple[tuple[SSAValue, ...], dict[str, Attribute]]:
         if moddown_rounding not in {"floor", "nearest"}:
             raise CaptureError("moddown_rounding must be 'floor' or 'nearest'")
-        if modup_method not in {"exact", "crt", "normalized_crt"}:
+        if basis_conversion not in {"exact", "crt", "normalized_crt"}:
             raise CaptureError(
-                "modup_method must be exact, crt, or normalized_crt"
+                "basis_conversion must be exact, crt, or normalized_crt"
             )
         layout = self._key_layout(keys)
         if keys and layout is None:
             return (), {
                 "moddown_rounding": StringAttr(moddown_rounding),
-                "modup_method": StringAttr(modup_method),
+                "basis_conversion": StringAttr(basis_conversion),
             }
         memo_key = (
             str(source.device),
             int(source.depth),
             moddown_rounding,
-            modup_method,
+            basis_conversion,
             rescale,
             rescale_rounding,
             output_domain,
@@ -2499,7 +2368,7 @@ class _EngineCalls:
         tensors, facts = dispatcher.device_resources.key_switch_operands(
             int(source.depth),
             moddown_rounding=moddown_rounding,
-            modup_method=modup_method,
+            basis_conversion=basis_conversion,
             rescale=rescale,
             rescale_rounding=rescale_rounding,
             output_domain=output_domain,
@@ -2514,19 +2383,6 @@ class _EngineCalls:
             }.items()
             if (attribute := state_attribute(value)) is not None
         }
-        self.capture.generated_attributes(
-            {
-                name: value
-                for name, value in attributes.items()
-                if name
-                not in {
-                    "moddown_rounding",
-                    "modup_method",
-                    "ntt_backend",
-                    "galois_generator",
-                }
-            }
-        )
         from fhelium.backend.rns._preparation import (
             table_description,
         )
@@ -2557,7 +2413,7 @@ class _EngineCalls:
         *,
         key: object = None,
         moddown_rounding: str = "nearest",
-        modup_method: str = "exact",
+        basis_conversion: str = "exact",
     ) -> _Value:
         if step == 0:
             return self._mod_switch(source, int(source.depth))
@@ -2570,7 +2426,7 @@ class _EngineCalls:
                         part,
                         domain if index == len(path) - 1 else "coefficient",
                         moddown_rounding=moddown_rounding,
-                        modup_method=modup_method,
+                        basis_conversion=basis_conversion,
                     )
                 return source
             key = self.engine._keys.rotation_keys.get(step)
@@ -2583,19 +2439,21 @@ class _EngineCalls:
             source,
             moddown_rounding,
             keys=(key,),
-            modup_method=modup_method,
+            basis_conversion=basis_conversion,
         )
         attributes.update(
             rotation_step=IntegerAttr(step, 64),
             input_domain=StringAttr(cast(str, source.polynomial_domain)),
             output_domain=StringAttr(domain),
         )
+        key_value = self.capture.key_reference(key, role="rotation", step=step)
         return self.capture.emit(
             ckks.RotateOp(
                 source.value,
-                self.capture.key_reference(key, role="rotation", step=step),
+                key_value,
                 typ,
                 parameters=parameters,
+                key_seeds=self.capture.key_seeds((key_value,)),
                 attributes=attributes,
             )
         )
@@ -2612,13 +2470,6 @@ class _Capture:
         self.active_config = None
         self.preparation = None
         self.runtime_inputs = {}
-        self.provenance = (
-            TemplateProvenance(
-                record_origins=workspace.get("local_plan_reuse") is not False
-            )
-            if workspace.get(RECORDING)
-            else None
-        )
         self.block = block
         self.engines: dict[int, _EngineCalls] = {}
         self.functions: dict[types.FunctionType, types.FunctionType] = {}
@@ -2631,8 +2482,11 @@ class _Capture:
             tuple[int, bool], list[tuple[Attribute, SSAValue]]
         ] = {}
         self.metadata: dict[tuple[int, str], tuple[Attribute, object]] = {}
+        self.bundles: dict[tuple[SSAValue, Attribute], SSAValue] = {}
         # Rotation steps of captured key values; key types record only layout.
         self.key_steps: dict[SSAValue, int] = {}
+        # Seed-row operands of seeded key values.
+        self.seeds: dict[SSAValue, SSAValue] = {}
         # Device resources of key-switching captures provide lowering tables.
         self.resources: dict[int, object] = {}
         self.type_keys: dict[int, tuple[Attribute, int]] = {}
@@ -2646,27 +2500,6 @@ class _Capture:
             # The entry retains the type so its identity is not reused.
             found = self.type_keys[id(typ)] = (typ, number)
         return found[1]
-
-    def adapter_scope(self):
-        return (
-            self.provenance.adapter()
-            if self.provenance is not None
-            else nullcontext()
-        )
-
-    def template_options(self, operation, **options):
-        if self.provenance is not None:
-            self.provenance.options.setdefault(operation, {}).update(options)
-
-    def generated_attributes(self, attributes):
-        if self.provenance is not None:
-            self.provenance.attributes(
-                {
-                    name: value
-                    for name, value in attributes.items()
-                    if name != "ntt_backend"
-                }
-            )
 
     def generated_material(self, tensor, typ, description=None):
         return self.material(tensor, typ, description, generated=True)
@@ -2710,7 +2543,6 @@ class _Capture:
         reference = core.MaterialRefOp(typ, symbol=symbol)
         self.block.add_op(reference)
         if self.preparation is not None and symbol in self.preparation.symbols:
-            self.template_options(reference, preparation_output=symbol)
             view = self.preparation.views.get(
                 symbol,
                 {
@@ -2724,24 +2556,9 @@ class _Capture:
                 json.dumps(view)
             )
         references.append((typ, reference.value))
-        if generated and self.provenance is not None:
-            self.provenance.generated_values.add(reference.value)
         return reference.value
 
     def emit(self, operation: Operation) -> _Value:
-        if self.provenance is not None:
-            from .._template_rules import RULES, result_types
-            from fhelium.config import CkksConfig
-
-            if type(operation) in RULES:
-                record = {"options": self.provenance.options.get(operation, {})}
-                workspace = {CkksConfig: self.active_config}
-                for result, typ in zip(
-                    tuple(operation.results),
-                    result_types(operation, record, workspace),
-                    strict=True,
-                ):
-                    Rewriter.replace_value_with_new_type(result, typ)
         self.block.add_op(operation)
         return _Value(operation.results[0], self)
 
@@ -2753,27 +2570,42 @@ class _Capture:
         ):
             return key.value
         if isinstance(key, KeySwitchKey):
-            return self.material(
+            value = self.material(
                 key.data,
                 cast(OpenStateType, value_type(key)),
                 key_description(key),
             )
+            seed = key.generated_seed
+            if seed is not None and value not in self.seeds:
+                key_symbol = cast(core.MaterialRefOp, value.owner).symbol
+                self.seeds[value] = self.material(
+                    seed,
+                    cast(OpenStateType, value_type(seed)),
+                    {"kind": "KeySeed", "key": cast(StringAttr, key_symbol).data},
+                )
+            return value
         if key is not None:
             raise CaptureError(f"{role} requires an evaluation key")
-        typ = ckks.EvaluationKeyType()
         symbol = f"{role}_key_{len(tuple(self.block.ops))}"
-        reference = core.MaterialRefOp(typ, symbol=symbol)
+        reference = key_placeholder(
+            symbol,
+            {
+                "kind": {
+                    "rotation": "RotationKey",
+                    "relinearization": "RelinearizationKey",
+                    "conjugation": "ConjugationKey",
+                    "switch": "KeySwitchKey",
+                }.get(role, role),
+                **({"rotation_step": step} if step is not None else {}),
+            },
+            self.descriptions,
+        )
         self.block.add_op(reference)
-        self.descriptions[symbol] = {
-            "kind": {
-                "rotation": "RotationKey",
-                "relinearization": "RelinearizationKey",
-                "conjugation": "ConjugationKey",
-                "switch": "KeySwitchKey",
-            }.get(role, role),
-            **({"rotation_step": step} if step is not None else {}),
-        }
         return reference.value
+
+    def key_seeds(self, keys: Sequence[SSAValue]) -> tuple[SSAValue, ...]:
+        """Return the seed operands of ``keys``: one per compact key, in order."""
+        return tuple(self.seeds[key] for key in keys if key in self.seeds)
 
     def unwrapped_key(self, value):
         if isinstance(value, _EngineCalls):
@@ -2815,10 +2647,6 @@ class _Capture:
                 result._implicit_value = _Value(
                     self.material(value.implicit_data, core.MessageType()), self
                 )
-                if self.provenance is not None:
-                    self.provenance.implicit_owners[
-                        result._implicit_value.value
-                    ] = result.value
             return result
         if isinstance(value, (tuple, list)):
             return type(value)(self.runtime(item) for item in value)
@@ -2875,10 +2703,6 @@ class _Capture:
                 result._implicit_value = _Value(
                     self.material(value.implicit_data, core.MessageType()), self
                 )
-                if self.provenance is not None:
-                    self.provenance.implicit_owners[
-                        result._implicit_value.value
-                    ] = result.value
             return result
         if isinstance(value, KeySwitchKey):
             return value
@@ -2976,14 +2800,6 @@ class _Capture:
     def numeric_call(self, function, args, kwargs):
         from ._tensor_capture import numeric_call
 
-        origin = (
-            self.provenance.emission(sys._getframe(2), "TensorCall")
-            if self.provenance is not None
-            and self.provenance.record_origins
-            and not self.provenance.internal
-            else None
-        )
-        before = self.block.last_op
         args, kwargs = self.runtime(args), self.runtime(kwargs)
         with (
             self.preparation.pause()
@@ -2991,36 +2807,10 @@ class _Capture:
             else nullcontext()
         ):
             result = numeric_call(self, function, args, kwargs)
-        if self.provenance is not None:
-            from fhelium.ir.dialects import semantic
-            from fhelium.ir.dialects.torch import TensorCallOp
-
-            operation = (
-                self.block.first_op if before is None else before.next_op
-            )
-            if self.provenance.record_origins:
-                self.provenance.record_emission(operation, origin)
-            while operation is not None:
-                if isinstance(
-                    operation, UnrealizedConversionCastOp
-                ) and isinstance(
-                    operation.results[0].type,
-                    (semantic.SecretType, semantic.PublicType),
-                ):
-                    self.template_options(operation, cast="semantic_role")
-                elif isinstance(operation, TensorCallOp):
-                    self.template_options(
-                        operation,
-                        tensor_call="internal_unclassified"
-                        if self.provenance.internal
-                        else "registered",
-                    )
-                operation = operation.next_op
         return result
 
     def append_unit_axis(self, value):
         result = value.reshape(*value.shape, 1)
-        self.template_options(result.value.owner, view="append_unit_axis")
         return result
 
     def function(self, function: types.FunctionType) -> types.FunctionType:
@@ -3032,10 +2822,6 @@ class _Capture:
             )
         if function in self.functions:
             return self.functions[function]
-        if self.provenance is not None and self.provenance.record_origins:
-            self.provenance.register_code(
-                function.__code__, function.__module__
-            )
         globals_ = dict(function.__globals__)
         closure = tuple(
             types.CellType(cell.cell_contents)
@@ -3181,6 +2967,7 @@ def capture_eager(
     physical = dict(runtime)
     input_fields = {}
     implicit_names = {}
+    seed_names = {}
     for name, value in runtime.items():
         if (
             isinstance(value, CompressedPlaintext)
@@ -3192,6 +2979,13 @@ def capture_eager(
             physical[extra] = value.implicit_data
             input_fields[extra] = [name, "implicit_data"]
             implicit_names[name] = extra
+        if isinstance(value, KeySwitchKey) and value.generated_seed is not None:
+            extra = name + "_seed"
+            while extra in ordered or extra in physical:
+                extra += "_"
+            physical[extra] = value.generated_seed
+            input_fields[extra] = [name, "seed"]
+            seed_names[name] = extra
     block = Block(arg_types=[value_type(value) for value in physical.values()])
     work = CompileWorkspace() if workspace is None else workspace
     capture = _Capture(work, block, material_names)
@@ -3212,10 +3006,8 @@ def capture_eager(
         capture.runtime_inputs[id(runtime[name])] = value
         if name in implicit_names:
             value._implicit_value = symbolic[implicit_names[name]]
-            if capture.provenance is not None:
-                capture.provenance.implicit_owners[
-                    value._implicit_value.value
-                ] = value.value
+        if name in seed_names:
+            capture.seeds[value.value] = symbolic[seed_names[name]].value
         if capture.preparation is None or not isinstance(
             runtime[name], (torch.Tensor, Plaintext, CompressedPlaintext)
         ):
@@ -3274,10 +3066,6 @@ def capture_eager(
                     "implicit": implicit,
                     "fields": fields,
                 }
-                if capture.provenance is not None:
-                    capture.provenance.output_values.append(
-                        (descriptor, value.value)
-                    )
                 return descriptor
             results.append(value.value)
             return {"kind": "ssa", "result": len(results) - 1}
@@ -3318,8 +3106,7 @@ def capture_eager(
             ):
                 block.detach_op(operation)
                 block.insert_op_before(operation, first)
-    with capture.adapter_scope():
-        descriptor = describe(output)
+    descriptor = describe(output)
     block.add_op(ReturnOp(*results))
     program = Program.from_function(
         block,
@@ -3338,24 +3125,6 @@ def capture_eager(
     )
     if capture.descriptions:
         program.set_material_descriptions(capture.descriptions)
-    if capture.provenance is not None:
-        work[METADATA] = capture.provenance.finish(program, physical)
-        work[METADATA]["static_arguments"] = {
-            name: json_value(value)
-            for name, value in ordered.items()
-            if name not in runtime
-        }
-        work[METADATA]["static_argument_types"] = {
-            name: type(value).__name__
-            for name, value in ordered.items()
-            if name not in runtime
-        }
-        from .._origins import OperationOrigins
-
-        if capture.provenance.record_origins:
-            work[OperationOrigins] = OperationOrigins(
-                program.module, capture.provenance.origins
-            )
     if capture.resources:
         work[CAPTURED_RESOURCES] = tuple(capture.resources.values())
     compilation = Compilation(
@@ -3369,9 +3138,6 @@ def capture_eager(
     capture.engines.clear()
     capture.runtime_inputs.clear()
     capture.preparation = None
-    from .._repeat_template import fold_capture
-
-    fold_capture(compilation)
     return compilation
 
 

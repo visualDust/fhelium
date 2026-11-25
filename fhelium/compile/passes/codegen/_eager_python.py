@@ -213,7 +213,7 @@ def _eager_expression(
         return f"engine.multiply({operands[0]}, {operands[1]})", resources
     if isinstance(operation, ckks.RotateOp):
         return (
-            f"engine.rotate_with_key({operands[0]}, {operands[1]}, output_domain={operation.output_domain.data!r}, moddown_rounding={operation.moddown_rounding.data!r}, modup_method={operation.modup_method.data!r})",
+            f"engine.rotate_with_key({operands[0]}, {operands[1]}, output_domain={operation.output_domain.data!r}, moddown_rounding={operation.moddown_rounding.data!r}, basis_conversion={operation.basis_conversion.data!r})",
             resources,
         )
     if isinstance(operation, ckks.ModulusRaiseOp):
@@ -243,14 +243,14 @@ def _eager_expression(
         return (
             f"engine.sum_rotations(({', '.join(terms)},), "
             f"rescale={bool(operation.rescale.value.data)!r}, "
-            f"moddown_rounding={operation.moddown_rounding.data!r}, modup_method={operation.modup_method.data!r})",
+            f"moddown_rounding={operation.moddown_rounding.data!r}, basis_conversion={operation.basis_conversion.data!r})",
             resources,
         )
     if isinstance(operation, ckks.RotateManyOp):
         keys = ", ".join(operands[1:])
         return (
             f"engine.rotate_many_with_keys({operands[0]}, ({keys},), "
-            f"use_hoisting=True, output_domain={operation.output_domain.data!r}, moddown_rounding={operation.moddown_rounding.data!r}, modup_method={operation.modup_method.data!r})",
+            f"use_hoisting=True, output_domain={operation.output_domain.data!r}, moddown_rounding={operation.moddown_rounding.data!r}, basis_conversion={operation.basis_conversion.data!r})",
             resources,
         )
     if isinstance(operation, ckks.GroupedRotationWeightedSumOp):
@@ -269,7 +269,7 @@ def _eager_expression(
         ]
         return (
             f"engine.sum_rotated_plaintext_product_groups({operands[0]}, "
-            f"({', '.join(entries)},), ({', '.join(groups)},), moddown_rounding={operation.moddown_rounding.data!r}, modup_method={operation.modup_method.data!r})",
+            f"({', '.join(entries)},), ({', '.join(groups)},), moddown_rounding={operation.moddown_rounding.data!r}, basis_conversion={operation.basis_conversion.data!r})",
             resources,
         )
     if isinstance(operation, ckks.ToNttOp):
@@ -300,7 +300,7 @@ def _eager_expression(
         method = (
             "add_scalar"
             if isinstance(operation, ckks.AddScalarOp)
-            else "multiply_scalar"
+            else "_multiply_scalar"
         )
         scalar = floating(operation.scalar, label="scalar")
         scalar_scale = floating(operation.scalar_scale, label="scalar scale")
@@ -341,7 +341,7 @@ def _eager_expression(
             else ""
         )
         return (
-            f"engine.{method}({operands[0]}, {operands[1]}, output_domain={operation.output_domain.data!r}, moddown_rounding={operation.moddown_rounding.data!r}, modup_method={operation.modup_method.data!r}{compound})",
+            f"engine.{method}({operands[0]}, {operands[1]}, output_domain={operation.output_domain.data!r}, moddown_rounding={operation.moddown_rounding.data!r}, basis_conversion={operation.basis_conversion.data!r}{compound})",
             resources,
         )
     if isinstance(operation, ckks.RescaleOp):

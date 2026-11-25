@@ -14,6 +14,8 @@ from fhelium.ir.dialects._common import state_attribute
 from fhelium.backend.ntt._selection import select_operation_policy, table_count
 from fhelium.backend.rns._preparation import (
     hybrid_decomposition_facts,
+    joint_rescale_attributes,
+    joint_rescale_facts,
     rns_names,
     table_description,
 )
@@ -29,21 +31,55 @@ def key_switch_runtime_attributes(
     """
     attributes = {
         name: facts[name]
-        for name in ("q_count", "p_count", "key_row_start", "digits")
+        for name in (
+            "q_count",
+            "p_count",
+            "key_row_start",
+            "key_p_row_start",
+            "digits",
+        )
     }
+    if facts.get("key_q_rows"):
+        attributes["key_q_rows"] = facts["key_q_rows"]
     attributes.update(
         (name, facts[name])
         for name in (
             "ntt_backend",
             "galois_generator",
-            "modup_method",
+            "basis_conversion",
             "joint_drop_count",
             "joint_drop_is_prefix",
             "joint_drop_prime_ids",
+            "joint_target_prime_ids",
         )
         if name in facts
     )
     return attributes
+
+
+def key_seed_rounds(key) -> int:
+    """Return the ChaCha round count a compact key value's state records; 0 when expanded."""
+    state = getattr(getattr(key, "type", None), "state", None)
+    rounds = None if state is None else state.data.get("seed_rounds")
+    return int(rounds.value.data) if isinstance(rounds, IntegerAttr) else 0
+
+
+def operation_key_rounds(operation: Operation) -> int:
+    """Return the generated-key round count of an operation's key operands.
+
+    Operations with ``key_seeds`` operands consume compact keys whose state
+    records ``seed_rounds``; others consume expanded keys.
+    """
+    seeds = getattr(operation, "key_seeds", ())
+    if not seeds:
+        return 0
+    for name in ("keys", "key", "low_key"):
+        keys = getattr(operation, name, None)
+        if keys is None:
+            continue
+        first = keys[0] if name == "keys" else keys
+        return key_seed_rounds(first)
+    return 0
 
 
 def operation_key_facts(operation: Operation, config: CkksConfig, depth: int):
@@ -134,6 +170,8 @@ def native_key_switch_requirements(
     attributes = dict(attributes)
     if isinstance(operation, ckks.RotateOp):
         attributes["rotation_step"] = operation.rotation_step
+    if rounds := operation_key_rounds(operation):
+        attributes["key_rounds"] = IntegerAttr(rounds, 64)
     return attributes, dict(descriptions)
 
 
@@ -164,30 +202,21 @@ def _native_key_switch_requirements(
         )
     method = cast(
         StringAttr,
-        operation.attributes.get("modup_method", StringAttr("exact")),
+        operation.attributes.get("basis_conversion", StringAttr("exact")),
     ).data
-    facts["modup_method"] = method
+    facts["basis_conversion"] = method
     facts["moddown_rounding"] = rounding.data
     facts["ntt_backend"] = policy.name
     rescale = isinstance(operation, ckks.RelinearizeOp) and bool(
         operation.rescale.value.data
     )
     if rescale:
-        group_start = sum(
-            map(len, config.q_depth_groups[: int(depth.value.data)])
-        )
-        drop_ids = tuple(
-            range(
-                group_start,
-                group_start + len(config.q_depth_groups[int(depth.value.data)]),
-            )
-        )
         facts.update(
-            rescale=True,
-            joint_drop_prime_ids=drop_ids,
-            joint_drop_count=len(drop_ids),
-            joint_drop_is_prefix=drop_ids
-            == cast(tuple[int, ...], facts["q_prime_ids"])[: len(drop_ids)],
+            joint_rescale_facts(
+                config,
+                int(depth.value.data),
+                cast(tuple[int, ...], facts["q_prime_ids"]),
+            ),
             rescale_rounding=cast(
                 ckks.RelinearizeOp, operation
             ).rescale_rounding.data,
@@ -199,8 +228,12 @@ def _native_key_switch_requirements(
         rns_names(
             facts["digits"],
             moddown_rounding=rounding.data,
-            modup_method=method,
+            basis_conversion=method,
             rescale=rescale,
+            restored=rescale
+            and not set(cast(tuple[int, ...], facts["joint_target_prime_ids"]))
+            <= set(cast(tuple[int, ...], facts["q_prime_ids"])),
+            rescale_rounding=str(facts.get("rescale_rounding", "nearest")),
         )
     )
     transforms = [
@@ -228,20 +261,12 @@ def _native_key_switch_requirements(
     attributes: dict[str, Attribute] = {
         "ntt_backend": StringAttr(policy.name),
         "moddown_rounding": rounding,
-        "modup_method": StringAttr(method),
+        "basis_conversion": StringAttr(method),
         "galois_generator": IntegerAttr(config.galois_generator, 64),
     }
     if rescale:
-        attributes.update(
-            joint_drop_count=IntegerAttr(len(drop_ids), 64),
-            joint_drop_is_prefix=IntegerAttr(
-                int(cast(bool, facts["joint_drop_is_prefix"])), 64
-            ),
-            joint_drop_prime_ids=ArrayAttr(
-                IntegerAttr(i, 64) for i in drop_ids
-            ),
-        )
-    for name in ("q_count", "p_count", "key_row_start"):
+        attributes.update(joint_rescale_attributes(facts))
+    for name in ("q_count", "p_count", "key_row_start", "key_p_row_start"):
         attributes[name] = cast(
             Attribute, state_attribute(cast(int, facts[name]))
         )
@@ -254,6 +279,10 @@ def _native_key_switch_requirements(
             )
         ),
     )
+    if facts.get("key_q_rows"):
+        attributes["key_q_rows"] = cast(
+            Attribute, state_attribute(tuple(cast(tuple[int, ...], facts["key_q_rows"])))
+        )
     return attributes, {
         name: table_description(config, int(depth.value.data), name, facts)
         for name in names
@@ -277,11 +306,14 @@ def rotation_sum_requirements(
     )
     rescale = bool(operation.rescale.value.data)
     rounding = operation.moddown_rounding.data
-    drop = len(config.q_depth_groups[depth]) if rescale else 0
-    q_count = len(config.q_moduli) - sum(
-        map(len, config.q_depth_groups[:depth])
+    dropped, restored = (
+        config.basis_transition(depth, depth + 1) if rescale else ((), ())
     )
-    M = prod(config.q_depth_groups[depth]) if rescale else 1
+    if restored:
+        return None
+    drop = len(dropped)
+    q_count = len(config.q_prime_ids(depth))
+    M = prod(config.moduli[i] for i in dropped)
     facts = operation_key_facts(operation, config, depth)
     if facts is None:
         return None
@@ -309,7 +341,7 @@ def rotation_sum_requirements(
         {
             name: {
                 'kind': 'rotation_sum_table',
-                'modup_method': operation.modup_method.data,
+                'basis_conversion': operation.basis_conversion.data,
                 'depth': depth,
                 'name': name,
                 'rescale': rescale,
@@ -330,7 +362,7 @@ def rotation_sum_requirements(
                 name = f'sum_galois_{step}'
                 descriptions[name] = {
                     'kind': 'rotation_sum_table',
-                    'modup_method': operation.modup_method.data,
+                    'basis_conversion': operation.basis_conversion.data,
                     'depth': depth,
                     'name': name,
                     'rescale': rescale,

@@ -17,11 +17,10 @@ from typing import ClassVar, Literal, cast
 from xdsl.dialects.builtin import (
     ArrayAttr,
     FloatAttr,
-    IndexType,
     IntegerAttr,
     StringAttr,
 )
-from xdsl.ir import Attribute, Dialect, Operation, Region, SSAValue
+from xdsl.ir import Attribute, Dialect, Operation, SSAValue
 from xdsl.irdl import (
     AttrSizedOperandSegments,
     IRDLOperation,
@@ -30,14 +29,12 @@ from xdsl.irdl import (
     irdl_op_definition,
     operand_def,
     opt_attr_def,
-    opt_operand_def,
     result_def,
-    region_def,
     traits_def,
     var_operand_def,
     var_result_def,
 )
-from xdsl.traits import IsTerminator, Pure
+from xdsl.traits import Pure
 from xdsl.utils.exceptions import VerifyException
 
 from .._operation_catalog import (
@@ -50,8 +47,9 @@ from .._operation_catalog import (
     unsupported_attributes,
 )
 from ..ckks_state import output_residues, transform_state
-from ._common import OpenStateType, ValueRole, state_attribute
+from ._common import OpenStateType, ValueRole
 from .core import MessageType
+from .._operation_structure import OperationStructure, compressed
 from .._dependencies import (
     DependencyKind,
     OperationDependencies,
@@ -80,7 +78,14 @@ class PlaintextType(OpenStateType):
 
 @irdl_attr_definition
 class EvaluationKeyType(OpenStateType):
-    """Evaluation-key Tensor with partial digit, row, and polynomial state."""
+    """Evaluation-key Tensor with partial digit, row, and polynomial state.
+
+    State ``seed_rounds`` greater than zero marks a compact key: the Tensor
+    holds component $k_0$ only, and each consuming operation receives the
+    key's int64 seed rows ``[key_digit, 6]`` in its ``key_seeds`` operands,
+    one per key operand in operand order, and generates $k_1$ from them.
+    Expanded keys hold both components and supply no seed operand.
+    """
 
     name = "fhelium_ckks.evaluation_key"
 
@@ -92,171 +97,6 @@ class CompressedPlaintextType(OpenStateType):
     name = "fhelium_ckks.compressed_plaintext"
 
     ROLE: ClassVar[ValueRole] = "plaintext"
-
-
-@irdl_op_definition
-class RepeatYieldOp(IRDLOperation):
-    """Yield one round's ordered outputs followed by updated carry values."""
-
-    name = "fhelium_ckks.repeat_yield"
-    values = var_operand_def()
-    traits = traits_def(IsTerminator())
-
-    def __init__(self, values: Sequence[SSAValue]) -> None:
-        super().__init__(operands=[values])
-
-
-@irdl_op_definition
-class RepeatOp(IRDLOperation):
-    r"""Apply one mathematical body to an ordered table of operand tuples.
-
-    For round i, (y_i, c_{i+1}) = body(i, shared, table_i, c_i). Results are the round-major y_i values followed by c_count. The body argument order is iteration index, shared operands, current table row, then carried values. All table entries remain ordinary SSA operands, including material references. Nested repeats have the same semantics.
-    """
-
-    name = "fhelium_ckks.repeat"
-    inputs = var_operand_def()
-    outputs = var_result_def()
-    body = region_def("single_block")
-    count = attr_def(IntegerAttr)
-    shared_count = attr_def(IntegerAttr)
-    table_width = attr_def(IntegerAttr)
-    yield_count = attr_def(IntegerAttr)
-    carry_count = attr_def(IntegerAttr)
-    traits = traits_def(Pure())
-
-    def __init__(
-        self, shared, tables, carried, result_types, body, *, count, yield_count
-    ):
-        width = len(tables) // count
-        super().__init__(
-            operands=[(*shared, *tables, *carried)],
-            result_types=[result_types],
-            regions=[Region(body)],
-            attributes={
-                "count": IntegerAttr(count, 64),
-                "shared_count": IntegerAttr(len(shared), 64),
-                "table_width": IntegerAttr(width, 64),
-                "yield_count": IntegerAttr(yield_count, 64),
-                "carry_count": IntegerAttr(len(carried), 64),
-            },
-        )
-
-    @property
-    def shared(self):
-        return tuple(self.inputs[: self.shared_count.value.data])
-
-    def row(self, index):
-        start = (
-            self.shared_count.value.data + index * self.table_width.value.data
-        )
-        return tuple(self.inputs[start : start + self.table_width.value.data])
-
-    @property
-    def carried(self):
-        start = (
-            self.shared_count.value.data
-            + self.count.value.data * self.table_width.value.data
-        )
-        return tuple(self.inputs[start:])
-
-    def verify_(self):
-        count, shared, width, outputs, carried = (
-            attribute.value.data
-            for attribute in (
-                self.count,
-                self.shared_count,
-                self.table_width,
-                self.yield_count,
-                self.carry_count,
-            )
-        )
-        if count < 1 or min(shared, width, outputs, carried) < 0:
-            raise VerifyException(
-                "Repeat counts must define a nonempty iteration space"
-            )
-        if (
-            len(self.inputs) != shared + count * width + carried
-            or len(self.outputs) != count * outputs + carried
-        ):
-            raise VerifyException("Repeat operand/result table extent mismatch")
-        block = self.body.block
-        if len(block.args) != 1 + shared + width + carried:
-            raise VerifyException("Repeat body argument extent mismatch")
-        if (
-            not isinstance(block.last_op, RepeatYieldOp)
-            or len(block.last_op.values) != outputs + carried
-        ):
-            raise VerifyException("Repeat body yield extent mismatch")
-
-
-@irdl_op_definition
-class RepeatIterationOp(IRDLOperation):
-    """Expose a repeat round's results at its original SSA placement.
-
-    The operation preserves its input values and types. Compile expansion inserts the corresponding body at this location, retaining the original order of surrounding computations.
-    """
-
-    name = "fhelium_ckks.repeat_iteration"
-    inputs = var_operand_def()
-    outputs = var_result_def()
-    iteration = attr_def(IntegerAttr)
-    traits = traits_def(Pure())
-
-    def __init__(self, inputs, *, iteration):
-        super().__init__(
-            operands=[inputs],
-            result_types=[[value.type for value in inputs]],
-            attributes={
-                "iteration": cast(Attribute, state_attribute(iteration))
-            },
-        )
-
-    def verify_(self):
-        if tuple(value.type for value in self.inputs) != tuple(
-            value.type for value in self.outputs
-        ):
-            raise VerifyException("Repeat placement must preserve value types")
-
-
-def select_batch_type(value_type: OpenStateType) -> OpenStateType:
-    """Remove the leading batch axis from logical and physical value state."""
-    state = value_type.state.data
-    batch = cast(ArrayAttr, state["batch_shape"]).data
-    updates: dict[str, Attribute | None] = {"batch_shape": ArrayAttr(batch[1:])}
-    shape = state.get("shape")
-    if isinstance(shape, ArrayAttr):
-        axis = len(shape.data) - 2 - len(batch)
-        for name in ("shape", "strides"):
-            field = state.get(name)
-            if isinstance(field, ArrayAttr):
-                updates[name] = ArrayAttr(
-                    field.data[:axis] + field.data[axis + 1 :]
-                )
-    return value_type.with_state(updates)
-
-
-@irdl_op_definition
-class SelectBatchOp(IRDLOperation):
-    r"""Select row $r$ of the leading batch axis of a plaintext or ciphertext.
-
-    With batch shape $(B,b_1,\ldots)$ the result has batch shape $(b_1,\ldots)$ and holds row $r=\mathrm{start}+i$ for $0\le r<B$, where $i$ is the optional ``index`` operand and $i=0$ without it. The row is a view of the source storage; depth, actual scale, prime rows, components, polynomial domain, residue representation, and compression layout are unchanged. In a repeat body ``index`` is the round index, so one batched operand supplies a different row to every round.
-    """
-
-    name = "fhelium_ckks.select_batch"
-    value = operand_def()
-    index = opt_operand_def(IndexType)
-    result = result_def()
-    start = attr_def(IntegerAttr)
-    traits = traits_def(Pure())
-
-    def __init__(
-        self, value: SSAValue, *, start: int, index: SSAValue | None = None
-    ):
-        super().__init__(
-            operands=[value, [] if index is None else [index]],
-            result_types=[select_batch_type(cast(OpenStateType, value.type))],
-            attributes={"start": IntegerAttr(start, 64)},
-        )
 
 
 @irdl_op_definition
@@ -546,8 +386,10 @@ class RotateOp(IRDLOperation):
     name = "fhelium_ckks.rotate"
     value = operand_def(CiphertextType)
     key = operand_def(EvaluationKeyType)
+    key_seeds = var_operand_def()
     parameters = var_operand_def()
     result = result_def(CiphertextType)
+    irdl_options = (AttrSizedOperandSegments(as_property=True),)
     rotation_step = attr_def(IntegerAttr)
     output_domain = attr_def(
         StringAttr, default_value=StringAttr("coefficient")
@@ -556,7 +398,7 @@ class RotateOp(IRDLOperation):
     moddown_rounding = opt_attr_def(
         StringAttr, default_value=StringAttr("nearest")
     )
-    modup_method = opt_attr_def(StringAttr, default_value=StringAttr("exact"))
+    basis_conversion = opt_attr_def(StringAttr, default_value=StringAttr("exact"))
     traits = traits_def(Pure())
 
     def dependencies(self) -> OperationDependencies:
@@ -587,8 +429,9 @@ class RotateOp(IRDLOperation):
         *,
         rotation_step: int | IntegerAttr | None = None,
         moddown_rounding: str = "nearest",
-        modup_method: str = "exact",
+        basis_conversion: str = "exact",
         parameters: Sequence[SSAValue | Operation] = (),
+        key_seeds: Sequence[SSAValue | Operation] = (),
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         attrs = dict(attributes or {})
@@ -599,7 +442,7 @@ class RotateOp(IRDLOperation):
                 else rotation_step
             )
         attrs.setdefault("moddown_rounding", StringAttr(moddown_rounding))
-        attrs.setdefault("modup_method", StringAttr(modup_method))
+        attrs.setdefault("basis_conversion", StringAttr(basis_conversion))
         if "input_domain" not in attrs:
             source_type = cast(CiphertextType, SSAValue.get(value).type)
             represented = source_type.state.data.get("polynomial_domain")
@@ -622,15 +465,15 @@ class RotateOp(IRDLOperation):
                 }
             )
         super().__init__(
-            operands=[value, key, parameters],
+            operands=[value, key, key_seeds, parameters],
             result_types=[result_type],
             attributes=attrs,
         )
 
     def verify_(self) -> None:
-        if self.modup_method.data not in {"exact", "crt", "normalized_crt"}:
+        if self.basis_conversion.data not in {"exact", "crt", "normalized_crt"}:
             raise VerifyException(
-                "modup_method must be exact, crt, or normalized_crt"
+                "basis_conversion must be exact, crt, or normalized_crt"
             )
         if self.moddown_rounding.data not in {"floor", "nearest"}:
             raise VerifyException(
@@ -659,6 +502,7 @@ class RotateManyOp(IRDLOperation):
     name = "fhelium_ckks.hoisted_rotate_many"
     value = operand_def(CiphertextType)
     keys = var_operand_def(EvaluationKeyType)
+    key_seeds = var_operand_def()
     parameters = var_operand_def()
     outputs = var_result_def(CiphertextType)
     irdl_options = (AttrSizedOperandSegments(as_property=True),)
@@ -668,7 +512,7 @@ class RotateManyOp(IRDLOperation):
     moddown_rounding = opt_attr_def(
         StringAttr, default_value=StringAttr("nearest")
     )
-    modup_method = opt_attr_def(StringAttr, default_value=StringAttr("exact"))
+    basis_conversion = opt_attr_def(StringAttr, default_value=StringAttr("exact"))
     traits = traits_def(Pure())
 
     def dependencies(self) -> OperationDependencies:
@@ -698,15 +542,16 @@ class RotateManyOp(IRDLOperation):
         *,
         output_domain: Literal["coefficient", "ntt"] = "coefficient",
         moddown_rounding: str = "nearest",
-        modup_method: str = "exact",
+        basis_conversion: str = "exact",
         parameters: Sequence[SSAValue | Operation] = (),
+        key_seeds: Sequence[SSAValue | Operation] = (),
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         super().__init__(
-            operands=(value, keys, parameters),
+            operands=(value, keys, key_seeds, parameters),
             result_types=(result_types,),
             attributes={
-                "modup_method": StringAttr(modup_method),
+                "basis_conversion": StringAttr(basis_conversion),
                 "moddown_rounding": StringAttr(moddown_rounding),
                 **(attributes or {}),
                 "output_domain": StringAttr(output_domain),
@@ -714,9 +559,9 @@ class RotateManyOp(IRDLOperation):
         )
 
     def verify_(self) -> None:
-        if self.modup_method.data not in {"exact", "crt", "normalized_crt"}:
+        if self.basis_conversion.data not in {"exact", "crt", "normalized_crt"}:
             raise VerifyException(
-                "modup_method must be exact, crt, or normalized_crt"
+                "basis_conversion must be exact, crt, or normalized_crt"
             )
         if self.moddown_rounding.data not in {"floor", "nearest"}:
             raise VerifyException(
@@ -791,7 +636,9 @@ class EncapsulatedModulusRaiseOp(IRDLOperation):
     value = operand_def(CiphertextType)
     low_key = operand_def(EvaluationKeyType)
     return_key = operand_def(EvaluationKeyType)
+    key_seeds = var_operand_def()
     parameters = var_operand_def()
+    irdl_options = (AttrSizedOperandSegments(as_property=True),)
     result = result_def(CiphertextType)
     target_depth = attr_def(IntegerAttr)
     low_p_moduli = attr_def(ArrayAttr[IntegerAttr])
@@ -815,10 +662,11 @@ class EncapsulatedModulusRaiseOp(IRDLOperation):
         return_p_moduli,
         rounding="nearest",
         parameters=(),
+        key_seeds=(),
         attributes=None,
     ):
         super().__init__(
-            operands=(value, low_key, return_key, parameters),
+            operands=(value, low_key, return_key, key_seeds, parameters),
             result_types=(result_type,),
             attributes={
                 **(attributes or {}),
@@ -848,7 +696,8 @@ class RotationSumOp(IRDLOperation):
     rotations contribute hybrid key products under the common destination
     relation. Ordinary components contribute P times their Q residues and
     zero P residues. The shared extended-basis sum is divided once by P,
-    or by P times the leading complete Q group when ``rescale`` is one.
+    or by P times the dropped rows $D_d$ when ``rescale`` is one; the
+    transition must restore no rows.
     This changes rounding relative to independent RotateOp results and is
     selected through a caller-requested numerical rewrite.
 
@@ -861,6 +710,7 @@ class RotationSumOp(IRDLOperation):
     name = "fhelium_ckks.rotation_sum"
     values = var_operand_def(CiphertextType)
     keys = var_operand_def(EvaluationKeyType)
+    key_seeds = var_operand_def()
     parameters = var_operand_def()
     result = result_def(CiphertextType)
     irdl_options = (AttrSizedOperandSegments(as_property=True),)
@@ -874,7 +724,7 @@ class RotationSumOp(IRDLOperation):
     moddown_rounding = opt_attr_def(
         StringAttr, default_value=StringAttr("nearest")
     )
-    modup_method = opt_attr_def(StringAttr, default_value=StringAttr("exact"))
+    basis_conversion = opt_attr_def(StringAttr, default_value=StringAttr("exact"))
     traits = traits_def(Pure())
 
     def __init__(
@@ -887,15 +737,16 @@ class RotationSumOp(IRDLOperation):
         rescale=False,
         input_domain="coefficient",
         rounding="nearest",
-        modup_method="exact",
+        basis_conversion="exact",
         parameters=(),
+        key_seeds=(),
         attributes=None,
     ):
         super().__init__(
-            operands=(values, keys, parameters),
+            operands=(values, keys, key_seeds, parameters),
             result_types=(result_type,),
             attributes={
-                "modup_method": StringAttr(modup_method),
+                "basis_conversion": StringAttr(basis_conversion),
                 **(attributes or {}),
                 "rotation_steps": ArrayAttr(
                     IntegerAttr(int(step), 64) for step in steps
@@ -923,9 +774,9 @@ class RotationSumOp(IRDLOperation):
         )
 
     def verify_(self) -> None:
-        if self.modup_method.data not in {"exact", "crt", "normalized_crt"}:
+        if self.basis_conversion.data not in {"exact", "crt", "normalized_crt"}:
             raise VerifyException(
-                "modup_method must be exact, crt, or normalized_crt"
+                "basis_conversion must be exact, crt, or normalized_crt"
             )
         steps = tuple(int(x.value.data) for x in self.rotation_steps)
         if self.source_count.value.data != len(self.values):
@@ -976,6 +827,7 @@ class GroupedRotationWeightedSumOp(IRDLOperation):
     value = operand_def(CiphertextType)
     keys = var_operand_def(EvaluationKeyType)
     plaintexts = var_operand_def(PlaintextType)
+    key_seeds = var_operand_def()
     parameters = var_operand_def()
     result = result_def(CiphertextType)
     baby_steps = attr_def(ArrayAttr[IntegerAttr])
@@ -984,7 +836,7 @@ class GroupedRotationWeightedSumOp(IRDLOperation):
     moddown_rounding = opt_attr_def(
         StringAttr, default_value=StringAttr("nearest")
     )
-    modup_method = opt_attr_def(StringAttr, default_value=StringAttr("exact"))
+    basis_conversion = opt_attr_def(StringAttr, default_value=StringAttr("exact"))
     traits = traits_def(Pure())
     irdl_options = (AttrSizedOperandSegments(as_property=True),)
 
@@ -1023,14 +875,15 @@ class GroupedRotationWeightedSumOp(IRDLOperation):
         baby_steps: tuple[int, ...],
         group_count: int,
         moddown_rounding: str = "nearest",
-        modup_method: str = "exact",
+        basis_conversion: str = "exact",
         parameters: Sequence[SSAValue | Operation] = (),
+        key_seeds: Sequence[SSAValue | Operation] = (),
     ) -> None:
         super().__init__(
-            operands=(value, keys, plaintexts, parameters),
+            operands=(value, keys, plaintexts, key_seeds, parameters),
             result_types=[result_type],
             attributes={
-                "modup_method": StringAttr(modup_method),
+                "basis_conversion": StringAttr(basis_conversion),
                 "moddown_rounding": StringAttr(moddown_rounding),
                 "baby_steps": ArrayAttr(
                     IntegerAttr(step, 64) for step in baby_steps
@@ -1041,9 +894,9 @@ class GroupedRotationWeightedSumOp(IRDLOperation):
         )
 
     def verify_(self) -> None:
-        if self.modup_method.data not in {"exact", "crt", "normalized_crt"}:
+        if self.basis_conversion.data not in {"exact", "crt", "normalized_crt"}:
             raise VerifyException(
-                "modup_method must be exact, crt, or normalized_crt"
+                "basis_conversion must be exact, crt, or normalized_crt"
             )
         if self.moddown_rounding.data not in {"floor", "nearest"}:
             raise VerifyException(
@@ -1284,9 +1137,10 @@ class AddOp(_BinaryCiphertextOp):
     r"""Add two state-compatible ciphertexts component by component.
 
     For each component $j$, active prime $q_i$, and coefficient, the operation
-    computes $c'_j=c^{(a)}_j+c^{(b)}_j\pmod {q_i}$.  Inputs have the same
-    component count, depth, prime rows, polynomial domain, residue representation,
-    and actual scale.  The result retains that state and represents the sum of the
+    computes $c'_j=c^{(a)}_j+c^{(b)}_j\pmod {q_i}$, where a component beyond an
+    operand's count is zero.  Inputs have the same depth, prime rows, polynomial
+    domain, residue representation, and actual scale; the result retains that
+    state, has the larger component count, and decrypts to the sum of the
     decoded slot values."""
 
     name = "fhelium_ckks.add"
@@ -1621,6 +1475,18 @@ class AddCompressedPlaintextOp(_CiphertextCompressedPlaintextOp):
 
     name = "fhelium_ckks.add_compressed_plaintext"
 
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return compressed(
+            "add",
+            operand_count,
+            str(attributes["compression_layout"]),
+            attributes.get("polynomial_domain") == "ntt",
+        )
+
     def dependencies(self) -> OperationDependencies:
         """Describe direct ciphertext reads and compact plaintext expansion."""
         relations = [
@@ -1673,6 +1539,15 @@ class MultiplyCompressedPlaintextOp(_CiphertextCompressedPlaintextOp):
 
     name = "fhelium_ckks.multiply_compressed_plaintext"
 
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles and component bodies for residue code generation."""
+        return compressed(
+            "multiply", operand_count, str(attributes["compression_layout"]), False
+        )
+
     def dependencies(self) -> OperationDependencies:
         """Describe direct ciphertext reads and compact plaintext expansion."""
         relations = [
@@ -1716,12 +1591,14 @@ class MultiplyCompressedPlaintextOp(_CiphertextCompressedPlaintextOp):
 class _OutputDomainCiphertextOp(IRDLOperation):
     value = operand_def(CiphertextType)
     key = operand_def()
+    key_seeds = var_operand_def()
     parameters = var_operand_def()
+    irdl_options = (AttrSizedOperandSegments(as_property=True),)
     result = result_def(CiphertextType)
     moddown_rounding = opt_attr_def(
         StringAttr, default_value=StringAttr("nearest")
     )
-    modup_method = opt_attr_def(StringAttr, default_value=StringAttr("exact"))
+    basis_conversion = opt_attr_def(StringAttr, default_value=StringAttr("exact"))
     traits = traits_def(Pure())
     output_domain = attr_def(
         StringAttr, default_value=StringAttr("coefficient")
@@ -1734,14 +1611,15 @@ class _OutputDomainCiphertextOp(IRDLOperation):
         result_type: Attribute | None = None,
         *,
         moddown_rounding: str = "nearest",
-        modup_method: str = "exact",
+        basis_conversion: str = "exact",
         parameters: Sequence[SSAValue | Operation] = (),
         output_domain: Literal["coefficient", "ntt"] = "coefficient",
+        key_seeds: Sequence[SSAValue | Operation] = (),
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         attrs = dict(attributes or {})
         attrs.setdefault("moddown_rounding", StringAttr(moddown_rounding))
-        attrs.setdefault("modup_method", StringAttr(modup_method))
+        attrs.setdefault("basis_conversion", StringAttr(basis_conversion))
         domain_attr = attrs.get("output_domain", StringAttr(output_domain))
         if not isinstance(domain_attr, StringAttr):
             raise TypeError("output_domain must be a StringAttr")
@@ -1760,15 +1638,15 @@ class _OutputDomainCiphertextOp(IRDLOperation):
                 }
             )
         super().__init__(
-            operands=[value, key, parameters],
+            operands=[value, key, key_seeds, parameters],
             result_types=[result_type],
             attributes=attrs,
         )
 
     def verify_(self) -> None:
-        if self.modup_method.data not in {"exact", "crt", "normalized_crt"}:
+        if self.basis_conversion.data not in {"exact", "crt", "normalized_crt"}:
             raise VerifyException(
-                "modup_method must be exact, crt, or normalized_crt"
+                "basis_conversion must be exact, crt, or normalized_crt"
             )
         if self.moddown_rounding.data not in {"floor", "nearest"}:
             raise VerifyException(
@@ -1805,8 +1683,9 @@ class RelinearizeOp(_OutputDomainCiphertextOp):
         rescale_rounding: str = "nearest",
         output_domain: Literal["coefficient", "ntt"] = "coefficient",
         moddown_rounding: str = "nearest",
-        modup_method: str = "exact",
+        basis_conversion: str = "exact",
         parameters: Sequence[SSAValue | Operation] = (),
+        key_seeds: Sequence[SSAValue | Operation] = (),
         attributes: Mapping[str, Attribute] | None = None,
     ) -> None:
         attrs = {
@@ -1834,7 +1713,10 @@ class RelinearizeOp(_OutputDomainCiphertextOp):
                 if isinstance(depth, IntegerAttr):
                     fields["depth"] = IntegerAttr(depth.value.data + 1, 64)
                 drop = attrs.get("joint_drop_prime_ids")
-                if isinstance(rows, ArrayAttr) and isinstance(drop, ArrayAttr):
+                target = attrs.get("joint_target_prime_ids")
+                if isinstance(target, ArrayAttr):
+                    fields["prime_ids"] = target
+                elif isinstance(rows, ArrayAttr) and isinstance(drop, ArrayAttr):
                     fields["prime_ids"] = ArrayAttr(
                         i for i in rows if i not in tuple(drop)
                     )
@@ -1853,8 +1735,9 @@ class RelinearizeOp(_OutputDomainCiphertextOp):
             result_type,
             output_domain=output_domain,
             moddown_rounding=moddown_rounding,
-            modup_method=modup_method,
+            basis_conversion=basis_conversion,
             parameters=parameters,
+            key_seeds=key_seeds,
             attributes=attrs,
         )
 
@@ -2318,10 +2201,16 @@ def _with_ciphertext_components(
 def _rotate_specification(operation: Operation) -> tuple[str, ...]:
     diagnostics = list(flat_operation(operation))
     diagnostics.extend(_moddown_rounding_diagnostics(operation))
-    diagnostics.extend(_modup_method_diagnostics(operation))
+    diagnostics.extend(_basis_conversion_diagnostics(operation))
     unsupported = unsupported_attributes(
         operation,
-        ("input_domain", "output_domain", "moddown_rounding", "modup_method"),
+        (
+            "input_domain",
+            "output_domain",
+            "moddown_rounding",
+            "basis_conversion",
+            "key_rounds",
+        ),
     )
     if unsupported:
         diagnostics.append(f"unsupported attributes {list(unsupported)}")
@@ -2339,9 +2228,10 @@ def _hoisted_rotate_many_specification(
 ) -> tuple[str, ...]:
     diagnostics = list(flat_operation(operation))
     diagnostics.extend(_moddown_rounding_diagnostics(operation))
-    diagnostics.extend(_modup_method_diagnostics(operation))
+    diagnostics.extend(_basis_conversion_diagnostics(operation))
     unsupported = unsupported_attributes(
-        operation, ("output_domain", "moddown_rounding", "modup_method")
+        operation,
+        ("output_domain", "moddown_rounding", "basis_conversion", "key_rounds"),
     )
     if unsupported:
         diagnostics.append(f"unsupported attributes {list(unsupported)}")
@@ -2356,14 +2246,14 @@ def _hoisted_rotate_many_specification(
     return tuple(diagnostics)
 
 
-def _modup_method_diagnostics(operation: Operation) -> tuple[str, ...]:
-    value = operation.attributes.get("modup_method", StringAttr("exact"))
+def _basis_conversion_diagnostics(operation: Operation) -> tuple[str, ...]:
+    value = operation.attributes.get("basis_conversion", StringAttr("exact"))
     if not isinstance(value, StringAttr) or value.data not in {
         "exact",
         "crt",
         "normalized_crt",
     }:
-        return ("modup_method must be exact, crt, or normalized_crt",)
+        return ("basis_conversion must be exact, crt, or normalized_crt",)
     return ()
 
 
@@ -2455,7 +2345,7 @@ def _prepare_specification(
 def _rescale_specification(operation: Operation) -> tuple[str, ...]:
     diagnostics = list(flat_operation(operation))
     unsupported = unsupported_attributes(
-        operation, ("rounding", "input_domain", "output_domain", "drop_count")
+        operation, ("rounding", "input_domain", "output_domain")
     )
     if unsupported:
         diagnostics.append(f"unsupported attributes {list(unsupported)}")
@@ -2500,9 +2390,6 @@ def _decrypt_specification(operation: Operation) -> tuple[str, ...]:
 
 
 OPERATION_SPECS: tuple[OperationSpec, ...] = (
-    registered_operation_spec(RepeatOp, "ckks"),
-    registered_operation_spec(RepeatYieldOp, "ckks"),
-    registered_operation_spec(RepeatIterationOp, "ckks"),
     registered_operation_spec(
         PrepareCompressedPlaintextOp,
         "ckks",
@@ -2549,7 +2436,6 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         "ckks",
         validator=flat_with_attributes("axis"),
     ),
-    registered_operation_spec(SelectBatchOp, "ckks"),
     *(
         registered_operation_spec(op, "ckks", validator=flat_operation)
         for op in (
@@ -2601,10 +2487,11 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
                     "term_count",
                     "group_count",
                     "moddown_rounding",
-                    "modup_method",
+                    "basis_conversion",
+                    "key_rounds",
                 )(operation),
                 *_moddown_rounding_diagnostics(operation),
-                *_modup_method_diagnostics(operation),
+                *_basis_conversion_diagnostics(operation),
             ),
             operands=((0, 2),),
             results=((0, 2),),
@@ -2639,12 +2526,13 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
                 *flat_with_attributes(
                     "output_domain",
                     "moddown_rounding",
-                    "modup_method",
+                    "basis_conversion",
                     "rescale",
                     "rescale_rounding",
+                    "key_rounds",
                 )(operation),
                 *_moddown_rounding_diagnostics(operation),
-                *_modup_method_diagnostics(operation),
+                *_basis_conversion_diagnostics(operation),
                 *_rotation_output_state_diagnostics(
                     cast(RelinearizeOp, operation)
                 ),
@@ -2659,10 +2547,13 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         validator=_with_ciphertext_components(
             lambda operation: (
                 *flat_with_attributes(
-                    "output_domain", "moddown_rounding", "modup_method"
+                    "output_domain",
+                    "moddown_rounding",
+                    "basis_conversion",
+                    "key_rounds",
                 )(operation),
                 *_moddown_rounding_diagnostics(operation),
-                *_modup_method_diagnostics(operation),
+                *_basis_conversion_diagnostics(operation),
                 *_rotation_output_state_diagnostics(
                     cast(SwitchKeyOp, operation)
                 ),
@@ -2677,10 +2568,13 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
         validator=_with_ciphertext_components(
             lambda operation: (
                 *flat_with_attributes(
-                    "output_domain", "moddown_rounding", "modup_method"
+                    "output_domain",
+                    "moddown_rounding",
+                    "basis_conversion",
+                    "key_rounds",
                 )(operation),
                 *_moddown_rounding_diagnostics(operation),
-                *_modup_method_diagnostics(operation),
+                *_basis_conversion_diagnostics(operation),
                 *_rotation_output_state_diagnostics(
                     cast(ConjugateOp, operation)
                 ),
@@ -2740,10 +2634,6 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = (
 FHEliumCkks = Dialect(
     "fhelium_ckks",
     [
-        RepeatOp,
-        RepeatYieldOp,
-        RepeatIterationOp,
-        SelectBatchOp,
         PrepareCompressedPlaintextOp,
         EncodeOp,
         DecodeOp,
@@ -2796,11 +2686,6 @@ FHEliumCkks = Dialect(
 
 
 __all__ = [
-    "RepeatOp",
-    "RepeatYieldOp",
-    "RepeatIterationOp",
-    "SelectBatchOp",
-    "select_batch_type",
     "AddOp",
     "SumBatchOp",
     "AddScalarOp",

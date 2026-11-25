@@ -3,7 +3,7 @@
 One period of a CKKS slot message supplies compact multiplication and addition
 operands. The example also demonstrates lossless compression of existing RNS
 data, checks arithmetic against dense equivalents, and checks in-place storage
-sharing. Example 11 uses compressed diagonals in a compiled matrix product.
+sharing. Example 12 uses compressed diagonals in a compiled matrix product.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def _paired_ms(dense, compact, *, iterations: int, device: torch.device):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_engine_args(
-        parser, default_preset=fh.Preset.slots8192_scale40_depth7_int64.value
+        parser, default_preset=fh.Preset.slots8192_scale40_depth7.value
     )
     parser.add_argument("--period", type=int, default=256)
     parser.add_argument("--iterations", type=int, default=20)

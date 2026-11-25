@@ -66,35 +66,15 @@ A compiled variant retains input conditions, source and transformed Compilations
 
 A call whose signature has no resident specialization prepares one in the calling thread and then executes it. Preparation captures or loads the Program, transforms it when needed, binds materials, links and warms supported CUDA kernels; the Triton kernels of one executable compile concurrently in a shared thread pool. Preparation errors propagate to the caller.
 
-`prepare(*args, **kwargs)` establishes the matching specialization without executing it. `on_miss="error"` requires a prior matching `prepare`. An omitted pipeline uses the default recipe, with source-lowering passes omitted for state-instantiated CKKS templates. Semantic templates retain full instance scheduling. A supplied Pipeline or signature-to-Pipeline function replaces the recipe.
+`prepare(*args, **kwargs)` establishes the matching specialization without executing it. `on_miss="error"` requires a prior matching `prepare`. An omitted pipeline uses the default recipe. A supplied Pipeline or signature-to-Pipeline function replaces the recipe.
 
 `with_backend` snapshots existing transformed variants into a new callable, which links them with the selected Backend when prepared. Later variants are prepared independently. Relinking does not retune an already transformed Program for different implementation coverage or hardware.
 
-## Structural instantiation and guarded selection plans
+## Reuse of selection work within a preparation
 
-A new call signature first checks the optimized-instance cache. On a miss, preparation looks for a compatible source-family template in process memory or the structural disk cache. `compile/_template.py` clones its high-level Program and applies registered operation-state rules to current inputs and material owners. The accompanying provenance description classifies facts as `Known`, `InputField`, `Derived` and `Unknown`. Python metadata reads are guarded against their capture-time values. A guard miss or uncovered operation returns to ordinary capture; it does not make the underlying callable unsupported.
+Execution selection probes each distinct local signature once. `SelectionDecisions` in `compile/passes/lowering/_select_execution.py` is a workspace entry keyed by the selecting pass configuration, the operation type, its attributes other than `rotation_step`, and the operand types. Operand types carry depth, actual scale and prime rows, so an entry applies to one depth. Later operations with the same key reuse the accepted or preserved decision and are lowered directly; the workspace key `selection_decision_cache=False` disables the entry. `stats()["specializations"][i]["selection_decisions"]` reports hits, misses, entries, key construction seconds and probe seconds.
 
-Templates cover CKKS arithmetic and scalar operations, NTT and residue transitions, depth operations, key operations and modulus raising, along with supported static Python loops and helper calls. Registered Tensor calls and encrypted semantic arithmetic and rotation also participate. Codec-specific paths, grouped-RNS operations and arbitrary replacements need ordinary capture when their state rules are unavailable. Source identity eligibility remains narrower than frontend capture support.
-
-A CKKS instance uses `instantiated_ckks_pipeline`, which removes source semantic/logical lowering and transition insertion already represented by template state evaluation. Semantic templates use the full default recipe. Current material requirements, state checks, common-subexpression elimination, dead-value elimination and implementation selection remain instance work.
-
-`compile/_selection_plan.py` stores decisions rather than prior operation objects. Built-in lowering selection uses per-operation guards; fusion uses a guard over the complete lowered block, including order, edges, escaping values, effects and matcher-visible facts. Applying a plan reconstructs the chosen lowering or fusion region from the current graph and current types. Custom policies outside these guard contracts use ordinary selection.
-
-Arithmetic and NTT guards permit supported prime-row variation; topology-sensitive key operations retain the concrete facts their lowerings consume. A changed key or digit layout can miss locally while neighboring arithmetic decisions still hit. Selection and fusion hit/miss counts and a reason are retained in specialization statistics. [Compilation persistence](compilation-persistence.md) defines the source-family storage and material-rebinding scope.
-
-### Local recipe and current-window facts reuse
-
-`stats()["specializations"][i]["local_plans"]` reports local matcher analysis performed during that specialization’s preparation. The current consumer describes one operation and its directly connected operand/result ports, including operand sharing. It reuses a matcher recipe for that local structure and fixed facts, then evaluates the recipe against current values. Python capture and lowering origins can identify candidates; they do not establish semantic equivalence by themselves.
-
-| Counter | Counting unit |
-| --- | --- |
-| `occurrences` | Requests for a local recipe over one operation and its direct ports, accumulated across participating pass scopes; an operation can contribute more than once |
-| `recipe_hits` / `recipe_misses` | Recipe lookups satisfied by the pass-local or source-family store, versus lookups requiring a new recipe |
-| `facts_hits` / `facts_misses` | Repeated queries satisfied by current-operation facts, versus first evaluations in a read-only graph-analysis window |
-
-Facts include the result of analyzing an unsupported operation. Multiple probes or matchers can query the same operation in one window, so facts counts can exceed recipe counts. A new window evaluates its own current facts; evaluated SSA values and layouts are discarded before graph rewriting. `guard_bypasses` records recipe requests that use ordinary analysis outside the local guard contract.
-
-Global candidate scheduling and final fusion eligibility checks continue when using local hits. The whole-block fusion plan remains a separate reuse decision. Local counters describe work reused at their respective granularities; compare preparation-stage timings and `PassReport.seconds` to establish a time saving. A resident invocation retains its specialization’s preparation record rather than performing those analyses again.
+Fusion matching reads each operation's registered `OperationStructure` (`ir/_operation_structure.py`): operand roles, result layout and scalar component bodies. Structures are memoized by operation type, operand count and attributes. The Triton code generator emits the `same`, `select`, `pack`, `key_product` and `transform` layouts; operations whose layout is `permute` (coefficient automorphism) or `reduce_rows` (ModDown, rescale) remain region boundaries executed by their whole-operation implementations.
 
 ## Kernel warming and automatic Graph capture
 
@@ -106,7 +86,7 @@ Each callable owns device-local shared Graph pools. Replays return owned copies 
 
 ## Preparation and execution statistics
 
-`stats()` reports per-specialization host durations for source capture, pipeline execution, material binding, linking, cache load/store and kernel warming where those stages ran. `PassReport.seconds` measures individual pass invocations and their configured structural verification. Instance-cache status distinguishes hits, stored entries, misses, disabled persistence and source/material ineligibility. Structural observations separately report hit, guard miss or unsupported capture, the memory/disk lookup layer, and template instantiation cost. `resident_cache_hits` counts reuse of linked specializations; selection-plan observations count lowering and fusion reuse.
+`stats()` reports per-specialization host durations for source capture, pipeline execution, material binding, linking, cache load/store and kernel warming where those stages ran. `PassReport.seconds` measures individual pass invocations and their configured structural verification. Instance-cache status distinguishes hits, stored entries, misses, disabled persistence and source/material ineligibility. `resident_cache_hits` counts reuse of linked specializations; `selection_decisions` counts reused selection probes.
 
 Execution timing separates host dispatch from completed work. CPU calls complete on return. For inputs identifying one CUDA device, events measure the caller’s CUDA stream, including work joined onto that stream; completed events are collected without a device synchronization. Independent streams and devices reachable only through closures lie outside that scope. Unsupported multi-device completion remains unavailable rather than being estimated from launch time. Use synchronized external timing for application-wide latency.
 

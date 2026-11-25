@@ -1,6 +1,6 @@
 # CUDA Graph matrix-vector multiplication
 
-**Example source:** [`examples/18_runtime_cuda_graph.py`](https://github.com/VisualDust/fhelium/blob/main/examples/18_runtime_cuda_graph.py)
+**Example source:** [`examples/19_runtime_cuda_graph.py`](https://github.com/VisualDust/fhelium/blob/main/examples/19_runtime_cuda_graph.py)
 
 This example captures a fixed packed CKKS matrix-vector evaluator $\mathbf{y}=A\mathbf{x}$ while keeping each request ciphertext as a dynamic input. The tutorial explains captured state, replay storage, and the steady-state measured region.
 
@@ -9,7 +9,7 @@ This example captures a fixed packed CKKS matrix-vector evaluator $\mathbf{y}=A\
 Run the same matrix-vector workload through the callable interface with:
 
 ```bash
-python examples/18_runtime_cuda_graph.py --device cuda:0 --compile
+python examples/19_runtime_cuda_graph.py --device cuda:0 --compile
 ```
 
 This path uses `fc.compile(evaluator, graph="auto")`, which opts into Graph capture. Ordinary `fc.compile` retains prepared execution with `graph=False`. Its first call prepares and executes the specialization, and the next invocation attempts automatic capture. Changing ciphertexts reuse the prepared schedule. Statistics report the Graph state and any fallback reason. The timed compiled calls use owned output storage by default, including its copy cost. `clear()` releases Graph resources at the end.
@@ -19,9 +19,9 @@ The remaining sections describe direct `CudaGraphProgram` use, which retains sep
 ## Run the example
 
 ```bash
-python examples/18_runtime_cuda_graph.py \
+python examples/19_runtime_cuda_graph.py \
   --device cuda:0 \
-  --preset slots8192-scale40-depth7-int64 \
+  --preset slots8192-scale40-depth7 \
   --size 8 \
   --capture-warmup 3 \
   --benchmark-warmup 10 \
@@ -150,7 +150,7 @@ Closing releases graph-owned inputs, outputs, and capture state.
 Add `--shared-pool` to run the example's optional two-program demonstration:
 
 ```bash
-python examples/18_runtime_cuda_graph.py --device cuda:0 --shared-pool
+python examples/19_runtime_cuda_graph.py --device cuda:0 --shared-pool
 ```
 
 The same matrix-vector evaluator is captured for two input scales, $\Delta$ and $2\Delta$, using one `CudaGraphPool`. Each program keeps its own input signature and retained output. The example replays the second program before the first, reports any change in the retained second output, and compares both decrypted results with the clear matrix-vector product. Both programs close when the pool context ends.
@@ -158,7 +158,7 @@ The same matrix-vector evaluator is captured for two input scales, $\Delta$ and 
 Pooled output leaves have independent cloned storage without autograd history or alias relationships to inputs or other output leaves. The [shared-storage guide](../how-to/capture-repeated-evaluator.md#share-temporary-storage-across-specializations) describes stream ordering and the lifetime of persistent resources. The single-program capture and benchmark remain the default example path.
 
 ::: details Source
-<<< @/../examples/18_runtime_cuda_graph.py
+<<< @/../examples/19_runtime_cuda_graph.py
 :::
 
 ## Related concepts and guides

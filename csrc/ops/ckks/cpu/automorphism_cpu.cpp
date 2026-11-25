@@ -1,5 +1,6 @@
 #include <ATen/Dispatch.h>
 #include <ATen/Parallel.h>
+#include <fhelium/rns.h>
 #include <torch/torch.h>
 
 #include <algorithm>
@@ -180,6 +181,14 @@ at::Tensor apply_coefficient_galois_automorphism(
 at::Tensor apply_ntt_galois_automorphism(const at::Tensor& residues_ntt,
                                          const at::Tensor& source_indices) {
   return ::ntt_galois_cpu(residues_ntt, source_indices);
+}
+
+void add_ntt_galois_automorphism_(at::Tensor& target,
+                                  const at::Tensor& residues_ntt,
+                                  const at::Tensor& source_indices,
+                                  const at::Tensor& rns_params) {
+  target.copy_(fhelium::rns::add_lazy(
+      target, ::ntt_galois_cpu(residues_ntt, source_indices), rns_params));
 }
 
 }  // namespace fhelium::ckks::cpu

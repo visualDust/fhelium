@@ -69,7 +69,7 @@ Compare the complete active set with effective cache capacity. Multiple live ten
 
 ## 4. Sweep the depths used by the evaluator
 
-Depth reduces the active Q rows. For `Preset.slots32768_scale40_depth34_int64` in the reference configuration:
+Depth reduces the active Q rows. For `Preset.slots32768_scale40_depth34` in the reference configuration:
 
 | Depth | Active QP rows | One-message extended QP digit |
 | ---: | ---: | ---: |
@@ -89,13 +89,13 @@ Run:
 
 ```bash
 python examples/07_eager_batching.py \
-  --preset slots32768-scale40-depth34-int64 --depth 0 --batch-sizes 1,4,8
+  --preset slots32768-scale40-depth34 --depth 0 --batch-sizes 1,4,8
 
 python examples/07_eager_batching.py \
-  --preset slots32768-scale40-depth34-int64 --depth 20 --batch-sizes 1,4,8
+  --preset slots32768-scale40-depth34 --depth 20 --batch-sizes 1,4,8
 
 python examples/07_eager_batching.py \
-  --preset slots32768-scale40-depth34-int64 --depth 30 --batch-sizes 1,4,8
+  --preset slots32768-scale40-depth34 --depth 30 --batch-sizes 1,4,8
 ```
 
 Repeat enough times for stable medians. If the production evaluator uses CUDA Graph, compare batch graph with a loop captured under the same policy; graph capture can remove much of the host-launch disadvantage of the loop.
@@ -107,7 +107,7 @@ The following data is a dated historical worked example for the measured platfor
 | Field | Reference value |
 | --- | --- |
 | Date | 2026-07-24 |
-| GPU | One NVIDIA RTX PRO 6000 Blackwell Max-Q |
+| GPU | One NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition, 300 W power limit |
 | L2 | 128 MiB |
 | Device | `cuda:0` |
 | Presets | 40-bit scale family at each recorded slot capacity |

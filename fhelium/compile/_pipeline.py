@@ -196,30 +196,11 @@ class Pipeline:
             current = compilation._with_pipeline_result(
                 compilation.program.clone(), ()
             )
-            from ._origins import clone_origins
-
-            clone_origins(
-                compilation.program,
-                current.program,
-                compilation.workspace,
-                current.workspace,
-            )
         else:
             current = compilation._with_pipeline_result(compilation.program, ())
-        from ._repeat import (
-            finish_repeat_pass,
-            prepare_repeat_pass,
-            repeat_loops,
-        )
-
-        loops = repeat_loops(current.program)
         for program_pass in self.passes:
             started = perf_counter()
-            if loops:
-                prepare_repeat_pass(current, program_pass, loops)
             result = program_pass.run(current)
-            if loops:
-                loops = finish_repeat_pass(current)
             if not isinstance(result, PassResult):
                 raise TransformError(
                     f"Pass {program_pass.name!r} returned "

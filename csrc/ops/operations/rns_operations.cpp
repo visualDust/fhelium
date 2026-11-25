@@ -16,7 +16,8 @@ at::Tensor portable_crt_basis_extend(
     const at::Tensor& source_parameters,
     const at::Tensor& target_parameters,
     const at::Tensor& matrix,
-    const std::optional<at::Tensor>& source_normalizers) {
+    const std::optional<at::Tensor>& source_normalizers,
+    const std::optional<at::Tensor>& target_offsets) {
   const auto destinations = matrix.size(1);
   auto values = source.clone();
   rns::reduce_to_standard_(values, source_parameters);
@@ -25,6 +26,14 @@ at::Tensor portable_crt_basis_extend(
     rns::to_montgomery_(normalizers, source_parameters);
     values = rns::montgomery_mul_row_scalars_standard(
         values, normalizers.squeeze(-1), source_parameters);
+    rns::reduce_to_standard_(values, source_parameters);
+    // Shift by (q - 1)/2; target_offsets removes its matrix image, so the
+    // lifted digit is the centered residue.
+    auto halves = at::floor_divide(source_parameters.select(0, 0), 4)
+                      .unsqueeze(-1)
+                      .expand_as(values)
+                      .contiguous();
+    values = rns::add_lazy(values, halves, source_parameters);
     rns::reduce_to_standard_(values, source_parameters);
   }
   // A second factor R lets ordinary Montgomery multiplication map an
@@ -39,7 +48,10 @@ at::Tensor portable_crt_basis_extend(
       at::floor_divide(target_parameters.select(0, 0), 2).view(modulus_shape);
   auto shape = source.sizes().vec();
   shape[shape.size() - 2] = destinations;
-  auto result = at::zeros(shape, source.options());
+  auto result =
+      target_offsets.has_value()
+          ? target_offsets->view(modulus_shape).expand(shape).contiguous()
+          : at::zeros(shape, source.options());
   for (int64_t row = 0; row < matrix.size(0); ++row) {
     const auto residues = at::remainder(values.narrow(-2, row, 1), moduli);
     const auto term = rns::montgomery_mul_row_scalars_standard(
@@ -58,78 +70,89 @@ namespace {
 
 using detail_operations::divide_trailing_rows;
 
-at::Tensor drop_coefficient_rows(at::Tensor source,
-                                 const TensorTable& tables,
-                                 c10::IntArrayRef half_primes,
-                                 int64_t drop_count,
-                                 bool nearest,
-                                 bool in_place) {
-  for (int64_t step = 0; step < drop_count; ++step) {
-    const auto prefix = "step" + std::to_string(step) + "_";
-    const auto& parameters = tables.at(prefix + "parameters");
-    const auto& inverse = tables.at(prefix + "inverse");
-    auto remaining = source.narrow(-2, 1, source.size(-2) - 1);
-    const auto dropped = source.select(-2, 0);
-    if (in_place || step != 0) {
-      if (nearest) {
-        ckks::rescale_drop_leading_prime_nearest_(
-            remaining, inverse, dropped, parameters, half_primes[step]);
-      } else {
-        ckks::rescale_drop_leading_prime_truncate_(
-            remaining, inverse, dropped, parameters);
-      }
-      source = remaining;
-    } else if (nearest) {
-      source = ckks::rescale_drop_leading_prime_nearest(
-          remaining, inverse, dropped, parameters, half_primes[step]);
-    } else {
-      source = ckks::rescale_drop_leading_prime_truncate(
-          remaining, inverse, dropped, parameters);
-    }
-  }
-  return source;
+// Centered CRT correction -r/D of `tables` entries named `prefix` plus the
+// CRT operand names; see `centered_quotient_tables` in fhelium.backend.rns.
+at::Tensor centered_quotient_correction(const at::Tensor& source,
+                                        const TensorTable& tables,
+                                        const std::string& prefix) {
+  return crt_basis_extend(source,
+                          tables.at(prefix + "source_parameters"),
+                          tables.at(prefix + "target_parameters"),
+                          tables.at(prefix + "matrix"),
+                          tables.at(prefix + "target_reciprocals"),
+                          tables.at(prefix + "source_normalizers"),
+                          tables.at(prefix + "source_reciprocals"),
+                          tables.at(prefix + "target_offsets"));
 }
 
-at::Tensor rescale(at::Tensor source,
-                   const TensorTable& tables,
-                   int64_t drop_count,
-                   c10::IntArrayRef half_primes,
-                   std::string_view rounding,
-                   std::string_view input_domain,
-                   std::string_view ntt_backend,
-                   bool in_place) {
-  TORCH_CHECK_VALUE(static_cast<int64_t>(half_primes.size()) >= drop_count,
-                    "half_primes requires one entry per dropped prime");
-  const bool nearest = rounding == "nearest";
-  if (input_domain != "ntt") {
-    return drop_coefficient_rows(
-        source, tables, half_primes, drop_count, nearest, in_place);
-  }
-  auto remaining = source.narrow(-2, drop_count, source.size(-2) - drop_count);
-  auto dropped = source.narrow(-2, 0, drop_count).clone();
-  ntt::transform_(
-      dropped, tables, ntt_backend, "dropped", "inverse_to_standard");
-  auto correction = at::zeros_like(source);
-  correction.narrow(-2, 0, drop_count).copy_(dropped);
-  correction = drop_coefficient_rows(
-      correction, tables, half_primes, drop_count, nearest, true);
-  correction =
-      detail_operations::forward_add_scaled(correction,
-                                            remaining,
-                                            tables.at("prefix_inverse"),
-                                            tables.at("remaining_forward_0"),
-                                            tables,
-                                            ntt_backend,
-                                            "remaining",
-                                            false);
-  if (in_place) {
-    remaining.copy_(correction);
-    return remaining;
-  }
-  return correction;
+// Returns `rows` placed at `positions` of a zero tensor with `row_count`
+// rows; the other rows hold residue zero.
+at::Tensor place_rows(const at::Tensor& rows,
+                      const at::Tensor& positions,
+                      int64_t row_count) {
+  auto shape = rows.sizes().vec();
+  shape[shape.size() - 2] = row_count;
+  auto placed = at::zeros(shape, rows.options());
+  placed.index_copy_(-2, positions, rows);
+  return placed;
 }
 
 }  // namespace
+
+at::Tensor rational_rescale(const at::Tensor& source,
+                            const TensorTable& tables,
+                            std::string_view input_domain,
+                            std::string_view ntt_backend) {
+  const auto& source_parameters = tables.at("source_parameters");
+  const auto& target_parameters = tables.at("target_parameters");
+  const auto target_rows = target_parameters.size(-1);
+  const auto restore = tables.get("restore");
+  const auto scaled =
+      restore.has_value()
+          ? montgomery_mul_row_scalars_standard(
+                source, *restore, source_parameters)
+          : source;
+  auto dropped =
+      scaled.index_select(-2, tables.at("drop_positions")).contiguous();
+  auto kept = scaled.index_select(-2, tables.at("keep_positions"));
+  if (const auto positions = tables.get("target_keep_positions")) {
+    kept = place_rows(kept, *positions, target_rows);
+  }
+  if (input_domain == "ntt") {
+    ntt::transform_(
+        dropped, tables, ntt_backend, "dropped", "inverse_to_standard");
+  }
+  add_standard_(
+      dropped, tables.at("dropped_offset"), tables.at("dropped_parameters"));
+  if (input_domain != "ntt") {
+    add_standard_(kept, tables.at("target_offset"), target_parameters);
+    return ckks::keyswitch_moddown_qp_to_q(kept,
+                                           dropped,
+                                           tables.at("inverses"),
+                                           tables.at("ordered_parameters"),
+                                           std::nullopt,
+                                           "floor");
+  }
+  std::vector<int64_t> offset_shape(dropped.sizes().begin(),
+                                    dropped.sizes().end() - 2);
+  offset_shape.push_back(-1);
+  offset_shape.push_back(-1);
+  auto correction = ckks::keyswitch_moddown_qp_to_q(
+      tables.at("target_offset").expand(offset_shape),
+      dropped,
+      tables.at("inverses"),
+      tables.at("ordered_parameters"),
+      std::nullopt,
+      "floor");
+  return detail_operations::forward_add_scaled(correction,
+                                               kept,
+                                               tables.at("product_inverse"),
+                                               target_parameters,
+                                               tables,
+                                               ntt_backend,
+                                               "target",
+                                               false);
+}
 
 at::Tensor hybrid_modup_digit(const at::Tensor& source,
                               const TensorTable& tables,
@@ -207,6 +230,19 @@ at::Tensor moddown_qp_to_q(const at::Tensor& source,
                            const TensorTable& tables,
                            int64_t p_count,
                            std::string_view rounding) {
+  if (tables.get("moddown_crt_matrix").has_value()) {
+    const auto q_count = source.size(-2) - p_count;
+    const auto& q_parameters = tables.at("q_parameters");
+    auto result = centered_quotient_correction(
+        source.narrow(-2, q_count, p_count), tables, "moddown_crt_");
+    add_standard_(result,
+                  montgomery_mul_row_scalars_standard(
+                      source.narrow(-2, 0, q_count),
+                      tables.at("p_inverse"),
+                      q_parameters),
+                  q_parameters);
+    return result;
+  }
   return divide_trailing_rows(source,
                               tables.at("moddown_inverses"),
                               tables.at("qp_parameters"),
@@ -216,36 +252,68 @@ at::Tensor moddown_qp_to_q(const at::Tensor& source,
                               rounding);
 }
 
+namespace {
+
+// A zero residue Tensor with the shape of `like`, broadcast from one element
+// so that readers do not require a materialized fill.
+at::Tensor zero_residues(const at::Tensor& like) {
+  return at::zeros({1}, like.options()).expand(like.sizes());
+}
+
+}  // namespace
+
+}  // namespace fhelium::rns
+
+namespace fhelium::detail_operations {
+
+at::Tensor moddown_ntt_rows(const at::Tensor& q_rows,
+                            at::Tensor p_rows,
+                            const std::optional<at::Tensor>& coefficient_c0,
+                            const TensorTable& tables,
+                            std::string_view ntt_backend,
+                            std::string_view rounding) {
+  ntt::transform_(p_rows, tables, ntt_backend, "p", "inverse_to_standard");
+  auto correction =
+      tables.get("moddown_crt_matrix").has_value()
+          ? rns::centered_quotient_correction(p_rows, tables, "moddown_crt_")
+          : ckks::keyswitch_moddown_qp_to_q(rns::zero_residues(q_rows),
+                                            p_rows,
+                                            tables.at("moddown_inverses"),
+                                            tables.at("qp_parameters"),
+                                            tables.get("moddown_half"),
+                                            rounding);
+  const auto& q_parameters = tables.at("q_parameters");
+  if (coefficient_c0.has_value()) {
+    auto component = correction.select(0, 0);
+    rns::add_standard_(component, *coefficient_c0, q_parameters);
+  }
+  return forward_add_scaled(correction,
+                            q_rows,
+                            tables.at("p_inverse"),
+                            q_parameters,
+                            tables,
+                            ntt_backend,
+                            "q",
+                            true);
+}
+
+}  // namespace fhelium::detail_operations
+
+namespace fhelium::rns {
+
 at::Tensor moddown_ntt_qp_to_q(const at::Tensor& source,
                                const std::optional<at::Tensor>& coefficient_c0,
                                const TensorTable& tables,
                                std::string_view ntt_backend,
                                int64_t p_count,
                                std::string_view rounding) {
-  const auto rows = source.size(-2);
-  auto p_rows = source.narrow(-2, rows - p_count, p_count).clone();
-  ntt::transform_(p_rows, tables, ntt_backend, "p", "inverse_to_standard");
-  const auto q_rows = source.narrow(-2, 0, rows - p_count);
-  auto correction =
-      ckks::keyswitch_moddown_qp_to_q(at::zeros_like(q_rows),
-                                      p_rows,
-                                      tables.at("moddown_inverses"),
-                                      tables.at("qp_parameters"),
-                                      tables.get("moddown_half"),
-                                      rounding);
-  const auto& q_parameters = tables.at("q_parameters");
-  if (coefficient_c0.has_value()) {
-    auto component = correction.select(0, 0);
-    add_standard_(component, *coefficient_c0, q_parameters);
-  }
-  return detail_operations::forward_add_scaled(correction,
-                                               q_rows,
-                                               tables.at("p_inverse"),
-                                               q_parameters,
-                                               tables,
-                                               ntt_backend,
-                                               "q",
-                                               true);
+  const auto q_count = source.size(-2) - p_count;
+  return detail_operations::moddown_ntt_rows(source.narrow(-2, 0, q_count),
+                          source.narrow(-2, q_count, p_count).clone(),
+                          coefficient_c0,
+                          tables,
+                          ntt_backend,
+                          rounding);
 }
 
 at::Tensor moddown_add_rescale(const at::Tensor& products,
@@ -268,22 +336,82 @@ at::Tensor moddown_add_rescale(const at::Tensor& products,
                                                 : "joint_remaining_positions"));
   };
   const auto& q_parameters = tables.at("q_parameters");
+  const auto restore = tables.get("joint_restore");
+  const auto scaled_products =
+      restore.has_value()
+          ? montgomery_mul_row_scalars_standard(
+                products, *restore, tables.at("joint_product_parameters"))
+          : products;
   auto numerator_q =
       montgomery_mul_row_scalars_standard(base.narrow(0, 0, products.size(0)),
                                           tables.at("joint_p_times_base"),
                                           q_parameters);
-  add_standard_(numerator_q, products.narrow(-2, 0, q_count), q_parameters);
-  auto dropped =
-      at::cat({rows(numerator_q, true),
-               products.narrow(-2, q_count, products.size(-2) - q_count)},
-              -2);
+  add_standard_(
+      numerator_q, scaled_products.narrow(-2, 0, q_count), q_parameters);
+  auto dropped = at::cat(
+      {rows(numerator_q, true),
+       scaled_products.narrow(-2, q_count, products.size(-2) - q_count)},
+      -2);
   ntt::transform_(
       dropped, tables, ntt_backend, "joint_dropped", "inverse_to_standard");
+  auto remaining = rows(numerator_q, false);
+  const auto& remaining_parameters = tables.at("joint_remaining_parameters");
+  if (const auto kept = tables.get("joint_target_keep_positions")) {
+    remaining = place_rows(remaining, *kept, remaining_parameters.size(-1));
+  }
+  if (tables.get("joint_crt_t_matrix").has_value()) {
+    // Centered quotient by P on the D rows, y = (x - L_P(x)) / P, then the
+    // exact quotient of y by D; the target rows combine both corrections.
+    const auto p_rows =
+        dropped.narrow(-2, joint_drop_count, dropped.size(-2) - joint_drop_count);
+    const auto& d_parameters = tables.at("joint_crt_d_target_parameters");
+    auto quotient = centered_quotient_correction(p_rows, tables, "joint_crt_d_");
+    add_standard_(quotient,
+                  montgomery_mul_row_scalars_standard(
+                      dropped.narrow(-2, 0, joint_drop_count),
+                      tables.at("joint_crt_p_inverse"),
+                      d_parameters),
+                  d_parameters);
+    auto correction =
+        centered_quotient_correction(p_rows, tables, "joint_crt_t_");
+    const auto half = tables.get("joint_crt_half");
+    add_standard_(correction,
+                  ckks::keyswitch_moddown_qp_to_q(
+                      zero_residues(correction),
+                      quotient,
+                      tables.at("joint_crt_inverses"),
+                      tables.at("joint_crt_ordered_parameters"),
+                      half,
+                      half.has_value() ? "nearest" : "floor"),
+                  remaining_parameters);
+    if (output_domain == "coefficient") {
+      remaining = remaining.clone();
+      ntt::transform_(remaining,
+                      tables,
+                      ntt_backend,
+                      "joint_remaining",
+                      "inverse_to_standard");
+      add_standard_(correction,
+                    montgomery_mul_row_scalars_standard(
+                        remaining,
+                        tables.at("joint_product_inverse"),
+                        remaining_parameters),
+                    remaining_parameters);
+      return correction;
+    }
+    return detail_operations::forward_add_scaled(
+        correction,
+        remaining,
+        tables.at("joint_product_inverse"),
+        remaining_parameters,
+        tables,
+        ntt_backend,
+        "joint_remaining",
+        false);
+  }
   add_standard_(dropped,
                 tables.at("joint_dropped_offset"),
                 tables.at("joint_dropped_parameters"));
-  auto remaining = rows(numerator_q, false);
-  const auto& remaining_parameters = tables.at("joint_remaining_parameters");
   if (output_domain == "coefficient") {
     remaining = remaining.clone();
     ntt::transform_(remaining,
@@ -322,40 +450,6 @@ at::Tensor moddown_add_rescale(const at::Tensor& products,
       ntt_backend,
       "joint_remaining",
       false);
-}
-
-at::Tensor rescale_drop_leading_primes(const at::Tensor& source,
-                                       const TensorTable& tables,
-                                       int64_t drop_count,
-                                       c10::IntArrayRef half_primes,
-                                       std::string_view rounding,
-                                       std::string_view input_domain,
-                                       std::string_view ntt_backend) {
-  return rescale(source,
-                 tables,
-                 drop_count,
-                 half_primes,
-                 rounding,
-                 input_domain,
-                 ntt_backend,
-                 false);
-}
-
-at::Tensor rescale_drop_leading_primes_(at::Tensor& source,
-                                        const TensorTable& tables,
-                                        int64_t drop_count,
-                                        c10::IntArrayRef half_primes,
-                                        std::string_view rounding,
-                                        std::string_view input_domain,
-                                        std::string_view ntt_backend) {
-  return rescale(source,
-                 tables,
-                 drop_count,
-                 half_primes,
-                 rounding,
-                 input_domain,
-                 ntt_backend,
-                 true);
 }
 
 }  // namespace fhelium::rns

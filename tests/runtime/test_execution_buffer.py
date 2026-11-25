@@ -185,7 +185,7 @@ def test_copy_handle_retains_submitted_leaf_after_source_tree_mutation() -> (
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
 def test_signatures_ignore_residency_but_bind_exact_value_state() -> None:
     engine = Engine(
-        Preset.slots8192_scale40_depth7_int64,
+        Preset.slots8192_scale40_depth7,
         allow_automatic_key_generation=False,
     )
     secret_key = engine.create_secret_key()

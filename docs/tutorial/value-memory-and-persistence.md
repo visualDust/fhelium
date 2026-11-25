@@ -1,24 +1,24 @@
 # Values, memory, and persistence
 
-**Example source:** [`examples/09_value_files.py`](https://github.com/VisualDust/fhelium/blob/main/examples/09_value_files.py)
+**Example source:** [`examples/10_value_files.py`](https://github.com/VisualDust/fhelium/blob/main/examples/10_value_files.py)
 
-Example 09 follows a live value through device movement, a caller-owned file, and restored numerical evaluation. [Example 10](artifact-store.md) separately covers named storage and generation-specific references.
+Example 10 follows a live value through device movement, a caller-owned file, and restored numerical evaluation. [Example 11](artifact-store.md) separately covers named storage and generation-specific references.
 
 ## Run the example
 
 Use a temporary output directory:
 
 ```bash
-python examples/09_value_files.py \
-  --preset slots8192-scale40-depth7-int64 \
+python examples/10_value_files.py \
+  --preset slots8192-scale40-depth7 \
   --depth 0
 ```
 
 Keep the generated files for inspection:
 
 ```bash
-python examples/09_value_files.py \
-  --preset slots8192-scale40-depth7-int64 \
+python examples/10_value_files.py \
+  --preset slots8192-scale40-depth7 \
   --depth 0 \
   --output-dir /tmp/fhelium-value-demo
 ```
@@ -93,7 +93,7 @@ flowchart LR
 None of these operations implicitly destroys another live value. Residency, durability, and application cache policy remain separate decisions.
 
 ::: details Source
-<<< @/../examples/09_value_files.py
+<<< @/../examples/10_value_files.py
 :::
 
 ## Related concepts and guides

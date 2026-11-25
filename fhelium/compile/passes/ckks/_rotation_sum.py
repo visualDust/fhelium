@@ -7,6 +7,7 @@ from typing import cast
 from xdsl.dialects.builtin import IntegerAttr, StringAttr, FloatAttr, ArrayAttr
 from xdsl.rewriter import Rewriter
 
+from fhelium.backend.ckks._key_switch_preparation import key_seed_rounds
 from fhelium.ir import EXECUTION_IMPLEMENTATION_ATTRIBUTE
 from fhelium.ir.dialects import ckks
 from ..._pipeline import DecisionRecord, PassResult, PassStats
@@ -86,6 +87,7 @@ class AggregateRotationSumsPass:
                 flatten(root.result, True)
                 sources = []
                 keys = []
+                seeds = []
                 steps = []
                 rotations = []
                 incompatible = False
@@ -108,15 +110,19 @@ class AggregateRotationSumsPass:
                         steps.append(step)
                         if step:
                             keys.append(owner.key)
+                            seeds.extend(owner.key_seeds)
                     else:
                         sources.append(leaf)
                         steps.append(0)
                 if incompatible or len(rotations) < 2:
                     continue
+                # One aggregate reads keys of one storage form.
+                if len({key_seed_rounds(k) for k in keys}) > 1:
+                    continue
                 first = rotations[0]
                 rounding = first.moddown_rounding.data
                 if any(
-                    r.modup_method != first.modup_method
+                    r.basis_conversion != first.basis_conversion
                     or r.moddown_rounding.data != rounding
                     or RotationHoistingPass._key_layout(r)
                     != RotationHoistingPass._key_layout(first)
@@ -227,7 +233,7 @@ class AggregateRotationSumsPass:
                     attrs = {
                         k: v
                         for k, v in first.attributes.items()
-                        if k in {'ckks_config', 'ntt_backend', 'modup_method'}
+                        if k in {'ckks_config', 'ntt_backend', 'basis_conversion'}
                     }
                     parameters = ()
                 else:
@@ -247,10 +253,11 @@ class AggregateRotationSumsPass:
                     tuple(keys),
                     tuple(steps),
                     anchor.result.type,
+                    key_seeds=tuple(seeds),
                     rescale=rescale,
                     input_domain=cast(StringAttr, domain).data,
                     rounding=rounding,
-                    modup_method=first.modup_method.data,
+                    basis_conversion=first.basis_conversion.data,
                     parameters=parameters,
                     attributes=attrs,
                 )

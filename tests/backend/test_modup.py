@@ -14,12 +14,13 @@ from fhelium.native.wrapper import rns_ops
 def test_modup_digit_matches_integer_reference_across_workspace_sizes(device):
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    base = CkksConfig.parse(Preset.slots32768_scale40_depth34_int64)
+    base = CkksConfig.parse(Preset.slots32768_scale40_depth34)
     for width in (16, 17, 18):
-        config = CkksConfig.parse(
-            base.dumps(),
-            q_depth_groups=base.q_depth_groups[:width],
+        config = CkksConfig.suffix_chain(
+            q_depth_groups=tuple((q,) for q in base.q_moduli[:width]),
+            scale=base.scale_at(0),
             p_moduli=(*base.q_moduli[width:], *base.p_moduli),
+            logN=base.logN,
         )
         context = RnsContext(config, device=device)
         ids = tuple(range(width))

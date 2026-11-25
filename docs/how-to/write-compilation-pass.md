@@ -45,7 +45,7 @@ For a rewrite, traverse a snapshot such as `tuple(program.walk())` when replacin
 
 If a pass derives a constant Tensor, assign it once under a Program material symbol in `compilation.material_bindings` and introduce a matching material-reference operand. A material description communicates purpose; it does not generate the Tensor or prevent a caller from replacing it. Preserve unknown state when the rewrite does not establish that state.
 
-`examples/14_compile_custom_pass.py` implements a complete constant-matrix baby-step/giant-step lowering. It reads a captured matrix Tensor, constructs cyclic diagonals, creates named material operands, rewrites the matrix operation, and applies a caller-selected CKKS schedule. Use that example to carry the packing assumptions through a complete numerical transformation.
+`examples/15_compile_custom_pass.py` implements a complete constant-matrix baby-step/giant-step lowering. It reads a captured matrix Tensor, constructs cyclic diagonals, creates named material operands, rewrites the matrix operation, and applies a caller-selected CKKS schedule. Use that example to carry the packing assumptions through a complete numerical transformation.
 
 ## 4. Validate the transformation's meaning
 

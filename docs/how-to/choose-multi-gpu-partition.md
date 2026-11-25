@@ -149,7 +149,7 @@ Record:
 
 ## Verify the outcome
 
-Each rank must own a defined input region or contribution, enter the same collective protocol, and produce the single-rank mathematical result after combination. Compare decoded messages under the same error criterion when the distributed summation schedule changes. See `examples/21_distributed_batch_inputs.py` through `examples/24_distributed_collective_ir.py` for input, partial-result, row-shard, and IR collective procedures.
+Each rank must own a defined input region or contribution, enter the same collective protocol, and produce the single-rank mathematical result after combination. Compare decoded messages under the same error criterion when the distributed summation schedule changes. See `examples/22_distributed_batch_inputs.py` through `examples/25_distributed_collective_ir.py` for input, partial-result, row-shard, and IR collective procedures.
 
 ## Related documentation
 

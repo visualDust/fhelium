@@ -1,15 +1,15 @@
 # Compose and execute a pipeline from built-in Compile passes
 
-**Example source:** [`examples/12_compile_pipeline.py`](https://github.com/VisualDust/fhelium/blob/main/examples/12_compile_pipeline.py)
+**Example source:** [`examples/13_compile_pipeline.py`](https://github.com/VisualDust/fhelium/blob/main/examples/13_compile_pipeline.py)
 
-Example 12 exposes the individual stages of the Compile workflow. It captures a supported PyTorch computation, composes existing FHElium passes, lowers the Program to operations covered by the Backend, links live keys and arithmetic resources, executes encrypted inputs, and reports error against the clear result.
+Example 13 exposes the individual stages of the Compile workflow. It captures a supported PyTorch computation, composes existing FHElium passes, lowers the Program to operations covered by the Backend, links live keys and arithmetic resources, executes encrypted inputs, and reports error against the clear result.
 
 ## Run the example
 
 From the repository root:
 
 ```bash
-python examples/12_compile_pipeline.py
+python examples/13_compile_pipeline.py
 ```
 
 The example runs on CPU and prints compact captured/backend-ready Program inventories, evaluation-key requirements, result state, numerical error, and pass reports with host durations.
@@ -59,7 +59,7 @@ pipeline = fh_compile.Pipeline(
         fh_compile.InsertRescalePass(),
         fh_compile.AssignCkksDepthsPass(entry_depth=0),
         fh_compile.AssignCkksScalesPass(
-            entry_scale=config.default_scale,
+            entry_scale=config.scale_at(0),
         ),
         fh_compile.AssignNttImplementationPass("native-ntt", ntt_backend="radix2_indexed"),
         fh_compile.LowerCkksToRnsNttPass(),
@@ -107,13 +107,13 @@ expected = captured_callable.reference(clear_x)
 
 Registered Backend implementations remain Tensor-oriented internally. `ProgramExecutable` performs the public value adaptation at the outer execution interface.
 
-## Why this differs from Example 14
+## Why this differs from Example 15
 
-Example 12 uses only operations and passes already supplied by FHElium. [Example 14](customize-compile-pass-and-pipeline.md) defines a new pass that rewrites captured `torch.matmul` into a baby-step/giant-step schedule before composing, linking, and executing its pipeline. [Example 13](ir-textual-program.md) instead focuses on textual Program IR and analysis-pass composition and returns the analyzed Program for inspection.
+Example 13 uses only operations and passes already supplied by FHElium. [Example 15](customize-compile-pass-and-pipeline.md) defines a new pass that rewrites captured `torch.matmul` into a baby-step/giant-step schedule before composing, linking, and executing its pipeline. [Example 14](ir-textual-program.md) instead focuses on textual Program IR and analysis-pass composition and returns the analyzed Program for inspection.
 
 ::: details Source
 
-<<< @/../examples/12_compile_pipeline.py
+<<< @/../examples/13_compile_pipeline.py
 
 :::
 

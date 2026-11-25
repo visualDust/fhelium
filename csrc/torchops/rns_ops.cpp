@@ -57,13 +57,13 @@ TORCH_LIBRARY_FRAGMENT(fhelium_rns_ops, m) {
   m.def(
       "crt_basis_extend_out_(Tensor source_residues, Tensor source_parameters, "
       "Tensor target_parameters, Tensor matrix, Tensor target_reciprocals, "
-      "Tensor? source_normalizers, Tensor? source_reciprocals, Tensor(a!) "
-      "output) -> ()");
+      "Tensor? source_normalizers, Tensor? source_reciprocals, Tensor? "
+      "target_offsets, Tensor(a!) output) -> ()");
   m.def(
       "crt_basis_extend(Tensor source_residues, Tensor source_parameters, "
       "Tensor target_parameters, Tensor matrix, Tensor target_reciprocals, "
-      "Tensor? source_normalizers=None, Tensor? source_reciprocals=None) -> "
-      "Tensor");
+      "Tensor? source_normalizers=None, Tensor? source_reciprocals=None, "
+      "Tensor? target_offsets=None) -> Tensor");
   m.def(
       "mixed_radix_modup_tiled(Tensor source_residues, Tensor[] "
       "decomposition_tables, "

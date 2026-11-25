@@ -11,18 +11,20 @@ Q prime IDs: 0 ... num_q - 1
 P prime IDs: num_q ... num_q + num_p - 1
 ```
 
-At depth $d$, the active Q basis drops the rows in all preceding depth groups. Let $s_d$ be the sum of their row counts:
+At depth $d$, the active Q basis is the interval `config.depth_bases[d] = (s_d, e_d)` of the Q order:
 
 ```text
-Q_d  = Q[s_d:]
-QP_d = Q[s_d:] + P
+Q_d  = Q[s_d:e_d]
+QP_d = Q[s_d:e_d] + P
 ```
+
+A rescale may drop rows at either end of the interval and introduce rows at the other end; a suffix chain has $e_d=$ `num_q` at every depth. RNS parameter tables for an interval are views of the dense parameter tensor; QP bases and other non-interval prime sets are gathered.
 
 ```mermaid
 graph TB
-    L0[depth 0<br/>G0 G1 G2 ... terminal Q group]
-    L1[depth 1<br/>G1 G2 ... terminal Q group]
-    L2[depth 2<br/>G2 ... terminal Q group]
+    L0[depth 0<br/>B0 = Q 0 ... num_q - 1]
+    L1[depth 1<br/>B1 = Q s_1 ... e_1 - 1]
+    L2[depth 2<br/>B2 = Q s_2 ... e_2 - 1]
     QP[depth-specific Q plus special P rows]
     L0 -->|rescale| L1 -->|rescale| L2
     L1 -->|ModUp| QP
@@ -110,13 +112,12 @@ For an operand with `k` compact active limbs, `RnsContext` selects a zero-copy p
 graph TD
     P[NTT schedule selection]
     P --> I[Indexed radix-2]
-    P --> C[Compact grouped radix-2]
+    P --> C[Compact radix-2]
     P --> R[Compact power-of-two radix]
     I --> I1[CPU production and cross-device baseline]
     I --> I2[stored indices and twiddles]
-    C --> C1[group4 + smem8]
-    C --> C2[group8 + smem8]
-    C --> C3[group16 + smem8]
+    C --> C1[two passes per transform]
+    C --> C2[Montgomery or Shoup32 twiddles]
     R --> F[strict fixed radix]
     F --> F1[radix-4 / radix-8 / radix-16]
 ```
@@ -129,7 +130,7 @@ $$
 
 Forward and inverse schedules preserve the evaluation ordering expected by pointwise multiplication and automorphism operations; inverse execution includes $N^{-1}$ normalization. Input/output Montgomery conversions are separately specified by the selected transition. `backend/ntt/operations.py` prepares these transitions through algorithm-specific executors, while `backend/ntt/_selection.py` selects compatible policies from represented facts. The policy names are defined in `fhelium/config/ntt.py`.
 
-Every name describes a complete policy. `group8` means three fused radix-2 stages, and `smem8` means eight radix-2 stages execute inside a shared-memory tile. FHElium does not infer either property from a string suffix: one immutable policy variant supplies only the factors meaningful to its algorithm family. The policy registry distinguishes indexed radix-2 execution, compact grouped radix-2, and strict fixed-radix variants.
+Every name describes a complete policy, and one immutable policy variant supplies only the factors meaningful to its algorithm family. The policy registry distinguishes indexed radix-2 execution, compact radix-2 execution with a selected twiddle encoding, and strict fixed-radix variants.
 
 ### Indexed plans
 
@@ -147,41 +148,32 @@ ntt_ops.validate_indexed_schedule(even_indices, odd_indices, ring_dimension)
 
 ### Compact plans
 
-Compact policies retain smaller per-prime transform data and derive indices in CUDA. They are CUDA backends. The selectable policies are `radix2_compact_group4_smem8`, `radix2_compact_group8_smem8`, and `radix2_compact_group16_smem8`; the group-16 policy is the CUDA default. CPU contexts and native CPU selection use `radix2_indexed`. Their eight shared-memory stages are listed in both the policy name and native ABI.
+Compact policies retain one $N$-entry twiddle row per prime and derive butterfly indices in the kernel. They are GPU backends. The two compact radix-2 policies are `radix2_compact`, the CUDA default, and `radix2_compact_shoup32`; they execute the same schedule and differ only in twiddle encoding. CPU contexts and native CPU selection use `radix2_indexed`.
 
 Plan objects are temporary construction values. `NttContext` retains the resulting `IndexedRadix2Tables`, `CompactRadix2Tables`, or `CompactPowerOfTwoRadixTables` package on its selected device. Indexed tables can reside on CPU or CUDA; compact table packages currently reside on CUDA.
 
-Compact CUDA int32 policies also support `twiddle_encoding="shoup32"`. The table layout is `[prime, N, 2]`: each pair stores the standard root and the uint32 bit pattern of its Shoup quotient, `floor(root * 2**32 / q)`. Ciphertext payloads remain Montgomery residues. The default Montgomery table layout remains `[prime, N]`; preparation returns the selected ready-to-consume encoding, without a second unconditional Montgomery conversion. Shoup tables require twice the root-table storage. Native transforms and generated NTT endpoints consume these pairs with their supplied strides; generated endpoints combine surrounding arithmetic with the same stage partitions used for Montgomery tables. Policy comparisons include complete-workload execution and table residency.
+`radix2_compact_shoup32` sets `twiddle_encoding="shoup32"` and requires CUDA int32 residues. The table layout is `[prime, N, 2]`: each pair stores the standard root and the uint32 bit pattern of its Shoup quotient, `floor(root * 2**32 / q)`. Ciphertext payloads remain Montgomery residues. The default Montgomery table layout remains `[prime, N]`; preparation returns the selected ready-to-consume encoding, without a second unconditional Montgomery conversion. Shoup tables require twice the root-table storage. Native transforms and generated NTT endpoints consume these pairs with their supplied strides; generated endpoints combine surrounding arithmetic with the same stage partitions used for Montgomery tables. Policy comparisons include complete-workload execution and table residency.
 
-Complete compact inverse transforms apply inverse normalization and the requested residue conversion in the final butterfly store. Stage-range operations remain unnormalized, so composing partial ranges does not normalize twice.
+Complete compact inverse transforms apply inverse normalization and the requested residue conversion in the final butterfly store. The fixed-radix stage-range operation remains unnormalized, so composing partial ranges does not normalize twice.
 
-## Grouped radix-2 stages
+## Two-pass compact radix-2 execution
 
-A grouped backend combines several radix-2 butterfly stages in one launch:
+For $N=2^L$ with $L \ge 8$, a compact radix-2 transform reads and writes each prime row twice. Let $A=\lfloor L/2 \rfloor$. The forward decimation-in-frequency transform runs stages $[0, A)$ in a column pass and stages $[A, L)$ in a contiguous pass; the inverse decimation-in-time transform runs stages $[0, L-A)$ contiguously and $[L-A, L)$ by columns.
 
 ```mermaid
 flowchart LR
-    subgraph Separate
-      A1[stage] --> A2[global store/load] --> A3[stage] --> A4[global store/load]
-    end
-    subgraph Grouped
-      B1[load local tuple] --> B2[multiple butterfly stages] --> B3[store]
-    end
+    G1[global row] --> CP[column pass: A stages on 2^A coefficients spaced 2^L-A apart] --> G2[global row] --> TP[contiguous pass: L-A stages on 2^L-A adjacent coefficients] --> G3[global row]
 ```
 
-This can reduce launches and global-memory round trips, but may increase:
+A column tile holds the $2^A$ coefficients of one butterfly column for several adjacent columns, so global loads and stores remain coalesced. A contiguous tile holds $2^{L-A}$ adjacent coefficients. Within a pass, each thread executes three radix-2 stages on eight coefficients in registers, and the tile is exchanged through shared memory between these rounds. The launch grid places the batch dimension inside the prime-row dimension, so the batches of one row execute adjacently and share that row's twiddles in L2.
 
-- register pressure;
-- shared-memory use;
-- index arithmetic;
-- occupancy loss;
-- sensitivity to active row count and batch shape.
+Butterflies, twiddle indices and lazy intervals follow the per-stage compact schedule. Both twiddle encodings therefore produce identical residues, and the pass partition does not change results. Fused forward variants deliver the final pass through an output functor: `forward_ntt_to_montgomery_compact_add_scaled_` adds a scaled NTT-domain operand, and `forward_ntt_montgomery_compact_keyswitch_accumulate_` multiplies by key digits and accumulates both key-switch components.
 
-`group16` means four grouped radix-2 stages; it must not be described as a distinct radix-16 algorithm.
+Generated Triton NTT endpoints use the same two stage intervals. Each interval becomes one kernel whose prologue or epilogue carries the surrounding pointwise arithmetic. The number of coefficients per program decreases with the number of coefficient operands loaded by that program, which bounds register use for endpoints that combine many inputs.
 
 ## Genuine power-of-two radix transforms
 
-This algorithm family has one shared mathematical plan, typed table package, backend, and native ABI for strict fixed-radix policies. Its dedicated radix-4, radix-8, and radix-16 CUDA butterflies have a distinct implementation identity from the grouped radix-2 kernels.
+This algorithm family has one shared mathematical plan, typed table package, backend, and native ABI for strict fixed-radix policies. Its dedicated radix-4, radix-8, and radix-16 CUDA butterflies have a distinct implementation identity from the two-pass compact radix-2 kernels.
 
 The strict policies are `radix4_compact`, `radix8_compact`, and `radix16_compact`. Every transform digit has exactly that radix. Consequently, they require `logN` to be divisible by 2, 3, and 4, respectively; configuration rejects an incompatible ring before any plan or GPU table is built. In particular, `radix16_compact` rejects `logN = 14`. The function `fhelium.compatible_ntt_backends(logN)` returns only names valid for a given ring dimension.
 
@@ -204,7 +196,7 @@ For an eligible strict schedule, the forward launcher chooses the largest suffix
 
 The eight-bit tile fits two complete radix-16 digits or four radix-4 digits and uses two 256-element shared buffers (4 KiB for int64 residues). A smaller budget cannot contain two complete radix-16 digits; larger tiles change shared-memory requirements, synchronization, and available CUDA thread-block parallelism. Evaluate those trade-offs on the complete workload before changing the production choice.
 
-The genuine-radix public names identify one strict-radix policy whose native implementation includes shared fusion. The registered compact radix-2 names expose grouping and `smem8` as distinct selectable execution policies. Result provenance should still record the FHElium version in case internal tuning changes.
+The genuine-radix public names identify one strict-radix policy whose native implementation includes shared fusion. Result provenance should still record the FHElium version in case internal tuning changes.
 
 This genuine-radix locality optimization assigns one worker to each radix-4 four-point tuple. Radix-8 and radix-16 use four-worker groups to evaluate their 2x4 and 4x4 factorizations through shared scratch space, reducing each worker's live register vector. A separate `fhelium_ntt_diagnostic_ops` namespace accepts a specified `shared_memory_log_n` override for correctness tests and cross-GPU profiling; the production backend never calls that namespace.
 
@@ -219,7 +211,7 @@ The supported schedules are:
 
 The power-of-two radix kernels may choose a different representative in the lazy $[0,2q)$ interval than sequential radix-2 because modular additions are associated differently. Forward results are therefore congruent modulo $q$, rather than necessarily bit-for-bit equal as signed integers. Standard-range inverse outputs are equal and all domain and representation states are unchanged.
 
-The CUDA default is `radix2_compact_group16_smem8`. Radix-4/8/16 trade transform digits and launches against register pressure and fixed-root arithmetic; compare full CKKS workloads when evaluating another default.
+The CUDA default is `radix2_compact`. Radix-4/8/16 trade transform digits and launches against register pressure and fixed-root arithmetic; compare full CKKS workloads when evaluating another default.
 
 ## Representation invariants
 
@@ -264,7 +256,7 @@ Whenever row mapping, tables, or kernels change, test:
 - compact current rows versus global parameter offsets;
 - multiple `logN` values;
 - indexed and compact families;
-- every declared compact group width and indexed execution;
+- both compact twiddle encodings and indexed execution;
 - every compatible strict radix-4, radix-8, and radix-16 schedule;
 - batched/component tensor axes;
 - partial-limb inputs only where the operation supports them.

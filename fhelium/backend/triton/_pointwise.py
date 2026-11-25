@@ -19,7 +19,6 @@ from fhelium.ir._structure import structural_key
 from fhelium.ir.dialects import ckks, fusion, rns
 
 from ._expressions import (
-    ARITHMETIC_OPS,
     BoundGraph,
     Emitter,
     Expr,
@@ -27,9 +26,8 @@ from ._expressions import (
     InputLayout,
     KernelArguments,
     ValueExpr,
-    arithmetic_value,
+    structured_value,
     component_axis,
-    compact_value,
     material_view_owners,
 )
 from ._budget import (
@@ -73,6 +71,8 @@ def compile_source(source: str) -> Any:
                 "add_lazy",
                 "subtract_lazy",
                 "canonicalize",
+                "seeded_key_residue",
+                "seeded_key_residue8",
             )
         },
     }
@@ -120,6 +120,8 @@ class PointwisePlan:
     scalars: tuple[int, ...]
     dtype: torch.dtype = torch.int64
     parts: tuple[PointwisePlan, ...] = ()
+    scalar_names: tuple[str, ...] = ()
+    seed_inputs: frozenset[int] = frozenset()
 
     @classmethod
     def build(
@@ -159,18 +161,23 @@ class PointwisePlan:
             "k = klo | (khi << (RADIX // 2))",
             "r2 = tl.load(rns_parameters + 5 * PSTRIDE + row * PROW_STRIDE, mask=mask, other=0).to(tl.int64)",
         ]
-        emitter = Emitter(graph.layouts, names)
+        emitter = Emitter(graph.layouts, names, segment_index=True)
         stores: list[str] = []
         for number, value in enumerate(materialized):
             count = prod(value.batch_shape) * rows * n
             count_name = names.scalar(f"count{number}", count)
             output_mask = f"(offset < {count_name})"
+            stride_name = (
+                names.scalar(f"component_stride{number}", count)
+                if len(value.components) > 1
+                else count_name
+            )
             for component, expr in enumerate(value.components):
                 result = emitter.emit(
                     expr, "index", "row", "batch", mask=output_mask
                 )
                 component_offset = (
-                    f" + {component} * {count_name}" if component else ""
+                    f" + {component} * {stride_name}" if component else ""
                 )
                 stores.append(
                     f"tl.store(out{number} + offset{component_offset}, {result}, mask={output_mask})"
@@ -219,6 +226,8 @@ class PointwisePlan:
             tuple(names.inputs),
             names.scalar_values,
             dtype,
+            scalar_names=tuple(name for name, _, _ in names.scalars),
+            seed_inputs=graph.seed_inputs,
         )
 
     def __reduce__(self):
@@ -235,6 +244,8 @@ class PointwisePlan:
                 self.scalars,
                 self.dtype,
                 self.parts,
+                self.scalar_names,
+                self.seed_inputs,
             ),
         )
 
@@ -257,9 +268,10 @@ class PointwisePlan:
         return int(
             self.kernel.warm(
                 *(
-                    [self.dtype]
-                    * (len(self.inputs) + len(self.materialized) + 1)
+                    torch.int64 if i in self.seed_inputs else self.dtype
+                    for i in self.inputs
                 ),
+                *([self.dtype] * (len(self.materialized) + 1)),
                 *parameter_strides,
                 radix,
                 256,
@@ -272,25 +284,45 @@ class PointwisePlan:
         inputs: tuple[torch.Tensor, ...],
         parameters: torch.Tensor,
         radix: int,
+        out: dict[int, torch.Tensor] | None = None,
     ) -> tuple[torch.Tensor, ...]:
+        """Evaluate the outputs; ``out`` maps output roots to caller storage.
+
+        Caller storage has the output shape with contiguous batch, row and
+        coefficient axes; its leading component axis may have any stride.
+        """
+        out = out or {}
         if self.parts:
             storage = {
                 value.root: tensor
                 for part in self.parts
                 for value, tensor in zip(
                     part.graph.outputs,
-                    part.execute(inputs, parameters, radix),
+                    part.execute(inputs, parameters, radix, out),
                     strict=True,
                 )
             }
         else:
             storage = {
-                v.root: torch.empty(
+                v.root: out[v.root]
+                if v.root in out
+                else torch.empty(
                     v.shape, dtype=inputs[0].dtype, device=inputs[0].device
                 )
                 for v in self.materialized
             }
         if self.length and not self.parts:
+            scalars = self.scalars
+            if out and len(self.scalar_names) == len(scalars):
+                strides = {
+                    f"component_stride{number}": storage[v.root].stride(0)
+                    for number, v in enumerate(self.materialized)
+                    if v.root in out
+                }
+                scalars = tuple(
+                    strides.get(name, value)
+                    for name, value in zip(self.scalar_names, scalars)
+                )
             with torch.cuda.device(inputs[0].device):
                 self.kernel(
                     *(inputs[i] for i in self.inputs),
@@ -300,7 +332,7 @@ class PointwisePlan:
                     parameters.stride(1),
                     radix,
                     256,
-                    *self.scalars,
+                    *scalars,
                     stream=torch.cuda.current_stream(
                         inputs[0].device
                     ).cuda_stream,
@@ -414,6 +446,17 @@ def _layout_signature(values) -> tuple[object, ...]:
     )
 
 
+def _key_row_split(
+    stored_rows: int, rows: int, start: int, p_start: int
+) -> tuple[int, int] | None:
+    """Return the ``(Q rows, unused rows)`` split of a two-slice key digit."""
+    if p_start < 0:
+        return None
+    q_rows = rows - (stored_rows - p_start)
+    gap = p_start - start - q_rows
+    return (q_rows, gap) if gap else None
+
+
 class _Payloads:
     """Select data operands and key-digit views from fusion operands."""
 
@@ -428,10 +471,18 @@ class _Payloads:
     def __call__(self, values):
         data = tuple(values[index] for index in self.data)
         if self.keys:
+            # The view starts at the first active Q row; layouts with a row
+            # split address the P rows past the unused stored rows. Seed rows
+            # of seeded keys follow the key views.
             rows = self.rows
             data += tuple(
                 values[self.tables[table]][digit, :, start : start + rows, :]
-                for table, digit, start in self.keys
+                for table, digit, start, *_ in self.keys
+            )
+            data += tuple(
+                values[self.tables[seed]][digit]
+                for _, digit, _, _, seed, _ in self.keys
+                if seed >= 0
             )
         return data
 
@@ -563,9 +614,25 @@ class PreparedFusion:
                 strict=True,
             )
         )
+        key_count = len(key_views)
         layouts += tuple(
-            InputLayout(tuple(value.shape), tuple(value.stride()), True)
-            for value in inputs[len(data_indices) :]
+            InputLayout(
+                tuple(value.shape),
+                tuple(value.stride()),
+                True,
+                row_split=_key_row_split(
+                    all_inputs[table_indices[table]].size(-2), rows, start, p_start
+                ),
+            )
+            for value, (table, _, start, p_start, *_) in zip(
+                inputs[len(data_indices) : len(data_indices) + key_count],
+                key_views,
+                strict=True,
+            )
+        )
+        layouts += tuple(
+            InputLayout(tuple(value.shape), tuple(value.stride()))
+            for value in inputs[len(data_indices) + key_count :]
         )
         graph = self.graph.bind(layouts)
         if graph.anchors:
@@ -700,7 +767,6 @@ class TritonFusionImplementation:
                 "selected",
                 "algorithm",
                 "tables",
-                "group_width",
                 "radix",
                 "device_type",
             )
@@ -795,6 +861,23 @@ class TritonFusionImplementation:
         raise RuntimeError("Resolve the fusion operation before execution")
 
 
+ARITHMETIC_OPS = (
+    ckks.AddCompressedPlaintextOp,
+    ckks.MultiplyCompressedPlaintextOp,
+    rns.AddStandardOp,
+    rns.SubtractStandardOp,
+    rns.NegateStandardOp,
+    rns.MontgomeryMultiplyOp,
+    rns.TensorProductOp,
+    rns.AddMontgomeryLazyOp,
+    rns.MultiplyPlaintextOp,
+    rns.AddPlaintextOp,
+    rns.StandardToMontgomeryOp,
+    rns.MontgomeryToStandardOp,
+)
+"""Operations the pointwise implementation executes individually."""
+
+
 @dataclass
 class TritonRnsImplementation:
     """Execute individual modular arithmetic operations using the expression generator.
@@ -853,21 +936,17 @@ class TritonRnsImplementation:
                 )
                 for i, layout in enumerate(layouts)
             ]
-            output = (
-                compact_value(
-                    invocation.operation_type,
-                    values,
-                    0,
-                    layout=compression,
-                    ntt_plaintext=ntt_plaintext,
-                )
-                if compression is not None
-                else arithmetic_value(
-                    invocation.operation_type,
-                    values,
-                    0,
-                    ntt_plaintext=ntt_plaintext,
-                )
+            structure = invocation.operation_type.structure(
+                invocation.operand_count, invocation.attributes
+            )
+            output = structured_value(
+                structure,
+                {
+                    index: values[index]
+                    for index in structure.operands("data", "compact")
+                },
+                0,
+                invocation.operation_type,
             )
             roots = {v.root: v for v in (*values, output)}
             plan = PointwisePlan.build(

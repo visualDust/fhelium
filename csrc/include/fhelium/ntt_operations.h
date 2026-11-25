@@ -10,10 +10,9 @@
 //! NTT transitions selected by NTT policy name over named schedule tables.
 //!
 //! A policy name is one of the FHElium NTT backend names: `radix2_indexed`,
-//! `radix2_compact_group{4,8,16}_smem8`,
-//! `radix2_compact_group{4,8,16}_shoup32_smem8`, and
-//! `radix{4,8,16}_compact`. For a basis prefix `b` and direction `d`
-//! (`forward` or `inverse`), the table supplies `b_d_0`, the `rns_params` of
+//! `radix2_compact`, `radix2_compact_shoup32`, and `radix{4,8,16}_compact`.
+//! For a basis prefix `b` and direction `d` (`forward` or `inverse`), the
+//! table supplies `b_d_0`, the `rns_params` of
 //! the transformed rows, and the schedule of the policy family: indexed
 //! radix-2 reads twiddles `b_d_1`, even indices `b_d_2`, and odd indices
 //! `b_d_3`; compact radix-2 reads twiddles `b_d_1`; fixed radix reads outer

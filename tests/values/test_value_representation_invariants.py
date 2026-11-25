@@ -30,14 +30,14 @@ def _cuda_default_device(request: pytest.FixtureRequest):
 
 @pytest.fixture(scope="module")
 def engine() -> Engine:
-    return Engine(fh.Preset.slots8192_scale40_depth7_int64)
+    return Engine(fh.Preset.slots8192_scale40_depth7)
 
 
 def _deterministic_engine(seed: int) -> Engine:
     """Create an engine whose cryptographic regression vector is reproducible."""
 
     return Engine(
-        fh.Preset.slots8192_scale40_depth7_int64, rng_seed=seed, rng_nonce=0
+        fh.Preset.slots8192_scale40_depth7, rng_seed=seed, rng_nonce=0
     )
 
 
@@ -125,7 +125,7 @@ def test_message_encryption_validates_input_before_lazy_key_generation() -> (
     None
 ):
     engine = Engine(
-        fh.Preset.slots8192_scale40_depth7_int64,
+        fh.Preset.slots8192_scale40_depth7,
         allow_automatic_key_generation=False,
     )
     message = torch.zeros(4, dtype=torch.float64)
@@ -360,7 +360,7 @@ def test_exact_key_consumers_reject_malformed_or_wrong_concrete_states(
     with pytest.raises(ValueError, match="NTT domain"):
         engine.set_secret_key(coefficient_secret)
 
-    wrong_dtype = replace(secret, data=secret.data.to(torch.int32))
+    wrong_dtype = replace(secret, data=secret.data.to(torch.int64))
     with pytest.raises(TypeError, match="dtype"):
         engine.set_secret_key(wrong_dtype)
 

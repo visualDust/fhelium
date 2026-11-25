@@ -60,9 +60,10 @@ _FRESH_CONSUMERS = (
     rns.AddPlaintextOp,
     rns.MultiplyPlaintextOp,
     rns.MontgomeryMultiplyOp,
+    rns.TensorProductOp,
     rns.PackTwoComponentsOp,
     rns.PackThreeComponentsOp,
-    rns.RescaleDropLeadingPrimesOp,
+    rns.RescaleOp,
 )
 
 

@@ -64,41 +64,45 @@ pool.update([relinearization_key, conjugation_key])
 
 The inventory retains references and deduplicates by object identity. The repeated additions above keep one entry for each object. Distinct keys for the same step can coexist, including alternative digit layouts or device copies. Keep all members within the secret relation and parameter context intended by the consumers; structural selection does not establish those cryptographic relations.
 
-For a configured `FullSlotBootstrap`, use its consumer-wide provisioning helper:
+For a `fhelium.bootstrap` plan, use its provisioning function:
 
 ```python
+from fhelium import bootstrap
+
+plan = bootstrap.plan(engine, intermediate_weight=48)
 bootstrap.create_evaluation_keys(
+    engine,
+    plan,
     secret_key,
     into=pool,
     rotation_key_strategy="all_required",
-    device=secret_key.device,
 )
 ```
 
-The helper returns `pool`, reuses compatible existing groups, and creates missing rotation, relinearization and conjugation material through Engine factories. Its layout choice accounts for additional storage across the composition's consumers, including shared steps and reuse across stages. When requested direct babies need new material, the helper completes a common layout for their hoisted execution. A complete mixed inventory is reused without generation and executes those babies independently; setting `hoist_baby_rotations=False` also permits independent layouts when filling gaps. Repeating provisioning can reuse material already present. Encapsulation's low and return hints are supplied through the raising component and retain their separately chosen secret relations and auxiliary bases.
+The helper returns `pool`, reuses compatible existing groups, and creates missing rotation, relinearization and conjugation material through Engine factories. Its layout choice accounts for additional storage across the composition's consumers, including shared steps and reuse across stages. When requested direct babies need new material, the helper completes a common layout for their hoisted execution. A complete mixed inventory is reused without generation and executes those babies independently; setting `hoist_baby_rotations=False` also permits independent layouts when filling gaps. Repeating provisioning can reuse material already present. A plan with `Encapsulated` raising also adds its low and return keys, which use the intermediate-secret relation and auxiliary bases.
 
-Inspect `bootstrap.key_steps(strategy)` and `bootstrap.evaluation_key_requirements(strategy)` to see the requested rotation strategy and capability roles. These queries describe the standalone basis and contain no generated key data. The default `all_required` strategy requires direct keys for its logical rotations, and the baby-step strategy requires direct baby keys. Signed-power requests can reuse more direct paths already present in the pool. Generate or load the needed keys before `prepare`, capture or linking.
+Inspect `plan.key_steps(strategy)` and `plan.key_requirements(strategy)` to see the requested rotation strategy and capability roles. These queries describe the standalone basis and contain no generated key data. The default `all_required` strategy requires direct keys for its logical rotations, and the baby-step strategy requires direct baby keys. Signed-power requests can reuse more direct paths already present in the pool. Generate or load the needed keys before `prepare`, capture or linking.
 
-## 4. Select compact layouts when they reduce total storage
+## 4. Select depth-specific layouts when they reduce total storage
 
-A primitive factory can create a key for a chosen active Q suffix:
+A primitive factory can create a key for the Q basis of a chosen source depth:
 
 ```python
-compact_key = engine.create_rotation_key(
+depth3_key = engine.create_rotation_key(
     8, secret_key, source_depth=3, device=secret_key.device
 )
-pool.add(compact_key)
-print(compact_key.prime_ids, compact_key.digit_prime_ids)
+pool.add(depth3_key)
+print(depth3_key.prime_ids, depth3_key.digit_prime_ids)
 ```
 
-At `source_depth=3`, the fresh key stores the active Q suffix and P and uses a greedy digit partition constrained by the auxiliary product. With the default P basis, `source_depth=0` uses the configured depth-zero decomposition. `digit_prime_ids=` permits a caller-selected partition in either scope. An existing broader key instead keeps its stored digit planes when used on a smaller basis: execution intersects each stored support with active Q and uses the original plane indices.
+At `source_depth=3`, the fresh key stores the active Q basis and P and uses a greedy digit partition constrained by the auxiliary product. With the default P basis, `source_depth=0` uses the configured depth-zero decomposition. `digit_prime_ids=` permits a caller-selected partition in either scope. An existing broader key instead keeps its stored digit planes when used on a smaller basis: execution intersects each stored support with active Q and uses the original plane indices.
 
-The key-switch, rotation, relinearization and conjugation factories also accept `p_prime_ids=`. The selected IDs must be distinct catalog primes outside the key's source Q suffix. For example, a key generated at depth 3 can use the already dropped Q primes together with the configured P primes:
+The key-switch, rotation, relinearization and conjugation factories also accept `p_prime_ids=`. The selected IDs must be distinct catalog primes outside the key's source Q basis. For example, a key generated at depth 3 can use the Q primes outside $B_3$ together with the configured P primes:
 
 ```python
 config = engine.config
 auxiliary_ids = (
-    *range(config.q_row_start(3)),
+    *(i for i in range(config.num_q_primes) if i not in config.q_prime_ids(3)),
     *range(config.num_q_primes, config.total_num_primes),
 )
 alternative = engine.create_rotation_key(
@@ -115,14 +119,33 @@ This generates new key material with Q rows followed by the selected P order. Su
 
 The pool can retain both keys for step 8. Selection reads the actual digit supports, QP rows, ring dimension, dtype and device required by the consumer. Depth supplies the active Q basis in that consumer's context; it is not a pool lookup identity. Members of a hoisted group share the stored QP row order and digit supports required by its common decomposition.
 
-A compact key can reduce one operation's key payload and digit work, but a separate compact key at every depth can increase the total retained inventory. Compare the additional bytes needed for the entire workload before generating alternatives. A shared broader key can be preferable when several consumers reuse it.
+A depth-specific key can reduce one operation's key payload and digit work, but a separate depth-specific key at every depth can increase the total retained inventory. Compare the additional bytes needed for the entire workload before generating alternatives. A shared broader key can be preferable when several consumers reuse it.
 
-## 5. Bind consumers before repeated execution
+## 5. Keep keys compact when memory is short
+
+Generated keys are expanded by default: each digit holds both components, and key switches read them. Compact keys hold the first component and a seed and generate the uniform component during each key switch, which halves key memory and lengthens key switches (about 6% for a 13-tier bootstrap and 13–16% for Eager key switches on an RTX PRO 6000 Blackwell Max-Q; unchanged bootstrap latency on an RTX A6000). Create the Engine with `expand_keys=False` to generate and keep compact keys:
+
+```python
+engine = Engine(config, expand_keys=False)
+rotation_key = engine.create_rotation_key(8, secret_key)
+assert not rotation_key.is_expanded
+```
+
+`compact()` returns a key without the uniform component, and `expand()` returns one with the uniform component generated on the key's device. Both leave the original key unchanged, so compiled programs and CUDA Graphs bound to it stay valid:
+
+```python
+large_key = large_key.compact()   # requires a generated key with a seed
+large_key = large_key.expand()    # before latency-sensitive use
+```
+
+The memory of the uniform component is released once no reference to the expanded key remains, including references held by an inventory, an Engine or a compiled program. A loaded key with a seed is compact. `engine.install_evaluation_key` installs its expansion when the Engine uses `expand_keys=True`; a loaded key supplied directly to operations runs on the generating path. Compiled programs specialize on the resident state, so select the state before compiling the consumer that uses the keys.
+
+## 6. Bind consumers before repeated execution
 
 Prepare a bootstrap from the populated inventory:
 
 ```python
-prepared = bootstrap.prepare(ciphertext, evaluation_keys=pool)
+prepared = bootstrap.prepare(engine, plan, ciphertext, keys=pool)
 refreshed = prepared(ciphertext)
 ```
 
@@ -139,7 +162,7 @@ Existing prepared users can still retain those keys. Close prepared callables af
 
 Primitive Eager operations remain available when the key choice is already known. Pass a key directly or install it with `engine.set_relinearization_key(...)` or `engine.set_rotation_key(...)`. Construct `Engine(config, allow_automatic_key_generation=False)` when missing material must be resolved by application provisioning. Compile capture and linking consume supplied numerical data.
 
-## 6. Assign devices, ranks and residency
+## 7. Assign devices, ranks and residency
 
 For every worker, record its local operations, permitted secret material, required key values, host storage and CUDA residency windows. Typical allocations include:
 
@@ -152,7 +175,7 @@ An inventory can contain device-local alternatives. Place a key with `key.to(dev
 
 Use the existing Residency facilities for pageable host holds, fixed-capacity pinned/CUDA windows, active leases and prefetch. Inventory membership retains key objects, while Residency controls physical materializations. A collective can create temporary peer copies even when only one rank ultimately retains a key, so include distribution peaks in capacity planning.
 
-## 7. Verify specialist key relations
+## 8. Verify specialist key relations
 
 Generate a generic key switch from the intended source and destination secrets, record that relation in application metadata, and verify under the destination secret:
 
@@ -179,7 +202,7 @@ conjugated = engine.conjugate(source, conjugation_key)
 
 Compare the decoded result with `message.conj()` under the selected packing convention. Provision these values before evaluation and retain their source relation with the application's inventory records.
 
-## 8. Persist values and report key cost
+## 9. Persist values and report key cost
 
 Save individual key values through the existing value or artifact persistence APIs. Stored metadata preserves the actual prime rows, digit supports and operation specialization. After loading, reconstruct the application's inventory and restore its parameter and secret-relation associations. Saving a key leaves its live placement unchanged.
 

@@ -7,7 +7,7 @@ resolution, the prime catalog, and the budget table are compiled into
 libfhelium.
 """
 
-from .ckks import CkksConfig, Preset  # noqa: I001
+from .ckks import CkksConfig, KeyLayout, Preset  # noqa: I001
 from .ntt import (
     DEFAULT_CPU_NTT_BACKEND,
     DEFAULT_NTT_BACKEND,
@@ -26,6 +26,7 @@ __all__ = [
     "DEFAULT_NTT_BACKEND",
     "SUPPORTED_NTT_BACKENDS",
     "CkksConfig",
+    "KeyLayout",
     "Preset",
     "SecurityAssessment",
     "assess_config_security",

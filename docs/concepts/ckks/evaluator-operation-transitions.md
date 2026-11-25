@@ -31,15 +31,15 @@ $$
 
 Eager execution uses $\Delta_s=\Delta_c$ when `scalar_scale` is omitted, which gives the ordinary slot-wise addition by `scalar`. A caller-supplied positive finite scale changes the represented scalar magnitude while preserving the ciphertext scale metadata.
 
-`multiply_scalar(ciphertext, scalar, scalar_scale=...)` quantizes the real scalar at $\Delta_s$ and applies one Montgomery scalar per active RNS row to every ciphertext component and coefficient. It preserves the depth and records
+`multiply_constant(ciphertext, constant, rescale=False, output_scale=...)` multiplies every ciphertext component modulo each active prime by the integer $k=\operatorname{RandRound}(u\delta)$ with $\delta=\Delta'/\Delta_c$, where $\Delta'$ defaults to $\Delta_c^2$. It preserves the depth and records
 
 $$
-\Delta_{\mathrm{out}}=\Delta_c\Delta_s.
+\Delta_{\mathrm{out}}=\Delta_c\delta.
 $$
 
-Eager execution again defaults $\Delta_s$ to the input ciphertext scale. `multiply_integer_scalar(ciphertext, integer)` instead performs modular integer multiplication without an encoding scale, so it preserves both $\Delta_c$ and the depth. Neither multiplication operation rescales. A caller invokes `rescale_to_next_depth` separately when its schedule requires the divide-round-drop transition.
+With the default `rescale=True`, `multiply_constant` instead multiplies by the compact plaintext of the constant slot vector $u$ at plaintext scale $\Delta_p=\Delta'\rho_d/\Delta_c$ and rescales once, so the result has depth $d+1$ and actual scale $\Delta'$, which defaults to $\Delta_{d+1}$; complex $u$ is supported on this path. `multiply_integer_scalar(ciphertext, integer)` performs modular integer multiplication without an encoding scale, so it preserves both $\Delta_c$ and the depth.
 
-These shortcuts apply to real scalars. A non-real complex slot value uses ordinary message encoding and plaintext preparation.
+The `add_scalar` and `rescale=False` shortcuts apply to real values. A non-real complex slot value uses ordinary message encoding and plaintext preparation.
 
 ## Plaintext multiplication preserves depth and multiplies scale
 
@@ -146,7 +146,7 @@ When a caller chooses transition placement, it runs those passes before `AssignC
 
 ## Scale and depth transitions
 
-`rescale_to_next_depth` accepts a complete Q or QP ciphertext with two or three components in coefficient/standard or NTT/Montgomery state and preserves that arithmetic state. It advances one depth, removes the leading Q depth group, and divides the actual scale by that group's prime product. `mod_switch_to_next_depth` and `mod_switch_to_depth` restrict the active Q basis while preserving scale. `reinterpret_at_scale` preserves residues and records a new scale, changing the decoded message by the old-to-new scale ratio. The equations, public bounds, and compatibility requirements are specified in [Scale and depth lifecycle](scale-and-depth-lifecycle.md).
+`rescale_to_next_depth` accepts a complete Q or QP ciphertext with two or three components in coefficient/standard or NTT/Montgomery state and preserves that arithmetic state. It advances one depth, replaces the active Q basis $B_d$ by $B_{d+1}$, and divides the actual scale by the rescale ratio $\rho_d$. `mod_switch_to_next_depth` and `mod_switch_to_depth` select the target depth's Q basis; a target basis contained in the source basis preserves scale, and any other target records the target depth's default scale. `reinterpret_at_scale` preserves residues and records a new scale, changing the decoded message by the old-to-new scale ratio. The equations, public bounds, and compatibility requirements are specified in [Scale and depth lifecycle](scale-and-depth-lifecycle.md).
 
 ## Rotation is automorphism plus key switching
 

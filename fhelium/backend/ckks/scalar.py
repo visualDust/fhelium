@@ -26,9 +26,13 @@ def scalar_operands(
     """Supply row parameters or live rounding state without sampling noise."""
     parameters = context.rns_parameters_for_prime_ids(prime_ids)
     if scalar_scale is None:
-        rows = context.integer_scalar_parameters(int(scalar))[
-            prime_ids[0] : prime_ids[-1] + 1
-        ]
+        table = context.integer_scalar_parameters(int(scalar))
+        start = prime_ids[0]
+        rows = (
+            table[start : start + len(prime_ids)]
+            if prime_ids == tuple(range(start, start + len(prime_ids)))
+            else table[list(prime_ids)]
+        )
         return (parameters, rows), {}
     if rounding_state is None:
         raise ValueError(

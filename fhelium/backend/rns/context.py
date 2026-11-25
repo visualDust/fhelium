@@ -122,7 +122,7 @@ class RnsContext:
             for index in self.rns_layout.prime_ids(0, include_p=True)
         ]
         self.rns_parameter_tensor = rns_ops.parameter_table(
-            moduli, self.config.logN, self.config.default_scale, self.dtype
+            moduli, self.config.logN, self.config.scales[0], self.dtype
         ).to(self.device)
         (
             self.twice_modulus,
@@ -181,9 +181,10 @@ class RnsContext:
 
     def _cache_row_parameters(self, rows: RnsRowParameters) -> None:
         row_stop = rows.parameter_row_start + len(rows.prime_ids)
-        self._native_parameter_views[(rows.parameter_row_start, row_stop)] = (
-            rows.native_parameters
-        )
+        if rows.prime_ids == tuple(range(rows.parameter_row_start, row_stop)):
+            self._native_parameter_views[(rows.parameter_row_start, row_stop)] = (
+                rows.native_parameters
+            )
         self._native_parameter_views_by_prime_ids[rows.prime_ids] = (
             rows.native_parameters
         )
@@ -200,6 +201,36 @@ class RnsContext:
             self._native_parameter_views[cache_key] = cached
         return cached
 
+    def _active_prime_ids(
+        self,
+        tensor: torch.Tensor,
+        *,
+        include_p: bool,
+        rns_dimension: int = -2,
+        parameter_row_start: int | None = None,
+    ) -> tuple[int, ...]:
+        """Return the context prime ids of a physical RNS operand's rows.
+
+        A complete Q or QP depth basis is identified by its row count.
+        Internal digit operations pass a ``parameter_row_start`` because a
+        key-switch digit is one prime interval rather than a depth basis.
+        """
+
+        row_count = tensor.size(rns_dimension)
+        if parameter_row_start is not None:
+            stop = parameter_row_start + row_count
+            if not 0 <= parameter_row_start < stop <= self.qp_row_stop:
+                raise ValueError(
+                    "RNS operand rows do not map to the context parameter tensor: "
+                    f"rows={row_count}, start={parameter_row_start}, "
+                    f"include_p={include_p}"
+                )
+            return tuple(range(parameter_row_start, stop))
+        depth = self.rns_layout.depth_for_active_row_count(
+            row_count, include_p=include_p
+        )
+        return self.rns_layout.prime_ids(depth, include_p=include_p)
+
     def _active_rns_parameters(
         self,
         tensor: torch.Tensor,
@@ -207,56 +238,38 @@ class RnsContext:
         include_p: bool,
         rns_dimension: int = -2,
         parameter_row_start: int | None = None,
-    ) -> tuple[torch.Tensor, int]:
+    ) -> tuple[torch.Tensor, tuple[int, ...]]:
         """Return parameter rows in the operand's RNS prime order.
 
-        The context stores one complete ``[parameter, Q | P]`` tensor. Native primitives receive a view with the same row count and order as their operand, so parameter row ``i`` describes operand row ``i``.
-
-        Full-basis operands infer their dropped-Q prefix from the row count and
-        whether the basis is ``Q`` or ``QP``. Internal digit operations pass a ``parameter_row_start`` because a key-switch digit is not a
-        complete depth basis.
+        The context stores one complete ``[parameter, Q | P]`` tensor. Native
+        primitives receive a table with the same row count and order as their
+        operand, so parameter row ``i`` describes operand row ``i``.
         """
 
-        row_count = tensor.size(rns_dimension)
-        if parameter_row_start is None:
-            basis_stop = self.qp_row_stop if include_p else self.q_row_stop
-            parameter_row_start = basis_stop - row_count
-        parameter_row_stop = parameter_row_start + row_count
-        if (
-            not 0
-            <= parameter_row_start
-            < parameter_row_stop
-            <= self.qp_row_stop
-        ):
-            raise ValueError(
-                "RNS operand rows do not map to the context parameter tensor: "
-                f"rows={row_count}, start={parameter_row_start}, "
-                f"stop={parameter_row_stop}, include_p={include_p}"
-            )
-        return (
-            self._native_parameter_view(
-                parameter_row_start, parameter_row_stop
-            ),
-            parameter_row_start,
+        prime_ids = self._active_prime_ids(
+            tensor,
+            include_p=include_p,
+            rns_dimension=rns_dimension,
+            parameter_row_start=parameter_row_start,
         )
+        return self.rns_parameters_for_prime_ids(prime_ids), prime_ids
 
-    def parameter_row_start_for(
+    def prime_ids_for(
         self,
         tensor: torch.Tensor,
         *,
         include_p: bool,
         rns_dimension: int = -2,
         parameter_row_start: int | None = None,
-    ) -> int:
-        """Resolve the context row interval used by a physical RNS operand."""
+    ) -> tuple[int, ...]:
+        """Resolve the context prime ids used by a physical RNS operand."""
 
-        _, row_start = self._active_rns_parameters(
+        return self._active_prime_ids(
             tensor,
             include_p=include_p,
             rns_dimension=rns_dimension,
             parameter_row_start=parameter_row_start,
         )
-        return row_start
 
     def rns_parameters_for(
         self,

@@ -12,8 +12,7 @@ def coerce_scale(value: Any, *, value_name: str) -> float:
     r"""Validate and convert one actual CKKS scale to binary64.
 
     The result is a Python :class:`float` satisfying
-    $0 < \Delta(v) < \infty$. This conversion does not normalize the scale to
-    ``default_scale`` or alter any value payload.
+    $0 < \Delta(v) < \infty$. The value payload is unchanged.
     """
 
     try:

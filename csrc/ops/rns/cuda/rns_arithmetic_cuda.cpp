@@ -132,6 +132,7 @@ void crt_basis_extend_out_(const at::Tensor& source_residues,
                            const at::Tensor& target_reciprocals,
                            const std::optional<at::Tensor>& source_normalizers,
                            const std::optional<at::Tensor>& source_reciprocals,
+                           const std::optional<at::Tensor>& target_offsets,
                            at::Tensor& output) {
   ::crt_basis_extend_out_cuda(source_residues,
                               source_parameters,
@@ -140,6 +141,7 @@ void crt_basis_extend_out_(const at::Tensor& source_residues,
                               target_reciprocals,
                               source_normalizers,
                               source_reciprocals,
+                              target_offsets,
                               output);
 }
 
@@ -150,14 +152,16 @@ at::Tensor crt_basis_extend(
     const at::Tensor& matrix,
     const at::Tensor& target_reciprocals,
     const std::optional<at::Tensor>& source_normalizers,
-    const std::optional<at::Tensor>& source_reciprocals) {
+    const std::optional<at::Tensor>& source_reciprocals,
+    const std::optional<at::Tensor>& target_offsets) {
   return ::crt_basis_extend_cuda(source_residues,
                                  source_parameters,
                                  target_parameters,
                                  matrix,
                                  target_reciprocals,
                                  source_normalizers,
-                                 source_reciprocals);
+                                 source_reciprocals,
+                                 target_offsets);
 }
 
 at::Tensor mixed_radix_modup_tiled(const at::Tensor& source_residues,

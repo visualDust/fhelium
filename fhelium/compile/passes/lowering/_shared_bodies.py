@@ -6,8 +6,9 @@ from collections import defaultdict
 from collections.abc import Sequence
 from typing import cast
 
+from xdsl.dialects.builtin import UnrealizedConversionCastOp
 from xdsl.dialects.func import CallOp, FuncOp, ReturnOp
-from xdsl.ir import Attribute, Block, Operation, Region
+from xdsl.ir import Attribute, Block, Operation, Region, SSAValue
 from xdsl.rewriter import Rewriter
 
 from fhelium.backend.ckks.rotation._galois import rotation_galois_element
@@ -16,7 +17,9 @@ from fhelium.ir.dialects import ckks, core
 
 from ._core import CkksLoweringRegistry
 from ._driver import apply_lowering
+from .._operation_transforms import cast_before
 from ._keyswitch import galois_tables
+from ._types import _cast_to_ckks, _rns_type
 
 KEY_SWITCH_OPERATIONS = (
     ckks.RotateOp,
@@ -54,6 +57,83 @@ def _galois_element(operation: Operation, config: CkksConfig) -> int | None:
     if isinstance(operation, ckks.ConjugateOp):
         return 2 * config.N - 1
     return None
+
+
+def _type_edge(operation: Operation, result_type: Attribute) -> bool:
+    return (
+        type(operation) is UnrealizedConversionCastOp
+        and len(operation.inputs) == len(operation.outputs) == 1
+        and not operation.attributes
+        and operation.outputs[0].type == result_type
+    )
+
+
+def _bundle_signature(block: Block) -> None:
+    """Type CKKS arguments and results of a lowered body as RNS bundles.
+
+    Lowering reads every CKKS argument through a type cast and returns casts of bundle results; the function then carries the bundle types directly.
+    """
+    for argument in tuple(block.args):
+        if not isinstance(argument.type, (ckks.CiphertextType, ckks.PlaintextType)):
+            continue
+        bundle = _rns_type(argument.type)
+        users = tuple(use.operation for use in argument.uses)
+        if not users or not all(_type_edge(user, bundle) for user in users):
+            continue
+        replacement = block.insert_arg(bundle, argument.index)
+        for user in users:
+            user.results[0].replace_all_uses_with(replacement)
+            Rewriter.erase_op(user)
+        block.erase_arg(argument)
+    terminator = block.last_op
+    assert isinstance(terminator, ReturnOp)
+    values: list[SSAValue] = []
+    for value in terminator.operands:
+        owner = value.owner
+        if (
+            isinstance(owner, Operation)
+            and isinstance(value.type, (ckks.CiphertextType, ckks.PlaintextType))
+            and _type_edge(owner, value.type)
+            and owner.inputs[0].type == _rns_type(value.type)
+        ):
+            value = owner.inputs[0]
+        values.append(value)
+    terminator.operands = values
+    for operation in tuple(block.ops):
+        if type(operation) is UnrealizedConversionCastOp and not any(
+            result.uses for result in operation.results
+        ):
+            Rewriter.erase_op(operation)
+
+
+def _replace_with_call(
+    member: Operation, name: str, arguments: list[SSAValue], function: FuncOp
+) -> None:
+    inputs = function.function_type.inputs.data
+    arguments = [
+        value
+        if value.type == expected
+        else cast_before(member, value, expected, name_hint="call_argument")
+        for value, expected in zip(arguments, inputs, strict=True)
+    ]
+    call = CallOp(name, arguments, tuple(function.function_type.outputs.data))
+    operations: list[Operation] = [call]
+    results: list[SSAValue | None] = []
+    for old, new in zip(member.results, call.results, strict=True):
+        if old.type == new.type:
+            results.append(new)
+            continue
+        for use in tuple(old.uses):
+            if _type_edge(use.operation, new.type):
+                use.operation.results[0].replace_all_uses_with(new)
+                Rewriter.erase_op(use.operation)
+        if old.uses:
+            cast, value = _cast_to_ckks(new, old.type)
+            operations.append(cast)
+            results.append(value)
+        else:
+            results.append(None)
+    Rewriter.replace_op(member, operations, new_results=results)
 
 
 def lower_shared_key_switches(
@@ -125,11 +205,9 @@ def lower_shared_key_switches(
             argument = block.insert_arg(reference.value.type, len(block.args))
             reference.value.replace_all_uses_with(argument)
             Rewriter.erase_op(reference)
+        _bundle_signature(block)
         function.update_function_type()
         inserted += len(block.ops)
-        result_types: tuple[Attribute, ...] = tuple(
-            function.function_type.outputs
-        )
         # Members are in program order, so the tables declared before the first
         # member of a block and Galois element dominate its later members.
         declared: dict[tuple[Block, int, Attribute | None], dict] = {}
@@ -151,7 +229,7 @@ def lower_shared_key_switches(
                     parent.insert_ops_before(created, member)
                     inserted += len(created)
                 arguments.extend(values[table] for table in table_names)
-            Rewriter.replace_op(member, CallOp(name, arguments, result_types))
+            _replace_with_call(member, name, arguments, function)
             inserted += 1
     return inserted
 

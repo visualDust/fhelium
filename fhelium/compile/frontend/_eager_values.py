@@ -68,6 +68,11 @@ def _state_keys(value: object) -> tuple[tuple[str, tuple[object, ...]], ...]:
             "polynomial_domain": value.polynomial_domain,
             "residue_representation": value.residue_representation,
             "basis": value.modulus_basis,
+            **(
+                {}
+                if value.is_expanded
+                else {"seed_rounds": value.generated_rounds}
+            ),
         }
     tensor: torch.Tensor | None = None
     if isinstance(value, (Ciphertext, Plaintext, CompressedPlaintext)):

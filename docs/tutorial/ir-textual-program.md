@@ -1,13 +1,13 @@
 # Import and transform textual Program IR
 
-**Example source:** [`examples/13_compile_textual_ir.py`](https://github.com/VisualDust/fhelium/blob/main/examples/13_compile_textual_ir.py)
+**Example source:** [`examples/14_compile_textual_ir.py`](https://github.com/VisualDust/fhelium/blob/main/examples/14_compile_textual_ir.py)
 
-Example 13 starts from textual mixed-level IR. It parses and prints the Program, verifies a stable textual round trip, inserts a caller-defined analysis pass into the Compile pipeline, and inspects the transformed CKKS operations.
+Example 14 starts from textual mixed-level IR. It parses and prints the Program, verifies a stable textual round trip, inserts a caller-defined analysis pass into the Compile pipeline, and inspects the transformed CKKS operations.
 
 ## Run the example
 
 ```bash
-python examples/13_compile_textual_ir.py
+python examples/14_compile_textual_ir.py
 ```
 
 No cryptographic runtime or device is required because the example stops at the transformed Program.
@@ -96,7 +96,7 @@ The parser accepts permissive mixed-level Programs. It does not turn structural 
 
 ::: details Source
 
-<<< @/../examples/13_compile_textual_ir.py
+<<< @/../examples/14_compile_textual_ir.py
 
 :::
 

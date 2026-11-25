@@ -11,6 +11,7 @@ remains covered by the multi-rank SPMD example/tests.
 from __future__ import annotations
 
 import gc
+import math
 import weakref
 from collections.abc import Iterator
 
@@ -52,7 +53,7 @@ def device(request: pytest.FixtureRequest) -> Iterator[str]:
 
 @pytest.fixture(scope="module")
 def _device_engine(device: str) -> Engine:
-    return Engine(Preset.slots8192_scale40_depth7_int64)
+    return Engine(Preset.slots8192_scale40_depth7)
 
 
 @pytest.fixture
@@ -144,7 +145,7 @@ def _assert_decryption_error_distribution(
         f"{operation} returned nonfinite data"
     )
 
-    noise_unit = engine.config.N / engine.config.default_scale
+    noise_unit = engine.config.N / engine.config.scale_at(ciphertext.depth)
     p99_error = float(torch.quantile(error, 0.99))
     rms_error = float(torch.sqrt(torch.mean(error.square())))
     assert rms_error < 6.0 * noise_unit, (
@@ -160,7 +161,7 @@ def _assert_decryption_error_distribution(
 def test_cpu_complete_ckks_engine_surface() -> None:
     """Exercise every Example 1 dependency and the remaining key switches."""
 
-    engine = Engine(Preset.slots8192_scale40_depth7_int64)
+    engine = Engine(Preset.slots8192_scale40_depth7)
     message = _message(engine)
     other = _other_message(engine)
     source = engine.encrypt_message(message)
@@ -256,32 +257,41 @@ def _assert_same_rns_value_modulo_primes(
 @pytest.mark.parametrize(
     ("preset", "cuda_ntt_backend"),
     [
-        (Preset.slots8192_scale25_depth14_int32, "radix2_indexed"),
-        (Preset.slots16384_scale25_depth29_int32, "radix2_indexed"),
-        (Preset.slots32768_scale25_depth24_int32, None),
-        (Preset.slots65536_scale25_depth14_int32, "radix2_indexed"),
-        (Preset.slots8192_scale40_depth7_int64, "radix2_indexed"),
-        (Preset.slots16384_scale40_depth16_int64, None),
-        (Preset.slots32768_scale40_depth34_int64, "radix2_indexed"),
+        (Preset.slots8192_scale30_depth9, "radix2_indexed"),
+        (Preset.slots16384_scale30_depth22, "radix2_indexed"),
+        (Preset.slots32768_scale30_depth46, None),
+        (Preset.slots65536_scale30_depth100, "radix2_indexed"),
+        (Preset.slots8192_scale40_depth7, "radix2_indexed"),
+        (Preset.slots16384_scale40_depth16, None),
+        (Preset.slots32768_scale40_depth34, "radix2_indexed"),
+        ("suffix-int64", None),
     ],
     ids=[
-        "indexed-int32-p1",
-        "indexed-int32-p2",
-        "default-compact-int32-p4",
-        "indexed-int32-p6",
-        "indexed-int64-p1",
-        "default-compact-int64-p2",
-        "indexed-int64-p4",
+        "indexed-scale30-p1",
+        "indexed-scale30-p2",
+        "default-compact-scale30-p4",
+        "indexed-scale30-p6",
+        "indexed-scale40-p1",
+        "default-compact-scale40-p2",
+        "indexed-scale40-p4",
+        "default-compact-suffix-int64-p2",
     ],
 )
 def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_depths(
-    preset: Preset,
+    preset: Preset | str,
     cuda_ntt_backend: str | None,
 ) -> None:
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
 
-    config = CkksConfig.parse(preset)
+    config = (
+        CkksConfig.catalog_suffix_chain(
+            logN=15, scale_bits=40, depth=16, p_count=2
+        )
+        if preset == "suffix-int64"
+        else CkksConfig.parse(preset)
+    )
+    name = preset if isinstance(preset, str) else preset.value
 
     cpu = Engine(config, rng_seed=0x12345678, rng_nonce=7)
     cuda = Engine(
@@ -300,17 +310,20 @@ def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_depths(
         )
 
     message = _message(cpu)
-    # Digits of at most num_p_primes Q primes keep each digit product below P,
+    # Consecutive Q primes are grouped while each digit product stays below P,
     # the layout for which the rotation noise bound below holds.
-    q_count = len(config.q_moduli)
-    p_count = config.num_p_primes
-    bounded_digits = tuple(
-        tuple(range(start, min(start + p_count, q_count)))
-        for start in range(0, q_count, p_count)
-    )
+    p_product = math.prod(config.p_moduli)
+    bounded_digits: list[tuple[int, ...]] = []
+    digit: list[int] = []
+    for prime_id, modulus in enumerate(config.q_moduli):
+        if digit and math.prod(config.q_moduli[i] for i in digit) * modulus > p_product:
+            bounded_digits.append(tuple(digit))
+            digit = []
+        digit.append(prime_id)
+    bounded_digits.append(tuple(digit))
     with torch.device("cpu"):
         cpu_rotation_key = cpu.create_rotation_key(
-            1, cpu.secret_key, digit_prime_ids=bounded_digits
+            1, cpu.secret_key, digit_prime_ids=tuple(bounded_digits)
         )
         cuda.set_secret_key(cpu.secret_key.to("cuda:0"))
         cuda.set_relinearization_key(cpu.relinearization_key.to("cuda:0"))
@@ -337,7 +350,7 @@ def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_depths(
             cuda_ciphertext,
             message,
             p99_noise_factor=12.0,
-            operation=f"{preset.value} encrypt at depth {depth}",
+            operation=f"{name} encrypt at depth {depth}",
         )
 
         cpu_ntt = cpu.coefficient_domain_to_ntt_domain(cpu_ciphertext)
@@ -356,7 +369,7 @@ def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_depths(
             cuda_relinearized,
             message * message,
             p99_noise_factor=0.5,
-            operation=f"{preset.value} relinearize at depth {depth}",
+            operation=f"{name} relinearize at depth {depth}",
         )
 
         cpu_rotated = cpu.rotate_with_key(cpu_ciphertext, cpu_rotation_key)
@@ -367,7 +380,7 @@ def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_depths(
             cuda_rotated,
             torch.roll(message, shifts=1),
             p99_noise_factor=12.0,
-            operation=f"{preset.value} rotate at depth {depth}",
+            operation=f"{name} rotate at depth {depth}",
         )
 
         if depth + 1 < config.max_depth:
@@ -379,7 +392,7 @@ def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_depths(
                 cuda_rescaled,
                 message * message,
                 p99_noise_factor=1.25,
-                operation=f"{preset.value} rescale at depth {depth}",
+                operation=f"{name} rescale at depth {depth}",
             )
 
     del cpu, cuda
@@ -393,7 +406,7 @@ def test_cuda_rns_parameters_are_isolated_between_engines(
 ) -> None:
     """Contexts with different rings and RNS bases remain independent."""
 
-    other_engine = Engine(Preset.slots16384_scale40_depth16_int64)
+    other_engine = Engine(Preset.slots16384_scale40_depth16)
     try:
         other_engine.encrypt_message(_message(other_engine))
         message = _message(engine)
@@ -469,23 +482,23 @@ def test_codec_encrypt_decrypt_and_convenience_paths_are_correct(
 
 @pytest.mark.gpu
 def test_int64_coefficients_wider_than_scale_prime_use_exact_rns_lift() -> None:
-    """An int64 coefficient may still exceed a 40-bit active modulus."""
+    """An int64 coefficient may exceed every active modulus."""
 
     with torch.device("cuda:0"):
-        engine = Engine(Preset.slots8192_scale40_depth7_int64)
+        engine = Engine(Preset.slots8192_scale40_depth7)
         message = torch.full((32,), 2.0e8, dtype=torch.float64)
 
         convenience = engine.decrypt_message(
-            engine.encrypt_message(message),
+            engine.encrypt_message(message, scale=2.0**40),
             is_real=True,
         )[: message.numel()]
-        plaintext = engine.encode(message)
+        plaintext = engine.encode(message, scale=2.0**40)
         composed = engine.decode(
             engine.decrypt(engine.encrypt(plaintext)),
             is_real=True,
         )[: message.numel()]
         operation_ready = engine.prepare_plaintext_for_addition(
-            engine.encode(message)
+            engine.encode(message, scale=2.0**40)
         )
         operation_ready_data = operation_ready.data
         plaintext_data = plaintext.data
@@ -512,13 +525,13 @@ def test_int64_coefficients_wider_than_scale_prime_use_exact_rns_lift() -> None:
             convenience,
             message,
             atol=5e-6,
-            operation="40-bit RNS convenience roundtrip",
+            operation="RNS convenience roundtrip",
         )
         _assert_array_close(
             composed,
             message,
             atol=5e-6,
-            operation="40-bit RNS composed roundtrip",
+            operation="RNS composed roundtrip",
         )
 
 
@@ -848,20 +861,27 @@ def test_multiply_matches_reference_component_convolution(
     assert actual.residue_representation == "montgomery"
 
 
+def test_multiply_rejects_coefficient_domain_inputs(engine: Engine) -> None:
+    coefficient = engine.encrypt_message(_message(engine))
+    ntt = engine.coefficient_domain_to_ntt_domain(coefficient)
+
+    for left, right in ((coefficient, ntt), (ntt, coefficient)):
+        with pytest.raises(ValueError, match="NTT/Montgomery"):
+            engine.multiply(left, right)
+
+
 @pytest.mark.gpu
 def test_final_legal_depth_remains_decryptable() -> None:
     """A short chain must support decryption at its last legal depth."""
 
     with torch.device("cuda:0"):
-        base_config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+        base_config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
         engine = Engine(
-            CkksConfig(
-                default_scale=base_config.default_scale,
-                q_depth_groups=base_config.q_depth_groups[:3],
-                p_moduli=base_config.p_moduli,
+            CkksConfig.catalog_suffix_chain(
                 logN=base_config.logN,
-                sigma=base_config.sigma,
-                security_bits=base_config.security_bits,
+                scale_bits=40,
+                depth=2,
+                p_count=1,
                 enforce_security_budget=False,
                 galois_generator=base_config.galois_generator,
             ),
@@ -950,7 +970,7 @@ def test_explicit_key_installation_drives_correct_operations() -> None:
 
     with torch.device("cuda:0"):
         engine = Engine(
-            Preset.slots8192_scale40_depth7_int64,
+            Preset.slots8192_scale40_depth7,
             allow_automatic_key_generation=False,
         )
         try:

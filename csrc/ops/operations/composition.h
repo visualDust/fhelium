@@ -19,7 +19,6 @@ enum class NttFamily { kIndexed, kCompact, kFixedRadix };
 
 struct NttPolicy {
   NttFamily family;
-  int64_t grouped_stage_count;  // compact radix-2 only
 };
 
 // Resolves an FHElium NTT backend name.
@@ -55,6 +54,16 @@ at::Tensor forward_add_scaled(at::Tensor correction,
                               std::string_view basis,
                               bool lazy_scaling);
 
+// rns::moddown_ntt_qp_to_q of NTT QP residues split into `q_rows` and
+// `p_rows`; the inverse P transform overwrites `p_rows`, so callers that own
+// the QP accumulator pass its P rows directly.
+at::Tensor moddown_ntt_rows(const at::Tensor& q_rows,
+                            at::Tensor p_rows,
+                            const std::optional<at::Tensor>& coefficient_c0,
+                            const TensorTable& tables,
+                            std::string_view ntt_backend,
+                            std::string_view rounding);
+
 // floor((x + h) / D) with the trailing drop_count rows of `source` (after
 // the optional row_order gather) as divisor rows.
 at::Tensor divide_trailing_rows(const at::Tensor& source,
@@ -81,12 +90,13 @@ at::Tensor portable_crt_basis_extend(
     const at::Tensor& source_parameters,
     const at::Tensor& target_parameters,
     const at::Tensor& matrix,
-    const std::optional<at::Tensor>& source_normalizers);
+    const std::optional<at::Tensor>& source_normalizers,
+    const std::optional<at::Tensor>& target_offsets);
 
 // Lifts one digit by the selected modup method (exact, crt, normalized_crt).
 at::Tensor lift_key_switch_digit(const at::Tensor& source,
                                  const TensorTable& tables,
-                                 std::string_view modup_method,
+                                 std::string_view basis_conversion,
                                  int64_t digit_index,
                                  const DigitSpan& span,
                                  const at::Tensor& out,

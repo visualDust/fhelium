@@ -297,6 +297,7 @@ def _validate_rns(operation: Operation) -> bool:
     fixed_same: dict[type[Operation], tuple[int, _Representation]] = {
         rns.MultiplyPlaintextOp: (2, _NTT_MONTGOMERY),
         rns.MontgomeryMultiplyOp: (2, _NTT_MONTGOMERY),
+        rns.TensorProductOp: (2, _NTT_MONTGOMERY),
         rns.KeySwitchDigitProductOp: (1, _NTT_MONTGOMERY),
         rns.AddMontgomeryLazyOp: (2, _NTT_MONTGOMERY),
         rns.ModDownNttQpToQOp: (1, _NTT_MONTGOMERY),
@@ -351,7 +352,7 @@ def _validate_rns(operation: Operation) -> bool:
         _require(
             operation.result, {ciphertext}, label=f"{operation.name} result"
         )
-    elif isinstance(operation, rns.RescaleDropLeadingPrimesOp):
+    elif isinstance(operation, rns.RescaleOp):
         domain = operation.input_domain.data
         if operation.output_domain.data != domain:
             raise ValueError(f"{operation.name} must preserve its domain")

@@ -24,11 +24,14 @@ experiments isolating GPU architecture alone.
 
 ## Configuration and sampling
 
-The current suite uses `slots32768_scale50_depth27_int64`: ring dimension
-$N=65{,}536$, default scale $2^{50}$ and maximum depth 27. The report embeds the
-complete Q depth groups and P primes, rather than relying on the preset name
-as their identity. Depth selects the active Q-group suffix; it is not a count
-of multiplications already performed.
+The current suite uses the single-prime suffix chain
+`CkksConfig.catalog_suffix_chain(logN=16, scale_bits=50, depth=27, p_count=4)`:
+ring dimension $N=65{,}536$, 28 Q primes and four P primes of the packaged
+prime catalog with int64 residues, scale $2^{50}$ at every depth and maximum
+depth 27. The report records this configuration as
+`slots32768-scale50-depth27-int64` and embeds the complete Q primes, depth
+bases and P primes as its identity. Depth selects the active Q basis; it is
+not a count of multiplications already performed.
 
 | Dimension | Values |
 | --- | --- |

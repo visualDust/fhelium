@@ -1,18 +1,18 @@
 # Composable CKKS bootstrapping
 
-FHElium composes bootstrapping from replaceable mathematical components executed through the ordinary `fhelium.eager.Engine`, `Ciphertext`, NTT, and native operator stack. The built-in `FullSlotBootstrap` makes its linear maps, periodic reduction, depth budget, primitive-key requirements, and arithmetic scale schedule visible.
+FHElium composes bootstrapping from replaceable mathematical components executed through the ordinary `fhelium.eager.Engine`, `Ciphertext`, NTT, and native operator stack. A `fhelium.bootstrap.BootstrapPlan` records its linear maps, periodic reduction, depth placement, key requirements and arithmetic scale schedule.
 
 ## The mathematical map
 
 Let:
 
 - $N$ be the ring dimension and $S=N/2$ the complex slot count;
-- $\Delta_0$ be `bootstrap.input_scale`, which defaults to `config.default_scale`;
-- $q_b$ be the product of the source Q suffix selected by `source_depth`;
+- $\Delta_0$ be `plan.input_scale`; the `"3/38"` profile uses `config.scale_at(plan.source_depth)`, and the other profiles round $q_b/\Delta_0$ to a power of two;
+- $q_b$ be the product of the Q basis at `plan.source_depth`, which is `engine.max_depth`;
 - $C$ and $T$ be the unscaled CoeffsToSlots and SlotsToCoeffs maps, with $T(C(a))=Sa$ in FHElium's cyclotomic slot order;
 - $B$ be a periodic reducer's `input_bound`.
 
-Entry accepts the source Q basis directly or rescales its preceding group into that basis. The default source is the terminal Q group. Centered ModRaise extends the components into the Q basis at `modulus_raise_target_depth`; encapsulated raising first changes the secret relation, extends the centered components and returns to the original relation. After the compensated entry-coordinate conversion described below, let $a$ be the coefficient-coordinate value represented by the raised ciphertext at scale $\Delta_0$. Define
+Entry moves an earlier-depth input to the source basis through `mod_switch_to_depth`. Centered raising extends the components into the depth-0 Q basis; encapsulated raising first changes the secret relation, extends the centered components and returns to the original relation. After the compensated entry-coordinate conversion described below, let $a$ be the coefficient-coordinate value represented by the raised ciphertext at scale $\Delta_0$. Define
 
 $$
 w=\frac{\Delta_0}{Sq_b}C(a),\qquad
@@ -69,12 +69,12 @@ The low and return bases, secret distributions and jointly published key relatio
 
 ## Full-slot state flow
 
-The built-in callable executes:
+A plan executes:
 
 ```mermaid
 flowchart TB
-    INPUT["Source-basis or preceding-group ciphertext"]
-    ENTRY["Entry coordinate and scale compensation ratio"]
+    INPUT["Ciphertext at or before the source depth"]
+    ENTRY["Mod switch, integer promotion and compensation ratio"]
     RAISING{"Raising relation"}
     CENTERED["Centered extension under main secret s"]
     LOW["Low-basis switch: s to t"]
@@ -92,44 +92,46 @@ flowchart TB
 ```
 
 
-All public pipeline ciphertexts have axes `[component, *batch, limb, coefficient]`, two components, Q basis, and `prime_ids`. They remain in coefficient domain with standard residues between operations. NTT-domain Montgomery values may span a complete polynomial or double-angle chain before returning to the coefficient-domain pipeline. Each linear stage removes one Q group, whose product is $M_d$ at depth $d$. `BootstrapArithmetic` uses supplied depth targets or derives its default schedule backward from the terminal target $s_D=\Delta_0$:
+All public pipeline ciphertexts have axes `[component, *batch, limb, coefficient]`, two components, Q basis, and `prime_ids`. They remain in coefficient domain with standard residues between operations. NTT-domain Montgomery values may span a complete polynomial or double-angle chain before returning to the coefficient-domain pipeline. A rescale at depth $d$ divides by the ratio $\rho_d$ of `config.rescale_divisor(d)`, the product of the Q primes leaving the basis divided by the product of the primes entering it. Without supplied targets, a plan derives its schedule backward from the terminal target $s_D=$ `config.scale_at(engine.max_depth)`:
 
 $$
-s_d=\sqrt{M_d s_{d+1}}.
+s_d=\sqrt{\rho_d s_{d+1}}.
 $$
 
-Ciphertext multiplication at $s_d$ followed by group rescale therefore has scale $s_{d+1}$. A scalar or diagonal product with input scale $\Delta$ uses plaintext scale $M_d s_{d+1}/\Delta$ to reach the same target. Every rescale retains its actual quotient scale; it is not reset to the default.
+Ciphertext multiplication at $s_d$ followed by rescale therefore has scale $s_{d+1}$. A scalar or diagonal product with input scale $\Delta$ uses plaintext scale $\rho_d s_{d+1}/\Delta$ to reach the same target. The `"3/38"` profile instead holds the CoeffsToSlots and EvalMod targets at the largest scales whose diagonal and constant encodings stay below $2^{61}$. Every rescale retains its actual quotient scale; it is not reset to the default.
 
-For preceding-group entry, preparation multiplies residues and scale by integer $k=\max(1,\lceil M_{input}\Delta_0/\Delta_{in}\rceil)$, preserving the message. After entry rescale the actual source-basis scale is $\Delta_b$. Direct source-basis entry uses the existing scale as $\Delta_b$. The fixed circuit interprets that payload at scale $\Delta_0$, so its message coordinate is $u=(\Delta_b/\Delta_0)m$. It refreshes $u$ using fixed CoeffsToSlots and SlotsToCoeffs maps. Multiplying the output scale by $\Delta_b/\Delta_0$ restores coordinate $m$. The compensation is part of the full-slot mathematics; intermediate rescale outputs still retain actual scale.
+Entry multiplies residues of an input at actual scale $\Delta_b$ by the integer $k=\max(1,\operatorname{round}(\Delta_0/\Delta_b))$, which keeps depth and represents the message coordinate $km$. The fixed circuit interprets that payload at scale $\Delta_0$, so it refreshes $u=(k\Delta_b/\Delta_0)m$ using fixed CoeffsToSlots and SlotsToCoeffs maps. Multiplying the output scale by $\tau=k\Delta_b/\Delta_0$ restores coordinate $m$. The compensation is part of the full-slot mathematics; intermediate rescale outputs still retain actual scale.
 
 Independent polynomial components derive basis scales from their input's actual scale rather than assuming it matches a full-slot stage. Coefficient products and accumulators connect the resulting basis values to the requested output scale. Available precision and integer-encoding range still limit which input scales, degrees, and modulus groups can be evaluated accurately.
 
-Key-switch basis extension defaults to the exact Garner lift. For a digit product $D$, any lift with the same source residues differs by an integer multiple of $D$. The normalized linear CRT lift uses a representative in $[0,wD)$ for $w$ source rows; the raw linear CRT lift can be larger. Those representatives multiply the evaluation-key error, so choosing `normalized_crt` or `crt` requires a noise budget consistent with the digit partition, auxiliary product P, actual scales and complete refresh precision.
+Key-switch basis extension uses the exact Garner lift unless a plan selects `basis_conversion`; `"3/38"` selects `normalized_crt`. For a digit product $D$, any lift with the same source residues differs by an integer multiple of $D$. The normalized CRT lift sums centered terms and uses a representative in $[-wD/2,wD/2)$ for $w$ source rows; the raw linear CRT lift can be larger. Those representatives multiply the evaluation-key error, so choosing `normalized_crt` or `crt` requires a noise budget consistent with the digit partition, auxiliary product P, actual scales and complete refresh precision.
 
 ## Raw and normalized reducer coordinates
 
-`CosineDoubleAngleReduction` distinguishes raw and normalized input coordinates:
+`fhelium.bootstrap.periodic.CosineDoubleAngle` distinguishes raw and normalized input coordinates:
 
 - `reference(values)` always consumes normalized $x\in[-1,1]$ and never divides by `input_bound`;
-- `evaluate(...)` consumes raw $r$ when `fuse_input_normalization=False` and spends one depth computing $x=r/B$;
-- with `fuse_input_normalization=True`, the caller must already provide $x$. `FullSlotBootstrap` does so by folding $1/B$ into CoeffsToSlots.
+- encrypted evaluation consumes raw $r$ when `fuse_input_normalization=False` and spends one depth computing $x=r/B$;
+- with `fuse_input_normalization=True`, the caller must already provide $x$. `bootstrap.plan` does so by folding $1/B$ into CoeffsToSlots.
 
 Both routes target $\sin(\pi Bx)/\pi=\sin(\pi r)/\pi$. Confusing the two coordinates changes the periodic frequency by a factor of $B$.
 
 ## Replaceable decisions
 
-A polynomial evaluator chooses a homomorphic multiplication directed acyclic graph (DAG) for the stored approximation.
+A polynomial evaluation plan chooses a homomorphic multiplication directed acyclic graph (DAG) for the stored approximation.
 
 | Component | Replaceable decision |
 |---|---|
-| polynomial approximator | How a function becomes basis-tagged coefficients |
-| polynomial evaluator | Which homomorphic multiplication DAG evaluates them |
-| linear-transform compiler | How a basis map becomes executable stages |
-| linear-transform evaluator | Direct, BSGS, or another stage schedule |
-| periodic reduction (`modular_reduction`) | Cosine recurrence or a caller-supplied periodic approximation |
+| polynomial approximator (`ChebyshevInterpolator`, `CosineExpansion`) | How a function becomes basis-tagged coefficients |
+| polynomial plan (`fhelium.algorithms.polynomial`) | Which homomorphic multiplication DAG evaluates them |
+| linear-transform stages (`radix2_dft`) | How a basis map becomes `LinearTransform` stages |
+| linear plan (`DirectPlan`, `BsgsPlan`) | Direct, BSGS, or another stage schedule |
+| periodic reduction (`eval_mod`) | Cosine recurrence or a caller-supplied periodic approximation |
 | ordinary Python | Complete algorithm topology and control flow |
 
-A `PolynomialApproximation` stores coefficients in ascending degree. Power basis means $p(x)=\sum_n a_nx^n$; Chebyshev basis means $p(x)=\sum_n a_nT_n(x)$. If an approximator records a physical domain $[a,b]\ne[-1,1]$, its coefficients are still functions of the normalized coordinate $x=(2t-a-b)/(b-a)$. An evaluator never performs that affine map implicitly.
+A replacement component declares its depth cost and key needs (rotation offsets for a linear plan, relinearization depths for a polynomial plan or reduction) and implements `evaluate`, whose first argument is the `fhelium.algorithms.Arithmetic` carrying the per-depth target scales $s_d$. The plan places the component from its declared depth cost and provisions keys from its declarations. Preparation runs `evaluate` once to select keys and encode plaintexts through the arithmetic; prepared execution repeats the same calls on the recorded materials.
+
+A `Polynomial` stores coefficients in ascending degree. Power basis means $p(x)=\sum_n a_nx^n$; Chebyshev basis means $p(x)=\sum_n a_nT_n(x)$. If an approximator records a physical domain $[a,b]\ne[-1,1]$, its coefficients are still functions of the normalized coordinate $x=(2t-a-b)/(b-a)$. An evaluation plan never performs that affine map implicitly.
 
 ## Direct and BSGS linear evaluation
 
@@ -172,13 +174,13 @@ The current block of group sums, hybrid-digit preparation, key-product scratch a
 
 Binary-decomposition Chebyshev evaluation shares a basis node until its final recurrence or coefficient consumer. Coefficient products at a common depth can be accumulated before all other basis nodes have been produced; their group rescale remains a depth transition of the summed product. This separates the arithmetic dependencies from retaining every intermediate through the end of the polynomial. Block-factorized evaluation instead builds its shared binary basis, then retains the aligned baby values and pending giants while consuming coefficient blocks.
 
-The aggregate giant-step schedule sums unrounded key products in QP, including the ordinary ciphertext components multiplied by P, before dividing once by $PM_d$. Here P is the product of auxiliary primes and $M_d$ is the product of the complete dropped Q group. The independent schedule rescales and key-switches each giant before its Q result joins the sum. Rounding a sum and summing rounded values generally differ, so the two schedules have the same ideal linear map and actual scale transition but different noise realizations and storage costs.
+The aggregate giant-step schedule sums unrounded key products in QP, including the ordinary ciphertext components multiplied by P, before dividing once by $P\rho_d$. Here P is the product of auxiliary primes and $\rho_d$ is the rescale ratio of depth $d$. The independent schedule rescales and key-switches each giant before its Q result joins the sum. Rounding a sum and summing rounded values generally differ, so the two schedules have the same ideal linear map and actual scale transition but different noise realizations and storage costs.
 
-The available output depth is determined jointly by the modulus chain and the component depth costs. If the input depth is $d_{in}$, output depth is $d_{out}$ and terminal depth is $D$, the remaining depth is $D-d_{out}$ and the repeatable refresh window is $d_{in}-d_{out}$. Additional residual Q groups and different Fourier or polynomial schedules change this window together with the scale and error budget.
+The available output depth is determined jointly by the modulus chain and the component depth costs. With source depth $D=$ `engine.max_depth` and output depth $d_{out}$, the refresh window `plan.refresh_window` is $D-d_{out}$: the depths available to the application before the next refresh. Different chains and Fourier or polynomial schedules change this window together with the scale and error budget.
 
 ## Shared key inventory and consumer requirements
 
-`EvaluationKeySet` is an application-owned collection of ordinary rotation, relinearization and conjugation key values. A bootstrap consumes it through `evaluation_keys=`. The inventory can retain several physical layouts and device copies for one operation, allowing different compositions and stages to share available material. Its membership is independent of consumer depth: active Q rows, digit supports, P rows, ring dimension, dtype and device determine suitability. [Key lifecycle](key-lifecycle.md) defines inventory ownership and key relations.
+`EvaluationKeySet` is an application-owned collection of ordinary rotation, relinearization and conjugation key values. A bootstrap consumes it through `keys=`. The inventory can retain several physical layouts and device copies for one operation, allowing different compositions and stages to share available material. Its membership is independent of consumer depth: active Q rows, digit supports, P rows, ring dimension, dtype and device determine suitability. [Key lifecycle](key-lifecycle.md) defines inventory ownership and key relations.
 
 `required_rotations` and `key_steps()` describe the transform rotation schedule. Relinearization is required when the reduction performs ciphertext products, and conjugation is required by branch handling and reconstruction. Provisioning generates missing capabilities before material discovery; `create_evaluation_keys` reuses compatible inventory groups and accounts for their additional storage across the composition. One key shared by several stages can cost less than separate compact keys for each stage.
 
@@ -192,16 +194,17 @@ A profile selects transform stage counts, polynomial degree, periodic-reduction 
 
 The Engine supplies the Q chain and arithmetic contexts. Source and entry depths, input scale and per-depth coefficient-product targets complete the scale schedule. Accuracy, resident storage and latency depend on this composition, the key inventory and the represented input class.
 
-The profiles specify component parameters and depth costs. The output-depth column assumes `modulus_raise_target_depth=0`; construction still rejects an Engine whose `max_depth` is too small for the selected composition.
+The profiles specify component parameters and depth costs. The raise targets depth 0, so the output depth equals the consumed depth count; `bootstrap.plan` rejects an Engine whose `max_depth` is smaller.
 
 | Profile | Raw bound $B$ | Polynomial degree | Double-angle iterations | CTS stages | STC stages | Output depth |
 |---|---:|---:|---:|---:|---:|---:|
+| `3/38` | 33 | 38 | 3 | 4 | 3 | 16 |
 | `7/44` | 1024 | 44 | 7 | 2 | 2 | 19 |
 | `8/28` | 1024 | 28 | 8 | 2 | 2 | 19 |
 | `8/28-s2c3` | 1024 | 28 | 8 | 2 | 3 | 20 |
-| `3/30` | 32 | 30 | 3 | 4 | 3 | 17 |
+| `3/30` | 32 | 30 | 3 | 4 | 3 | 16 |
 
-The bound column describes the raw reduction coordinate. The degree-30 profile uses the even-polynomial identity $p(x)=q(T_2(x))$, a shifted seed coordinate and normalization in the final forward-transform stage. Its raising relation must establish the narrower coordinate range. The shared RNS implementation centers and extends arbitrary supported source-basis widths.
+The bound column describes the raw reduction coordinate. The four-stage profiles fold the slot-count normalization into the final forward-transform stage and use a shifted seed coordinate. The degree-30 profile uses the even-polynomial identity $p(x)=q(T_2(x))$; the degree-38 profile expands the cosine seed through Jacobi–Anger coefficients and evaluates it recursively. Their raising relation must establish the narrower coordinate range, which `Encapsulated` provides through the intermediate-secret weight. The shared RNS implementation centers and extends arbitrary supported source-basis widths.
 
 
 ## Evaluation schedules and numerical materials
@@ -212,19 +215,19 @@ Constant slot messages admit compact period-one encoding. Cached scalar plaintex
 
 ## Normalized core and prepared execution
 
-For preceding-group entry, preparation multiplies residues and scale by an integer $k$, then rescales through the entry Q group of product $M$. The source-basis actual scale is $\Delta_b=k\Delta_{\mathrm{in}}/M$. Direct source-basis entry uses $\Delta_b=\Delta_{\mathrm{in}}$. Interpreting that payload at the configured scale $\Delta_0$ gives the normalized message coordinate $u=\tau m$, where $\tau=\Delta_b/\Delta_0$. The core refreshes $u$; multiplying the output's recorded scale by $\tau$ restores the message coordinate $m$. The output envelope carries this compensation separately from the core's payload and metadata.
+Entry mod-switches an earlier input to the source depth and multiplies its residues by the integer $k$ defined above. Interpreting that payload at the configured scale $\Delta_0$ gives the normalized message coordinate $u=\tau m$, where $\tau=k\Delta_b/\Delta_0$. The core refreshes $u$; multiplying the output's recorded scale by $\tau$ restores the message coordinate $m$. The output envelope carries this compensation separately from the core's payload and metadata.
 
 A prepared core binds component objects, an input state and device, and the selected key references and encoded materials. During material discovery, the executing consumer selects keys from the shared inventory and records the actual choices in ordinary dictionaries. Preparation consumes the normal first-encoding rounding samples; subsequent execution uses those samples and bound keys. The prototype ciphertext and preparation output are temporary.
 
-Each prepared core owns its material dictionaries. Appending to or clearing the inventory leaves existing prepared bindings unchanged because those dictionaries retain their selected references. The key Tensor contents remain live. `PreparedBootstrap` combines this core with entry and finish, supplying one computation body to ordinary Eager execution and Compile capture. Backend execution consumes the represented key and table Tensor operands.
+Each prepared core owns its material dictionaries. Appending to or clearing the inventory leaves existing prepared bindings unchanged because those dictionaries retain their selected references. The key Tensor contents remain live. `PreparedBootstrap` combines this core with entry and output compensation, supplying one computation body to ordinary Eager execution and Compile capture. Backend execution consumes the represented key and table Tensor operands.
 
 Encoded NTT diagonals can use contiguous repeated-block storage. If a row changes value at position $i$, a repeated block of length $R$ must place $i$ on a block boundary. For power-of-two ring extent $N$, the largest shared valid block across all rows is $R=\min(\{N\}\cup\{\operatorname{lowbit}(i):i\text{ is a change position}\})$. The stored extent is $U=N/R$. This criterion preserves every encoded integer and finds the minimum extent within this layout. A value with $U=N$ retains dense storage.
 
 ## Real-valued slot composition
 
-`FullSlotBootstrap(message_domain="real")` refreshes ciphertexts whose decoded CKKS slots are real-valued. The default `"complex"` composition retains both periodic-reduction branches. A real-valued source model does not establish the real-slot precondition when its packing uses imaginary slot coordinates. The precondition belongs to the caller; encrypted data is not inspected to select a composition.
+`bootstrap.plan(engine, message_domain="real")` refreshes ciphertexts whose decoded CKKS slots are real-valued. The default `"complex"` composition retains both periodic-reduction branches. A real-valued source model does not establish the real-slot precondition when its packing uses imaginary slot coordinates. The precondition belongs to the caller; encrypted data is not inspected to select a composition.
 
-For the radix-2 SlotsToCoeffs map $T$, let $H=\operatorname{diag}(1/2,1,\ldots,1)$. Real-slot reconstruction evaluates only the real coefficient branch and forms $z+\overline z$ after applying $T H$. The factor $H$ corrects the constant polynomial coefficient, which would otherwise be counted twice by conjugate addition. For a cyclic-diagonal stage $L(x)=\sum_k d_k\odot\operatorname{Rot}_k(x)$, composing $L H$ replaces its diagonal by $d_k\odot\operatorname{Rot}_k(H)$. The first STC stage owns this adjustment; depth and actual scale are preserved by the final conjugation and addition. The built-in real composition requires the generator-5 radix-2 STC compiler.
+For the radix-2 SlotsToCoeffs map $T$, let $H=\operatorname{diag}(1/2,1,\ldots,1)$. Real-slot reconstruction evaluates only the real coefficient branch and forms $z+\overline z$ after applying $T H$. The factor $H$ corrects the constant polynomial coefficient, which would otherwise be counted twice by conjugate addition. For a cyclic-diagonal stage $L(x)=\sum_k d_k\odot\operatorname{Rot}_k(x)$, composing $L H$ replaces its diagonal by $d_k\odot\operatorname{Rot}_k(H)$. The first STC stage owns this adjustment; depth and actual scale are preserved by the final conjugation and addition. Full-slot bootstrapping requires Galois generator 5.
 
 The corrected transform is a new plan with its own encoded material entries. Its diagonal repetition can differ from the complex plan, so real-slot execution may retain more plaintext storage even though it evaluates one reduction branch. Both compositions use the same entry, preparation, core execution, finish and release lifecycle.
 

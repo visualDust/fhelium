@@ -64,34 +64,7 @@ bool less_than(const std::vector<uint64_t>& lhs,
       lhs.rbegin(), lhs.rend(), rhs.rbegin(), rhs.rend());
 }
 
-struct Preset {
-  const char* name;
-  int64_t log_n;
-  int64_t scaling_bits;
-  int64_t max_depth;
-  int64_t p_count;
-  int64_t special_bits;
-};
-
-constexpr Preset kPresets[] = {
-    {"slots8192-scale30-depth9-int64", 14, 30, 9, 1, 60},
-    {"slots8192-scale40-depth7-int64", 14, 40, 7, 1, 60},
-    {"slots8192-scale50-depth5-int64", 14, 50, 5, 1, 60},
-    {"slots16384-scale30-depth21-int64", 15, 30, 21, 2, 60},
-    {"slots16384-scale40-depth16-int64", 15, 40, 16, 2, 60},
-    {"slots16384-scale50-depth12-int64", 15, 50, 12, 2, 60},
-    {"slots32768-scale30-depth45-int64", 16, 30, 45, 4, 60},
-    {"slots32768-scale40-depth34-int64", 16, 40, 34, 4, 60},
-    {"slots32768-scale50-depth27-int64", 16, 50, 27, 4, 60},
-    {"slots32768-scale50-depth29-int64", 16, 50, 29, 4, 60},
-    {"slots65536-scale30-depth95-int64", 17, 30, 95, 6, 60},
-    {"slots65536-scale40-depth72-int64", 17, 40, 72, 6, 60},
-    {"slots65536-scale50-depth58-int64", 17, 50, 58, 6, 60},
-    {"slots8192-scale25-depth14-int32", 14, 25, 14, 1, 28},
-    {"slots16384-scale25-depth29-int32", 15, 25, 29, 2, 28},
-    {"slots32768-scale25-depth24-int32", 16, 25, 24, 4, 28},
-    {"slots65536-scale25-depth14-int32", 17, 25, 14, 6, 28},
-};
+#include "ckks_preset_data.inc"
 
 struct SecurityRow {
   bool ternary;
@@ -170,7 +143,7 @@ std::vector<std::string> preset_names() {
 }
 
 CkksParameters preset_parameters(std::string_view name) {
-  const Preset* preset = nullptr;
+  const PresetData* preset = nullptr;
   for (const auto& candidate : kPresets) {
     if (name == candidate.name) {
       preset = &candidate;
@@ -178,32 +151,20 @@ CkksParameters preset_parameters(std::string_view name) {
   }
   TORCH_CHECK_VALUE(
       preset != nullptr, "Unknown CKKS preset ", std::string(name));
-  const int64_t degree = int64_t{1} << preset->log_n;
-  const auto scaling = scaling_primes(preset->scaling_bits, degree);
-  TORCH_CHECK_VALUE(static_cast<int64_t>(scaling.size()) > preset->max_depth,
-                    "The prime catalog has too few scaling primes for preset ",
-                    preset->name);
   CkksParameters parameters;
   parameters.log_n = preset->log_n;
-  parameters.default_scale =
-      static_cast<double>(int64_t{1} << preset->scaling_bits);
-  std::set<int64_t> q;
-  for (int64_t i = 0; i <= preset->max_depth; ++i) {
-    parameters.q_depth_groups.push_back({scaling[i]});
-    q.insert(scaling[i]);
+  parameters.q_moduli.assign(kPresetPrimes + preset->q_first,
+                             kPresetPrimes + preset->q_first + preset->q_count);
+  int64_t row = preset->row_first;
+  for (int64_t i = 0; i < preset->base_count; ++i) {
+    const int64_t size = kPresetBasisSizes[preset->base_first + i];
+    parameters.q_bases.emplace_back(kPresetBasisRows + row,
+                                    kPresetBasisRows + row + size);
+    parameters.scales.push_back(kPresetScales[preset->base_first + i]);
+    row += size;
   }
-  for (const int64_t prime : special_primes(preset->special_bits, degree)) {
-    if (static_cast<int64_t>(parameters.p_moduli.size()) == preset->p_count) {
-      break;
-    }
-    if (q.count(prime) == 0) {
-      parameters.p_moduli.push_back(prime);
-    }
-  }
-  TORCH_CHECK_VALUE(
-      static_cast<int64_t>(parameters.p_moduli.size()) == preset->p_count,
-      "The prime catalog has too few special primes for preset ",
-      preset->name);
+  parameters.p_moduli.assign(kPresetPrimes + preset->p_first,
+                             kPresetPrimes + preset->p_first + preset->p_count);
   return parameters;
 }
 

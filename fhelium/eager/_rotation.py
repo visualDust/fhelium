@@ -26,7 +26,7 @@ def iter_rotations_with_keys(
     *,
     output_domain: PolynomialDomain,
     moddown_rounding: Literal["nearest", "floor"],
-    modup_method: Literal["exact", "crt", "normalized_crt"],
+    basis_conversion: Literal["exact", "crt", "normalized_crt"],
 ) -> Iterator[Ciphertext]:
     from ._engine import _ciphertext_result
 
@@ -50,22 +50,25 @@ def iter_rotations_with_keys(
         placed.append(key)
     if not placed:
         return
+    layout = engine._key_switch_attributes(
+        value, [key for key in placed if key is not None]
+    )
+    key_rounds = int(cast(int, layout.pop("key_rounds", 0)))
     tensors, attributes = engine._dispatcher_for(
         value.device
     ).device_resources.key_switch_operands(
         value.depth,
         moddown_rounding=moddown_rounding,
-        modup_method=modup_method,
-        **engine._key_switch_attributes(
-            value, [key for key in placed if key is not None]
-        ),
+        basis_conversion=basis_conversion,
+        **layout,
     )
     for data in iter_rotations(
         value.data,
         [None if key is None else key.data for key in placed],
         [0 if key is None else key.rotation_step for key in placed],
         tensors,
-        attributes,
+        {**attributes, "key_rounds": key_rounds},
+        seeds=[None if key is None else key.generated_seed for key in placed],
         output_ntt=output_domain == "ntt",
     ):
         yield _ciphertext_result(
@@ -83,7 +86,7 @@ def sum_rotations(
     *,
     rescale: bool,
     moddown_rounding: Literal["nearest", "floor"],
-    modup_method: Literal["exact", "crt", "normalized_crt"],
+    basis_conversion: Literal["exact", "crt", "normalized_crt"],
 ) -> Ciphertext:
     iterator = iter(terms)
     try:
@@ -105,7 +108,7 @@ def sum_rotations(
         source.depth,
         rescale=rescale,
         rounding=moddown_rounding,
-        modup_method=modup_method,
+        basis_conversion=basis_conversion,
     )
     accumulator = RotationSumAccumulator(
         tables, input_domain=source.polynomial_domain
@@ -150,7 +153,14 @@ def sum_rotations(
                     key, device, operation_name="sum_rotations"
                 ),
             )
-            layout = engine._key_switch_attributes(value, [key])
+            # Each contribution reads its own key form; rows and digits are shared.
+            layout = {
+                name: entry
+                for name, entry in engine._key_switch_attributes(
+                    value, [key]
+                ).items()
+                if name != "key_rounds"
+            }
             if key_layout is None:
                 key_layout = layout
                 accumulator.tables = engine._dispatcher_for(
@@ -159,7 +169,7 @@ def sum_rotations(
                     value.depth,
                     rescale=rescale,
                     rounding=moddown_rounding,
-                    modup_method=modup_method,
+                    basis_conversion=basis_conversion,
                     **layout,
                 )
             elif layout != key_layout:
@@ -170,6 +180,8 @@ def sum_rotations(
             value.data,
             None if key is None else key.data,
             0 if key is None else key.rotation_step,
+            seed=None if key is None else key.generated_seed,
+            key_rounds=0 if key is None else key.generated_rounds,
         )
         del value, key
         try:

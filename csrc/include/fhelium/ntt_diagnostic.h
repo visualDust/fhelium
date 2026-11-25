@@ -19,15 +19,6 @@
 
 namespace fhelium::ntt::diagnostic {
 
-/// `forward_ntt_montgomery_compact_grouped_smem_` with a selected shared-memory
-/// transform size.
-FHELIUM_API void forward_ntt_montgomery_compact_grouped_smem_override_(
-    at::Tensor& montgomery_residues,
-    const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count,
-    int64_t shared_memory_log_n);
-
 /// `forward_ntt_montgomery_power_of_two_radix_compact_` with a selected
 /// shared-memory transform size.
 FHELIUM_API void forward_ntt_montgomery_power_of_two_radix_compact_override_(

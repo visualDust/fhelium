@@ -54,7 +54,6 @@ _PRESERVING_TYPES = (
     ckks.AddScalarOp,
     ckks.MultiplyScalarOp,
     ckks.MultiplyIntegerScalarOp,
-    ckks.SelectBatchOp,
 )
 _SAME_LEVEL_TYPES = (
     ckks.MultiplyOp,
@@ -68,8 +67,7 @@ _SAME_LEVEL_TYPES = (
 def _prime_ids(config: CkksConfig, depth: int) -> tuple[int, ...]:
     if not 0 <= depth <= config.max_depth:
         raise ValueError(f"CKKS public depth {depth} is unavailable")
-    start = sum(len(group) for group in config.q_depth_groups[:depth])
-    return tuple(range(start, config.num_q_primes))
+    return config.q_prime_ids(depth)
 
 
 def _depth_state(config: CkksConfig, depth: int) -> dict[str, Attribute]:
@@ -183,7 +181,7 @@ class AssignCkksDepthsPass:
         function = program.function("main")
         block = program.single_block("main")
         if any(
-            (operation.regions and not isinstance(operation, ckks.RepeatOp))
+            operation.regions
             or operation.successors
             for operation in block.walk()
         ):
@@ -247,22 +245,7 @@ class AssignCkksDepthsPass:
                 "CKKS depth assignment requires an encrypted entry"
             )
 
-        from ..._repeat import (
-            sync_repeat_inputs,
-            sync_repeat_results,
-            sync_iteration,
-        )
-
         for operation in tuple(block.walk()):
-            if isinstance(operation, ckks.RepeatOp):
-                sync_repeat_inputs(operation)
-                continue
-            if isinstance(operation, ckks.RepeatYieldOp):
-                sync_repeat_results(operation.parent_op())
-                continue
-            if isinstance(operation, ckks.RepeatIterationOp):
-                sync_iteration(operation)
-                continue
             if isinstance(operation, ReturnOp):
                 continue
             if isinstance(operation, UnrealizedConversionCastOp):

@@ -4,11 +4,11 @@ This workload measures polynomial evaluation, not an approximation to a named
 activation function. Coefficients are in ascending power order on [-1, 1].
 """
 
-from fhelium.experimental.bootstrap import (
-    BalancedPowerEvaluator,
-    HornerPowerEvaluator,
-    PatersonStockmeyerPowerEvaluator,
-    PolynomialApproximation,
+from fhelium.algorithms.polynomial import (
+    BalancedPowerPlan,
+    HornerPlan,
+    PatersonStockmeyerPlan,
+    Polynomial,
 )
 
 COEFFICIENTS = (
@@ -16,14 +16,14 @@ COEFFICIENTS = (
     0.0078125, -0.00390625, 0.001953125, -0.0009765625,
     0.00048828125, -0.000244140625,
 )
-POLYNOMIAL = PolynomialApproximation(
+POLYNOMIAL = Polynomial(
     basis="power", coefficients=COEFFICIENTS, domain=(-1.0, 1.0),
     name="dense-power-d12",
 )
 METHODS = {
-    "balanced": BalancedPowerEvaluator(),
-    "horner": HornerPowerEvaluator(),
-    "paterson_stockmeyer": PatersonStockmeyerPowerEvaluator(baby_step=4),
+    "balanced": BalancedPowerPlan(),
+    "horner": HornerPlan(),
+    "paterson_stockmeyer": PatersonStockmeyerPlan(baby_step=4),
 }
 
 

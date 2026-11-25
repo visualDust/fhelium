@@ -38,18 +38,37 @@ class NativeKeySwitchDigitProductImplementation:
         in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
         del resources, in_place
-        digit, key, parameters = values
+        digit, key, parameters, *seed = values
         index = cast(int, invocation.attributes["key_digit_index"])
+        rounds = int(cast(int, invocation.attributes.get("key_rounds", 0)))
+        digit_seed = seed[0][index] if seed else None
         accumulator0, accumulator1 = (
             torch.zeros_like(digit),
             torch.zeros_like(digit),
         )
-        ckks_ops.keyswitch_accumulate_digit_products_(
-            accumulator0,
-            accumulator1,
-            digit,
-            key[index],
-            parameters,
-            cast(int, invocation.attributes["key_row_start"]),
-        )
+        p_start = int(cast(int, invocation.attributes.get("key_p_row_start", -1)))
+        rows = tuple(cast(tuple[int, ...], invocation.attributes.get("key_q_rows", ())))
+        if not rows:
+            runs = ((0, digit.size(-2), cast(int, invocation.attributes["key_row_start"]), p_start),)
+        else:
+            # Each run of consecutive key rows, then the auxiliary rows, is one product.
+            runs, start = [], 0
+            for row in range(1, len(rows) + 1):
+                if row == len(rows) or rows[row] != rows[row - 1] + 1:
+                    runs.append((start, row - start, rows[start], -1))
+                    start = row
+            runs.append((len(rows), digit.size(-2) - len(rows), p_start, -1))
+        for start, count, key_start, key_p_start in runs:
+            ckks_ops.keyswitch_accumulate_digit_products_(
+                accumulator0.narrow(-2, start, count),
+                accumulator1.narrow(-2, start, count),
+                digit.narrow(-2, start, count),
+                key[index],
+                parameters.narrow(1, start, count),
+                key_start,
+                key_p_start,
+                None,
+                digit_seed,
+                rounds,
+            )
         return (torch.stack((accumulator0, accumulator1)),)

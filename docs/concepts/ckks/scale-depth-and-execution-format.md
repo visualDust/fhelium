@@ -12,7 +12,7 @@ $$
 b_\Delta=\log_2\Delta.
 $$
 
-It is a reporting and planning quantity. For example, “scale 50” means $\Delta\approx2^{50}$. `config.default_scale` supplies the initial value when encoding or encryption does not receive a caller-selected scale.
+It is a reporting and planning quantity. For example, “scale 40” means $\Delta\approx2^{40}$. `config.scale_at(depth)` supplies the initial value at that depth when encoding or encryption does not receive a caller-selected scale.
 
 Multiplication and rescaling update actual scale as follows:
 
@@ -20,23 +20,17 @@ $$
 \Delta(ab)=\Delta(a)\Delta(b),
 \qquad
 \Delta(\operatorname{Rescale}_d(a))
-=\frac{\Delta(a)}{M_d}.
+=\frac{\Delta(a)}{\rho_d}.
 $$
 
-$M_d$ is the modulus removed by the rescale at depth $d$.
+$\rho_d$ is the rescale ratio of the transition from depth $d$ to $d+1$, defined below.
 
 ## Depth selects the active Q basis
 
-`CkksConfig` partitions the ciphertext modulus Q into ordered depth groups:
+`CkksConfig` stores the Q primes as one ordered list and assigns each depth $d$ a contiguous interval $B_d$ of that list. The public depth interval is $0\le d\le D$, where `config.max_depth == D`, and $B_0$ contains every Q prime. For $d<D$, one `rescale_to_next_depth` call replaces $B_d$ by $B_{d+1}$, dropping $D_d=B_d\setminus B_{d+1}$ and introducing $R_d=B_{d+1}\setminus B_d$. It divides every coefficient and the actual scale by
 
 $$
-(G_0,G_1,\ldots,G_D).
-$$
-
-The public depth interval is $0\le d\le D$, where `config.max_depth == D`. At depth $d$, the active Q basis contains $G_d$ through the terminal group $G_D$. For $d<D$, one `rescale_to_next_depth` call removes the complete group $G_d$, so
-
-$$
-M_d=\prod_{q\in G_d}q,
+\rho_d=\frac{\prod_{q\in D_d}q}{\prod_{q\in R_d}q},
 \qquad d'=d+1.
 $$
 
@@ -52,23 +46,25 @@ FHElium exposes these quantities directly:
 
 ```python
 config.max_depth
-config.q_depth_groups
-config.rescale_divisor(depth)
+config.depth_bases           # (start, stop) of every B_d in Q order
+config.q_prime_ids(depth)    # Q prime IDs of B_d
+config.scale_at(depth)       # default scale of depth d
+config.transition_ratio(depth, depth + 1)  # rho_d as a Fraction
 engine.depth_remaining(ciphertext)
 ```
 
-## A depth group determines both scale reduction and RNS work
+## A basis transition determines both scale reduction and RNS work
 
-A parameter planner commonly chooses $M_d$ near the scale introduced by one multiplication. A scale near $2^{50}$ can therefore use either of these group shapes:
+A parameter planner chooses $\rho_d$ near the scale introduced by one multiplication. The built-in scale-40 presets combine primes near $2^{30}$ and $2^{25}$, for example
 
 ```text
-G_d = [one prime near 2^50]
-G_d = [two primes near 2^25 whose product is near 2^50]
+D_d = [three primes near 2^30], R_d = [two primes near 2^25]    rho_d near 2^(90-50)
+D_d = [four primes near 2^25],  R_d = [two primes near 2^30]    rho_d near 2^(100-60)
 ```
 
-Both groups consume one CKKS depth and divide scale by approximately $2^{50}$. Their execution costs differ because the first shape stores one RNS row at that depth and the second stores two. The prime values also determine which residue formats satisfy the native kernels' lazy-reduction bounds.
+Each such transition consumes one CKKS depth and reduces the active modulus by approximately 40 bits. The execution cost of a depth follows the number of rows $|B_d|$, which these presets keep close to the minimum needed for the remaining modulus. The prime values also determine which residue formats satisfy the native kernels' lazy-reduction bounds.
 
-This is why `q_depth_groups` stores nested prime groups rather than a flat prime count. Semantic depth follows the outer group sequence; NTT, key-switch, and RNS work follow the flattened prime rows.
+Semantic depth follows the sequence of bases; NTT, key-switch, and RNS work follow the rows of each basis. A suffix chain, in which every $R_d$ is empty, is the special case where each depth drops a fixed group of primes.
 
 ## Residue words and the represented integer
 
@@ -91,7 +87,7 @@ The encoder uses `int64` to hold signed integer coefficients before modular redu
 
 ## Execution-format selection and kernel dispatch
 
-When an Engine is constructed, `RnsExecutionFormat.select` examines every configured Q and P modulus in the configuration and chooses the narrowest supported residue Tensor and Montgomery-radix pairing. `engine.dtype` reports the result. An expert `rns_dtype=` argument requests a supported Tensor dtype; construction checks that every configured prime fits the corresponding lazy-reduction range. The Engine uses one format for its lifetime. Device-local `RnsContext` resources own the dense RNS parameters and residue-representation arithmetic in that format. `NttContext` composes that RNS context and owns the selected NTT policy, transform tables, and transforms; CKKS preparation supplies the basis-conversion and key-switch materials needed by the chosen operations.
+When an Engine is constructed, `RnsExecutionFormat.select` examines every configured Q and P modulus in the configuration and chooses the narrowest supported residue Tensor and Montgomery-radix pairing: `torch.int32` when every prime is below $2^{30}$, otherwise `torch.int64`. Built-in presets use primes below $2^{30}$. `engine.dtype` reports the result. An expert `rns_dtype=` argument requests a supported Tensor dtype; construction checks that every configured prime fits the corresponding lazy-reduction range. The Engine uses one format for its lifetime. Device-local `RnsContext` resources own the dense RNS parameters and residue-representation arithmetic in that format. `NttContext` composes that RNS context and owns the selected NTT policy, transform tables, and transforms; CKKS preparation supplies the basis-conversion and key-switch materials needed by the chosen operations.
 
 The registered CKKS and RNS operations have shared schemas. Native dtype dispatch selects the scalar specialization of the same implementation. The operation graph, Ciphertext type, depth transition, and Backend registration remain unchanged.
 
@@ -100,26 +96,19 @@ The registered CKKS and RNS operations have shared schemas. Native dtype dispatc
 Consider a configuration with
 
 ```text
-default_scale = 2^50
-max_depth = 26
-G_0 = [q_0a, q_0b]
-q_0a, q_0b < 2^30
-q_0a * q_0b approximately 2^50
-all remaining Q and P primes below 2^30
+preset = slots16384-scale40-depth16, max_depth = 16
+q_0 ... q_3 near 2^25, q_4 ... q_23 near 2^30, every P prime below 2^30
+B_1 = q_2 ... q_23,   B_2 = q_0 ... q_20     (Q-order intervals)
+D_1 = [q_21, q_22, q_23],   R_1 = [q_0, q_1]
+scales[1], scales[2] approximately 2^40
 ```
 
-A fresh ciphertext begins with
-
-```text
-depth = 0
-depth_remaining = 26
-scale = 2^50
-```
-
-Multiplying two such ciphertexts produces scale $2^{100}$ at depth zero. Rescaling removes both primes in $G_0$, advances to depth one, and produces
+A ciphertext at depth one with scale $\Delta_1$ has `depth_remaining == 15`. Multiplying two such ciphertexts produces scale $\Delta_1^2$ at depth one. Rescaling computes the rounded quotient by $q_{21}q_{22}q_{23}$ after multiplication by $q_0q_1$, represents it over $B_2$, and produces
 
 $$
-\Delta'=\frac{2^{100}}{q_{0a}q_{0b}}\approx2^{50}.
+\Delta'=\frac{\Delta_1^2}{\rho_1}=\Delta_2,
+\qquad
+\rho_1=\frac{q_{21}q_{22}q_{23}}{q_0q_1}.
 $$
 
-The result has `depth_remaining == 25`. The rescale implementation executes two prime-row division steps internally, but they implement one CKKS depth transition. Its RNS kernels use the format selected from the complete prime set when the Engine was built.
+The result has `depth_remaining == 14`. The rescale implementation performs one rounding step for the three dropped primes and one basis conversion to the retained and introduced rows; together they implement one CKKS depth transition. Its RNS kernels use the format selected from the complete prime set when the Engine was built.

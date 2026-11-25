@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from xdsl.dialects.builtin import ArrayAttr, IntegerAttr, StringAttr
 from fhelium.ir.dialects import ckks, ntt, rns
+from fhelium.backend.ckks._key_switch_preparation import key_seed_rounds
 from fhelium.backend.ckks.tables import encapsulation_configs
 from ._core import CkksLoweringDefinition, LoweredCkksOperation
 from ._keyswitch import _KeySwitchLowering
@@ -90,11 +91,13 @@ def lower_modulus_raise(operation, config, compilation):
             ckks_config=StringAttr(json.dumps(low_config.dumps())),
             moddown_rounding=operation.moddown_rounding,
         )
+        seeds = tuple(operation.key_seeds)
         descriptor = ckks.SwitchKeyOp(
             low_value,
             operation.low_key,
             low_type,
             parameters=tuple(tensors[name] for name in names),
+            key_seeds=seeds[:1],
             attributes=fields,
         )
         low = _KeySwitchLowering(descriptor, low_config, compilation).lower()
@@ -180,6 +183,8 @@ def lower_modulus_raise(operation, config, compilation):
                 typ(high=True, ntt_domain=True, components=2),
                 key_digit_index=0,
                 key_row_start=0,
+                key_seed=seeds[1] if seeds else None,
+                key_rounds=key_seed_rounds(operation.return_key) if seeds else 0,
             )
         )
         products = transform(products, inverse=True, components=2)
@@ -216,7 +221,7 @@ def lower_modulus_raise(operation, config, compilation):
             )
         )
         start = int(operation.attributes["target_row_start"].value.data)
-        count = config.num_q_primes - start
+        count = int(operation.attributes["target_row_count"].value.data)
         c0 = emit(
             rns.SliceRowsOp(c0, typ(target=True), start=start + 1, count=count)
         )

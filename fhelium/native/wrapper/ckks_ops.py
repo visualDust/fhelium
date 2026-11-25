@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 
 import torch
 
@@ -172,6 +173,33 @@ def add_cyclic_compressed_plaintext_component_(
     _require_native()
     torch.ops.fhelium_ckks_ops.add_cyclic_compressed_plaintext_component_(
         ciphertext_component, compressed_plaintext, rns_params
+    )
+
+
+def add_ntt_galois_automorphism_(
+    target: torch.Tensor,
+    residues_ntt: torch.Tensor,
+    source_indices: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_ckks_ops::add_ntt_galois_automorphism_``.
+
+    Torch schema::
+
+        fhelium_ckks_ops::add_ntt_galois_automorphism_(Tensor(a!) target, Tensor residues_ntt, Tensor source_indices, Tensor rns_params) -> ()
+
+    Args:
+        target: torch.Tensor (modified in-place).
+        residues_ntt: torch.Tensor.
+        source_indices: torch.Tensor.
+        rns_params: torch.Tensor.
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_ckks_ops.add_ntt_galois_automorphism_(
+        target, residues_ntt, source_indices, rns_params
     )
 
 
@@ -350,6 +378,35 @@ def coefficient_galois_indices(
     )
 
 
+def compact_key_switch_key(
+    data: torch.Tensor,
+    seed_rows: torch.Tensor,
+    moduli: list[int],
+    prf: str,
+    rounds: int,
+) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_ckks_ops::compact_key_switch_key``.
+
+    Torch schema::
+
+        fhelium_ckks_ops::compact_key_switch_key(Tensor data, Tensor seed_rows, int[] moduli, str prf, int rounds) -> Tensor
+
+    Args:
+        data: torch.Tensor.
+        seed_rows: torch.Tensor.
+        moduli: list[int].
+        prf: str.
+        rounds: int.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_ckks_ops.compact_key_switch_key(
+        data, seed_rows, moduli, prf, rounds
+    )
+
+
 def convert_secret_key(
     secret_key: torch.Tensor,
     table_names: list[str],
@@ -385,18 +442,18 @@ def create_galois_key(
     seed: torch.Tensor,
     cdt_table: torch.Tensor,
     ntt_backend: str,
-    q_row_start: int,
+    q_rows: list[int],
     digit_sizes: list[int],
     p_rows: list[int],
     uniform_by_digit: torch.Tensor | None,
     error_by_digit: torch.Tensor | None,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor | None, list[int], int]:
     """
     Typed wrapper for ``fhelium_ckks_ops::create_galois_key``.
 
     Torch schema::
 
-        fhelium_ckks_ops::create_galois_key(Tensor secret_key, int galois_element, str[] table_names, Tensor[] tables, Tensor seed, Tensor cdt_table, str ntt_backend, int q_row_start, int[] digit_sizes, int[] p_rows, Tensor? uniform_by_digit, Tensor? error_by_digit) -> Tensor
+        fhelium_ckks_ops::create_galois_key(Tensor secret_key, int galois_element, str[] table_names, Tensor[] tables, Tensor seed, Tensor cdt_table, str ntt_backend, int[] q_rows, int[] digit_sizes, int[] p_rows, Tensor? uniform_by_digit, Tensor? error_by_digit) -> (Tensor, Tensor?, int[], int)
 
     Args:
         secret_key: torch.Tensor.
@@ -406,13 +463,13 @@ def create_galois_key(
         seed: torch.Tensor.
         cdt_table: torch.Tensor.
         ntt_backend: str.
-        q_row_start: int.
+        q_rows: list[int].
         digit_sizes: list[int].
         p_rows: list[int].
         uniform_by_digit: torch.Tensor | None.
         error_by_digit: torch.Tensor | None.
 
-    Returns: torch.Tensor.
+    Returns: tuple[torch.Tensor, torch.Tensor | None, list[int], int].
     """
     _require_native()
     return torch.ops.fhelium_ckks_ops.create_galois_key(
@@ -423,7 +480,7 @@ def create_galois_key(
         seed,
         cdt_table,
         ntt_backend,
-        q_row_start,
+        q_rows,
         digit_sizes,
         p_rows,
         uniform_by_digit,
@@ -439,18 +496,18 @@ def create_key_switch_key(
     seed: torch.Tensor,
     cdt_table: torch.Tensor,
     ntt_backend: str,
-    q_row_start: int,
+    q_rows: list[int],
     digit_sizes: list[int],
     p_rows: list[int],
     uniform_by_digit: torch.Tensor | None,
     error_by_digit: torch.Tensor | None,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor | None, list[int], int]:
     """
     Typed wrapper for ``fhelium_ckks_ops::create_key_switch_key``.
 
     Torch schema::
 
-        fhelium_ckks_ops::create_key_switch_key(Tensor source_secret_key, Tensor destination_secret_key, str[] table_names, Tensor[] tables, Tensor seed, Tensor cdt_table, str ntt_backend, int q_row_start, int[] digit_sizes, int[] p_rows, Tensor? uniform_by_digit, Tensor? error_by_digit) -> Tensor
+        fhelium_ckks_ops::create_key_switch_key(Tensor source_secret_key, Tensor destination_secret_key, str[] table_names, Tensor[] tables, Tensor seed, Tensor cdt_table, str ntt_backend, int[] q_rows, int[] digit_sizes, int[] p_rows, Tensor? uniform_by_digit, Tensor? error_by_digit) -> (Tensor, Tensor?, int[], int)
 
     Args:
         source_secret_key: torch.Tensor.
@@ -460,13 +517,13 @@ def create_key_switch_key(
         seed: torch.Tensor.
         cdt_table: torch.Tensor.
         ntt_backend: str.
-        q_row_start: int.
+        q_rows: list[int].
         digit_sizes: list[int].
         p_rows: list[int].
         uniform_by_digit: torch.Tensor | None.
         error_by_digit: torch.Tensor | None.
 
-    Returns: torch.Tensor.
+    Returns: tuple[torch.Tensor, torch.Tensor | None, list[int], int].
     """
     _require_native()
     return torch.ops.fhelium_ckks_ops.create_key_switch_key(
@@ -477,7 +534,7 @@ def create_key_switch_key(
         seed,
         cdt_table,
         ntt_backend,
-        q_row_start,
+        q_rows,
         digit_sizes,
         p_rows,
         uniform_by_digit,
@@ -534,18 +591,18 @@ def create_relinearization_key(
     seed: torch.Tensor,
     cdt_table: torch.Tensor,
     ntt_backend: str,
-    q_row_start: int,
+    q_rows: list[int],
     digit_sizes: list[int],
     p_rows: list[int],
     uniform_by_digit: torch.Tensor | None,
     error_by_digit: torch.Tensor | None,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor | None, list[int], int]:
     """
     Typed wrapper for ``fhelium_ckks_ops::create_relinearization_key``.
 
     Torch schema::
 
-        fhelium_ckks_ops::create_relinearization_key(Tensor secret_key, str[] table_names, Tensor[] tables, Tensor seed, Tensor cdt_table, str ntt_backend, int q_row_start, int[] digit_sizes, int[] p_rows, Tensor? uniform_by_digit, Tensor? error_by_digit) -> Tensor
+        fhelium_ckks_ops::create_relinearization_key(Tensor secret_key, str[] table_names, Tensor[] tables, Tensor seed, Tensor cdt_table, str ntt_backend, int[] q_rows, int[] digit_sizes, int[] p_rows, Tensor? uniform_by_digit, Tensor? error_by_digit) -> (Tensor, Tensor?, int[], int)
 
     Args:
         secret_key: torch.Tensor.
@@ -554,13 +611,13 @@ def create_relinearization_key(
         seed: torch.Tensor.
         cdt_table: torch.Tensor.
         ntt_backend: str.
-        q_row_start: int.
+        q_rows: list[int].
         digit_sizes: list[int].
         p_rows: list[int].
         uniform_by_digit: torch.Tensor | None.
         error_by_digit: torch.Tensor | None.
 
-    Returns: torch.Tensor.
+    Returns: tuple[torch.Tensor, torch.Tensor | None, list[int], int].
     """
     _require_native()
     return torch.ops.fhelium_ckks_ops.create_relinearization_key(
@@ -570,7 +627,7 @@ def create_relinearization_key(
         seed,
         cdt_table,
         ntt_backend,
-        q_row_start,
+        q_rows,
         digit_sizes,
         p_rows,
         uniform_by_digit,
@@ -725,12 +782,16 @@ def encapsulated_modulus_raise(
     ntt_backend: str,
     digits: list[int],
     key_row_start: int,
-    modup_method: str,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
     p_count: int,
     moddown_rounding: str,
     input_domain: str,
     output_domain: str,
     galois_generator: int,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
     return_drop_count: int,
     target_row_start: int,
     q_count: int,
@@ -740,7 +801,7 @@ def encapsulated_modulus_raise(
 
     Torch schema::
 
-        fhelium_ckks_ops::encapsulated_modulus_raise(Tensor source, Tensor low_key, Tensor return_key, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, str modup_method, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, int return_drop_count, int target_row_start, int q_count) -> Tensor
+        fhelium_ckks_ops::encapsulated_modulus_raise(Tensor source, Tensor low_key, Tensor return_key, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, int key_p_row_start, int[] key_q_rows, str basis_conversion, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, Tensor[] key_seeds, int key_rounds, int return_drop_count, int target_row_start, int q_count) -> Tensor
 
     Args:
         source: torch.Tensor.
@@ -751,12 +812,16 @@ def encapsulated_modulus_raise(
         ntt_backend: str.
         digits: list[int].
         key_row_start: int.
-        modup_method: str.
+        key_p_row_start: int.
+        key_q_rows: list[int].
+        basis_conversion: str.
         p_count: int.
         moddown_rounding: str.
         input_domain: str.
         output_domain: str.
         galois_generator: int.
+        key_seeds: list[torch.Tensor].
+        key_rounds: int.
         return_drop_count: int.
         target_row_start: int.
         q_count: int.
@@ -773,12 +838,16 @@ def encapsulated_modulus_raise(
         ntt_backend,
         digits,
         key_row_start,
-        modup_method,
+        key_p_row_start,
+        key_q_rows,
+        basis_conversion,
         p_count,
         moddown_rounding,
         input_domain,
         output_domain,
         galois_generator,
+        key_seeds,
+        key_rounds,
         return_drop_count,
         target_row_start,
         q_count,
@@ -857,6 +926,35 @@ def encrypt(
     )
 
 
+def expand_key_switch_key(
+    data: torch.Tensor,
+    seed_rows: torch.Tensor,
+    moduli: list[int],
+    prf: str,
+    rounds: int,
+) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_ckks_ops::expand_key_switch_key``.
+
+    Torch schema::
+
+        fhelium_ckks_ops::expand_key_switch_key(Tensor data, Tensor seed_rows, int[] moduli, str prf, int rounds) -> Tensor
+
+    Args:
+        data: torch.Tensor.
+        seed_rows: torch.Tensor.
+        moduli: list[int].
+        prf: str.
+        rounds: int.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_ckks_ops.expand_key_switch_key(
+        data, seed_rows, moduli, prf, rounds
+    )
+
+
 def grouped_rotation_weighted_sum(
     source: torch.Tensor,
     keys: list[torch.Tensor],
@@ -868,19 +966,23 @@ def grouped_rotation_weighted_sum(
     ntt_backend: str,
     digits: list[int],
     key_row_start: int,
-    modup_method: str,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
     p_count: int,
     moddown_rounding: str,
     input_domain: str,
     output_domain: str,
     galois_generator: int,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
 ) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_ckks_ops::grouped_rotation_weighted_sum``.
 
     Torch schema::
 
-        fhelium_ckks_ops::grouped_rotation_weighted_sum(Tensor source, Tensor[] keys, int[] baby_steps, Tensor[] plaintexts, int group_count, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, str modup_method, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator) -> Tensor
+        fhelium_ckks_ops::grouped_rotation_weighted_sum(Tensor source, Tensor[] keys, int[] baby_steps, Tensor[] plaintexts, int group_count, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, int key_p_row_start, int[] key_q_rows, str basis_conversion, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, Tensor[] key_seeds, int key_rounds) -> Tensor
 
     Args:
         source: torch.Tensor.
@@ -893,12 +995,16 @@ def grouped_rotation_weighted_sum(
         ntt_backend: str.
         digits: list[int].
         key_row_start: int.
-        modup_method: str.
+        key_p_row_start: int.
+        key_q_rows: list[int].
+        basis_conversion: str.
         p_count: int.
         moddown_rounding: str.
         input_domain: str.
         output_domain: str.
         galois_generator: int.
+        key_seeds: list[torch.Tensor].
+        key_rounds: int.
 
     Returns: torch.Tensor.
     """
@@ -914,12 +1020,16 @@ def grouped_rotation_weighted_sum(
         ntt_backend,
         digits,
         key_row_start,
-        modup_method,
+        key_p_row_start,
+        key_q_rows,
+        basis_conversion,
         p_count,
         moddown_rounding,
         input_domain,
         output_domain,
         galois_generator,
+        key_seeds,
+        key_rounds,
     )
 
 
@@ -949,12 +1059,16 @@ def key_switch(
     ntt_backend: str,
     digits: list[int],
     key_row_start: int,
-    modup_method: str,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
     p_count: int,
     moddown_rounding: str,
     input_domain: str,
     output_domain: str,
     galois_generator: int,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
     conjugate: bool,
 ) -> torch.Tensor:
     """
@@ -962,7 +1076,7 @@ def key_switch(
 
     Torch schema::
 
-        fhelium_ckks_ops::key_switch(Tensor source, Tensor key, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, str modup_method, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, bool conjugate) -> Tensor
+        fhelium_ckks_ops::key_switch(Tensor source, Tensor key, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, int key_p_row_start, int[] key_q_rows, str basis_conversion, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, Tensor[] key_seeds, int key_rounds, bool conjugate) -> Tensor
 
     Args:
         source: torch.Tensor.
@@ -972,12 +1086,16 @@ def key_switch(
         ntt_backend: str.
         digits: list[int].
         key_row_start: int.
-        modup_method: str.
+        key_p_row_start: int.
+        key_q_rows: list[int].
+        basis_conversion: str.
         p_count: int.
         moddown_rounding: str.
         input_domain: str.
         output_domain: str.
         galois_generator: int.
+        key_seeds: list[torch.Tensor].
+        key_rounds: int.
         conjugate: bool.
 
     Returns: torch.Tensor.
@@ -991,12 +1109,16 @@ def key_switch(
         ntt_backend,
         digits,
         key_row_start,
-        modup_method,
+        key_p_row_start,
+        key_q_rows,
+        basis_conversion,
         p_count,
         moddown_rounding,
         input_domain,
         output_domain,
         galois_generator,
+        key_seeds,
+        key_rounds,
         conjugate,
     )
 
@@ -1008,14 +1130,17 @@ def keyswitch_accumulate_digit_products_(
     key_switch_key_digit: torch.Tensor,
     rns_params: torch.Tensor,
     key_digit_row_start: int,
+    key_p_row_start: int = -1,
     source_indices: torch.Tensor | None = None,
+    key_seed: torch.Tensor | None = None,
+    key_rounds: int = 0,
 ) -> None:
     """
     Typed wrapper for ``fhelium_ckks_ops::keyswitch_accumulate_digit_products_``.
 
     Torch schema::
 
-        fhelium_ckks_ops::keyswitch_accumulate_digit_products_(Tensor(a!) accumulator0_qp, Tensor(b!) accumulator1_qp, Tensor extended_digit_ntt_qp, Tensor key_switch_key_digit, Tensor rns_params, int key_digit_row_start, Tensor? source_indices=None) -> ()
+        fhelium_ckks_ops::keyswitch_accumulate_digit_products_(Tensor(a!) accumulator0_qp, Tensor(b!) accumulator1_qp, Tensor extended_digit_ntt_qp, Tensor key_switch_key_digit, Tensor rns_params, int key_digit_row_start, int key_p_row_start=-1, Tensor? source_indices=None, Tensor? key_seed=None, int key_rounds=0) -> ()
 
     Args:
         accumulator0_qp: torch.Tensor (modified in-place).
@@ -1024,7 +1149,10 @@ def keyswitch_accumulate_digit_products_(
         key_switch_key_digit: torch.Tensor.
         rns_params: torch.Tensor.
         key_digit_row_start: int.
+        key_p_row_start: int.
         source_indices: torch.Tensor | None.
+        key_seed: torch.Tensor | None.
+        key_rounds: int.
 
     Returns: None.
     """
@@ -1036,46 +1164,58 @@ def keyswitch_accumulate_digit_products_(
         key_switch_key_digit,
         rns_params,
         key_digit_row_start,
+        key_p_row_start,
         source_indices,
+        key_seed,
+        key_rounds,
     )
 
 
 def keyswitch_accumulate_products_(
-    accumulator0_qp: torch.Tensor,
-    accumulator1_qp: torch.Tensor,
+    accumulators0_qp: list[torch.Tensor],
+    accumulators1_qp: list[torch.Tensor],
     extended_digits_ntt_qp: list[torch.Tensor],
-    key_switch_key: torch.Tensor,
+    key_switch_keys: list[torch.Tensor],
     rns_params: torch.Tensor,
     key_digit_row_start: int,
-    source_indices: torch.Tensor | None = None,
+    key_p_row_start: int,
+    source_indices: list[torch.Tensor],
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
 ) -> None:
     """
     Typed wrapper for ``fhelium_ckks_ops::keyswitch_accumulate_products_``.
 
     Torch schema::
 
-        fhelium_ckks_ops::keyswitch_accumulate_products_(Tensor(a!) accumulator0_qp, Tensor(b!) accumulator1_qp, Tensor[] extended_digits_ntt_qp, Tensor key_switch_key, Tensor rns_params, int key_digit_row_start, Tensor? source_indices=None) -> ()
+        fhelium_ckks_ops::keyswitch_accumulate_products_(Tensor(a!)[] accumulators0_qp, Tensor(b!)[] accumulators1_qp, Tensor[] extended_digits_ntt_qp, Tensor[] key_switch_keys, Tensor rns_params, int key_digit_row_start, int key_p_row_start, Tensor[] source_indices, Tensor[] key_seeds, int key_rounds) -> ()
 
     Args:
-        accumulator0_qp: torch.Tensor (modified in-place).
-        accumulator1_qp: torch.Tensor (modified in-place).
+        accumulators0_qp: list[torch.Tensor] (modified in-place).
+        accumulators1_qp: list[torch.Tensor] (modified in-place).
         extended_digits_ntt_qp: list[torch.Tensor].
-        key_switch_key: torch.Tensor.
+        key_switch_keys: list[torch.Tensor].
         rns_params: torch.Tensor.
         key_digit_row_start: int.
-        source_indices: torch.Tensor | None.
+        key_p_row_start: int.
+        source_indices: list[torch.Tensor].
+        key_seeds: list[torch.Tensor].
+        key_rounds: int.
 
     Returns: None.
     """
     _require_native()
     torch.ops.fhelium_ckks_ops.keyswitch_accumulate_products_(
-        accumulator0_qp,
-        accumulator1_qp,
+        accumulators0_qp,
+        accumulators1_qp,
         extended_digits_ntt_qp,
-        key_switch_key,
+        key_switch_keys,
         rns_params,
         key_digit_row_start,
+        key_p_row_start,
         source_indices,
+        key_seeds,
+        key_rounds,
     )
 
 
@@ -1376,18 +1516,18 @@ def preset_names() -> list[str]:
 
 def preset_parameters(
     name: str,
-) -> tuple[int, float, list[int], list[int], list[int]]:
+) -> tuple[int, list[int], list[int], list[int], Any, list[int]]:
     """
     Typed wrapper for ``fhelium_ckks_ops::preset_parameters``.
 
     Torch schema::
 
-        fhelium_ckks_ops::preset_parameters(str name) -> (int, float, int[], int[], int[])
+        fhelium_ckks_ops::preset_parameters(str name) -> (int, int[], int[], int[], float[], int[])
 
     Args:
         name: str.
 
-    Returns: tuple[int, float, list[int], list[int], list[int]].
+    Returns: tuple[int, list[int], list[int], list[int], Any, list[int]].
     """
     _require_native()
     return torch.ops.fhelium_ckks_ops.preset_parameters(name)
@@ -1430,12 +1570,16 @@ def relinearize(
     ntt_backend: str,
     digits: list[int],
     key_row_start: int,
-    modup_method: str,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
     p_count: int,
     moddown_rounding: str,
     input_domain: str,
     output_domain: str,
     galois_generator: int,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
     rescale: bool,
     q_count: int,
     joint_drop_count: int,
@@ -1446,7 +1590,7 @@ def relinearize(
 
     Torch schema::
 
-        fhelium_ckks_ops::relinearize(Tensor source, Tensor key, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, str modup_method, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, bool rescale, int q_count, int joint_drop_count, bool joint_drop_is_prefix) -> Tensor
+        fhelium_ckks_ops::relinearize(Tensor source, Tensor key, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, int key_p_row_start, int[] key_q_rows, str basis_conversion, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, Tensor[] key_seeds, int key_rounds, bool rescale, int q_count, int joint_drop_count, bool joint_drop_is_prefix) -> Tensor
 
     Args:
         source: torch.Tensor.
@@ -1456,12 +1600,16 @@ def relinearize(
         ntt_backend: str.
         digits: list[int].
         key_row_start: int.
-        modup_method: str.
+        key_p_row_start: int.
+        key_q_rows: list[int].
+        basis_conversion: str.
         p_count: int.
         moddown_rounding: str.
         input_domain: str.
         output_domain: str.
         galois_generator: int.
+        key_seeds: list[torch.Tensor].
+        key_rounds: int.
         rescale: bool.
         q_count: int.
         joint_drop_count: int.
@@ -1478,136 +1626,20 @@ def relinearize(
         ntt_backend,
         digits,
         key_row_start,
-        modup_method,
+        key_p_row_start,
+        key_q_rows,
+        basis_conversion,
         p_count,
         moddown_rounding,
         input_domain,
         output_domain,
         galois_generator,
+        key_seeds,
+        key_rounds,
         rescale,
         q_count,
         joint_drop_count,
         joint_drop_is_prefix,
-    )
-
-
-def rescale_drop_leading_prime_nearest(
-    remaining_residues: torch.Tensor,
-    drop_prime_inverse_mont: torch.Tensor,
-    dropped_residue: torch.Tensor,
-    rns_params: torch.Tensor,
-    half_drop_prime: int,
-) -> torch.Tensor:
-    """
-    Typed wrapper for ``fhelium_ckks_ops::rescale_drop_leading_prime_nearest``.
-
-    Torch schema::
-
-        fhelium_ckks_ops::rescale_drop_leading_prime_nearest(Tensor remaining_residues, Tensor drop_prime_inverse_mont, Tensor dropped_residue, Tensor rns_params, int half_drop_prime) -> Tensor
-
-    Args:
-        remaining_residues: torch.Tensor.
-        drop_prime_inverse_mont: torch.Tensor.
-        dropped_residue: torch.Tensor.
-        rns_params: torch.Tensor.
-        half_drop_prime: int.
-
-    Returns: torch.Tensor.
-    """
-    _require_native()
-    return torch.ops.fhelium_ckks_ops.rescale_drop_leading_prime_nearest(
-        remaining_residues,
-        drop_prime_inverse_mont,
-        dropped_residue,
-        rns_params,
-        half_drop_prime,
-    )
-
-
-def rescale_drop_leading_prime_nearest_(
-    remaining_residues: torch.Tensor,
-    drop_prime_inverse_mont: torch.Tensor,
-    dropped_residue: torch.Tensor,
-    rns_params: torch.Tensor,
-    half_drop_prime: int,
-) -> None:
-    """
-    Typed wrapper for ``fhelium_ckks_ops::rescale_drop_leading_prime_nearest_``.
-
-    Torch schema::
-
-        fhelium_ckks_ops::rescale_drop_leading_prime_nearest_(Tensor(a!) remaining_residues, Tensor drop_prime_inverse_mont, Tensor dropped_residue, Tensor rns_params, int half_drop_prime) -> ()
-
-    Args:
-        remaining_residues: torch.Tensor (modified in-place).
-        drop_prime_inverse_mont: torch.Tensor.
-        dropped_residue: torch.Tensor.
-        rns_params: torch.Tensor.
-        half_drop_prime: int.
-
-    Returns: None.
-    """
-    _require_native()
-    torch.ops.fhelium_ckks_ops.rescale_drop_leading_prime_nearest_(
-        remaining_residues,
-        drop_prime_inverse_mont,
-        dropped_residue,
-        rns_params,
-        half_drop_prime,
-    )
-
-
-def rescale_drop_leading_prime_truncate(
-    remaining_residues: torch.Tensor,
-    drop_prime_inverse_mont: torch.Tensor,
-    dropped_residue: torch.Tensor,
-    rns_params: torch.Tensor,
-) -> torch.Tensor:
-    """
-    Typed wrapper for ``fhelium_ckks_ops::rescale_drop_leading_prime_truncate``.
-
-    Torch schema::
-
-        fhelium_ckks_ops::rescale_drop_leading_prime_truncate(Tensor remaining_residues, Tensor drop_prime_inverse_mont, Tensor dropped_residue, Tensor rns_params) -> Tensor
-
-    Args:
-        remaining_residues: torch.Tensor.
-        drop_prime_inverse_mont: torch.Tensor.
-        dropped_residue: torch.Tensor.
-        rns_params: torch.Tensor.
-
-    Returns: torch.Tensor.
-    """
-    _require_native()
-    return torch.ops.fhelium_ckks_ops.rescale_drop_leading_prime_truncate(
-        remaining_residues, drop_prime_inverse_mont, dropped_residue, rns_params
-    )
-
-
-def rescale_drop_leading_prime_truncate_(
-    remaining_residues: torch.Tensor,
-    drop_prime_inverse_mont: torch.Tensor,
-    dropped_residue: torch.Tensor,
-    rns_params: torch.Tensor,
-) -> None:
-    """
-    Typed wrapper for ``fhelium_ckks_ops::rescale_drop_leading_prime_truncate_``.
-
-    Torch schema::
-
-        fhelium_ckks_ops::rescale_drop_leading_prime_truncate_(Tensor(a!) remaining_residues, Tensor drop_prime_inverse_mont, Tensor dropped_residue, Tensor rns_params) -> ()
-
-    Args:
-        remaining_residues: torch.Tensor (modified in-place).
-        drop_prime_inverse_mont: torch.Tensor.
-        dropped_residue: torch.Tensor.
-        rns_params: torch.Tensor.
-
-    Returns: None.
-    """
-    _require_native()
-    torch.ops.fhelium_ckks_ops.rescale_drop_leading_prime_truncate_(
-        remaining_residues, drop_prime_inverse_mont, dropped_residue, rns_params
     )
 
 
@@ -1620,19 +1652,23 @@ def rotate(
     ntt_backend: str,
     digits: list[int],
     key_row_start: int,
-    modup_method: str,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
     p_count: int,
     moddown_rounding: str,
     input_domain: str,
     output_domain: str,
     galois_generator: int,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
 ) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_ckks_ops::rotate``.
 
     Torch schema::
 
-        fhelium_ckks_ops::rotate(Tensor source, Tensor key, int step, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, str modup_method, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator) -> Tensor
+        fhelium_ckks_ops::rotate(Tensor source, Tensor key, int step, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, int key_p_row_start, int[] key_q_rows, str basis_conversion, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, Tensor[] key_seeds, int key_rounds) -> Tensor
 
     Args:
         source: torch.Tensor.
@@ -1643,12 +1679,16 @@ def rotate(
         ntt_backend: str.
         digits: list[int].
         key_row_start: int.
-        modup_method: str.
+        key_p_row_start: int.
+        key_q_rows: list[int].
+        basis_conversion: str.
         p_count: int.
         moddown_rounding: str.
         input_domain: str.
         output_domain: str.
         galois_generator: int.
+        key_seeds: list[torch.Tensor].
+        key_rounds: int.
 
     Returns: torch.Tensor.
     """
@@ -1662,12 +1702,16 @@ def rotate(
         ntt_backend,
         digits,
         key_row_start,
-        modup_method,
+        key_p_row_start,
+        key_q_rows,
+        basis_conversion,
         p_count,
         moddown_rounding,
         input_domain,
         output_domain,
         galois_generator,
+        key_seeds,
+        key_rounds,
     )
 
 
@@ -1681,19 +1725,23 @@ def rotate_hoisted(
     ntt_backend: str,
     digits: list[int],
     key_row_start: int,
-    modup_method: str,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
     p_count: int,
     moddown_rounding: str,
     input_domain: str,
     output_domain: str,
     galois_generator: int,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
 ) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_ckks_ops::rotate_hoisted``.
 
     Torch schema::
 
-        fhelium_ckks_ops::rotate_hoisted(Tensor c0, Tensor hoisted_digits, Tensor key, int step, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, str modup_method, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator) -> Tensor
+        fhelium_ckks_ops::rotate_hoisted(Tensor c0, Tensor hoisted_digits, Tensor key, int step, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, int key_p_row_start, int[] key_q_rows, str basis_conversion, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, Tensor[] key_seeds, int key_rounds) -> Tensor
 
     Args:
         c0: torch.Tensor.
@@ -1705,12 +1753,16 @@ def rotate_hoisted(
         ntt_backend: str.
         digits: list[int].
         key_row_start: int.
-        modup_method: str.
+        key_p_row_start: int.
+        key_q_rows: list[int].
+        basis_conversion: str.
         p_count: int.
         moddown_rounding: str.
         input_domain: str.
         output_domain: str.
         galois_generator: int.
+        key_seeds: list[torch.Tensor].
+        key_rounds: int.
 
     Returns: torch.Tensor.
     """
@@ -1725,12 +1777,16 @@ def rotate_hoisted(
         ntt_backend,
         digits,
         key_row_start,
-        modup_method,
+        key_p_row_start,
+        key_q_rows,
+        basis_conversion,
         p_count,
         moddown_rounding,
         input_domain,
         output_domain,
         galois_generator,
+        key_seeds,
+        key_rounds,
     )
 
 
@@ -1743,19 +1799,23 @@ def rotate_many(
     ntt_backend: str,
     digits: list[int],
     key_row_start: int,
-    modup_method: str,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
     p_count: int,
     moddown_rounding: str,
     input_domain: str,
     output_domain: str,
     galois_generator: int,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
 ) -> list[torch.Tensor]:
     """
     Typed wrapper for ``fhelium_ckks_ops::rotate_many``.
 
     Torch schema::
 
-        fhelium_ckks_ops::rotate_many(Tensor source, Tensor[] keys, int[] steps, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, str modup_method, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator) -> Tensor[]
+        fhelium_ckks_ops::rotate_many(Tensor source, Tensor[] keys, int[] steps, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, int key_p_row_start, int[] key_q_rows, str basis_conversion, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, Tensor[] key_seeds, int key_rounds) -> Tensor[]
 
     Args:
         source: torch.Tensor.
@@ -1766,12 +1826,16 @@ def rotate_many(
         ntt_backend: str.
         digits: list[int].
         key_row_start: int.
-        modup_method: str.
+        key_p_row_start: int.
+        key_q_rows: list[int].
+        basis_conversion: str.
         p_count: int.
         moddown_rounding: str.
         input_domain: str.
         output_domain: str.
         galois_generator: int.
+        key_seeds: list[torch.Tensor].
+        key_rounds: int.
 
     Returns: list[torch.Tensor].
     """
@@ -1785,12 +1849,16 @@ def rotate_many(
         ntt_backend,
         digits,
         key_row_start,
-        modup_method,
+        key_p_row_start,
+        key_q_rows,
+        basis_conversion,
         p_count,
         moddown_rounding,
         input_domain,
         output_domain,
         galois_generator,
+        key_seeds,
+        key_rounds,
     )
 
 
@@ -1801,19 +1869,23 @@ def rotation_digits(
     ntt_backend: str,
     digits: list[int],
     key_row_start: int,
-    modup_method: str,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
     p_count: int,
     moddown_rounding: str,
     input_domain: str,
     output_domain: str,
     galois_generator: int,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
 ) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_ckks_ops::rotation_digits``.
 
     Torch schema::
 
-        fhelium_ckks_ops::rotation_digits(Tensor component, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, str modup_method, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator) -> Tensor
+        fhelium_ckks_ops::rotation_digits(Tensor component, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, int key_p_row_start, int[] key_q_rows, str basis_conversion, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, Tensor[] key_seeds, int key_rounds) -> Tensor
 
     Args:
         component: torch.Tensor.
@@ -1822,12 +1894,16 @@ def rotation_digits(
         ntt_backend: str.
         digits: list[int].
         key_row_start: int.
-        modup_method: str.
+        key_p_row_start: int.
+        key_q_rows: list[int].
+        basis_conversion: str.
         p_count: int.
         moddown_rounding: str.
         input_domain: str.
         output_domain: str.
         galois_generator: int.
+        key_seeds: list[torch.Tensor].
+        key_rounds: int.
 
     Returns: torch.Tensor.
     """
@@ -1839,12 +1915,16 @@ def rotation_digits(
         ntt_backend,
         digits,
         key_row_start,
-        modup_method,
+        key_p_row_start,
+        key_q_rows,
+        basis_conversion,
         p_count,
         moddown_rounding,
         input_domain,
         output_domain,
         galois_generator,
+        key_seeds,
+        key_rounds,
     )
 
 
@@ -1878,12 +1958,16 @@ def rotation_sum(
     ntt_backend: str,
     digits: list[int],
     key_row_start: int,
-    modup_method: str,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
     p_count: int,
     moddown_rounding: str,
     input_domain: str,
     output_domain: str,
     galois_generator: int,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
     remaining_q_count: int,
 ) -> torch.Tensor:
     """
@@ -1891,7 +1975,7 @@ def rotation_sum(
 
     Torch schema::
 
-        fhelium_ckks_ops::rotation_sum(Tensor[] sources, Tensor[] keys, int[] steps, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, str modup_method, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, int remaining_q_count) -> Tensor
+        fhelium_ckks_ops::rotation_sum(Tensor[] sources, Tensor[] keys, int[] steps, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, int key_p_row_start, int[] key_q_rows, str basis_conversion, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, Tensor[] key_seeds, int key_rounds, int remaining_q_count) -> Tensor
 
     Args:
         sources: list[torch.Tensor].
@@ -1902,12 +1986,16 @@ def rotation_sum(
         ntt_backend: str.
         digits: list[int].
         key_row_start: int.
-        modup_method: str.
+        key_p_row_start: int.
+        key_q_rows: list[int].
+        basis_conversion: str.
         p_count: int.
         moddown_rounding: str.
         input_domain: str.
         output_domain: str.
         galois_generator: int.
+        key_seeds: list[torch.Tensor].
+        key_rounds: int.
         remaining_q_count: int.
 
     Returns: torch.Tensor.
@@ -1922,12 +2010,16 @@ def rotation_sum(
         ntt_backend,
         digits,
         key_row_start,
-        modup_method,
+        key_p_row_start,
+        key_q_rows,
+        basis_conversion,
         p_count,
         moddown_rounding,
         input_domain,
         output_domain,
         galois_generator,
+        key_seeds,
+        key_rounds,
         remaining_q_count,
     )
 
@@ -1943,19 +2035,23 @@ def rotation_sum_add_(
     ntt_backend: str,
     digits: list[int],
     key_row_start: int,
-    modup_method: str,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
     p_count: int,
     moddown_rounding: str,
     input_domain: str,
     output_domain: str,
     galois_generator: int,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
 ) -> None:
     """
     Typed wrapper for ``fhelium_ckks_ops::rotation_sum_add_``.
 
     Torch schema::
 
-        fhelium_ckks_ops::rotation_sum_add_(Tensor(a!) ordinary, Tensor(b!) products, Tensor source, Tensor? key, int step, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, str modup_method, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator) -> ()
+        fhelium_ckks_ops::rotation_sum_add_(Tensor(a!) ordinary, Tensor(b!) products, Tensor source, Tensor? key, int step, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, int key_p_row_start, int[] key_q_rows, str basis_conversion, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, Tensor[] key_seeds, int key_rounds) -> ()
 
     Args:
         ordinary: torch.Tensor (modified in-place).
@@ -1968,12 +2064,16 @@ def rotation_sum_add_(
         ntt_backend: str.
         digits: list[int].
         key_row_start: int.
-        modup_method: str.
+        key_p_row_start: int.
+        key_q_rows: list[int].
+        basis_conversion: str.
         p_count: int.
         moddown_rounding: str.
         input_domain: str.
         output_domain: str.
         galois_generator: int.
+        key_seeds: list[torch.Tensor].
+        key_rounds: int.
 
     Returns: None.
     """
@@ -1989,12 +2089,16 @@ def rotation_sum_add_(
         ntt_backend,
         digits,
         key_row_start,
-        modup_method,
+        key_p_row_start,
+        key_q_rows,
+        basis_conversion,
         p_count,
         moddown_rounding,
         input_domain,
         output_domain,
         galois_generator,
+        key_seeds,
+        key_rounds,
     )
 
 
@@ -2006,12 +2110,16 @@ def rotation_sum_finish_(
     ntt_backend: str,
     digits: list[int],
     key_row_start: int,
-    modup_method: str,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
     p_count: int,
     moddown_rounding: str,
     input_domain: str,
     output_domain: str,
     galois_generator: int,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
     remaining_q_count: int,
 ) -> torch.Tensor:
     """
@@ -2019,7 +2127,7 @@ def rotation_sum_finish_(
 
     Torch schema::
 
-        fhelium_ckks_ops::rotation_sum_finish_(Tensor(a!) ordinary, Tensor(b!) products, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, str modup_method, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, int remaining_q_count) -> Tensor
+        fhelium_ckks_ops::rotation_sum_finish_(Tensor(a!) ordinary, Tensor(b!) products, str[] table_names, Tensor[] tables, str ntt_backend, int[] digits, int key_row_start, int key_p_row_start, int[] key_q_rows, str basis_conversion, int p_count, str moddown_rounding, str input_domain, str output_domain, int galois_generator, Tensor[] key_seeds, int key_rounds, int remaining_q_count) -> Tensor
 
     Args:
         ordinary: torch.Tensor (modified in-place).
@@ -2029,12 +2137,16 @@ def rotation_sum_finish_(
         ntt_backend: str.
         digits: list[int].
         key_row_start: int.
-        modup_method: str.
+        key_p_row_start: int.
+        key_q_rows: list[int].
+        basis_conversion: str.
         p_count: int.
         moddown_rounding: str.
         input_domain: str.
         output_domain: str.
         galois_generator: int.
+        key_seeds: list[torch.Tensor].
+        key_rounds: int.
         remaining_q_count: int.
 
     Returns: torch.Tensor.
@@ -2048,12 +2160,16 @@ def rotation_sum_finish_(
         ntt_backend,
         digits,
         key_row_start,
-        modup_method,
+        key_p_row_start,
+        key_q_rows,
+        basis_conversion,
         p_count,
         moddown_rounding,
         input_domain,
         output_domain,
         galois_generator,
+        key_seeds,
+        key_rounds,
         remaining_q_count,
     )
 

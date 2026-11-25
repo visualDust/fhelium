@@ -7,7 +7,9 @@
 #include <algorithm>
 
 #include "../../common/cpu/montgomery.h"
+#include "../../common/key_rows.h"
 #include "../../common/rns_batch.h"
+#include "../../random/random_core.h"
 #include "../backends.h"
 #include "tensor_validation.h"
 
@@ -212,6 +214,7 @@ void keyswitch_accumulate_cpu_(
     const torch::Tensor key_digit,
     const torch::Tensor rns_params,
     const int64_t key_row_start,
+    const int64_t key_p_row_start,
     const std::optional<torch::Tensor> source_indices) {
   constexpr const char* operation = "keyswitch_accumulate_digit_products";
   for (const auto& peer :
@@ -245,11 +248,11 @@ void keyswitch_accumulate_cpu_(
     }
   }
   TORCH_CHECK(key_digit.dim() == 3 && key_digit.size(0) == 2 &&
-                  key_row_start >= 0 &&
-                  key_row_start + digit.size(1) <= key_digit.size(1) &&
                   key_digit.size(2) == digit.size(2),
               operation,
-              " key digit shape or row interval mismatch");
+              " key digit shape mismatch");
+  const auto key_rows = fhelium::detail::key_row_map(
+      digit.size(1), key_digit.size(1), key_row_start, key_p_row_start, operation);
   at::assert_no_internal_overlap(accumulator0);
   at::assert_no_internal_overlap(accumulator1);
   at::assert_no_overlap(accumulator0, accumulator1);
@@ -300,7 +303,10 @@ void keyswitch_accumulate_cpu_(
                                              limb);
             const scalar_t* source_row =
                 source + batch * digit_stride0 + limb * digit_stride1;
-            const int64_t key_row = key_row_start + limb;
+            const int64_t key_row =
+                limb < key_rows.q_rows
+                    ? key_row_start + limb
+                    : key_rows.p_row_start + (limb - key_rows.q_rows);
             const int64_t key_component_stride = key_digit.stride(0);
             const scalar_t* key_row0 = key + key_row * key_stride1;
             const scalar_t* key_row1 =
@@ -362,13 +368,63 @@ void keyswitch_accumulate_digit_products_(
     const at::Tensor& key_switch_key_digit,
     const at::Tensor& rns_params,
     int64_t key_digit_row_start,
-    const std::optional<at::Tensor>& source_indices) {
+    int64_t key_p_row_start,
+    const std::optional<at::Tensor>& source_indices,
+    const std::optional<at::Tensor>& key_seed,
+    int64_t key_rounds) {
+  at::Tensor key = key_switch_key_digit;
+  if (key_seed.has_value()) {
+    // Materialize the uniform component of the key rows this product reads.
+    namespace seeded = ::fhelium::random::detail;
+    constexpr const char* operation = "keyswitch_accumulate_digit_products";
+    TORCH_CHECK(key_switch_key_digit.dim() == 3 && key_switch_key_digit.size(0) == 1 &&
+                    key_seed->scalar_type() == at::kLong && key_seed->is_contiguous() &&
+                    key_seed->numel() == seeded::kSeededKeyRowWords && key_seed->is_cpu(),
+                operation,
+                " requires a seeded key digit [1, key_rows, N] with one CPU seed row");
+    const auto digit = view_rns_batch_3d(extended_digit_ntt_qp, "extended_digit_ntt_qp");
+    const auto rows = fhelium::detail::key_row_map(digit.size(1),
+                                                   key_switch_key_digit.size(1),
+                                                   key_digit_row_start,
+                                                   key_p_row_start,
+                                                   operation);
+    const int64_t n = key_switch_key_digit.size(2);
+    TORCH_CHECK(n % seeded::kSeededKeyCoefficientsPerCall == 0,
+                operation, " requires a ring dimension divisible by 8");
+    key = at::zeros({2, key_switch_key_digit.size(1), n}, key_switch_key_digit.options());
+    key.select(0, 0).copy_(key_switch_key_digit.select(0, 0));
+    const auto twice_modulus = rns_params.select(0, 0).to(at::kLong);
+    const auto* twice = twice_modulus.const_data_ptr<int64_t>();
+    const auto* seed_row = key_seed->const_data_ptr<int64_t>();
+    auto uniform = key.select(0, 1);
+    seeded::dispatch_seeded_key_rounds(key_rounds, [&](auto rounds_constant) {
+      constexpr int kRounds = decltype(rounds_constant)::value;
+      AT_DISPATCH_INTEGRAL_TYPES(key.scalar_type(), operation, [&] {
+        at::parallel_for(0, digit.size(1), 1, [&](int64_t begin, int64_t end) {
+          uint64_t values[seeded::kSeededKeyCoefficientsPerCall];
+          for (int64_t row = begin; row < end; ++row) {
+            const int64_t key_row = row < rows.q_rows
+                                        ? key_digit_row_start + row
+                                        : rows.p_row_start + (row - rows.q_rows);
+            const auto q = static_cast<uint64_t>(twice[row]) >> 1;
+            scalar_t* target = uniform[key_row].data_ptr<scalar_t>();
+            for (int64_t c = 0; c < n; c += seeded::kSeededKeyCoefficientsPerCall) {
+              seeded::seeded_key_residues<kRounds>(seed_row, key_row, c, q, values);
+              for (int j = 0; j < seeded::kSeededKeyCoefficientsPerCall; ++j)
+                target[c + j] = static_cast<scalar_t>(values[j]);
+            }
+          }
+        });
+      });
+    });
+  }
   ::keyswitch_accumulate_cpu_(accumulator0_qp,
                               accumulator1_qp,
                               extended_digit_ntt_qp,
-                              key_switch_key_digit,
+                              key,
                               rns_params,
                               key_digit_row_start,
+                              key_p_row_start,
                               source_indices);
 }
 

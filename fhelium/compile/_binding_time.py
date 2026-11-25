@@ -12,16 +12,11 @@ from functools import cached_property
 from typing import Any
 
 import torch
-from xdsl.dialects.builtin import StringAttr
 
-from fhelium.backend.execution import OperationBackend
-from fhelium.backend.implementation import OperationImplementationRegistry
-from fhelium.backend.torch import TorchCallImplementation, prepare_tensor_call
+from fhelium.backend.torch import tensor_call_arguments
 from fhelium.ir import Program
 from fhelium.ir.dialects.torch import CallOp
 from fhelium.values import CompressedPlaintext, Plaintext
-
-from ._compilation import Compilation
 
 PREPARATION = "plaintext_preparation"
 
@@ -118,38 +113,23 @@ class _EngineMethod:
         )
 
 
+def _target_function(target, engines):
+    if target.startswith("ops."):
+        _, namespace, name, overload = target.split(".", 3)
+        return getattr(getattr(getattr(torch.ops, namespace), name), overload)
+    if target == "prepare.engine":
+        return _EngineMethod(engines)
+    return {
+        "prepare.getitem": operator.getitem,
+        "prepare.factory": tensor_factory,
+    }[target]
+
+
 @dataclass(frozen=True)
-class PreparationCallImplementation(TorchCallImplementation):
-    """Execute ordered ATen calls and high-level plaintext codec nodes."""
+class _RecipeExecutable:
+    """Run recorded preparation calls as one generated host function."""
 
-    name: str = "plaintext-preparation"
-    operation_types: tuple = (CallOp,)
-    engines: tuple = ()
-
-    def supports_operation(self, operation):
-        target = operation.attributes.get("fhelium.call.target")
-        return isinstance(target, StringAttr) and target.data.startswith(
-            ("aten.", "prepare.")
-        )
-
-    def prepare_operation(self, operation):
-        target = operation.attributes["fhelium.call.target"].data
-        if target.startswith("aten."):
-            _, name, overload = target.split(".", 2)
-            function = getattr(getattr(torch.ops.aten, name), overload)
-        elif target == "prepare.engine":
-            function = _EngineMethod(self.engines)
-        else:
-            function = {
-                "prepare.getitem": operator.getitem,
-                "prepare.factory": tensor_factory,
-            }[target]
-        descriptor = json.loads(
-            operation.attributes["fhelium.call.arguments"].data
-        )
-        return dataclasses.replace(
-            self, _call=prepare_tensor_call(function, descriptor)
-        )
+    run: Any
 
 
 @dataclass(frozen=True)
@@ -200,15 +180,83 @@ class PreparationRecipe:
         program.verify_structure()
         return program
 
+    def executable(self, engines) -> _RecipeExecutable:
+        """Generate one host function that performs the calls in recorded order.
+
+        Each intermediate value is released after its last use, and the function returns the output values as a tuple.
+        """
+        namespace: dict[str, Any] = {}
+        functions: dict[str, str] = {}
+        last_use = {}
+        for index, (_, _, operands) in enumerate(self.calls):
+            for operand in operands:
+                last_use[operand] = index
+        kept = set(self.outputs)
+
+        def literal(value):
+            name = f"c{len(namespace)}"
+            namespace[name] = value
+            return name
+
+        lines = [
+            "def run("
+            + ", ".join(f"v{index}" for index in range(self.inputs))
+            + "):"
+        ]
+        for index, (target, descriptor, operands) in enumerate(self.calls):
+            function = functions.get(target)
+            if function is None:
+                function = functions[target] = literal(
+                    _target_function(target, engines)
+                )
+            arguments = tensor_call_arguments(
+                json.loads(descriptor),
+                lambda position: f"v{operands[position]}",
+                literal,
+            )
+            lines.append(f"    v{self.inputs + index} = {function}({arguments})")
+            released = [
+                f"v{operand}"
+                for operand in dict.fromkeys(operands)
+                if last_use[operand] == index and operand not in kept
+            ]
+            if released:
+                lines.append("    del " + ", ".join(released))
+        lines.append(
+            "    return ("
+            + "".join(f"v{index}, " for index in self.outputs)
+            + ")"
+        )
+        exec(
+            compile("\n".join(lines) + "\n", "<fhelium-preparation>", "exec"),
+            namespace,
+        )
+        return _RecipeExecutable(namespace["run"])
+
+    def encode(self):
+        return [self.inputs, self.calls, self.outputs]
+
+    @classmethod
+    def decode(cls, value):
+        inputs, calls, outputs = value
+        return cls(
+            inputs,
+            tuple(
+                (target, descriptor, tuple(operands))
+                for target, descriptor, operands in calls
+            ),
+            tuple(outputs),
+        )
+
 
 @dataclass
 class PreparationPlan:
-    """Own a preparation Program, its leaf bindings, and its current generation.
+    """Own a preparation recipe, its leaf bindings, and its current generation.
 
     Inputs identify callable arguments or external material leaves. Outputs bind ordinary MaterialRef symbols in the ciphertext Program. Tensor identity and version counters govern resident reuse; inference tensors are refreshed on each invocation.
     """
 
-    source: Program | PreparationRecipe
+    source: PreparationRecipe
     inputs: tuple[dict, ...]
     exports: tuple[str, ...]
     engines: tuple
@@ -230,13 +278,11 @@ class PreparationPlan:
     last_material_bytes: int = 0
     resident_material_bytes: int = 0
     link_seconds: float = 0.0
-    link_source: str | None = None
 
     @cached_property
     def program(self) -> Program:
-        """The preparation Program, built from a recorded recipe on first access."""
-        source = self.source
-        return source if isinstance(source, Program) else source.program()
+        """The preparation Program, built from the recorded recipe on first access."""
+        return self.source.program()
 
     def values(self, arguments):
         values = []
@@ -287,50 +333,12 @@ class PreparationPlan:
         self.last_material_bytes = payload_bytes(bindings.values())
         self.resident_material_bytes = self.last_material_bytes
 
-    def link(self, cache=None):
-        """Link the preparation Program, restoring its executable from ``cache`` when recorded."""
+    def link(self):
+        """Generate the host function of the recorded preparation calls."""
         if self._executable is not None:
             return
-        from fhelium.backend._artifact import (
-            ArtifactIneligible,
-            export_executable,
-            restore_executable,
-        )
-
         started = time.perf_counter()
-        backend = OperationBackend(
-            OperationImplementationRegistry(
-                (PreparationCallImplementation(engines=self.engines),)
-            )
-        )
-        key = record = None
-        if cache is not None:
-            from ._cache import preparation_artifact_key
-
-            key = preparation_artifact_key(self.source)
-            record = cache.load_artifact(key)
-        if record is not None:
-            self._executable = restore_executable(
-                record["payload"], backend, {}, externals=self.engines
-            )
-            self.link_source = "artifact"
-        else:
-            self._executable = backend.link(Compilation(self.program))
-            self.link_source = "linked"
-            if key is not None:
-                try:
-                    cache.store_artifact(
-                        key,
-                        {
-                            "payload": export_executable(
-                                self._executable,
-                                backend.registry,
-                                externals=self.engines,
-                            )
-                        },
-                    )
-                except (ArtifactIneligible, OSError):
-                    self.link_source = "linked-unrecorded"
+        self._executable = self.source.executable(self.engines)
         self.link_seconds += time.perf_counter() - started
 
     def refresh(self, arguments, *, force=False):
@@ -349,8 +357,6 @@ class PreparationPlan:
         started = time.perf_counter()
         self.link()
         outputs = self._executable.run(*values)
-        if len(self.exports) == 1:
-            outputs = (outputs,)
         bindings = self.materialize_views(
             dict(zip(self.exports, outputs, strict=True))
         )
@@ -382,12 +388,9 @@ class PreparationPlan:
         self.resident_material_bytes = self.last_material_bytes
         return bindings
 
-    @cached_property
+    @property
     def operation_count(self):
-        source = self.source
-        if isinstance(source, PreparationRecipe):
-            return len(source.calls)
-        return sum(1 for op in source.walk() if isinstance(op, CallOp))
+        return len(self.source.calls)
 
     def release(self):
         self.bindings.clear()
@@ -414,7 +417,6 @@ class PreparationPlan:
             "derived_material_bytes": self.last_material_bytes,
             "resident_material_bytes": self.resident_material_bytes,
             "preparation_link_seconds": self.link_seconds,
-            "preparation_link": self.link_source,
             "derived_material_bytes_before_merge": self.before_merge_bytes,
             "binding_generation": self.generation,
         }
@@ -439,7 +441,7 @@ class PreparationPlan:
                 "Preparation memoization writes retain live object bindings"
             )
         return {
-            "program": self.program.to_text(),
+            "recipe": self.source.encode(),
             "inputs": self.inputs,
             "exports": self.exports,
             "views": self.views,
@@ -477,7 +479,7 @@ class PreparationPlan:
             return read
 
         plan = cls(
-            Program.parse(descriptor["program"]),
+            PreparationRecipe.decode(descriptor["recipe"]),
             tuple(descriptor["inputs"]),
             tuple(descriptor["exports"]),
             tuple(_resolve_path(roots, path) for path in descriptor["engines"]),
@@ -508,16 +510,3 @@ def _restore_export(value, bindings):
     if isinstance(value, (tuple, list)):
         return type(value)(_restore_export(item, bindings) for item in value)
     return value
-
-
-def preparation_guards(arguments):
-    """Keep metadata-dependent recipes within the input state that was traced."""
-    from ._specialization import describe_call
-    from .frontend._template_provenance import json_value
-
-    return json_value(
-        tuple(
-            (item.name, item.kind, item.properties)
-            for item in describe_call(arguments).arguments
-        )
-    )

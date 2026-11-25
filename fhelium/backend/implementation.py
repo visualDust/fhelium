@@ -125,6 +125,17 @@ class OperationInvocation:
             )
 
 
+_PRIME_IDS: dict[tuple[int, ...], tuple[int, ...]] = {}
+
+
+def _prime_ids(values: object | None) -> tuple[int, ...] | None:
+    # One shared tuple per prime set lets artifact pickling memoize it.
+    if values is None:
+        return None
+    key = tuple(int(value) for value in values)  # type: ignore[union-attr]
+    return _PRIME_IDS.setdefault(key, key)
+
+
 def operation_invocation(operation: Operation) -> OperationInvocation:
     """Convert one linked IR operation to its runtime invocation descriptor."""
 
@@ -146,12 +157,7 @@ def operation_invocation(operation: Operation) -> OperationInvocation:
     components: list[int | None] = []
     for operand in value_operands:
         value_type = operand.type
-        represented_prime_ids = optional_field(value_type, "prime_ids")
-        prime_ids.append(
-            None
-            if represented_prime_ids is None
-            else tuple(int(value) for value in represented_prime_ids)  # type: ignore[union-attr]
-        )
+        prime_ids.append(_prime_ids(optional_field(value_type, "prime_ids")))
         represented_basis = optional_field(value_type, "basis")
         bases.append(
             None if represented_basis is None else str(represented_basis)
@@ -168,11 +174,8 @@ def operation_invocation(operation: Operation) -> OperationInvocation:
         )
     result_prime_ids = []
     for result in operation.results:
-        represented = optional_field(result.type, "prime_ids")
         result_prime_ids.append(
-            None
-            if represented is None
-            else tuple(int(value) for value in represented)  # type: ignore[union-attr]
+            _prime_ids(optional_field(result.type, "prime_ids"))
         )
     return OperationInvocation(
         operation_type=type(operation),
@@ -191,7 +194,10 @@ def operation_invocation(operation: Operation) -> OperationInvocation:
 
 @runtime_checkable
 class OperationImplementation(Protocol):
-    """Execute one or more registered operations on Tensor payloads."""
+    """Execute one or more registered operations on Tensor payloads.
+
+    An implementation may define ``requires_request = True``. Such an implementation is selected only when an operation names it or a fusion region requests it; default resolution of an unannotated operation skips it.
+    """
 
     @property
     def name(self) -> str: ...
@@ -399,11 +405,23 @@ class ImplementationRegistry[ImplementationT: OperationImplementation]:
         *,
         requested: str | None,
     ) -> ImplementationT:
-        """Resolve one named implementation, refusing ambiguous defaults."""
+        """Resolve one named implementation, refusing ambiguous defaults.
+
+        An unrequested operation resolves to its only implementation that does not set ``requires_request``. An implementation with ``requires_request = True`` is selected only when the operation names it or a fusion region requests it.
+        """
 
         choices = self.available(operation_type)
         selected = requested
         if selected is None:
+            choices = tuple(
+                name
+                for name in choices
+                if not getattr(
+                    self._entries[(operation_type, name)],
+                    "requires_request",
+                    False,
+                )
+            )
             if len(choices) != 1:
                 raise ValueError(
                     f"{self._category} operation {operation_type.name!r} has "

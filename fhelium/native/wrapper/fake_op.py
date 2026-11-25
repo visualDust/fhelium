@@ -51,6 +51,16 @@ def _fake_fhelium_ckks_ops_add__cyclic__compressed__plaintext__component__(
     pass
 
 
+@torch.library.register_fake("fhelium_ckks_ops::add_ntt_galois_automorphism_")
+def _fake_fhelium_ckks_ops_add__ntt__galois__automorphism__(
+    target: torch.Tensor,
+    residues_ntt: torch.Tensor,
+    source_indices: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
+    pass
+
+
 @torch.library.register_fake(
     "fhelium_ckks_ops::add_prepared_plaintext_component"
 )
@@ -126,20 +136,26 @@ def _fake_fhelium_ckks_ops_keyswitch__accumulate__digit__products__(
     key_switch_key_digit: torch.Tensor,
     rns_params: torch.Tensor,
     key_digit_row_start: int,
+    key_p_row_start: int = -1,
     source_indices: torch.Tensor | None = None,
+    key_seed: torch.Tensor | None = None,
+    key_rounds: int = 0,
 ) -> None:
     pass
 
 
 @torch.library.register_fake("fhelium_ckks_ops::keyswitch_accumulate_products_")
 def _fake_fhelium_ckks_ops_keyswitch__accumulate__products__(
-    accumulator0_qp: torch.Tensor,
-    accumulator1_qp: torch.Tensor,
+    accumulators0_qp: list[torch.Tensor],
+    accumulators1_qp: list[torch.Tensor],
     extended_digits_ntt_qp: list[torch.Tensor],
-    key_switch_key: torch.Tensor,
+    key_switch_keys: list[torch.Tensor],
     rns_params: torch.Tensor,
     key_digit_row_start: int,
-    source_indices: torch.Tensor | None = None,
+    key_p_row_start: int,
+    source_indices: list[torch.Tensor],
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
 ) -> None:
     pass
 
@@ -168,69 +184,6 @@ def _fake_fhelium_ckks_ops_multiply__two__component__ntt__montgomery(
 
 
 @torch.library.register_fake(
-    "fhelium_ckks_ops::rescale_drop_leading_prime_nearest"
-)
-def _fake_fhelium_ckks_ops_rescale__drop__leading__prime__nearest(
-    remaining_residues: torch.Tensor,
-    drop_prime_inverse_mont: torch.Tensor,
-    dropped_residue: torch.Tensor,
-    rns_params: torch.Tensor,
-    half_drop_prime: int,
-) -> torch.Tensor:
-    return torch.empty_like(remaining_residues)
-
-
-@torch.library.register_fake(
-    "fhelium_ckks_ops::rescale_drop_leading_prime_nearest_"
-)
-def _fake_fhelium_ckks_ops_rescale__drop__leading__prime__nearest__(
-    remaining_residues: torch.Tensor,
-    drop_prime_inverse_mont: torch.Tensor,
-    dropped_residue: torch.Tensor,
-    rns_params: torch.Tensor,
-    half_drop_prime: int,
-) -> None:
-    pass
-
-
-@torch.library.register_fake(
-    "fhelium_ckks_ops::rescale_drop_leading_prime_truncate"
-)
-def _fake_fhelium_ckks_ops_rescale__drop__leading__prime__truncate(
-    remaining_residues: torch.Tensor,
-    drop_prime_inverse_mont: torch.Tensor,
-    dropped_residue: torch.Tensor,
-    rns_params: torch.Tensor,
-) -> torch.Tensor:
-    return torch.empty_like(remaining_residues)
-
-
-@torch.library.register_fake(
-    "fhelium_ckks_ops::rescale_drop_leading_prime_truncate_"
-)
-def _fake_fhelium_ckks_ops_rescale__drop__leading__prime__truncate__(
-    remaining_residues: torch.Tensor,
-    drop_prime_inverse_mont: torch.Tensor,
-    dropped_residue: torch.Tensor,
-    rns_params: torch.Tensor,
-) -> None:
-    pass
-
-
-@torch.library.register_fake(
-    "fhelium_ntt_diagnostic_ops::forward_ntt_montgomery_compact_grouped_smem_override_"
-)
-def _fake_fhelium_ntt_diagnostic_ops_forward__ntt__montgomery__compact__grouped__smem__override__(
-    montgomery_residues: torch.Tensor,
-    forward_twiddles: torch.Tensor,
-    rns_params: torch.Tensor,
-    grouped_stage_count: int,
-    shared_memory_log_n: int,
-) -> None:
-    pass
-
-
-@torch.library.register_fake(
     "fhelium_ntt_diagnostic_ops::forward_ntt_montgomery_power_of_two_radix_compact_override_"
 )
 def _fake_fhelium_ntt_diagnostic_ops_forward__ntt__montgomery__power__of__two__radix__compact__override__(
@@ -256,19 +209,6 @@ def _fake_fhelium_ntt_diagnostic_ops_inverse__ntt__montgomery__power__of__two__r
     pass
 
 
-@torch.library.register_fake("fhelium_ntt_ops::compact_ntt_stage_range_")
-def _fake_fhelium_ntt_ops_compact__ntt__stage__range__(
-    residues: torch.Tensor,
-    compact_twiddles: torch.Tensor,
-    rns_params: torch.Tensor,
-    inverse: bool,
-    start_stage: int,
-    end_stage: int,
-    grouped_stage_count: int,
-) -> None:
-    pass
-
-
 @torch.library.register_fake("fhelium_ntt_ops::fixed_radix_ntt_stage_range_")
 def _fake_fhelium_ntt_ops_fixed__radix__ntt__stage__range__(
     residues: torch.Tensor,
@@ -282,14 +222,11 @@ def _fake_fhelium_ntt_ops_fixed__radix__ntt__stage__range__(
     pass
 
 
-@torch.library.register_fake(
-    "fhelium_ntt_ops::forward_ntt_montgomery_compact_grouped_smem_"
-)
-def _fake_fhelium_ntt_ops_forward__ntt__montgomery__compact__grouped__smem__(
+@torch.library.register_fake("fhelium_ntt_ops::forward_ntt_montgomery_compact_")
+def _fake_fhelium_ntt_ops_forward__ntt__montgomery__compact__(
     montgomery_residues: torch.Tensor,
     forward_twiddles: torch.Tensor,
     rns_params: torch.Tensor,
-    grouped_stage_count: int,
 ) -> None:
     pass
 
@@ -305,7 +242,7 @@ def _fake_fhelium_ntt_ops_forward__ntt__montgomery__compact__keyswitch__accumula
     accumulator0_qp: torch.Tensor,
     accumulator1_qp: torch.Tensor,
     key_row_start: int,
-    grouped_stage_count: int = 4,
+    key_p_row_start: int = -1,
 ) -> None:
     pass
 
@@ -334,6 +271,28 @@ def _fake_fhelium_ntt_ops_forward__ntt__montgomery__power__of__two__radix__compa
 
 
 @torch.library.register_fake(
+    "fhelium_ntt_ops::forward_ntt_to_montgomery_compact"
+)
+def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__compact(
+    standard_residues: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> torch.Tensor:
+    return torch.empty_like(standard_residues)
+
+
+@torch.library.register_fake(
+    "fhelium_ntt_ops::forward_ntt_to_montgomery_compact_"
+)
+def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__compact__(
+    standard_residues: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake(
     "fhelium_ntt_ops::forward_ntt_to_montgomery_compact_add_scaled_"
 )
 def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__compact__add__scaled__(
@@ -342,31 +301,6 @@ def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__compact__add__scaled__(
     multiplier: torch.Tensor,
     forward_twiddles: torch.Tensor,
     rns_params: torch.Tensor,
-    grouped_stage_count: int,
-) -> None:
-    pass
-
-
-@torch.library.register_fake(
-    "fhelium_ntt_ops::forward_ntt_to_montgomery_compact_grouped_smem"
-)
-def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__compact__grouped__smem(
-    standard_residues: torch.Tensor,
-    forward_twiddles: torch.Tensor,
-    rns_params: torch.Tensor,
-    grouped_stage_count: int,
-) -> torch.Tensor:
-    return torch.empty_like(standard_residues)
-
-
-@torch.library.register_fake(
-    "fhelium_ntt_ops::forward_ntt_to_montgomery_compact_grouped_smem_"
-)
-def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__compact__grouped__smem__(
-    standard_residues: torch.Tensor,
-    forward_twiddles: torch.Tensor,
-    rns_params: torch.Tensor,
-    grouped_stage_count: int,
 ) -> None:
     pass
 
@@ -421,14 +355,11 @@ def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__power__of__two__radix__c
     pass
 
 
-@torch.library.register_fake(
-    "fhelium_ntt_ops::inverse_ntt_montgomery_compact_grouped_smem_"
-)
-def _fake_fhelium_ntt_ops_inverse__ntt__montgomery__compact__grouped__smem__(
+@torch.library.register_fake("fhelium_ntt_ops::inverse_ntt_montgomery_compact_")
+def _fake_fhelium_ntt_ops_inverse__ntt__montgomery__compact__(
     montgomery_residues: torch.Tensor,
     inverse_twiddles: torch.Tensor,
     rns_params: torch.Tensor,
-    grouped_stage_count: int,
 ) -> None:
     pass
 
@@ -457,13 +388,12 @@ def _fake_fhelium_ntt_ops_inverse__ntt__montgomery__power__of__two__radix__compa
 
 
 @torch.library.register_fake(
-    "fhelium_ntt_ops::inverse_ntt_to_centered_compact_grouped_smem_"
+    "fhelium_ntt_ops::inverse_ntt_to_centered_compact_"
 )
-def _fake_fhelium_ntt_ops_inverse__ntt__to__centered__compact__grouped__smem__(
+def _fake_fhelium_ntt_ops_inverse__ntt__to__centered__compact__(
     montgomery_residues: torch.Tensor,
     inverse_twiddles: torch.Tensor,
     rns_params: torch.Tensor,
-    grouped_stage_count: int,
 ) -> None:
     pass
 
@@ -494,13 +424,12 @@ def _fake_fhelium_ntt_ops_inverse__ntt__to__centered__power__of__two__radix__com
 
 
 @torch.library.register_fake(
-    "fhelium_ntt_ops::inverse_ntt_to_standard_compact_grouped_smem_"
+    "fhelium_ntt_ops::inverse_ntt_to_standard_compact_"
 )
-def _fake_fhelium_ntt_ops_inverse__ntt__to__standard__compact__grouped__smem__(
+def _fake_fhelium_ntt_ops_inverse__ntt__to__standard__compact__(
     montgomery_residues: torch.Tensor,
     inverse_twiddles: torch.Tensor,
     rns_params: torch.Tensor,
-    grouped_stage_count: int,
 ) -> None:
     pass
 
@@ -519,13 +448,12 @@ def _fake_fhelium_ntt_ops_inverse__ntt__to__standard__indexed__(
 
 
 @torch.library.register_fake(
-    "fhelium_ntt_ops::inverse_ntt_to_standard_lazy_compact_grouped_smem_"
+    "fhelium_ntt_ops::inverse_ntt_to_standard_lazy_compact_"
 )
-def _fake_fhelium_ntt_ops_inverse__ntt__to__standard__lazy__compact__grouped__smem__(
+def _fake_fhelium_ntt_ops_inverse__ntt__to__standard__lazy__compact__(
     montgomery_residues: torch.Tensor,
     inverse_twiddles: torch.Tensor,
     rns_params: torch.Tensor,
-    grouped_stage_count: int,
 ) -> None:
     pass
 
@@ -589,6 +517,16 @@ def _fake_fhelium_random_ops_chacha20__keystream(
     seed: torch.Tensor, first_block: int, block_count: int
 ) -> torch.Tensor:
     return seed.new_empty((block_count, 16), dtype=torch.uint32)
+
+
+@torch.library.register_fake("fhelium_random_ops::expand_seeded_key")
+def _fake_fhelium_random_ops_expand__seeded__key(
+    seed_rows: torch.Tensor,
+    moduli: torch.Tensor,
+    ring_dimension: int,
+    rounds: int,
+) -> torch.Tensor:
+    return torch.empty_like(seed_rows)
 
 
 @torch.library.register_fake("fhelium_random_ops::sample_centered_binomial")
@@ -705,6 +643,7 @@ def _fake_fhelium_rns_ops_crt__basis__extend(
     target_reciprocals: torch.Tensor,
     source_normalizers: torch.Tensor | None = None,
     source_reciprocals: torch.Tensor | None = None,
+    target_offsets: torch.Tensor | None = None,
 ) -> torch.Tensor:
     return source_residues.new_empty(
         (
@@ -724,6 +663,7 @@ def _fake_fhelium_rns_ops_crt__basis__extend__out__(
     target_reciprocals: torch.Tensor,
     source_normalizers: torch.Tensor | None,
     source_reciprocals: torch.Tensor | None,
+    target_offsets: torch.Tensor | None,
     output: torch.Tensor,
 ) -> None:
     pass

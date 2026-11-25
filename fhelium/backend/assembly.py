@@ -20,7 +20,6 @@ from fhelium.backend.ckks import (
 from .ckks.arithmetic import (
     NativeCiphertextMultiplyImplementation,
     NativeCompressedPlaintextImplementation,
-    NativeSelectBatchImplementation,
 )
 from .ckks.modulus_raise import NativeModulusRaiseImplementation
 from .ckks.key_switch import (
@@ -51,6 +50,7 @@ from .rns.operations import (
     NativeRnsLinearImplementation,
     NativeRnsStructureImplementation,
     NativeRnsTransitionImplementation,
+    NativeTensorProductImplementation,
 )
 
 
@@ -99,6 +99,7 @@ def create_builtin_operation_registry(
             NativeRnsTransitionImplementation(),
             NativePlaintextArithmeticImplementation(),
             NativeMontgomeryMultiplyImplementation(),
+            NativeTensorProductImplementation(),
             NativeMontgomeryWeightedSumImplementation(),
             *weighted,
             NativeRnsStructureImplementation(),
@@ -119,7 +120,6 @@ def create_builtin_operation_registry(
             NativeRotateImplementation(),
             NativeRotationSumImplementation(),
             NativeCompressedPlaintextImplementation(),
-            NativeSelectBatchImplementation(),
             NativeHoistedRotateManyImplementation(),
             NativeGroupedRotationWeightedSumImplementation(),
             NativeEncodeImplementation(),

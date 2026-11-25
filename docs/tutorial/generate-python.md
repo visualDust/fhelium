@@ -1,8 +1,8 @@
 # Generate editable Python from a Program
 
-**Example source:** [`examples/15_compile_python_codegen.py`](https://github.com/VisualDust/fhelium/blob/main/examples/15_compile_python_codegen.py)
+**Example source:** [`examples/16_compile_python_codegen.py`](https://github.com/VisualDust/fhelium/blob/main/examples/16_compile_python_codegen.py)
 
-Example 15 uses two optional Compile passes to emit Python at two different Program stages:
+Example 16 uses two optional Compile passes to emit Python at two different Program stages:
 
 - `EmitEagerPythonPass` translates CKKS operations into calls on the public Eager `Engine`;
 - `EmitBackendPythonPass` resolves the operations visible at its position and emits direct calls to their Backend implementation classes.
@@ -12,7 +12,7 @@ Both passes scan the Program supplied at their own pipeline position, leave it u
 ## Run the example
 
 ```bash
-python examples/15_compile_python_codegen.py
+python examples/16_compile_python_codegen.py
 ```
 
 The example emits both source forms, executes them on CPU, checks that their Tensor payloads are identical, and compares the decrypted Eager result with the clear rotated sum.
@@ -32,7 +32,7 @@ ckks_compilation = fh_compile.Pipeline(
         fh_compile.ResolveRotationKeyOperandsPass(),
         fh_compile.AssignCkksDepthsPass(entry_depth=0),
         fh_compile.AssignCkksScalesPass(
-            entry_scale=config.default_scale,
+            entry_scale=config.scale_at(0),
         ),
         fh_compile.EmitEagerPythonPass(),
     )
@@ -137,6 +137,6 @@ Generated Python is executable code. Execute only source emitted from trusted Pr
 
 ::: details Source
 
-<<< @/../examples/15_compile_python_codegen.py
+<<< @/../examples/16_compile_python_codegen.py
 
 :::

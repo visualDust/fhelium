@@ -20,9 +20,9 @@ $$
 
 The polynomial product is implemented in NTT/Montgomery form. Relinearization reduces three components to two using a supplied evaluation key; its output keeps the represented depth and scale. The [arithmetic article](multiplication-keyswitch-rescale.md) gives the key-switch decomposition and rounding equations.
 
-If the next depth group contains primes $G_d$, rescale uses their complete product $D_d=\prod_{q\in G_d}q$. It advances depth from $d$ to $d+1$, removes those rows, and changes scale to $\Delta/D_d$. Domain-specific implementations preserve the requested coefficient/standard or NTT/Montgomery result representation. A depth transition can remove several primes.
+Rescale from depth $d$ to $d+1$ drops the primes $D_d=B_d\setminus B_{d+1}$, introduces $R_d=B_{d+1}\setminus B_d$, and divides by $\rho_d=\prod D_d/\prod R_d$. It advances depth, records the prime IDs of $B_{d+1}$, and changes scale to $\Delta/\rho_d$. Domain-specific implementations preserve the requested coefficient/standard or NTT/Montgomery result representation. A depth transition can remove and introduce several primes.
 
-Modulus restriction selects a smaller active basis without performing the rescale quotient. Reinterpreting scale changes the represented message interpretation without changing residue bytes. These are distinct operations with distinct state transitions.
+Modulus restriction selects a target basis contained in the source basis without performing the rescale quotient; a target basis outside the source basis is reached by an integer multiplication followed by one rescale. Reinterpreting scale changes the represented message interpretation without changing residue bytes. These are distinct operations with distinct state transitions.
 
 ## How does an Engine call reach arithmetic?
 

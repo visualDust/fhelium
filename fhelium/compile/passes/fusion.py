@@ -15,18 +15,10 @@ from xdsl.dialects.builtin import StringAttr
 from xdsl.ir import Operation, SSAValue, Block
 
 from fhelium.ir import EXECUTION_IMPLEMENTATION_ATTRIBUTE
-from fhelium.ir.dialects import ckks, core, fusion
+from fhelium.ir.dialects import core, fusion
 from fhelium.backend.implementation import FusionImplementation, FusionMatcher
 
-from .._local_plans import LocalPlanScope, local_plan_scope
 from .._pipeline import DecisionRecord, PassResult, PassStats
-from .._selection_plan import (
-    GuardMemo,
-    SelectionPlans,
-    fusion_policy,
-    graph_guard,
-    plan_event,
-)
 from .program._purity import known_pure, known_region_blocks
 
 
@@ -52,10 +44,8 @@ def _fuse(
     input_set: set[SSAValue] = set()
     canonical: dict[SSAValue, SSAValue] = {}
     resource_roles: dict[tuple[object, object], SSAValue] = {}
-    from fhelium.backend.triton._repeat import graph_nodes
-
-    for node in graph_nodes(body_ops, preserve_carried=True):
-        for operand in node.operands:
+    for operation in body_ops:
+        for operand in operation.operands:
             if not isinstance(operand, SSAValue):
                 continue
             owner = operand.owner
@@ -115,7 +105,7 @@ class _CandidateSet:
     """Index necessary static facts while leaving escaping-use checks to probes."""
 
     def __init__(self, matcher, operations):
-        from fhelium.backend.triton._matching import RegionMatcher, NTT_OPS
+        from fhelium.backend.triton._matching import RegionMatcher
         from fhelium.backend.triton._tensor import (
             TensorRegionMatcher,
             _operation_facts,
@@ -136,17 +126,14 @@ class _CandidateSet:
             return
         for index, operation in enumerate(operations):
             if self.kind == "rns":
-                if isinstance(operation, ckks.RepeatOp):
-                    row = {}
-                else:
-                    facts = matcher.analysis.operation(operation)
-                    if not facts.valid or (
-                        facts.anchors and NTT_OPS[0] not in matcher.supported
-                    ):
-                        continue
-                    row = dict(facts.known)
-                    if facts.parameter is not None:
-                        row["_parameter"] = facts.parameter
+                facts = matcher.analysis.operation(operation)
+                if not facts.valid or (
+                    facts.anchors and not matcher.include_ntt
+                ):
+                    continue
+                row = dict(facts.known)
+                if facts.parameter is not None:
+                    row["_parameter"] = facts.parameter
             else:
                 if operation not in matcher.facts:
                     matcher.facts[operation] = _operation_facts(operation)
@@ -193,8 +180,6 @@ def _first_position(mask):
 def _fusion_schedule(
     operations: Sequence[Operation],
     implementations: Sequence[FusionImplementation],
-    *,
-    local_plans: LocalPlanScope | None = None,
 ) -> tuple[
     list[Operation], list[tuple[list[Operation], FusionImplementation, int]]
 ]:
@@ -217,25 +202,10 @@ def _fusion_schedule(
             RegionMatcher,
         )
 
-        has_mac = any(
-            isinstance(operation, ckks.RepeatOp)
-            and any(
-                isinstance(nested, ckks.RepeatOp) and nested.carried
-                for nested in operation.walk()
-            )
-            for operation in items
-        )
+        analysis = OperationAnalysis()
         for matcher in matchers:
             if type(matcher) is RegionMatcher:
-                matcher.check_mac = has_mac
-
-        if local_plans is not None:
-            analysis = OperationAnalysis(
-                local_plans.matcher_recipe, local_plans.stats
-            )
-            for matcher in matchers:
-                if type(matcher) is RegionMatcher:
-                    matcher.use_analysis(analysis)
+                matcher.use_analysis(analysis)
 
         def match(operation):
             for implementation, matcher in zip(
@@ -340,12 +310,8 @@ def _fusion_schedule(
 def _fusion_segments(
     operations: Sequence[Operation],
     implementations: Sequence[FusionImplementation],
-    *,
-    local_plans: LocalPlanScope | None = None,
 ) -> list[tuple[list[Operation], FusionImplementation, int]]:
-    return _fusion_schedule(
-        operations, implementations, local_plans=local_plans
-    )[1]
+    return _fusion_schedule(operations, implementations)[1]
 
 
 @dataclass(frozen=True)
@@ -368,39 +334,12 @@ class FuseOperationsPass:
 
     def run(self, compilation: "Compilation") -> PassResult:
         program = compilation.program
-        from .._repeat import expand_repeats
-        from .._repeat_rotation import is_rotation_repeat
-
-        # Unsupported endpoint policies use the ordinary expanded scheduler.
-        for operation in tuple(program.walk()):
-            if (
-                isinstance(operation, ckks.RepeatOp)
-                and not is_rotation_repeat(operation)
-                and not any(
-                    implementation.match_fusion((operation,)) is not None
-                    for implementation in self.implementations
-                )
-            ):
-                expand_repeats(compilation, roots=(operation,))
-        shared_data = compilation.workspace
-        plans = shared_data.get(SelectionPlans)
-        policy = None
-        policy_reason = ""
-        if isinstance(plans, SelectionPlans):
-            try:
-                policy = [fusion_policy(self.implementations), self.min_ops]
-            except ValueError as error:
-                policy_reason = str(error)
-        local_plans = local_plan_scope(shared_data, policy)
         blocks = []
 
         def visit(block):
             blocks.append(block)
             for operation in tuple(block.ops):
-                if isinstance(operation, fusion.FusedOp) or (
-                    isinstance(operation, ckks.RepeatOp)
-                    and not is_rotation_repeat(operation)
-                ):
+                if isinstance(operation, fusion.FusedOp):
                     continue
                 for nested in known_region_blocks(operation):
                     visit(nested)
@@ -410,75 +349,20 @@ class FuseOperationsPass:
                 visit(block)
         matched = transformed = removed = 0
         decisions: list[DecisionRecord] = []
-        guard_memo = GuardMemo()
         for block in blocks:
             original = tuple(block.ops)
-            plan_key = None
-            cached = None
-            if isinstance(plans, SelectionPlans):
-                if policy is not None:
-                    try:
-                        plan_key = "fusion:" + graph_guard(
-                            block,
-                            stage="fusion",
-                            policy=policy,
-                            memo=guard_memo,
-                        )
-                        cached = plans.entries.get(plan_key)
-                        plan_event(
-                            shared_data,
-                            "fusion",
-                            cached is not None,
-                            "guard matched"
-                            if cached is not None
-                            else "graph guard miss",
-                        )
-                    except ValueError as error:
-                        plan_event(shared_data, "fusion", False, str(error))
-                else:
-                    plan_event(shared_data, "fusion", False, policy_reason)
-            positions = {op: index for index, op in enumerate(original)}
-            recorded_groups = []
-            if cached is None:
-                scheduled, segments = _fusion_schedule(
-                    original, self.implementations, local_plans=local_plans
-                )
-            else:
-                scheduled = [original[index] for index in cached["schedule"]]
-                segments = [
-                    (
-                        [original[index] for index in indices],
-                        self.implementations[implementation],
-                        count,
-                    )
-                    for indices, implementation, count in cached["groups"]
-                ]
+            scheduled, segments = _fusion_schedule(original, self.implementations)
             if scheduled != list(block.ops):
                 for operation in tuple(block.ops):
                     block.detach_op(operation)
                 block.add_ops(scheduled)
 
             for operations, implementation, count in segments:
-                if cached is None:
-                    if count < self.min_ops:
-                        continue
-                    eligible = implementation.match_fusion(operations)
-                    if eligible is None or eligible < self.min_ops:
-                        continue
-                    if plan_key is not None:
-                        recorded_groups.append(
-                            [
-                                [positions[op] for op in operations],
-                                next(
-                                    index
-                                    for index, item in enumerate(
-                                        self.implementations
-                                    )
-                                    if item is implementation
-                                ),
-                                count,
-                            ]
-                        )
+                if count < self.min_ops:
+                    continue
+                eligible = implementation.match_fusion(operations)
+                if eligible is None or eligible < self.min_ops:
+                    continue
                 matched += 1
                 fused = _fuse(block, operations, implementation.name)
                 if fused is None:
@@ -496,11 +380,6 @@ class FuseOperationsPass:
                         ),
                     )
                 )
-            if plan_key is not None and cached is None:
-                plans.entries[plan_key] = {
-                    "schedule": [positions[op] for op in scheduled],
-                    "groups": recorded_groups,
-                }
         return PassResult(
             program,
             PassStats(

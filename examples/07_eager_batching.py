@@ -9,7 +9,7 @@ to evaluate its members one at a time.
 
 Example:
     python examples/07_eager_batching.py \
-        --preset slots8192-scale40-depth7-int64 --depth 0 --batch-sizes 1,4,8
+        --preset slots8192-scale40-depth7 --depth 0 --batch-sizes 1,4,8
 """
 
 from __future__ import annotations
@@ -219,7 +219,7 @@ def peak_allocated_mib(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_engine_args(parser, default_preset="slots8192-scale40-depth7-int64")
+    add_engine_args(parser, default_preset="slots8192-scale40-depth7")
     parser.add_argument("--depth", type=int, default=0)
     parser.add_argument("--size", type=int, default=8)
     parser.add_argument(

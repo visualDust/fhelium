@@ -27,8 +27,7 @@ from .crypto import (
 )
 from .tables import KeySwitchTables
 from ..rns.tables import (
-    RescaleTables,
-    rescale_inverse_matrix,
+    rescale_tables,
 )
 
 
@@ -73,7 +72,10 @@ class CkksDeviceResources:
         self._ntt_context: NttContext | None = None
         self._rng: RandomStream | None = None
         self._key_generation: KeyGenerationResource | None = None
-        self._rescale: RescaleTables | None = None
+        self._rescale: dict[
+            tuple[object, ...],
+            tuple[dict[str, torch.Tensor], dict[str, object]],
+        ] = {}
         self._key_switch: KeySwitchTables | None = None
         self._rotation_sums: dict[tuple[object, ...], RotationSumTables] = {}
         self._modulus_raise: dict[
@@ -196,7 +198,7 @@ class CkksDeviceResources:
         depth: int,
         *,
         moddown_rounding: str = "nearest",
-        modup_method: str = "exact",
+        basis_conversion: str = "exact",
         rescale: bool = False,
         rescale_rounding: str = "nearest",
         output_domain: str = "coefficient",
@@ -216,7 +218,7 @@ class CkksDeviceResources:
         return tables.tensor_operands(
             depth,
             moddown_rounding=moddown_rounding,
-            modup_method=modup_method,
+            basis_conversion=basis_conversion,
             rescale=rescale,
             rescale_rounding=rescale_rounding,
             output_domain=output_domain,
@@ -230,7 +232,7 @@ class CkksDeviceResources:
         *,
         rescale: bool = False,
         rounding: str = "nearest",
-        modup_method: str = "exact",
+        basis_conversion: str = "exact",
         key_prime_ids: tuple[int, ...] | None = None,
         digit_prime_ids: tuple[tuple[int, ...], ...] | None = None,
     ) -> RotationSumTables:
@@ -241,7 +243,7 @@ class CkksDeviceResources:
             depth,
             rescale,
             rounding,
-            modup_method,
+            basis_conversion,
             key_prime_ids,
             digit_prime_ids,
         )
@@ -249,7 +251,7 @@ class CkksDeviceResources:
             self.key_switch_operands(
                 depth,
                 moddown_rounding=rounding,
-                modup_method=modup_method,
+                basis_conversion=basis_conversion,
                 key_prime_ids=key_prime_ids,
                 digit_prime_ids=digit_prime_ids,
             )
@@ -259,7 +261,7 @@ class CkksDeviceResources:
                 depth,
                 rescale=rescale,
                 rounding=rounding,
-                modup_method=modup_method,
+                basis_conversion=basis_conversion,
                 key_prime_ids=key_prime_ids,
                 digit_prime_ids=digit_prime_ids,
             )
@@ -321,25 +323,25 @@ class CkksDeviceResources:
 
     def rescale_operands(
         self,
-        row_count: int,
-        drop_count: int,
+        source_prime_ids: tuple[int, ...],
+        target_prime_ids: tuple[int, ...],
         *,
-        include_p: bool = False,
+        rounding: str = "nearest",
         input_domain: str = "coefficient",
     ) -> tuple[dict[str, torch.Tensor], dict[str, object]]:
-        """Prepare quotient and transform tables for one rescale group."""
-        tables = self._rescale
-        if tables is None:
-            tables = RescaleTables(
-                self.rns_context, rescale_inverse_matrix(self.rns_context)
+        """Prepare the tables of one rescale from the source to the target basis."""
+        key = (source_prime_ids, target_prime_ids, rounding, input_domain)
+        cached = self._rescale.get(key)
+        if cached is None:
+            cached = rescale_tables(
+                self.rns_context,
+                source_prime_ids,
+                target_prime_ids,
+                rounding=rounding,
+                ntt_context=self.ntt_context if input_domain == "ntt" else None,
             )
-            self._rescale = tables
-        return tables.tensor_operands(
-            row_count,
-            drop_count,
-            include_p=include_p,
-            ntt_context=self.ntt_context if input_domain == "ntt" else None,
-        )
+            self._rescale[key] = cached
+        return cached
 
     def reconstruction_operands(self, depth: int) -> tuple[torch.Tensor, ...]:
         """Prepare Q parameters and centered mixed-radix reconstruction tables."""

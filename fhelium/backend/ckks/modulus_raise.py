@@ -10,7 +10,10 @@ from xdsl.ir import Attribute
 from fhelium.backend._native_operands import key_switch_options, named_tables
 from fhelium.native.wrapper import ckks_ops, rns_ops
 from .tables import encapsulation_configs
-from ._key_switch_preparation import key_switch_runtime_attributes
+from ._key_switch_preparation import (
+    key_switch_runtime_attributes,
+    operation_key_rounds,
+)
 
 
 def modulus_raise_requirements(operation, config):
@@ -98,7 +101,8 @@ def modulus_raise_requirements(operation, config):
     facts.update(
         ntt_backend=policy.name,
         q_count=config.num_q_primes,
-        target_row_start=config.q_row_start(target),
+        target_row_start=config.q_prime_ids(target)[0],
+        target_row_count=len(config.q_prime_ids(target)),
         return_drop_count=len(return_p) + 1,
     )
     attributes: dict[str, Attribute] = {
@@ -112,6 +116,8 @@ def modulus_raise_requirements(operation, config):
         ArrayAttr(IntegerAttr(i, 64) for i in span)
         for span in cast(tuple[tuple[int, ...], ...], low_facts["digits"])
     )
+    if rounds := operation_key_rounds(operation):
+        attributes["key_rounds"] = IntegerAttr(rounds, 64)
     descriptions = {
         name: {
             "kind": "encapsulated_modulus_raise_table",
@@ -162,6 +168,12 @@ class NativeModulusRaiseImplementation:
                 ),
             )
         low = key_switch_options(attributes, prefix="low_")
+        low["key_rounds"] = int(attributes.get("key_rounds", 0))
+        end = 3
+        if low["key_rounds"]:
+            # Seeded low and return keys supply their seeds after the keys.
+            low["key_seeds"] = list(inputs[3:5])
+            end = 5
         low["moddown_rounding"] = str(
             attributes.get("moddown_rounding", "nearest")
         )
@@ -170,10 +182,11 @@ class NativeModulusRaiseImplementation:
                 inputs[0],
                 inputs[1],
                 inputs[2],
-                *named_tables(attributes["parameter_names"], inputs[3:]),
+                *named_tables(attributes["parameter_names"], inputs[end:]),
                 **low,
                 return_drop_count=int(attributes["return_drop_count"]),
                 target_row_start=int(attributes["target_row_start"]),
-                q_count=int(attributes["q_count"]),
+                q_count=int(attributes["target_row_start"])
+                + int(attributes["target_row_count"]),
             ),
         )

@@ -3,7 +3,7 @@
 """Benchmark grouped rotation hoisting against independent rotations.
 
 Example:
-    python examples/06_eager_rotation_hoisting.py --preset slots32768-scale40-depth34-int64 --counts 4,8,16
+    python examples/06_eager_rotation_hoisting.py --preset slots32768-scale40-depth34 --counts 4,8,16
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ def _parse_counts(text: str) -> list[int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_engine_args(parser, default_preset="slots32768-scale40-depth34-int64")
+    add_engine_args(parser, default_preset="slots32768-scale40-depth34")
     parser.add_argument("--counts", type=_parse_counts, default=[4, 8, 16])
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--runs", type=int, default=20)

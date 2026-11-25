@@ -9,6 +9,7 @@ from fhelium import (
     Preset,
 )
 from fhelium.eager import Engine
+from fhelium.ir.ckks_state import depth_prime_ids
 from fhelium.errors import (
     InvalidScaleError,
     MaximumDepthError,
@@ -16,10 +17,14 @@ from fhelium.errors import (
 )
 
 
-def test_config_names_the_encoding_scale_as_a_default() -> None:
-    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+def test_config_lists_one_encoding_scale_per_depth() -> None:
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
 
-    assert config.default_scale == float(1 << 40)
+    assert len(config.scales) == config.max_depth + 1
+    assert all(
+        abs(math.log2(config.scale_at(d)) - 40) < 1.5
+        for d in range(1, config.max_depth + 1)
+    )
     assert not hasattr(config, "scale")
 
 
@@ -27,13 +32,13 @@ def test_config_names_the_encoding_scale_as_a_default() -> None:
 def engine() -> Engine:
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
-    return Engine(Preset.slots8192_scale40_depth7_int64)
+    return Engine(Preset.slots8192_scale40_depth7)
 
 
 def _deterministic_engine(seed: int) -> Engine:
     """Create an engine whose cryptographic test vectors are reproducible."""
 
-    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
     return Engine(
         config,
         rng_seed=seed,
@@ -87,7 +92,7 @@ def test_public_depth_limit_and_rescale_to_next_depth_queries_are_explicit(
 
 def test_rescale_reaches_the_terminal_basis() -> None:
     runtime = Engine(
-        Preset.slots8192_scale40_depth7_int64,
+        Preset.slots8192_scale40_depth7,
         rng_seed=19,
         rng_nonce=0,
     )
@@ -98,8 +103,7 @@ def test_rescale_reaches_the_terminal_basis() -> None:
 
     result = runtime.rescale_to_next_depth(value)
     assert result.depth == runtime.max_depth
-    assert result.prime_ids == value.prime_ids[1:]
-    assert result.limb_count == value.limb_count - 1
+    assert result.prime_ids == runtime.config.q_prime_ids(runtime.max_depth)
 
 
 @pytest.mark.gpu
@@ -110,7 +114,7 @@ def test_arbitrary_scales_multiply_and_rescale_by_the_actual_prime(
 ) -> None:
     message = torch.linspace(-0.01, 0.01, 32, dtype=torch.float64)
     factor_message = torch.full((32,), 1.25, dtype=torch.float64)
-    source = engine.encrypt_message(message, scale=2.0**39)
+    source = engine.encrypt_message(message, depth=1, scale=2.0**39)
     factor = engine.prepare_plaintext_for_multiplication(
         engine.encode(factor_message, depth=source.depth, scale=2.0**39)
     )
@@ -169,10 +173,10 @@ def test_three_component_ciphertext_can_be_rescaled_before_relinearization() -> 
     left_message = torch.linspace(-0.005, 0.005, 32, dtype=torch.float64)
     right_message = torch.full((32,), 0.5, dtype=torch.float64)
     left = engine.coefficient_domain_to_ntt_domain(
-        engine.encrypt_message(left_message, scale=2.0**40)
+        engine.encrypt_message(left_message, depth=1, scale=2.0**40)
     )
     right = engine.coefficient_domain_to_ntt_domain(
-        engine.encrypt_message(right_message, scale=2.0**40)
+        engine.encrypt_message(right_message, depth=1, scale=2.0**40)
     )
 
     triplet = engine.multiply(left, right)
@@ -215,7 +219,7 @@ def test_qp_ciphertext_rescale_preserves_p_rows_and_message() -> None:
         engine.encode(
             torch.ones(32, dtype=torch.float64),
             depth=source.depth,
-            scale=engine.config.default_scale,
+            scale=engine.config.scale_at(0),
         ),
         modulus_basis='QP',
     )
@@ -227,8 +231,9 @@ def test_qp_ciphertext_rescale_preserves_p_rows_and_message() -> None:
 
     rescaled = engine.rescale_to_next_depth(pending)
     assert rescaled.modulus_basis == "QP"
-    assert rescaled.prime_ids == pending.prime_ids[1:]
-    assert rescaled.limb_count == pending.limb_count - 1
+    assert rescaled.prime_ids == depth_prime_ids(
+        engine.config, pending.depth + 1, "QP"
+    )
     assert rescaled.scale == engine.rescale_output_scale(
         pending.scale,
         depth=pending.depth,
@@ -247,21 +252,22 @@ def test_qp_ciphertext_rescale_preserves_p_rows_and_message() -> None:
 
 
 @pytest.mark.gpu
-def test_mod_switch_drops_q_rows_without_changing_scale(
+def test_mod_switch_selects_subset_rows_or_rescales_to_target_scale(
     engine: Engine,
 ) -> None:
+    config = engine.config
     message = torch.linspace(-0.01, 0.01, 32, dtype=torch.float64)
-    source = engine.encrypt_message(
-        message,
-        scale=engine.config.default_scale,
-    )
+    source = engine.encrypt_message(message, scale=config.scale_at(0))
+
+    def rows(depth: int) -> list[int]:
+        return list(config.q_prime_ids(depth))
 
     switched = engine.mod_switch_to_depth(source, 3)
     assert source.depth == 0
     assert switched.depth == 3
     assert switched.scale == source.scale
-    assert switched.prime_ids == source.prime_ids[3:]
-    assert torch.equal(switched.data, source.data[..., 3:, :])
+    assert switched.prime_ids == config.q_prime_ids(3)
+    assert torch.equal(switched.data, source.data[..., rows(3), :])
     torch.testing.assert_close(
         engine.decrypt_message(switched, is_real=True, device="cpu")[:32],
         message,
@@ -275,7 +281,7 @@ def test_mod_switch_drops_q_rows_without_changing_scale(
     assert inplace.depth == 1
     assert inplace.scale == source.scale
     assert inplace.data.untyped_storage().data_ptr() == storage
-    assert torch.equal(inplace.data, source.data[..., 1:, :])
+    assert torch.equal(inplace.data, source.data[..., rows(1), :])
 
     ntt_source = engine.coefficient_domain_to_ntt_domain(source)
     ntt_switched = engine.mod_switch_to_next_depth(ntt_source)
@@ -284,14 +290,32 @@ def test_mod_switch_drops_q_rows_without_changing_scale(
         and ntt_switched.residue_representation == "montgomery"
     )
     assert ntt_switched.scale == ntt_source.scale
-    assert torch.equal(ntt_switched.data, ntt_source.data[..., 1:, :])
+    assert torch.equal(ntt_switched.data, ntt_source.data[..., rows(1), :])
 
-    final = engine.mod_switch_to_depth(
-        source,
-        engine.max_depth,
+    depth = next(
+        d
+        for d in range(1, engine.max_depth)
+        if not config.is_subbasis(d, d + 1)
     )
+    lower = engine.encrypt_message(
+        message, depth=depth, scale=config.scale_at(depth)
+    )
+    for value in (lower, engine.coefficient_domain_to_ntt_domain(lower)):
+        reduced = engine.mod_switch_to_next_depth(value)
+        assert reduced.depth == depth + 1
+        assert reduced.prime_ids == config.q_prime_ids(depth + 1)
+        assert reduced.scale == config.scale_at(depth + 1)
+        assert reduced.polynomial_domain == value.polynomial_domain
+        torch.testing.assert_close(
+            engine.decrypt_message(reduced, is_real=True, device="cpu")[:32],
+            message,
+            atol=1e-5,
+            rtol=0.0,
+        )
+
+    final = engine.mod_switch_to_depth(source, engine.max_depth)
     assert final.depth == engine.max_depth
-    assert final.prime_ids == (engine.config.num_q_primes - 1,)
+    assert final.prime_ids == config.q_prime_ids(engine.max_depth)
     with pytest.raises(ValueError, match="depth must be"):
         engine.mod_switch_to_next_depth(final)
 

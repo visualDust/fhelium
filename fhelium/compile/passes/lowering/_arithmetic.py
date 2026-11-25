@@ -90,15 +90,47 @@ def _lower_add(
     lhs_cast, lhs = _cast_to_rns(operation.lhs)
     rhs_cast, rhs = _cast_to_rns(operation.rhs)
     parameter_ops, parameters = _parameters(operation, config, compilation)
-    logical = rns.AddStandardOp(
-        lhs,
-        rhs,
-        parameters,
-        _rns_type(operation.result.type),
+    counts = tuple(
+        value.type.state.data.get("components")
+        for value in (operation.lhs, operation.rhs)
     )
-    result_cast, result = _cast_to_ckks(logical.result, operation.result.type)
+    result_type = operation.result.type
+    operations: list[Operation] = [lhs_cast, rhs_cast, *parameter_ops]
+    if None in counts or counts[0] == counts[1]:
+        logical = rns.AddStandardOp(lhs, rhs, parameters, _rns_type(result_type))
+        operations.append(logical)
+        packed = logical.result
+    else:
+        # Components present in only one operand pass through unchanged.
+        counts = tuple(
+            int(cast(IntegerAttr, count).value.data) for count in counts
+        )
+        polynomial = _polynomial_type(result_type)
+        components = []
+        for j in range(max(counts)):
+            terms = []
+            for value, count in zip((lhs, rhs), counts, strict=True):
+                if j < count:
+                    extract = rns.ExtractComponentOp(
+                        value, polynomial, component=j
+                    )
+                    operations.append(extract)
+                    terms.append(extract.result)
+            if len(terms) == 2:
+                total = rns.AddStandardOp(*terms, parameters, polynomial)
+                operations.append(total)
+                terms = [total.result]
+            components.append(terms[0])
+        pack = (
+            rns.PackThreeComponentsOp
+            if len(components) == 3
+            else rns.PackTwoComponentsOp
+        )(*components, _rns_type(result_type))
+        operations.append(pack)
+        packed = pack.result
+    result_cast, result = _cast_to_ckks(packed, result_type)
     return LoweredCkksOperation(
-        (lhs_cast, rhs_cast, *parameter_ops, logical, result_cast),
+        (*operations, result_cast),
         result,
         _parameter_descriptions(parameter_ops, operation, config),
     )
@@ -229,67 +261,12 @@ def _lower_multiply(
     lhs_cast, lhs = _cast_to_rns(operation.lhs)
     rhs_cast, rhs = _cast_to_rns(operation.rhs)
     parameter_ops, parameters = _parameters(operation, config, compilation)
-    lhs_component_type = _polynomial_type(operation.lhs.type)
-    rhs_component_type = _polynomial_type(operation.rhs.type)
-    product_type = _polynomial_type(operation.result.type)
-    lhs0 = rns.ExtractComponentOp(lhs, lhs_component_type, component=0)
-    lhs1 = rns.ExtractComponentOp(lhs, lhs_component_type, component=1)
-    rhs0 = rns.ExtractComponentOp(rhs, rhs_component_type, component=0)
-    rhs1 = rns.ExtractComponentOp(rhs, rhs_component_type, component=1)
-    product00 = rns.MontgomeryMultiplyOp(
-        lhs0.result,
-        rhs0.result,
-        parameters,
-        product_type,
+    product = rns.TensorProductOp(
+        lhs, rhs, parameters, _rns_type(operation.result.type)
     )
-    product01 = rns.MontgomeryMultiplyOp(
-        lhs0.result,
-        rhs1.result,
-        parameters,
-        product_type,
-    )
-    product10 = rns.MontgomeryMultiplyOp(
-        lhs1.result,
-        rhs0.result,
-        parameters,
-        product_type,
-    )
-    product11 = rns.MontgomeryMultiplyOp(
-        lhs1.result,
-        rhs1.result,
-        parameters,
-        product_type,
-    )
-    cross = rns.AddMontgomeryLazyOp(
-        product01.result,
-        product10.result,
-        parameters,
-        product_type,
-    )
-    packed = rns.PackThreeComponentsOp(
-        product00.result,
-        cross.result,
-        product11.result,
-        _rns_type(operation.result.type),
-    )
-    result_cast, result = _cast_to_ckks(packed.result, operation.result.type)
+    result_cast, result = _cast_to_ckks(product.result, operation.result.type)
     return LoweredCkksOperation(
-        (
-            lhs_cast,
-            rhs_cast,
-            *parameter_ops,
-            lhs0,
-            lhs1,
-            rhs0,
-            rhs1,
-            product00,
-            product01,
-            product10,
-            product11,
-            cross,
-            packed,
-            result_cast,
-        ),
+        (lhs_cast, rhs_cast, *parameter_ops, product, result_cast),
         result,
         _parameter_descriptions(parameter_ops, operation, config),
     )

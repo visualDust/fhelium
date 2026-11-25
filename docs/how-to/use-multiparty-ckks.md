@@ -399,7 +399,7 @@ CKG, RKG, and Galois share functions sample internal errors on every invocation.
 Run the example from the repository root:
 
 ```bash
-python examples/26_experimental_multiparty.py --preset slots8192-scale40-depth7-int64
+python examples/26_experimental_multiparty.py --preset slots8192-scale40-depth7
 ```
 
 The example holds two party-local `SecretKey` objects in one Python process so it can demonstrate the complete arithmetic dataflow. It never sums them, installs an aggregate secret, or uses an aggregate secret for verification. Its fixed/canceling Protocol-3/4 coefficient tensors are named and documented as correctness fixtures.
