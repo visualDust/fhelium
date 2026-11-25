@@ -72,7 +72,7 @@ class _ArtifactPlaintextSource:
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
 def test_ckks_values_follow_plan_and_lease_through_real_operation() -> None:
     engine = Engine(
-        Preset.slots8192_scale40_depth7_int64,
+        Preset.slots8192_scale40_depth7,
     )
     manager = ResidencyManager()
     device_location = cuda_location("cuda:0")

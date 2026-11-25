@@ -464,10 +464,8 @@ def _active_q_secret_rows(
     depth: int,
 ) -> torch.Tensor:
     rns_context = engine.rns_context(secret_share.device)
-    basis = rns_context.basis_parameters(depth)
-    return secret_share.data[
-        basis.parameter_row_start : basis.parameter_row_stop
-    ]
+    rows = list(engine.config.q_prime_ids(depth))
+    return secret_share.data[rows]
 
 
 def _ciphertext_secret_product(
@@ -1002,13 +1000,9 @@ def unsafe_public_key_switch_share(
     )
     rns_context = engine.rns_context(ciphertext.device)
     ntt_context = engine._ntt_context_for(ciphertext.device)
-    basis = rns_context.basis_parameters(ciphertext.depth)
-    destination0 = destination_public_key.k0[
-        basis.parameter_row_start : basis.parameter_row_stop
-    ]
-    destination1 = destination_public_key.k1[
-        basis.parameter_row_start : basis.parameter_row_stop
-    ]
+    rows = list(engine.config.q_prime_ids(ciphertext.depth))
+    destination0 = destination_public_key.k0[rows]
+    destination1 = destination_public_key.k1[rows]
     encrypted0 = rns_context.montgomery_mul(
         ephemeral_rns,
         destination0,

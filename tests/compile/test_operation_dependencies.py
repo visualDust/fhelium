@@ -33,7 +33,7 @@ def test_rescale_and_whole_key_switch_resolve_their_actual_coordinates():
     value_type, _ = _types()
     block = Block(arg_types=(value_type,))
     for domain, position in (("coefficient", "element"), ("ntt", "mixing")):
-        operation = rns.RescaleDropLeadingPrimesOp(
+        operation = rns.RescaleOp(
             block.args[0], (), value_type, polynomial_domain=domain
         )
         dependencies = operation_dependencies(operation)

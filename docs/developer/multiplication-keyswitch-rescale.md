@@ -1,6 +1,6 @@
 # Multiplication, key switching, and rescale
 
-Ciphertext multiplication forms a component convolution, key switching changes the secret-key relation, and rescale computes a rounded quotient over a complete Q depth group. Their implementations share RNS basis-conversion and NTT algorithms while preserving active rows, per-value scale, and residue representation.
+Ciphertext multiplication forms a component convolution, key switching changes the secret-key relation, and rescale computes a rounded quotient that replaces one depth's Q basis by the next. Their implementations share RNS basis-conversion and NTT algorithms while preserving active rows, per-value scale, and residue representation.
 
 ## Numerical implementation path
 
@@ -54,7 +54,7 @@ $$
 (c_0d_0,\;c_0d_1+c_1d_0,\;c_1d_1).
 $$
 
-Two-component multiplication requires compatible NTT/Montgomery inputs and returns a three-component NTT/Montgomery ciphertext. The result scale is the product $\Delta_c\Delta_d$; equal input scales give $\Delta^2$. The caller or selected scheduling passes place relinearization and rescale. A caller may request them separately or select a relinearization that also consumes the next complete Q group.
+Two-component multiplication requires compatible NTT/Montgomery inputs and returns a three-component NTT/Montgomery ciphertext. The result scale is the product $\Delta_c\Delta_d$; equal input scales give $\Delta^2$. The caller or selected scheduling passes place relinearization and rescale. A caller may request them separately or select a relinearization that also performs the rescale to the next depth.
 
 ## Relinearization
 
@@ -76,7 +76,7 @@ graph LR
 
 The original first two components are combined with corrections that replace the $s^2$ dependency represented by `e2`. With `rescale=False`, depth, Q rows and actual scale are preserved. Coefficient output inverses all required terms. NTT output inverses only `e2` for digit decomposition, retains the first two components as evaluations, and adds NTT-domain corrections.
 
-`Engine.relinearize(product, key, rescale=True, ...)` combines relinearization with removal of the next complete Q group. Let $P$ be the key's auxiliary product, $D$ the dropped Q-group product, $v_i$ the accumulated key products before adding the original component $a_i$, and $H_P,H_D$ the respective rounding offsets. Floor uses offset zero; nearest uses $(M-1)/2$ for an odd divisor $M$. Coefficient-wise integer division satisfies
+`Engine.relinearize(product, key, rescale=True, ...)` combines relinearization with the rescale to the next depth. Let $P$ be the key's auxiliary product, $D$ the product of the dropped Q primes $D_l$, $R$ the product of the introduced Q primes $R_l$ (one for a suffix chain), $v_i$ the accumulated key products before adding the original component $a_i$, and $H_P,H_D$ the respective rounding offsets. Floor uses offset zero; nearest uses $(M-1)/2$ for an odd divisor $M$. Coefficient-wise integer division satisfies
 
 $$
 \left\lfloor\frac{\left\lfloor(v_i+H_P)/P\right\rfloor+a_i+H_D}{D}\right\rfloor
@@ -84,7 +84,7 @@ $$
 \left\lfloor\frac{v_i+P a_i+H_P+P H_D}{P D}\right\rfloor.
 $$
 
-The key is selected at the product's input depth. The result has two components, advances depth by one, removes every prime in $D$, and carries actual scale $\Delta_{product}/D$. `moddown_rounding` and `rescale_rounding` choose the two offsets independently. When both select nearest, their combined offset is $(PD-1)/2$.
+When $R_l$ is nonempty, the numerator is first multiplied by $R$ on every product row, and the quotient is taken over the ordered basis $(B_{l+1},P,D_l)$. The key is selected at the product's input depth. The result has two components, advances depth by one, carries the prime IDs of $B_{l+1}$, and carries actual scale $\Delta_{product}R/D$. `moddown_rounding` and `rescale_rounding` choose the two offsets independently. When both select nearest, their combined offset is $(PD-1)/2$.
 
 RNS owns the shared quotient over $PD$ and its ordered numerical operands. The numerator adds $P a_i$ on Q rows and zero on P rows. Coefficient output evaluates this quotient in coefficient representation. NTT output retains the surviving Q evaluations, inverses only the dropped Q and P rows, and transforms the resulting quotient correction. Whole execution and logical lowering use the same numerator, offset and output-state equations. Capture records the compound operation's joint materials; separately requested relinearization and rescale retain their own operands and transitions.
 
@@ -117,7 +117,7 @@ Key generation stores `[Q_source | P_key]` in that order. Operand preparation pr
 
 `key_row_start` is a physical offset into the supplied key Tensor. Operand preparation, whole-operation execution and lowering use the actual partition and ordered row IDs. A shared `EvaluationKeySet` may contain multiple layouts for one role or step. Selection checks active Q support, P rows, physical layout, ring dimension, dtype and device. Keys selected for one hoisted or aggregated group must share the effective digit partition and physical interpretation required by that operation.
 
-The `modup_method` argument defaults to `"exact"` and also accepts `"crt"` or `"normalized_crt"`. Exact uses the canonical Garner lift; the CRT alternatives use the linear lifts defined in [RNS and NTT architecture](rns-and-ntt.md#linear-crt-lifts). The source-Q congruence is preserved, while the larger integer representative changes evaluation-key noise. Choose the lift together with P, the digit partition, actual ciphertext scale and the required output error. The selected method remains an operation fact through capture, hoisting and lowering; implementations consume its supplied numerical tables.
+The `basis_conversion` argument defaults to `"exact"` and also accepts `"crt"` or `"normalized_crt"`; it selects both conversions of key switching. `"exact"` uses the Garner digit lift and the mixed-radix ModDown remainder. `"crt"` uses the raw linear digit lift defined in [RNS and NTT architecture](rns-and-ntt.md#linear-crt-lifts) and the exact ModDown remainder. `"normalized_crt"` uses the centered linear lift for digits and for the P remainder; ModDown then runs the same CRT kernel as ModUp, and its quotient is nearest-rounded up to an integer error smaller than half the number of P primes, so `moddown_rounding` does not apply. A fused relinearize-and-rescale follows the centered P quotient with the exact quotient by the dropped Q group under `rescale_rounding`, which divides that error by the group product. Choose the conversion together with P, the digit partition, actual ciphertext scale and the required output error. The selected value remains an operation fact through capture, hoisting and lowering; implementations consume its supplied numerical tables.
 
 ## Rotation and hoisting
 
@@ -162,25 +162,30 @@ The same NTT policy also supports streaming digit consumption: the last NTT stag
 
 ## Rescale
 
-For the leading active Q depth group $G_l$, let $M_l=\prod_{q\in G_l}q$:
+For the transition from depth $l$ to $l+1$, let $D_l=B_l\setminus B_{l+1}$ be the dropped primes, $R_l=B_{l+1}\setminus B_l$ the introduced primes, $D=\prod D_l$, $R=\prod R_l$, and $H=\lfloor D/2\rfloor$ for nearest or $0$ for floor rounding. `rns.RescaleOp` computes
 
 $$
-c'\approx\operatorname{round}(c/M_l)\pmod{Q_{l+1}}.
+c'=\left\lfloor\frac{cR+H}{D}\right\rfloor\pmod{Q_{l+1}}.
 $$
 
 ```mermaid
 flowchart LR
-    IN[Q_l residue rows]
-    DROP[select dropped Q-group rows]
-    ROUND[nearest/truncate correction]
-    INV[multiply inverse of M_l modulo remaining primes]
-    OUT[remaining rows in Q_l+1]
-    IN --> DROP --> ROUND --> INV --> OUT
+    IN[B_l residue rows]
+    RES[multiply every row by R when R_l is nonempty]
+    DROP[select D_l rows and retained rows]
+    PLACE[place retained rows in B_l+1 order]
+    ROUND[exact quotient over the ordered target and D_l rows]
+    OUT[rows of B_l+1]
+    IN --> RES --> DROP --> PLACE --> ROUND --> OUT
 ```
 
-The implementation must select constants using configured prime identities, not an ambiguous compact row position. Output metadata must increase depth, remove all IDs in the dropped group, reduce row count by that group's size, and update scale by $M_l$.
+After the multiplication by $R$, the rows of $R_l$ hold $cR\equiv0$, so placing the retained rows of $B_l\cap B_{l+1}$ into the target order and leaving zero in the rows of $R_l$ gives the residues of $cR+H$ over $B_{l+1}$. The quotient uses the successive trailing-row division of ModDown over the ordered basis $(B_{l+1}, D_l)$; it divides by the complete dropped product with one rounding step. When $R_l$ is empty, the multiplication and placement are omitted and the retained rows are the target rows.
 
-NTT/Montgomery input can remain in that representation. The implementation inverts the dropped group's rows to obtain the rounding value, forms the quotient correction on surviving Q rows, transforms that correction, and adds it to the surviving evaluations multiplied by $M_l^{-1}$. This is congruent to coefficient rescale followed by a forward NTT without inverting the surviving input rows.
+The implementation selects constants and tables by configured prime identities, not by compact row positions. Output metadata records depth $l+1$, the prime IDs of $B_{l+1}$, and actual scale $\Delta/\rho_l$ with $\rho_l=D/R$.
+
+NTT/Montgomery input can remain in that representation. The implementation inverts only the rows of $D_l$ to obtain the quotient correction, converts that correction to the target rows, transforms it, and adds it to the target evaluations multiplied by $D^{-1}$. This is congruent to coefficient rescale followed by a forward NTT without inverting the surviving input rows.
+
+`mod_switch_to_depth` to a target basis $B_t\not\subseteq B_l$ uses the same operation from $B_l$ to $B_t$ after multiplying by the integer $k=\operatorname{round}(\Delta_t\rho/\Delta)$, so the result records the target depth's default scale $\Delta_t$.
 
 ## Correctness hazards
 

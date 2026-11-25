@@ -61,6 +61,45 @@ FHELIUM_API at::Tensor sample_uniform_residues(const at::Tensor& seed,
                                                at::IntArrayRef shape,
                                                const at::Tensor& rns_params);
 
+/// Expands the uniform component of a seeded key-switching key.
+///
+/// FHElium key generation gives every key-switching key one seed row per
+/// digit; its uniform component $a$ is the deterministic expansion below,
+/// uniform on every row and used directly as the stored residues. A key keeps
+/// $a$ resident (expanded) or holds only $k_0$ and the seed (compact), in
+/// which case key-switching products generate $a$ where they read it. Both
+/// give bitwise equal results; the compact state halves key memory and, on
+/// an RTX PRO 6000 Blackwell Max-Q, makes a 13-tier bootstrap about 6% and
+/// Eager key switches 13-16% slower (unchanged bootstrap latency on an RTX
+/// A6000). Security rests on RLWE with $a$ replaced by ChaCha12 output, i.e.
+/// on ChaCha12 as a pseudorandom function, and on the quality of the random
+/// stream that supplied the seed.
+///
+/// `seed_rows` is a contiguous int64 Tensor `[key_digit, 6]` whose row holds
+/// the 256-bit key as four little-endian 64-bit words, the 64-bit key
+/// identifier and the stored digit index $d$. Row $r$ of the result, with
+/// prime $q_r$ = `moduli[r]`, is sampled by segments of
+/// $L = 8$ coefficients when $q_r < 2^{32}$ and $L = 4$ otherwise. Segment
+/// $s$ consumes candidates $w$ of $W = 32$ or $64$ bits in order from the
+/// ChaCha`rounds` blocks whose nonce is the key identifier and whose 64-bit
+/// block counter is $(r + 2^{16} d) \cdot 2^{32} + s + 2^{24} t$ for
+/// attempts $t = 0, 1, \ldots$: each 32-bit word, or each little-endian word
+/// pair. A candidate is accepted when $w q_r \bmod 2^W \ge 2^W \bmod q_r$
+/// and yields $\lfloor w q_r / 2^W \rfloor$, so every accepted value is
+/// uniform on $[0, q_r)$ (Lemire's rejection method). Entries
+/// $Ls, \ldots, Ls + L - 1$ are the first $L$ accepted values. The values are
+/// the stored residues of the key's uniform component (NTT domain,
+/// Montgomery representation) without further conversion. The result has
+/// shape `[key_digit, limb, ring_dimension]` and the dtype of `moduli`, an
+/// int32 or int64 Tensor `[limb]` on the device of `seed_rows`.
+/// Requires fewer than $2^{16}$ rows and digits and a ring dimension
+/// divisible by 8 and at most $2^{26}$; `rounds` must be a supported round
+/// count (12).
+FHELIUM_API at::Tensor expand_seeded_key(const at::Tensor& seed_rows,
+                                         const at::Tensor& moduli,
+                                         int64_t ring_dimension,
+                                         int64_t rounds);
+
 /// Returns the cumulative distribution table of the centered discrete
 /// Gaussian distribution with parameter $\sigma$.
 ///

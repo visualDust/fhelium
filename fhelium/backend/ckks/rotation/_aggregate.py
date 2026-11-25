@@ -53,9 +53,17 @@ class RotationSumAccumulator:
         source: torch.Tensor,
         key: torch.Tensor | None,
         step: int,
+        *,
+        seed: torch.Tensor | None = None,
+        key_rounds: int = 0,
     ) -> None:
-        """Consume CT2 with the common Q layout, scale and polynomial domain."""
+        """Consume CT2 with the common Q layout, scale and polynomial domain.
+
+        A seeded key supplies its seed rows and ChaCha round count.
+        """
         names, tables, options = self._arguments()
+        if seed is not None:
+            options.update(key_seeds=[seed], key_rounds=key_rounds)
         if self.ordinary is None:
             self.ordinary = torch.zeros_like(source)
         # Step zero reads no key products, and the QP layout of a later key

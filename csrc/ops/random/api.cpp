@@ -61,6 +61,14 @@ at::Tensor stochastic_round(const at::Tensor& seed,
   FHELIUM_DISPATCH_CPU_GPU(stochastic_round, seed, values, word_stride);
 }
 
+at::Tensor expand_seeded_key(const at::Tensor& seed_rows,
+                             const at::Tensor& moduli,
+                             int64_t ring_dimension,
+                             int64_t rounds) {
+  FHELIUM_DISPATCH_CPU_GPU(
+      expand_seeded_key, seed_rows, moduli, ring_dimension, rounds);
+}
+
 at::Tensor sample_fixed_weight_ternary(
     const at::Tensor& seed,
     at::IntArrayRef shape,

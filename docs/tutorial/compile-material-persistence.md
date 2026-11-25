@@ -1,13 +1,13 @@
 # Program materials and persistence
 
-**Example source:** [`examples/16_compile_material_persistence.py`](https://github.com/VisualDust/fhelium/blob/main/examples/16_compile_material_persistence.py)
+**Example source:** [`examples/17_compile_material_persistence.py`](https://github.com/VisualDust/fhelium/blob/main/examples/17_compile_material_persistence.py)
 
-Example 16 separates capture from execution preparation. It names two rotation keys, saves a Program with optional Tensor data, loads it, fills missing bindings, and executes with a newly constructed Backend. It introduces no new optimization policy; [Example 11](compile-jit.md) and [Example 12](compose-and-execute-compile-pipeline.md) cover compilation choices.
+Example 17 separates capture from execution preparation. It names two rotation keys, saves a Program with optional Tensor data, loads it, fills missing bindings, and executes with a newly constructed Backend. It introduces no new optimization policy; [Example 12](compile-jit.md) and [Example 13](compose-and-execute-compile-pipeline.md) cover compilation choices.
 
 ```bash
-python examples/16_compile_material_persistence.py --include-materials partial
-python examples/16_compile_material_persistence.py --include-materials none
-python examples/16_compile_material_persistence.py --device cuda:0 --include-materials all
+python examples/17_compile_material_persistence.py --include-materials partial
+python examples/17_compile_material_persistence.py --include-materials none
+python examples/17_compile_material_persistence.py --device cuda:0 --include-materials all
 ```
 
 Use `--output-dir PATH` to retain the file. Otherwise the example cleans up its temporary directory after execution.
@@ -35,5 +35,5 @@ Changing a bound Tensor's contents is visible to execution. Replacing its bindin
 [ArtifactStore](artifact-store.md) can store the same Compilation representation under a logical name.
 
 ::: details Source
-<<< @/../examples/16_compile_material_persistence.py
+<<< @/../examples/17_compile_material_persistence.py
 :::

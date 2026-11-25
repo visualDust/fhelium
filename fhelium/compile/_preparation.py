@@ -21,10 +21,7 @@ from fhelium.ir.dialects._common import OpenStateType
 from fhelium.values import Ciphertext, CompressedPlaintext, Plaintext
 
 from ._compilation import Compilation, DeferredCompilation
-from ._lower_and_fuse import (
-    default_lower_and_fuse_pipeline,
-    instantiated_ckks_pipeline,
-)
+from ._lower_and_fuse import default_lower_and_fuse_pipeline
 from ._pipeline import Pipeline
 from ._specialization import CallSignature, prepare_match
 from ._workspace import CompileWorkspace
@@ -294,15 +291,9 @@ def _input_specialization(
                 argument, represented.with_state(updates)
             )
     program.function().update_function_type()
-    workspace = fresh_workspace(compilation.workspace)
-    from ._origins import clone_origins
-
-    clone_origins(
-        compilation.program, program, compilation.workspace, workspace
-    )
     return Compilation(
         program,
-        workspace,
+        fresh_workspace(compilation.workspace),
         compilation.reports,
         dict(compilation.material_bindings),
     )
@@ -327,13 +318,9 @@ def prepare_variant(
     if keys:
         request.workspace["evaluation_keys"] = keys
     if pipeline is None:
-        selected = (
-            instantiated_ckks_pipeline(backend)
-            if request.workspace.get("structural_template_stage")
-            == "captured-ckks"
-            else default_lower_and_fuse_pipeline(backend)
+        optimized = default_lower_and_fuse_pipeline(backend).run(
+            request, clone=False
         )
-        optimized = selected.run(request, clone=False)
     else:
         if not isinstance(pipeline, Pipeline):
             pipeline = pipeline(signature)

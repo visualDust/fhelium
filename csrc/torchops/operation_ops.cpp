@@ -22,38 +22,51 @@ using fhelium::TensorTable;
 using fhelium::ckks::KeySwitchOptions;
 
 #define FHELIUM_KEY_SWITCH_SCHEMA                                        \
-  "str ntt_backend, int[] digits, int key_row_start, str modup_method, " \
+  "str ntt_backend, int[] digits, int key_row_start, "                   \
+  "int key_p_row_start, int[] key_q_rows, str basis_conversion, "           \
   "int p_count, str moddown_rounding, str input_domain, "                \
-  "str output_domain, int galois_generator"
+  "str output_domain, int galois_generator, Tensor[] key_seeds, "        \
+  "int key_rounds"
 
 #define FHELIUM_KEY_SWITCH_PARAMETERS                                        \
   std::string_view ntt_backend, c10::IntArrayRef digits,                     \
-      int64_t key_row_start, std::string_view modup_method, int64_t p_count, \
+      int64_t key_row_start, int64_t key_p_row_start,                        \
+      c10::IntArrayRef key_q_rows,                                           \
+      std::string_view basis_conversion, int64_t p_count,                        \
       std::string_view moddown_rounding, std::string_view input_domain,      \
-      std::string_view output_domain, int64_t galois_generator
+      std::string_view output_domain, int64_t galois_generator,              \
+      at::TensorList key_seeds, int64_t key_rounds
 
 #define FHELIUM_KEY_SWITCH_OPTIONS     \
   key_switch_options(ntt_backend,      \
                      digits,           \
                      key_row_start,    \
-                     modup_method,     \
+                     key_p_row_start,  \
+                     key_q_rows,       \
+                     basis_conversion,     \
                      p_count,          \
                      moddown_rounding, \
                      input_domain,     \
                      output_domain,    \
-                     galois_generator)
+                     galois_generator, \
+                     key_seeds,        \
+                     key_rounds)
 
 KeySwitchOptions key_switch_options(FHELIUM_KEY_SWITCH_PARAMETERS) {
   KeySwitchOptions options;
   options.ntt_backend = std::string(ntt_backend);
   options.digits = digits.vec();
   options.key_row_start = key_row_start;
-  options.modup_method = std::string(modup_method);
+  options.key_p_row_start = key_p_row_start;
+  options.key_q_rows = key_q_rows.vec();
+  options.basis_conversion = std::string(basis_conversion);
   options.p_count = p_count;
   options.moddown_rounding = std::string(moddown_rounding);
   options.input_domain = std::string(input_domain);
   options.output_domain = std::string(output_domain);
   options.galois_generator = galois_generator;
+  options.key_seeds = key_seeds.vec();
+  options.key_rounds = key_rounds;
   return options;
 }
 
@@ -150,39 +163,13 @@ at::Tensor moddown_add_rescale_op(const at::Tensor& products,
                                            output_domain);
 }
 
-at::Tensor rescale_drop_leading_primes_op(const at::Tensor& source,
-                                          const std::vector<std::string>& names,
-                                          at::TensorList tables,
-                                          int64_t drop_count,
-                                          c10::IntArrayRef half_primes,
-                                          std::string_view rounding,
-                                          std::string_view input_domain,
-                                          std::string_view ntt_backend) {
-  return fhelium::rns::rescale_drop_leading_primes(source,
-                                                   table(names, tables),
-                                                   drop_count,
-                                                   half_primes,
-                                                   rounding,
-                                                   input_domain,
-                                                   ntt_backend);
-}
-
-at::Tensor rescale_drop_leading_primes__op(
-    at::Tensor& source,
-    const std::vector<std::string>& names,
-    at::TensorList tables,
-    int64_t drop_count,
-    c10::IntArrayRef half_primes,
-    std::string_view rounding,
-    std::string_view input_domain,
-    std::string_view ntt_backend) {
-  return fhelium::rns::rescale_drop_leading_primes_(source,
-                                                    table(names, tables),
-                                                    drop_count,
-                                                    half_primes,
-                                                    rounding,
-                                                    input_domain,
-                                                    ntt_backend);
+at::Tensor rational_rescale_op(const at::Tensor& source,
+                               const std::vector<std::string>& names,
+                               at::TensorList tables,
+                               std::string_view input_domain,
+                               std::string_view ntt_backend) {
+  return fhelium::rns::rational_rescale(
+      source, table(names, tables), input_domain, ntt_backend);
 }
 
 at::Tensor key_switch_op(const at::Tensor& source,
@@ -429,13 +416,8 @@ TORCH_LIBRARY_FRAGMENT(fhelium_rns_ops, m) {
       "Tensor[] tables, str ntt_backend, int q_count, int joint_drop_count, "
       "bool joint_drop_is_prefix, str output_domain) -> Tensor");
   m.def(
-      "rescale_drop_leading_primes(Tensor source, str[] table_names, "
-      "Tensor[] tables, int drop_count, int[] half_primes, str rounding, "
+      "rational_rescale(Tensor source, str[] table_names, Tensor[] tables, "
       "str input_domain, str ntt_backend) -> Tensor");
-  m.def(
-      "rescale_drop_leading_primes_(Tensor(a!) source, str[] table_names, "
-      "Tensor[] tables, int drop_count, int[] half_primes, str rounding, "
-      "str input_domain, str ntt_backend) -> Tensor(a!)");
 }
 
 TORCH_LIBRARY_IMPL(fhelium_rns_ops, CompositeImplicitAutograd, m) {
@@ -444,9 +426,8 @@ TORCH_LIBRARY_IMPL(fhelium_rns_ops, CompositeImplicitAutograd, m) {
   m.impl("rounded_trailing_quotient", &rounded_trailing_quotient_op);
   m.impl("moddown_qp_to_q", &moddown_qp_to_q_op);
   m.impl("moddown_ntt_qp_to_q", &moddown_ntt_qp_to_q_op);
+  m.impl("rational_rescale", &rational_rescale_op);
   m.impl("moddown_add_rescale", &moddown_add_rescale_op);
-  m.impl("rescale_drop_leading_primes", &rescale_drop_leading_primes_op);
-  m.impl("rescale_drop_leading_primes_", &rescale_drop_leading_primes__op);
 }
 
 TORCH_LIBRARY_FRAGMENT(fhelium_ckks_ops, m) {

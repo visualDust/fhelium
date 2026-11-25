@@ -14,7 +14,7 @@ import fhelium as fh
 from fhelium import compile as fc
 from fhelium.eager import Engine
 
-config = fh.CkksConfig.parse(fh.Preset.slots8192_scale40_depth7_int64)
+config = fh.CkksConfig.parse(fh.Preset.slots8192_scale40_depth7)
 engine = Engine(config)
 secret = engine.create_secret_key(device="cpu")
 public = engine.create_public_key(secret, device="cpu")
@@ -90,4 +90,4 @@ print(executable.manifest)
 
 For a manual Compilation, complete the selected lowering and operand preparation before this step. Restore any configuration or caller workspace entries required by additional passes; they were not serialized. Linking requires the implementation and execution facts consumed by the chosen operations. A portable Program can retain unresolved facts until this preparation stage.
 
-The observable outcome is a restored, newly linked calculation with the intended decoded result. `examples/16_compile_material_persistence.py` exercises omitted, partial, and complete material inclusion. [ArtifactStore](manage-artifacts.md) adds logical names and checked generations for stored values; [device placement](switch-cpu-cuda.md) covers moving data and recreating live state. See [Materials and preparation](../developer/materials-and-preparation.md) and [Compilation persistence](../developer/compilation-persistence.md) for the contracts.
+The observable outcome is a restored, newly linked calculation with the intended decoded result. `examples/17_compile_material_persistence.py` exercises omitted, partial, and complete material inclusion. [ArtifactStore](manage-artifacts.md) adds logical names and checked generations for stored values; [device placement](switch-cpu-cuda.md) covers moving data and recreating live state. See [Materials and preparation](../developer/materials-and-preparation.md) and [Compilation persistence](../developer/compilation-persistence.md) for the contracts.

@@ -19,7 +19,6 @@ _KNOWN_REGION_OPERATION_NAMES = frozenset(
     {
         scf.ForOp.name,
         scf.IfOp.name,
-        ckks.RepeatOp.name,
         "fhelium_dist.all_reduce",
     }
 )
@@ -27,7 +26,7 @@ _KNOWN_REGION_OPERATION_NAMES = frozenset(
 
 def _is_terminator(operation: Operation) -> bool:
     return isinstance(
-        operation, (ReturnOp, scf.YieldOp, ckks.RepeatYieldOp)
+        operation, (ReturnOp, scf.YieldOp)
     ) or operation.name == ("fhelium_dist.yield")
 
 

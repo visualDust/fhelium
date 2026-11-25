@@ -197,6 +197,14 @@ class _EagerOperationDispatcher:
                         strict=True,
                     )
                 )
+            start = ids[0]
+            if ids != tuple(range(start, start + len(ids))):
+                # Gather the key rows of a basis that is not a row interval.
+                key = inputs[1]
+                rows = torch.tensor(ids, device=key.device)
+                dimension = 1 if operation_type is ckks.EncryptOp else 0
+                inputs = (inputs[0], key.index_select(dimension, rows), *inputs[2:])
+                start = 0
             inputs = (*inputs, *tensors.values())
             invocation = OperationInvocation._from_eager(
                 operation_type,
@@ -205,7 +213,7 @@ class _EagerOperationDispatcher:
                 {
                     **invocation.attributes,
                     "parameter_names": tuple(tensors),
-                    "key_row_start": ids[0],
+                    "key_row_start": start,
                     "ntt_backend": self.ntt_context.ntt_backend_name,
                 },
             )
@@ -264,11 +272,11 @@ class _EagerOperationDispatcher:
                 {**invocation.attributes, **facts},
             )
             prepared_resources = ()
-        elif operation_type is rns.RescaleDropLeadingPrimesOp:
+        elif operation_type is rns.RescaleOp:
             tensors, facts = self.device_resources.rescale_operands(
-                inputs[0].size(-2),
-                cast(int, invocation.attributes.get("drop_count", 1)),
-                include_p=bool(bases and bases[0] == "QP"),
+                cast(tuple[int, ...], invocation.attributes["source_prime_ids"]),
+                cast(tuple[int, ...], invocation.attributes["target_prime_ids"]),
+                rounding=str(invocation.attributes.get("rounding", "nearest")),
                 input_domain=str(
                     invocation.attributes.get("input_domain", "coefficient")
                 ),
@@ -306,8 +314,8 @@ class _EagerOperationDispatcher:
             tensors, facts = self.device_resources.key_switch_operands(
                 depth,
                 moddown_rounding=rounding,
-                modup_method=str(
-                    invocation.attributes.get("modup_method", "exact")
+                basis_conversion=str(
+                    invocation.attributes.get("basis_conversion", "exact")
                 ),
                 rescale=operation_type is ckks.RelinearizeOp
                 and bool(invocation.attributes.get("rescale", False)),

@@ -5,12 +5,13 @@ Start with [installation](installation.md) and [security](../developer/security.
 | Module | Examples | Entry point |
 | --- | --- | --- |
 | Eager | 01–08 | [Basic CKKS workflow](basic-ckks-workflow.md) |
-| Values, Serialization, and Artifacts | 09–10 | [Value movement and files](value-memory-and-persistence.md) |
-| Compile | 11–16 | [JIT compilation](compile-jit.md) |
-| Runtime | 17–18 | [Double-buffered execution](reusable-value-buffer.md) |
-| Residency | 19–20 | [Manual Residency](explicit-residency.md) |
-| Distributed | 21–24 | [Data-parallel encrypted batches](spmd-independent-ciphertexts.md) |
-| Experimental | 25–26 | [Experimental bootstrapping](composable-ckks-bootstrap.md) |
+| Algorithms | 09 | [Bootstrapping](composable-ckks-bootstrap.md) |
+| Values, Serialization, and Artifacts | 10–11 | [Value movement and files](value-memory-and-persistence.md) |
+| Compile | 12–17 | [JIT compilation](compile-jit.md) |
+| Runtime | 18–19 | [Double-buffered execution](reusable-value-buffer.md) |
+| Residency | 20–21 | [Manual Residency](explicit-residency.md) |
+| Distributed | 22–25 | [Data-parallel encrypted batches](spmd-independent-ciphertexts.md) |
+| Experimental | 26 | [Multiparty CKKS](multiparty-ckks.md) |
 
 ## Choose a level of control
 

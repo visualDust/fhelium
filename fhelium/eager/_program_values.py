@@ -214,13 +214,8 @@ def public_value_from_tensor(
         prime_ids = tuple(
             int(cast(IntegerAttr, item).value.data) for item in prime_attribute
         )
-    elif template is not None:
-        row_count = data.size(-2)
-        if row_count > len(template.prime_ids):
-            raise ValueError(
-                "CKKS result has more RNS rows than its public template"
-            )
-        prime_ids = tuple(template.prime_ids[-row_count:])
+    elif template is not None and data.size(-2) == len(template.prime_ids):
+        prime_ids = template.prime_ids
     else:
         raise ValueError("CKKS result lacks represented 'prime_ids'")
     if isinstance(value_type, ckks.CiphertextType):

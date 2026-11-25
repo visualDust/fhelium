@@ -152,7 +152,7 @@ If a scope body also failed, keep the body exception as primary and inspect `sco
 - [Residency lifetimes](../concepts/execution/residency-lifetimes.md)
 - [Automatic Residency tutorial](../tutorial/automatic-residency.md)
 - [Explicit Residency tutorial](../tutorial/explicit-residency.md)
-- [Automatic Example 20 source](https://github.com/VisualDust/fhelium/blob/main/examples/20_residency_automatic.py)
+- [Automatic Example 21 source](https://github.com/VisualDust/fhelium/blob/main/examples/21_residency_automatic.py)
 - [`ResidencySnapshot` API](../api/fhelium/residency/snapshot.md#residencysnapshot)
 - [`ResidencyDecision` API](../api/fhelium/residency/controller.md#residencydecision)
 - [Residency exception API](../api/fhelium/errors.md)

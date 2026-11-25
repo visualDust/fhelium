@@ -7,6 +7,11 @@ from dataclasses import dataclass, field
 import torch
 
 from fhelium.backend.rns.operations import weighted_sum_operands
+from fhelium.ir._operation_structure import (
+    compressed,
+    elementwise,
+    plaintext_product,
+)
 from fhelium.ir.dialects import ckks, rns
 from fhelium.native.wrapper import rns_ops
 
@@ -15,8 +20,7 @@ from ._expressions import (
     Expr,
     InputLayout,
     ValueExpr,
-    arithmetic_value,
-    compact_value,
+    structured_value,
 )
 from ._pointwise import PointwisePlan, execution_parameters
 
@@ -29,6 +33,7 @@ class TritonWeightedSumImplementation:
     modular products and left-associated additions use the existing RNS
     expression generator. Dense and compressed plaintexts remain runtime
     operands; sparse implicit rows are loaded from their supplied Tensors.
+    The implementation sets ``requires_request``: Compile selects it only when a caller names it or a fusion region requests it, and an unannotated weighted sum outside a region uses the native implementation.
     Chunk results are added modulo each prime without changing scale or depth.
     """
 
@@ -38,6 +43,7 @@ class TritonWeightedSumImplementation:
         rns.MontgomeryWeightedSumsOp,
     )
     supports_in_place: bool = False
+    requires_request: bool = True
     _plans: dict[object, PointwisePlan] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -45,7 +51,7 @@ class TritonWeightedSumImplementation:
     def resource_requirements(self, invocation):
         return ()
 
-    def _row(self, ciphertexts, represented, parameters, radix):
+    def _row(self, ciphertexts, represented, parameters, radix, out=None):
         inputs = list(ciphertexts)
         inputs.extend(plaintext for plaintext, _, _ in represented)
         inputs.extend(
@@ -89,20 +95,28 @@ class TritonWeightedSumImplementation:
                 if implicit is not None:
                     operands.append(values[implicit_index])
                     implicit_index += 1
-                term = (
-                    arithmetic_value(rns.MultiplyPlaintextOp, operands, 0)
+                structure = (
+                    plaintext_product()
                     if layout == "dense"
-                    else compact_value(
-                        ckks.MultiplyCompressedPlaintextOp,
-                        operands,
-                        0,
-                        layout=layout,
-                    )
+                    else compressed("multiply", len(operands) + 1, layout, False)
+                )
+                term = structured_value(
+                    structure,
+                    dict(enumerate(operands)),
+                    0,
+                    rns.MultiplyPlaintextOp
+                    if layout == "dense"
+                    else ckks.MultiplyCompressedPlaintextOp,
                 )
                 total = (
                     term
                     if total is None
-                    else arithmetic_value(rns.AddStandardOp, [total, term], 0)
+                    else structured_value(
+                        elementwise("add", 2),
+                        {0: total, 1: term},
+                        0,
+                        rns.AddStandardOp,
+                    )
                 )
             assert total is not None
             plan = PointwisePlan.build(
@@ -110,7 +124,12 @@ class TritonWeightedSumImplementation:
                 dtype=inputs[0].dtype,
             )
             self._plans[key] = plan
-        return plan.execute(tuple(inputs), parameters, radix)[0]
+        return plan.execute(
+            tuple(inputs),
+            parameters,
+            radix,
+            None if out is None else {plan.graph.outputs[0].root: out},
+        )[0]
 
     def execute(self, invocation, values, resources, *, in_place):
         del resources
@@ -144,6 +163,19 @@ class TritonWeightedSumImplementation:
         chunk = int(invocation.attributes.get("term_chunk_size", count))
         if chunk <= 0:
             raise ValueError("Weighted-sum term chunk size must be positive")
+        grouped = invocation.operation_type is rns.MontgomeryWeightedSumsOp
+        shape = ciphertexts[0].shape
+        # Group sums are written into their slices of one [component, group,
+        # ...] result instead of being stacked afterwards.
+        result = (
+            torch.empty(
+                (shape[0], len(represented) // count, *shape[1:]),
+                dtype=ciphertexts[0].dtype,
+                device=ciphertexts[0].device,
+            )
+            if grouped
+            else None
+        )
         outputs = []
         for start in range(0, len(represented), count):
             row = represented[start : start + count]
@@ -154,14 +186,16 @@ class TritonWeightedSumImplementation:
                     row[offset : offset + chunk],
                     parameters,
                     radix,
+                    out=None
+                    if result is None or total is not None
+                    else result[:, start // count],
                 )
                 if total is None:
                     total = partial
                 else:
-                    rns_ops.add_standard_(total, partial, parameters)
+                    for component in range(total.size(0)):
+                        rns_ops.add_standard_(
+                            total[component], partial[component], parameters
+                        )
             outputs.append(total)
-        return (
-            torch.stack(outputs, dim=1)
-            if invocation.operation_type is rns.MontgomeryWeightedSumsOp
-            else outputs[0],
-        )
+        return (result if grouped else outputs[0],)

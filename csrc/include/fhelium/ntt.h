@@ -32,9 +32,12 @@
 //!   `[limb, stage, N/2]`. A schedule must be accepted by
 //!   `validate_indexed_schedule` before use and must not change while execution
 //!   that uses it is prepared.
-//! - Compact: twiddles of shape `[limb, N]`, executed in groups of
-//!   `grouped_stage_count` radix-2 stages (2, 3, or 4) with a shared-memory
-//!   tail. CUDA int32 kernels also accept `[limb, N, 2]` Shoup pairs.
+//! - Compact: radix-2 twiddles of shape `[limb, N]` in bit-reversed stage
+//!   order. For $N = 2^L$ the transform makes two passes over the operand: one
+//!   pass applies $\lfloor L/2 \rfloor$ stages to coefficients spaced
+//!   $2^{L - \lfloor L/2 \rfloor}$ apart, and the other applies the remaining
+//!   stages to contiguous tiles. CUDA int32 kernels also accept
+//!   `[limb, N, 2]` Shoup pairs.
 //! - Power-of-two radix: `outer_twiddles` of shape `[limb, N-1]` and
 //!   `radix_root_powers` of shape `[limb, radix]` for radix 4, 8, or 16;
 //!   $\log_2 N$ is a multiple of $\log_2$ radix.
@@ -79,29 +82,26 @@ FHELIUM_API at::Tensor forward_ntt_to_montgomery_indexed(
     const at::Tensor& forward_twiddles,
     const at::Tensor& rns_params);
 
-/// Forward NTT of coefficient-domain Montgomery residues with compact twiddles
-/// and grouped stages, in place.
-FHELIUM_API void forward_ntt_montgomery_compact_grouped_smem_(
+/// Forward NTT of coefficient-domain Montgomery residues with compact twiddles,
+/// in place.
+FHELIUM_API void forward_ntt_montgomery_compact_(
     at::Tensor& montgomery_residues,
     const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count);
+    const at::Tensor& rns_params);
 
-/// Forward NTT of coefficient-domain standard residues with compact twiddles
-/// and grouped stages, in place.
-FHELIUM_API void forward_ntt_to_montgomery_compact_grouped_smem_(
+/// Forward NTT of coefficient-domain standard residues with compact twiddles,
+/// in place.
+FHELIUM_API void forward_ntt_to_montgomery_compact_(
     at::Tensor& standard_residues,
     const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count);
+    const at::Tensor& rns_params);
 
-/// Forward NTT of coefficient-domain standard residues with compact twiddles
-/// and grouped stages; returns a new Tensor.
-FHELIUM_API at::Tensor forward_ntt_to_montgomery_compact_grouped_smem(
+/// Forward NTT of coefficient-domain standard residues with compact twiddles;
+/// returns a new Tensor.
+FHELIUM_API at::Tensor forward_ntt_to_montgomery_compact(
     const at::Tensor& standard_residues,
     const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count);
+    const at::Tensor& rns_params);
 
 /// Transforms a correction to the NTT domain and adds a scaled NTT addend in
 /// the same pass.
@@ -110,16 +110,14 @@ FHELIUM_API at::Tensor forward_ntt_to_montgomery_compact_grouped_smem(
 /// with $\operatorname{NTT}(e) + a \cdot m_j R^{-1} \bmod q_j$ in NTT-domain
 /// Montgomery form and the lazy range. `addend` holds NTT-domain Montgomery
 /// residues $a$ with the shape of `source`, and `multiplier` holds one
-/// Montgomery scalar $m_j$ per limb. The transform uses compact twiddles and
-/// `grouped_stage_count` as in
-/// `forward_ntt_to_montgomery_compact_grouped_smem_`.
+/// Montgomery scalar $m_j$ per limb. The transform uses compact twiddles as in
+/// `forward_ntt_to_montgomery_compact_`.
 FHELIUM_API void forward_ntt_to_montgomery_compact_add_scaled_(
     at::Tensor& source,
     const at::Tensor& addend,
     const at::Tensor& multiplier,
     const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count);
+    const at::Tensor& rns_params);
 
 /// Transforms one coefficient-domain key-switching digit and accumulates its
 /// key products.
@@ -138,7 +136,7 @@ FHELIUM_API void forward_ntt_montgomery_compact_keyswitch_accumulate_(
     at::Tensor& accumulator0_qp,
     at::Tensor& accumulator1_qp,
     int64_t key_row_start,
-    int64_t grouped_stage_count = 4);
+    int64_t key_p_row_start = -1);
 
 /// Forward NTT of coefficient-domain Montgomery residues with power-of-two
 /// radix stages, in place.
@@ -200,37 +198,33 @@ FHELIUM_API void inverse_ntt_to_centered_indexed_(
     const at::Tensor& inverse_twiddles,
     const at::Tensor& rns_params);
 
-/// Inverse NTT with compact twiddles and grouped stages, in place, producing
+/// Inverse NTT with compact twiddles, in place, producing
 /// coefficient-domain Montgomery residues in $[0, 2q_j)$.
-FHELIUM_API void inverse_ntt_montgomery_compact_grouped_smem_(
+FHELIUM_API void inverse_ntt_montgomery_compact_(
     at::Tensor& montgomery_residues,
     const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count);
+    const at::Tensor& rns_params);
 
-/// Inverse NTT with compact twiddles and grouped stages, in place, producing
+/// Inverse NTT with compact twiddles, in place, producing
 /// coefficient-domain standard residues in $[0, 2q_j)$.
-FHELIUM_API void inverse_ntt_to_standard_lazy_compact_grouped_smem_(
+FHELIUM_API void inverse_ntt_to_standard_lazy_compact_(
     at::Tensor& montgomery_residues,
     const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count);
+    const at::Tensor& rns_params);
 
-/// Inverse NTT with compact twiddles and grouped stages, in place, producing
+/// Inverse NTT with compact twiddles, in place, producing
 /// coefficient-domain standard residues in $[0, q_j)$.
-FHELIUM_API void inverse_ntt_to_standard_compact_grouped_smem_(
+FHELIUM_API void inverse_ntt_to_standard_compact_(
     at::Tensor& montgomery_residues,
     const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count);
+    const at::Tensor& rns_params);
 
-/// Inverse NTT with compact twiddles and grouped stages, in place, producing
+/// Inverse NTT with compact twiddles, in place, producing
 /// coefficient-domain standard residues in the centered range.
-FHELIUM_API void inverse_ntt_to_centered_compact_grouped_smem_(
+FHELIUM_API void inverse_ntt_to_centered_compact_(
     at::Tensor& montgomery_residues,
     const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count);
+    const at::Tensor& rns_params);
 
 /// Inverse NTT with power-of-two radix stages, in place, producing
 /// coefficient-domain Montgomery residues in $[0, 2q_j)$.
@@ -276,29 +270,16 @@ FHELIUM_API void validate_indexed_schedule(const at::Tensor& even_indices,
                                            const at::Tensor& odd_indices,
                                            int64_t ring_dimension);
 
-/// Executes a half-open interval of unnormalized compact radix-2 stages in
+/// Executes a half-open interval of unnormalized power-of-two radix stages in
 /// place.
 ///
 /// The interval `[start_stage, end_stage)` with $0 \le$ `start_stage` $\le$
 /// `end_stage` $\le \log_2 N$ selects forward decimation-in-frequency stages
 /// or, when `inverse` is true, inverse decimation-in-time stages, on Montgomery
-/// residues with compact twiddles. Representation conversion and the inverse
-/// factor $N^{-1}$ are left to the caller. Successive calls compose a full
-/// transform.
-FHELIUM_API void compact_ntt_stage_range_(at::Tensor& residues,
-                                          const at::Tensor& compact_twiddles,
-                                          const at::Tensor& rns_params,
-                                          bool inverse,
-                                          int64_t start_stage,
-                                          int64_t end_stage,
-                                          int64_t grouped_stage_count);
-
-/// Executes a half-open interval of unnormalized power-of-two radix stages in
-/// place.
-///
-/// Operands and stage semantics follow `compact_ntt_stage_range_`, with
-/// `outer_twiddles` and `root_powers` in the power-of-two radix layout.
-/// `start_stage` and `end_stage` are multiples of $\log_2$ radix.
+/// residues with `outer_twiddles` and `root_powers` in the power-of-two radix
+/// layout. `start_stage` and `end_stage` are multiples of $\log_2$ radix.
+/// Representation conversion and the inverse factor $N^{-1}$ are left to the
+/// caller. Successive calls compose a full transform.
 FHELIUM_API void fixed_radix_ntt_stage_range_(at::Tensor& residues,
                                               const at::Tensor& outer_twiddles,
                                               const at::Tensor& root_powers,

@@ -4,14 +4,19 @@ from __future__ import annotations
 
 from typing import Literal, cast
 
+from fractions import Fraction
+
 from xdsl.dialects.builtin import (
     ArrayAttr,
+    FloatAttr,
     IntegerAttr,
     StringAttr,
 )
-from xdsl.ir import Operation
+from xdsl.ir import Attribute, Operation
 
+from fhelium.backend.rns.tables import RESCALE_TABLE_NAMES
 from fhelium.config import CkksConfig
+from fhelium.ir.ckks_state import depth_prime_ids
 from fhelium.config.ntt import (
     CompactRadix2Policy,
     IndexedRadix2Policy,
@@ -232,6 +237,62 @@ def _lower_ntt(
     )
 
 
+def _rescale_materials(
+    operation: Operation,
+    config: CkksConfig,
+    path: str,
+    source_ids: tuple[int, ...],
+    target_ids: tuple[int, ...],
+    rounding: str,
+    domain: str,
+    attributes: dict[str, Attribute],
+) -> tuple[tuple[core.MaterialRefOp, ...], dict[str, dict[str, object]]]:
+    """Reference the tables of one rescale from ``source_ids`` to ``target_ids``.
+
+    ``attributes`` receives the ``parameter_names`` of the referenced tables."""
+
+    names = [
+        *RESCALE_TABLE_NAMES,
+        *(
+            ("target_keep_positions", "restore")
+            if not set(target_ids) <= set(source_ids)
+            else ()
+        ),
+    ]
+    policy = attributes.get("ntt_backend")
+    policy_name = policy.data if isinstance(policy, StringAttr) else "unknown"
+    if domain == "ntt":
+        count = _ntt_table_count(policy_name)
+        names.extend(
+            f"{part}_{direction}_{i}"
+            for part, direction in (("dropped", "inverse"), ("target", "forward"))
+            for i in range(count)
+        )
+        names.append("product_inverse")
+    refs = tuple(
+        core.MaterialRefOp(
+            core.MessageType(),
+            symbol=material_symbol(operation, f"{path}/{name}"),
+        )
+        for name in names
+    )
+    descriptions = {
+        cast(StringAttr, reference.symbol).data: parameter_description(
+            config,
+            "rescale_table",
+            source_prime_ids=list(source_ids),
+            target_prime_ids=list(target_ids),
+            rounding=rounding,
+            name=name,
+            input_domain=domain,
+            ntt_backend=policy_name,
+        )
+        for name, reference in zip(names, refs, strict=True)
+    }
+    attributes["parameter_names"] = ArrayAttr(StringAttr(name) for name in names)
+    return refs, descriptions
+
+
 def _lower_rescale(
     operation: Operation,
     config: CkksConfig | None,
@@ -250,77 +311,34 @@ def _lower_rescale(
     if not isinstance(depth_attr, IntegerAttr):
         raise ValueError("rescale lowering requires concrete ciphertext depth")
     depth = int(depth_attr.value.data)
-    drop_count = len(config.q_depth_groups[depth])
+    basis_attr = source_rns_type.state.data.get("basis")
+    basis = basis_attr.data if isinstance(basis_attr, StringAttr) else "Q"
+    source_ids = depth_prime_ids(config, depth, basis)
+    target_ids = depth_prime_ids(config, depth + 1, basis)
     parameters = tuple(operation.parameters)
     parameter_ops: tuple[Operation, ...] = ()
     descriptions: dict[str, dict[str, object]] = {}
     attributes = {
         name: value
         for name, value in operation.attributes.items()
-        if name in {"parameter_names", "half_primes", "ntt_backend"}
+        if name in {"parameter_names", "ntt_backend"}
     }
     if not parameters:
-        names = [
-            name
-            for i in range(drop_count)
-            for name in (f"step{i}_parameters", f"step{i}_inverse")
-        ]
-        if operation.input_domain.data == "ntt":
-            policy = attributes.get("ntt_backend", StringAttr("unknown"))
-            assert isinstance(policy, StringAttr)
-            count = _ntt_table_count(policy.data)
-            names.extend(
-                f"{basis}_{direction}_{i}"
-                for basis, direction in (
-                    ("dropped", "inverse"),
-                    ("remaining", "forward"),
-                )
-                for i in range(count)
-            )
-            names.append("prefix_inverse")
-        basis_attr = source_rns_type.state.data.get("basis")
-        basis = (
-            basis_attr.data if isinstance(basis_attr, StringAttr) else "unknown"
+        parameter_ops, descriptions = _rescale_materials(
+            operation,
+            config,
+            f"rescale/{basis}/{depth}/{rounding.data}",
+            source_ids,
+            target_ids,
+            rounding.data,
+            operation.input_domain.data,
+            attributes,
         )
-        refs = tuple(
-            core.MaterialRefOp(
-                core.MessageType(),
-                symbol=material_symbol(
-                    operation, f"rescale/{basis}/{depth}/{name}"
-                ),
-            )
-            for name in names
-        )
-        parameter_ops = refs
-        parameters = tuple(ref.value for ref in refs)
-        for name, reference in zip(names, refs, strict=True):
-            policy = attributes.get("ntt_backend")
-            descriptions[cast(StringAttr, reference.symbol).data] = (
-                parameter_description(
-                    config,
-                    "rescale_table",
-                    depth=depth,
-                    basis=basis,
-                    name=name,
-                    input_domain=operation.input_domain.data,
-                    ntt_backend=policy.data
-                    if isinstance(policy, StringAttr)
-                    else "unknown",
-                )
-            )
-
-        attributes["parameter_names"] = ArrayAttr(
-            StringAttr(name) for name in names
-        )
-        attributes["half_primes"] = ArrayAttr(
-            IntegerAttr(prime // 2, 64)
-            for prime in config.q_depth_groups[depth]
-        )
-    logical = rns.RescaleDropLeadingPrimesOp(
+        parameters = tuple(ref.value for ref in parameter_ops)
+    logical = rns.RescaleOp(
         value,
         parameters,
         _rns_type(operation.result.type),
-        drop_count=drop_count,
         attributes=attributes,
         rounding=rounding,
         polynomial_domain=cast(
@@ -375,6 +393,15 @@ def _lower_mod_switch(
 ) -> LoweredCkksOperation:
     if not isinstance(operation, ckks.ModSwitchOp):
         raise TypeError("Modulus-switch lowering received another operation")
+    state = operation.value.type.state.data
+    depth_attr = state.get("depth")
+    target_depth = int(operation.target_depth.value.data)
+    if (
+        config is not None
+        and isinstance(depth_attr, IntegerAttr)
+        and not config.is_subbasis(int(depth_attr.value.data), target_depth)
+    ):
+        return _lower_level_reduce(operation, config, compilation)
     input_cast, value = _cast_to_rns(operation.value)
     logical = rns.RestrictDepthOp(
         value,
@@ -387,6 +414,74 @@ def _lower_mod_switch(
     return LoweredCkksOperation(
         (input_cast, logical, result_cast),
         result,
+    )
+
+
+def _lower_level_reduce(
+    operation: ckks.ModSwitchOp,
+    config: CkksConfig,
+    compilation,
+) -> LoweredCkksOperation:
+    r"""Lower a move to a non-subset basis as $c\cdot x$ followed by one rescale.
+
+    With $\rho=D/R$ the ratio from the source basis to the target basis,
+    $c=\operatorname{round}(\Delta_t\rho/\Delta)$ for the input actual scale
+    $\Delta$, matching ``Engine.mod_switch_to_depth``.
+    """
+
+    state = operation.value.type.state.data
+    source_depth = int(cast(IntegerAttr, state["depth"]).value.data)
+    target_depth = int(operation.target_depth.value.data)
+    scale_attr = state.get("scale")
+    if not isinstance(scale_attr, FloatAttr):
+        raise ValueError(
+            "Moving to a non-subset basis requires a known input scale"
+        )
+    multiplier = round(
+        Fraction(config.scale_at(target_depth))
+        * config.transition_ratio(source_depth, target_depth)
+        / Fraction(float(scale_attr.value.data))
+    )
+    scaled = ckks.MultiplyIntegerScalarOp(
+        operation.value, scalar=IntegerAttr(multiplier, 64)
+    )
+    basis_attr = state.get("basis")
+    basis = basis_attr.data if isinstance(basis_attr, StringAttr) else "Q"
+    source_ids = depth_prime_ids(config, source_depth, basis)
+    target_ids = depth_prime_ids(config, target_depth, basis)
+    domain_attr = state.get("polynomial_domain")
+    domain = (
+        domain_attr.data if isinstance(domain_attr, StringAttr) else "coefficient"
+    )
+    attributes: dict[str, Attribute] = {
+        name: value
+        for name, value in operation.attributes.items()
+        if name == "ntt_backend"
+    }
+    refs, descriptions = _rescale_materials(
+        operation,
+        config,
+        f"level-reduce/{basis}/{source_depth}/{target_depth}",
+        source_ids,
+        target_ids,
+        "nearest",
+        domain,
+        attributes,
+    )
+    input_cast, value = _cast_to_rns(scaled.result)
+    logical = rns.RescaleOp(
+        value,
+        tuple(ref.value for ref in refs),
+        _rns_type(operation.result.type),
+        attributes=attributes,
+        rounding="nearest",
+        polynomial_domain=cast(Literal["coefficient", "ntt"], domain),
+    )
+    result_cast, result = _cast_to_ckks(logical.result, operation.result.type)
+    return LoweredCkksOperation(
+        (scaled, *refs, input_cast, logical, result_cast),
+        result,
+        descriptions,
     )
 
 

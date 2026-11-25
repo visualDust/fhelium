@@ -194,7 +194,7 @@ def benchmark_recommend_group() -> None:
     "--preset",
     "preset_name",
     type=click.Choice(tuple(preset.value for preset in Preset)),
-    default=Preset.slots32768_scale40_depth34_int64.value,
+    default=Preset.slots32768_scale40_depth34.value,
     show_default=True,
 )
 @click.option("--device", default="cuda:0", show_default=True)

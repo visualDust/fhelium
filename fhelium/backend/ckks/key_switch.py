@@ -8,7 +8,7 @@ import torch
 from xdsl.ir import Operation
 from fhelium.backend.implementation import OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
-from fhelium.backend._native_operands import key_switch_options, named_tables
+from fhelium.backend._native_operands import named_tables, seeded_key_operands
 from fhelium.ir.dialects import ckks
 from fhelium.native.wrapper import ckks_ops
 
@@ -53,12 +53,13 @@ class NativeKeySwitchImplementation:
     ) -> tuple[torch.Tensor, ...]:
         del resources, in_place
         attributes = invocation.attributes
+        options, end = seeded_key_operands(attributes, inputs, 2, 1)
         return (
             ckks_ops.key_switch(
                 inputs[0],
                 inputs[1],
-                *named_tables(attributes["parameter_names"], inputs[2:]),
-                **key_switch_options(attributes),
+                *named_tables(attributes["parameter_names"], inputs[end:]),
+                **options,
                 conjugate=invocation.operation_type is ckks.ConjugateOp,
             ),
         )
@@ -91,7 +92,8 @@ class NativeRelinearizeImplementation:
         del resources, in_place
         attributes = invocation.attributes
         rescale = bool(attributes.get("rescale", False))
-        names, tables = named_tables(attributes["parameter_names"], inputs[2:])
+        options, end = seeded_key_operands(attributes, inputs, 2, 1)
+        names, tables = named_tables(attributes["parameter_names"], inputs[end:])
         drop_count = attributes.get("joint_drop_count")
         if rescale and drop_count is None:
             drop_count = tables[names.index("joint_drop_positions")].numel()
@@ -101,7 +103,7 @@ class NativeRelinearizeImplementation:
                 inputs[1],
                 names,
                 tables,
-                **key_switch_options(attributes),
+                **options,
                 rescale=rescale,
                 q_count=int(attributes.get("q_count", 0)),
                 joint_drop_count=int(drop_count or 0),

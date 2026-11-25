@@ -152,7 +152,7 @@ Both routes can use the editable `default_lower_and_fuse_pipeline`. It resolves 
 
 A specialization records input metadata and static scalar conditions, its transformed Compilation, and its linked executable. A call with a new input specialization performs capture, transformation, linking and kernel warming before executing; `prepare` performs the same work without executing. `on_miss="error"` requires prior preparation. `with_backend` snapshots transformed variants for linking with another Backend, while future variants are prepared independently.
 
-Callable reuse has three levels: a resident executable for matching `CallSignature` conditions, an optimized Program for one input specialization, and a high-level structural template shared by a source family. A source family groups supported calls whose Python computation and fixed configuration agree while represented CKKS depth, scale or prime-row extent can vary. Each level retains the conditions needed by its consumer.
+Callable reuse has two levels: a resident executable for matching `CallSignature` conditions and an optimized Program for one input specialization. A new input specialization, including a new entry depth, is captured and transformed for its concrete value states.
 
 The default `graph=False` policy retains prepared execution. Selecting `graph="auto"` or `graph=True` attempts CUDA Graph capture after a specialization’s first prepared execution. Each callable owns its Graphs and their device-local shared pools. Unsupported capture and autograd outputs retain prepared execution. Graph results use owned storage by default; borrowed output is an optional lifetime contract. These execution states and fallback reasons are observable in callable statistics.
 
@@ -160,28 +160,9 @@ Clearing a callable releases its Graphs before their pools, then releases reside
 
 Compile constructs fusion regions, and the selected Backend generates their numerical execution. A region may contain one pointwise kernel or several synchronized transform stages. Host preparation can complete before first-use device compilation; execute the prepared workload before measuring warmed execution or recording its CUDA Graph. Callable specialization, generated device code, and CUDA Graph capture therefore have distinct preparation lifetimes.
 
-## Structural templates and instance Programs
+## Optimized Programs per input specialization
 
-A structural template retains captured operation structure and the origins of its state facts. An instance Program is the concrete computation produced by evaluating those facts against current input and material state. Template instantiation avoids repeating Python source execution and Engine capture adapters; transformation and linking operate on the new instance.
-
-| Fact origin | Meaning during instantiation |
-| --- | --- |
-| `Known` | A fixed captured constant or intrinsic operation attribute |
-| `InputField` | A field read from the current input or material owner |
-| `Derived` | A fact computed by an operation’s state-transition rule from current operands |
-| `Unknown` | A fact that remains unresolved until an applicable analysis or preparation step assigns it |
-
-Depth, actual scale, active prime identities and physical layouts retain their dependencies. The template preserves the declared evaluation-key layout; compatible fresh key payloads are rebound before execution. Material Tensor contents are absent from template identity and storage. Numerical tables are declared and supplied for the instance’s current state.
-
-Python reads of value metadata become guards: the observed field must retain the value on which captured Python control flow or attribute construction depended. A guard miss invokes ordinary capture and can produce another guarded variant. Changing captured Python constants requires clearing the resident callable so the next preparation observes the new source configuration.
-
-Supported CKKS templates include arithmetic, scalar operations, representation transitions, depth transitions, key operations and modulus raising. Capture can record static Python loops and supported helper calls. Registered Tensor calls and encrypted semantic addition, subtraction, multiplication, negation and rotation can also form templates. Codec-specific paths, grouped-RNS operations and arbitrary value replacement remain ordinary capture paths when template rules do not cover them. Template eligibility governs reuse; an unsupported template pattern can still execute through the normal compiler.
-
-An instantiated CKKS Program uses a reduced preparation recipe because its source-level transitions and current value states are already represented. A semantic template still requires the full instance scheduling sequence. Common-subexpression elimination, dead-value elimination, operation selection and fusion remain instance transformations.
-
-Selection plans retain guarded decisions for built-in per-operation lowering and whole-block fusion schedules. Applying a plan reconstructs operations and fusion regions on the current instance graph. Guards cover graph structure, implementation policy and the facts consumed by selection. A key-layout or digit-layout change can invalidate a local decision while neighboring arithmetic decisions remain reusable.
-
-Optimized Programs persist per input specialization. Structural templates are shared in process memory and optionally persisted under the cache directory’s `structures` subdirectory. Both store Program structure and material relocation descriptions; each reuse binds current material objects before linking. `cache=False` disables disk access while preserving resident executable and process-memory template reuse. Custom compilation configurations and ineligible source identities use ordinary preparation. Clearing one callable releases its resident state while shared templates and disk entries retain independent lifetimes.
+Optimized Programs persist per input specialization under the cache directory. An entry stores Program structure and material relocation descriptions; material Tensor contents are absent. A hit binds the current process's materials, and compatible fresh key data can reuse the Program when the declared key layout is unchanged. Custom compilation configurations and ineligible source identities use ordinary preparation. Clearing one callable releases its resident state while disk entries retain an independent lifetime.
 
 ## Four different validity questions
 

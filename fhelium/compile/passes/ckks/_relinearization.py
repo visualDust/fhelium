@@ -8,9 +8,8 @@ if TYPE_CHECKING:
     from fhelium.compile._compilation import Compilation
 
 
-from typing import cast
 
-from ..._materials import material_symbol
+from ..._materials import key_placeholder, material_symbol
 
 from ..._pipeline import (
     PassResult,
@@ -20,10 +19,10 @@ from ..._pipeline import (
 from dataclasses import dataclass
 
 from xdsl.ir import Attribute, Operation, SSAValue, Use
-from xdsl.dialects.builtin import StringAttr, UnrealizedConversionCastOp
+from xdsl.dialects.builtin import UnrealizedConversionCastOp
 
 from fhelium.ir import Program
-from fhelium.ir.dialects import ckks, core
+from fhelium.ir.dialects import ckks
 from .._operation_transforms import (
     ciphertext_type,
     display_name,
@@ -176,12 +175,10 @@ def _materialize_relinearization(
         residues="montgomery",
         components=2,
     )
-    key = core.MaterialRefOp(
-        ckks.EvaluationKeyType(),
-        symbol=material_symbol(operation, "relinearization-key"),
-    )
-    program.set_material_description(
-        cast(StringAttr, key.symbol).data, {"kind": "RelinearizationKey"}
+    key = key_placeholder(
+        material_symbol(operation, "relinearization-key"),
+        {"kind": "RelinearizationKey"},
+        program,
     )
     if edge is None or opaque_cast is not None:
         block.insert_op_before(key, insertion_point)
@@ -202,7 +199,7 @@ def _materialize_relinearization(
     insert(relinearized)
     if edge is not None and opaque_cast is None:
         consumer.operands[operand_index] = relinearized.result
-    return inserted + 2, relinearized.result
+    return inserted + 3, relinearized.result
 
 
 def _place_relinearizations(program: Program, *, late: bool) -> PassResult:

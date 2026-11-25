@@ -153,11 +153,29 @@ class NativeRnsTransitionImplementation(_TensorOperandImplementation):
                     "Depth restriction result rows must be within the source "
                     "Tensor extent"
                 )
-            selected = source.narrow(
-                -2,
-                source_rows - result_rows,
-                result_rows,
+            source_ids = (
+                invocation.operand_prime_ids[0]
+                if invocation.operand_prime_ids
+                else None
             )
+            if source_ids is None:
+                selected = source.narrow(
+                    -2, source_rows - result_rows, result_rows
+                )
+            else:
+                start = source_ids.index(expected_prime_ids[0])
+                if source_ids[start : start + result_rows] == expected_prime_ids:
+                    selected = source.narrow(-2, start, result_rows)
+                else:
+                    return (
+                        source.index_select(
+                            -2,
+                            torch.tensor(
+                                [source_ids.index(i) for i in expected_prime_ids],
+                                device=source.device,
+                            ),
+                        ),
+                    )
             data = selected if in_place else selected.clone()
             return (data,)
         return (source if in_place else source.clone(),)
@@ -225,6 +243,13 @@ def weighted_sum_operands(invocation, values):
         "dense",
     ) * (terms * groups)
     ciphertexts = values[:terms]
+    if "plaintext_term_axis" in invocation.attributes:
+        # Rows of one stacked plaintext are views; layouts holds their common layout.
+        return (
+            ciphertexts,
+            tuple((p, layouts[0], None) for p in values[terms].unbind(0)),
+            values[-1],
+        )
     plaintexts = values[terms : terms * (groups + 1)]
     implicit = iter(values[terms * (groups + 1) : -1])
     represented = tuple(
@@ -344,6 +369,40 @@ class NativeMontgomeryMultiplyImplementation(_TensorOperandImplementation):
 
 
 @dataclass(frozen=True)
+class NativeTensorProductImplementation(_TensorOperandImplementation):
+    """Form the three-component product of two-component NTT/Montgomery bundles."""
+
+    name: str = "native-tensor-product"
+    supports_in_place: bool = False
+    operation_types: tuple[type[Operation], ...] = (rns.TensorProductOp,)
+
+    def execute(
+        self,
+        invocation: OperationInvocation,
+        values: tuple[torch.Tensor, ...],
+        resources: tuple[BoundResource, ...],
+        *,
+        in_place: bool,
+    ) -> tuple[torch.Tensor, ...]:
+        del invocation, resources, in_place
+        lhs, rhs, parameters = values
+        cross = rns_ops.add_lazy(
+            rns_ops.montgomery_mul(lhs[0], rhs[1], parameters),
+            rns_ops.montgomery_mul(lhs[1], rhs[0], parameters),
+            parameters,
+        )
+        return (
+            torch.stack(
+                (
+                    rns_ops.montgomery_mul(lhs[0], rhs[0], parameters),
+                    cross,
+                    rns_ops.montgomery_mul(lhs[1], rhs[1], parameters),
+                )
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class NativeRnsStructureImplementation(_TensorOperandImplementation):
     """Extract and assemble logical RNS component bundles."""
 
@@ -433,6 +492,7 @@ class NativeMontgomeryAccumulateImplementation(_TensorOperandImplementation):
 __all__ = [
     "NativeMontgomeryAccumulateImplementation",
     "NativeMontgomeryMultiplyImplementation",
+    "NativeTensorProductImplementation",
     "NativeMontgomeryWeightedSumImplementation",
     "NativePlaintextArithmeticImplementation",
     "NativeRnsLinearImplementation",

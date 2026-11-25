@@ -152,7 +152,7 @@ Compressed plaintext reduces the stored payload for a represented polynomial fro
 
 ## NTT grouping has workload-dependent optima
 
-Combining multiple radix-2 stages can reduce launches and global-memory round-trips, but wider grouping can increase register pressure, reduce occupancy, or interact poorly with active row count.
+Executing several radix-2 stages per launch reduces launches and global-memory round trips; the number of stages held per tile determines register pressure, shared-memory use, and occupancy, which interact with the active row count.
 
 The best backend depends on:
 
@@ -163,7 +163,7 @@ The best backend depends on:
 - table footprint and traffic;
 - surrounding workload and graph capture.
 
-A name such as `group16` identifies one execution strategy. Controlled measurements determine its ranking, and direct-radix algorithms retain separate implementation identities.
+A policy name such as `radix2_compact_shoup32` identifies one execution strategy. Controlled measurements determine its ranking, and direct-radix algorithms retain separate implementation identities.
 
 ## Multi-GPU time model
 

@@ -154,7 +154,7 @@ def engine(request: pytest.FixtureRequest) -> Iterator[Engine]:
         pytest.skip("CUDA is not available")
     previous_device = torch.get_default_device()
     torch.set_default_device(device)
-    instance = Engine(fh.Preset.slots8192_scale40_depth7_int64)
+    instance = Engine(fh.Preset.slots8192_scale40_depth7)
     yield instance
     torch.set_default_device(previous_device)
     del instance

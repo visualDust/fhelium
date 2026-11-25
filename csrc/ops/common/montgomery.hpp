@@ -19,6 +19,28 @@ montgomery_mul(const scalar_t a,
                const scalar_t modulus_hi,
                const scalar_t neg_inv_modulus_lo,
                const scalar_t neg_inv_modulus_hi) {
+#ifndef __HIPCC__
+  if constexpr (sizeof(scalar_t) == 8) {
+    // R = 2^62 from full-width products: t = ab + s q, s = (ab mod R) k mod R,
+    // result floor(t / R). Operands are signed: key generation passes negative
+    // residues, so ab is the signed 128-bit product (__mul64hi) and the result
+    // equals the 31-bit split form below for all |a|, |b| < 2^62.
+    constexpr uint64_t mask62 = (uint64_t{1} << 62) - 1;
+    const uint64_t q = static_cast<uint64_t>(modulus_lo) |
+                       (static_cast<uint64_t>(modulus_hi) << 31);
+    const uint64_t neg_inverse = static_cast<uint64_t>(neg_inv_modulus_lo) |
+                                 (static_cast<uint64_t>(neg_inv_modulus_hi) << 31);
+    const uint64_t lo = static_cast<uint64_t>(a) * static_cast<uint64_t>(b);
+    const uint64_t hi = static_cast<uint64_t>(
+        __mul64hi(static_cast<long long>(a), static_cast<long long>(b)));
+    const uint64_t s = (lo * neg_inverse) & mask62;
+    const uint64_t sq_lo = s * q;
+    const uint64_t sq_hi = __umul64hi(s, q);
+    const uint64_t t_lo = lo + sq_lo;
+    const uint64_t t_hi = hi + sq_hi + (t_lo < lo ? 1 : 0);
+    return static_cast<scalar_t>((t_hi << 2) | (t_lo >> 62));
+  }
+#endif
   // Masks.
   constexpr scalar_t one = 1;
   constexpr scalar_t nbits = sizeof(scalar_t) * 8 - 2;

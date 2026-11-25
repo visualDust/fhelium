@@ -54,7 +54,7 @@ import fhelium as fh
 from fhelium.eager import Engine
 
 engine = Engine(
-    fh.Preset.slots8192_scale40_depth7_int64,
+    fh.Preset.slots8192_scale40_depth7,
     ntt_backend="radix2_indexed",
 )
 ```

@@ -92,7 +92,8 @@ Key generation is a data-provision API without an IR operation: `backend/ckks/cr
 | `fhelium_ckks.multiply_compressed_plaintext` | Multiply ciphertext components by compact plaintext values through encoded-axis indexing | `backend/ckks/arithmetic.py`, `backend/triton/_expressions.py` |
 | `fhelium_rns.add_plaintext` | Add the supplied plaintext polynomial to component zero | `backend/rns/operations.py` |
 | `fhelium_rns.multiply_plaintext` | Multiply each ciphertext component by the supplied plaintext polynomial | `backend/rns/operations.py` |
-| `fhelium_rns.montgomery_weighted_sum` | Accumulate one weighted sum of polynomial Tensor products | `backend/rns/operations.py` |
+| `fhelium_rns.tensor_product` | Form the three components $(a_0b_0, a_0b_1+a_1b_0, a_1b_1)$ of a ciphertext tensor product | `backend/rns/operations.py` |
+| `fhelium_rns.montgomery_weighted_sum` | Accumulate one weighted sum of polynomial Tensor products | `backend/rns/operations.py`, `backend/triton/_weighted_sum.py` |
 | `fhelium_rns.montgomery_weighted_sums` | Apply several plaintext weight rows to shared polynomial Tensor inputs | `backend/rns/operations.py` |
 
 ## Polynomial and residue representation transforms
@@ -116,10 +117,10 @@ libfhelium table functions (`csrc/tables/`) construct twiddle and index tables; 
 
 | Operation | Responsibility | Direct owner |
 |---|---|---|
-| `fhelium_ckks.rescale` | Lower a rounded quotient over the next complete Q depth group | `compile/passes/lowering/_representation.py` |
+| `fhelium_ckks.rescale` | Lower the rounded quotient from the source to the next depth's Q basis | `compile/passes/lowering/_representation.py` |
 | `fhelium_ckks.mod_switch` | Lower restriction to the selected active Q rows | `compile/passes/lowering/_representation.py` |
 | `fhelium_ckks.reinterpret_scale` | Lower a represented-scale change that preserves residue data | `compile/passes/lowering/_representation.py` |
-| `fhelium_rns.rescale_drop_leading_primes` | Divide by a dropped Q group with the selected rounding | `backend/rns/rescale.py` |
+| `fhelium_rns.rescale` | Rescale from the source to the target Q basis by $\lfloor(xR+H)/D\rceil$ with the selected rounding | `backend/rns/rescale.py` |
 | `fhelium_rns.restrict_depth` | Select the active rows at the requested depth | `backend/rns/operations.py` |
 | `fhelium_rns.reinterpret_scale` | Update represented scale while preserving residue data | `backend/rns/operations.py` |
 

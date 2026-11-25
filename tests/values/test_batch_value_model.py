@@ -355,14 +355,14 @@ def batch_engine():
         pytest.skip("CUDA is not available")
     previous_device = torch.get_default_device()
     torch.set_default_device("cuda:0")
-    yield Engine(Preset.slots8192_scale40_depth7_int64)
+    yield Engine(Preset.slots8192_scale40_depth7)
     torch.set_default_device(previous_device)
 
 
 @pytest.fixture(scope="module")
 def cpu_batch_engine():
     return Engine(
-        Preset.slots8192_scale40_depth7_int64,
+        Preset.slots8192_scale40_depth7,
         ntt_backend="radix2_indexed",
     )
 

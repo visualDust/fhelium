@@ -90,15 +90,6 @@ def apply_lowering(operation, config, compilation, *, registry, requested=None):
             break
         replacements.append(current)
         current = current.next_op
-    from ..._origins import replace_origin
-
-    if compilation.workspace.get("local_plan_reuse") is not False:
-        replace_origin(
-            compilation,
-            operation,
-            replacements,
-            lowering=requested or registry.resolve(type(operation)).name,
-        )
     return LoweredCkksOperation(
         tuple(replacements), lowered.result, lowered.material_descriptions
     )

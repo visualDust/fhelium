@@ -7,7 +7,7 @@
 namespace fhelium::ntt::gpu {
 
 // CUDA indexed execution uses one launch per stage and provides the validation
-// baseline for compact grouped CUDA policies. CPU indexed execution is the CPU
+// baseline for compact CUDA policies. CPU indexed execution is the CPU
 // production backend.
 void forward_ntt_montgomery_indexed_(at::Tensor& montgomery_residues,
                                      const at::Tensor& even_indices,
@@ -59,111 +59,6 @@ at::Tensor forward_ntt_to_montgomery_indexed(
                                                 odd_indices,
                                                 forward_twiddles,
                                                 rns_params);
-}
-
-void forward_ntt_montgomery_compact_grouped_smem_(
-    at::Tensor& montgomery_residues,
-    const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
-  fhelium::ntt::validate_compact_tables(montgomery_residues,
-                                        forward_twiddles,
-                                        rns_params,
-                                        grouped_stage_count,
-                                        true);
-  forward_ntt_montgomery_compact_grouped_smem_inplace_cuda(
-      montgomery_residues,
-      forward_twiddles,
-      rns_params,
-      grouped_stage_count,
-      fhelium::ntt::kNttDefaultSharedMemoryLogN);
-}
-
-void forward_ntt_to_montgomery_compact_grouped_smem_(
-    at::Tensor& standard_residues,
-    const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
-  fhelium::ntt::validate_compact_tables(standard_residues,
-                                        forward_twiddles,
-                                        rns_params,
-                                        grouped_stage_count,
-                                        true);
-  forward_ntt_to_montgomery_compact_grouped_smem_inplace_cuda(
-      standard_residues,
-      forward_twiddles,
-      rns_params,
-      grouped_stage_count,
-      fhelium::ntt::kNttDefaultSharedMemoryLogN);
-}
-
-at::Tensor forward_ntt_to_montgomery_compact_grouped_smem(
-    const at::Tensor& standard_residues,
-    const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
-  fhelium::ntt::validate_compact_tables(standard_residues,
-                                        forward_twiddles,
-                                        rns_params,
-                                        grouped_stage_count,
-                                        true);
-  return forward_ntt_to_montgomery_compact_grouped_smem_cuda(
-      standard_residues,
-      forward_twiddles,
-      rns_params,
-      grouped_stage_count,
-      fhelium::ntt::kNttDefaultSharedMemoryLogN);
-}
-
-void forward_ntt_montgomery_compact_keyswitch_accumulate_(
-    at::Tensor& coefficient_digit_qp,
-    const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    const at::Tensor& key_digit_qp,
-    at::Tensor& accumulator0_qp,
-    at::Tensor& accumulator1_qp,
-    int64_t key_row_start,
-    int64_t grouped_stage_count) {
-  // Specialized mutating fusion: coefficient_digit_qp is disposable scratch
-  // with coefficient/Montgomery input [*batch, QP limb, N]. Its NTT values
-  // are consumed inside the final kernel and not written back to scratch.
-  // Products with key_digit_qp[key component, QP limb, N] are added to
-  // the two NTT/Montgomery QP accumulators. key_row_start maps local limb j to
-  // key limb key_row_start+j. Key/tables/params are read-only; the three schema
-  // write aliases are distinct and no implicit broadcast changes public batch.
-  fhelium::ntt::validate_compact_tables(coefficient_digit_qp,
-                                        forward_twiddles,
-                                        rns_params,
-                                        grouped_stage_count,
-                                        true);
-  forward_ntt_montgomery_compact_keyswitch_accumulate_inplace_cuda(
-      coefficient_digit_qp,
-      forward_twiddles,
-      rns_params,
-      key_digit_qp,
-      accumulator0_qp,
-      accumulator1_qp,
-      key_row_start,
-      grouped_stage_count);
-}
-
-void forward_ntt_montgomery_compact_grouped_smem_diagnostic_(
-    torch::Tensor montgomery_residues,
-    const torch::Tensor forward_twiddles,
-    const torch::Tensor rns_params,
-    const int64_t grouped_stage_count,
-    const int64_t shared_memory_log_n) {
-  fhelium::ntt::validate_compact_tables(montgomery_residues,
-                                        forward_twiddles,
-                                        rns_params,
-                                        grouped_stage_count,
-                                        true);
-  fhelium::ntt::validate_shared_memory_log_n(shared_memory_log_n);
-  forward_ntt_montgomery_compact_grouped_smem_inplace_cuda(montgomery_residues,
-                                                           forward_twiddles,
-                                                           rns_params,
-                                                           grouped_stage_count,
-                                                           shared_memory_log_n);
 }
 
 void forward_ntt_montgomery_power_of_two_radix_compact_(
@@ -232,39 +127,9 @@ void forward_ntt_montgomery_power_of_two_radix_compact_diagnostic_(
       shared_memory_log_n);
 }
 
-void forward_ntt_to_montgomery_compact_add_scaled_(
-    at::Tensor& source,
-    const at::Tensor& addend,
-    const at::Tensor& multiplier,
-    const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
-  ::forward_ntt_to_montgomery_compact_add_scaled_inplace_cuda(
-      source,
-      addend,
-      multiplier,
-      forward_twiddles,
-      rns_params,
-      grouped_stage_count);
-}
-
 }  // namespace fhelium::ntt::gpu
 
 namespace fhelium::ntt::diagnostic::gpu {
-
-void forward_ntt_montgomery_compact_grouped_smem_override_(
-    at::Tensor& montgomery_residues,
-    const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count,
-    int64_t shared_memory_log_n) {
-  ::fhelium::ntt::gpu::forward_ntt_montgomery_compact_grouped_smem_diagnostic_(
-      montgomery_residues,
-      forward_twiddles,
-      rns_params,
-      grouped_stage_count,
-      shared_memory_log_n);
-}
 
 void forward_ntt_montgomery_power_of_two_radix_compact_override_(
     at::Tensor& montgomery_residues,

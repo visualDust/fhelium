@@ -9,7 +9,10 @@ import torch
 from xdsl.ir import Operation
 from fhelium.backend.implementation import OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
-from fhelium.backend._native_operands import key_switch_options, named_tables
+from fhelium.backend._native_operands import (
+    named_tables,
+    seeded_key_operands,
+)
 from fhelium.ir.dialects import ckks
 from fhelium.native.wrapper import ckks_ops
 
@@ -46,13 +49,14 @@ class NativeRotateImplementation:
     ) -> tuple[torch.Tensor, ...]:
         del resources, in_place
         attributes = invocation.attributes
+        options, end = seeded_key_operands(attributes, inputs, 2, 1)
         return (
             ckks_ops.rotate(
                 inputs[0],
                 inputs[1],
                 int(cast(int, attributes["rotation_step"])),
-                *named_tables(attributes["parameter_names"], inputs[2:]),
-                **key_switch_options(attributes),
+                *named_tables(attributes["parameter_names"], inputs[end:]),
+                **options,
             ),
         )
 
@@ -76,15 +80,16 @@ class NativeRotationSumImplementation:
         count = int(attributes["source_count"])
         steps = [int(step) for step in attributes["rotation_steps"]]
         key_count = sum(step != 0 for step in steps)
+        options, end = seeded_key_operands(
+            attributes, inputs, count + key_count, key_count
+        )
         return (
             ckks_ops.rotation_sum(
                 list(inputs[:count]),
                 list(inputs[count : count + key_count]),
                 steps,
-                *named_tables(
-                    attributes["parameter_names"], inputs[count + key_count :]
-                ),
-                **key_switch_options(attributes),
+                *named_tables(attributes["parameter_names"], inputs[end:]),
+                **options,
                 remaining_q_count=int(attributes["sum_remaining_q_count"]),
             ),
         )
@@ -117,15 +122,14 @@ class NativeHoistedRotateManyImplementation:
         del resources, in_place
         attributes = invocation.attributes
         count = invocation.result_count
+        options, end = seeded_key_operands(attributes, inputs, 1 + count, count)
         return tuple(
             ckks_ops.rotate_many(
                 inputs[0],
                 list(inputs[1 : 1 + count]),
                 [int(step) for step in attributes["rotation_steps"]],
-                *named_tables(
-                    attributes["parameter_names"], inputs[1 + count :]
-                ),
-                **key_switch_options(attributes),
+                *named_tables(attributes["parameter_names"], inputs[end:]),
+                **options,
             )
         )
 
@@ -162,6 +166,7 @@ class NativeGroupedRotationWeightedSumImplementation:
         group_count = int(cast(int, attributes["group_count"]))
         key_count = sum(step != 0 for step in steps)
         end = 1 + key_count + term_count * group_count
+        options, tables = seeded_key_operands(attributes, inputs, end, key_count)
         return (
             ckks_ops.grouped_rotation_weighted_sum(
                 inputs[0],
@@ -169,7 +174,7 @@ class NativeGroupedRotationWeightedSumImplementation:
                 steps,
                 list(inputs[1 + key_count : end]),
                 group_count,
-                *named_tables(attributes["parameter_names"], inputs[end:]),
-                **key_switch_options(attributes),
+                *named_tables(attributes["parameter_names"], inputs[tables:]),
+                **options,
             ),
         )

@@ -113,9 +113,15 @@ def parse_header(include: str, page: str) -> Header:
     pending: list[str] = []
     declarations: list[Declaration] = []
     parent = ""
+    # Documentation of the preceding function, shared by the overloads that
+    # directly follow it without their own comment.
+    shared: list[str] = []
     index = 0
     while index < len(lines):
         stripped = lines[index].strip()
+        if stripped.startswith("FHELIUM_API") and not pending:
+            pending = shared
+        shared = []
         if stripped.startswith("//!"):
             intro.append(stripped[3:].removeprefix(" "))
         elif stripped.startswith("///"):
@@ -140,7 +146,8 @@ def parse_header(include: str, page: str) -> Header:
         elif pending:
             start = index
             if parent:
-                terminators: tuple[str, ...] = (";", "{")
+                # A member function may carry its whole body on one line.
+                terminators: tuple[str, ...] = (";", "{", "}")
             elif stripped.startswith("FHELIUM_API"):
                 terminators = (";",)
             else:
@@ -151,6 +158,7 @@ def parse_header(include: str, page: str) -> Header:
                 text.append(lines[index].strip())
             declaration = " ".join(text)
             if parent:
+                declaration = re.sub(r"\s*\{[^{}]*\}$", "", declaration)
                 declaration = declaration.rstrip("{;").strip()
                 name = re.search(r"(\w+)\(", declaration) or re.search(
                     r"(\w+)(?:\s*=.*)?$", declaration
@@ -164,6 +172,8 @@ def parse_header(include: str, page: str) -> Header:
                 name = re.match(r"(\w+)", declaration)
                 kind = "enumerator"
             assert name is not None, f"{include}:{start + 1}"
+            if kind == "function":
+                shared = pending
             declarations.append(
                 Declaration(
                     name=name.group(1),
@@ -304,12 +314,13 @@ def escape_cell(value: str) -> str:
 def render_function(
     header: Header,
     declaration: Declaration,
+    anchor: str,
     operators: dict[str, tuple[str, str]],
     devices: dict[str, str],
 ) -> str:
     qualified = f"{header.namespace}::{declaration.name}"
     parts = [
-        f"## `{declaration.name}` {{#{declaration.name}}}",
+        f"## `{declaration.name}` {{#{anchor}}}",
         "",
         '<span class="api-kind">function</span> '
         f"[View source]({source_link(header.include, declaration)})",
@@ -396,21 +407,30 @@ def render_page(
     ]
     parts.extend(render_type(header, d) for d in types)
     if functions:
+        # Overloads share a name, so later ones get numbered anchors.
+        anchors: list[str] = []
+        seen: dict[str, int] = {}
+        for d in functions:
+            seen[d.name] = seen.get(d.name, 0) + 1
+            anchors.append(
+                d.name if seen[d.name] == 1 else f"{d.name}-{seen[d.name]}"
+            )
         parts.extend(
             [
                 "| Function | Devices | Summary |",
                 "| --- | --- | --- |",
                 *[
-                    f"| [`{d.name}`](#{d.name}) "
+                    f"| [`{d.name}`](#{anchor}) "
                     f"| {devices.get(f'{header.namespace}::{d.name}', ANY_DEVICE)} "
                     f"| {escape_cell(first_sentence(d.doc))} |"
-                    for d in functions
+                    for d, anchor in zip(functions, anchors)
                 ],
                 "",
             ]
         )
         parts.extend(
-            render_function(header, d, operators, devices) for d in functions
+            render_function(header, d, anchor, operators, devices)
+            for d, anchor in zip(functions, anchors)
         )
     if enumerators:
         parts.append(render_enumerators(header))

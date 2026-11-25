@@ -49,11 +49,13 @@ torch::Tensor crt_basis_extend_cuda(
     torch::Tensor target_parameters, torch::Tensor matrix,
     torch::Tensor target_reciprocals,
     std::optional<torch::Tensor> source_normalizers,
-    std::optional<torch::Tensor> source_reciprocals);
+    std::optional<torch::Tensor> source_reciprocals,
+    std::optional<torch::Tensor> target_offsets);
 
 void crt_basis_extend_out_cuda(
     torch::Tensor source, torch::Tensor source_parameters,
     torch::Tensor target_parameters, torch::Tensor matrix,
     torch::Tensor target_reciprocals,
     std::optional<torch::Tensor> source_normalizers,
-    std::optional<torch::Tensor> source_reciprocals, torch::Tensor output);
+    std::optional<torch::Tensor> source_reciprocals,
+    std::optional<torch::Tensor> target_offsets, torch::Tensor output);

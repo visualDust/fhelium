@@ -11,7 +11,7 @@ from fhelium.eager import Engine
 
 def _assert_hoisted_rotation_lifecycle(device: str) -> None:
     engine = Engine(
-        Preset.slots8192_scale40_depth7_int64, rng_seed=941, rng_nonce=17
+        Preset.slots8192_scale40_depth7, rng_seed=941, rng_nonce=17
     )
     with torch.device(device):
         message = torch.linspace(
@@ -105,12 +105,12 @@ def test_cuda_hoisted_rotation_reuses_executor_across_calls() -> None:
 def test_hybrid_key_operations_across_depths(device: str) -> None:
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    source_config = CkksConfig.parse(Preset.slots32768_scale40_depth34_int64)
-    config = CkksConfig(
-        default_scale=source_config.default_scale,
-        q_depth_groups=source_config.q_depth_groups[:8],
-        p_moduli=source_config.p_moduli,
+    config = CkksConfig.catalog_suffix_chain(
         logN=12,
+        scale_bits=40,
+        depth=7,
+        p_count=4,
+        catalog_logN=16,
         enforce_security_budget=False,
     )
     engine = Engine(config, allow_automatic_key_generation=False)

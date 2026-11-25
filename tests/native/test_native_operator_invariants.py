@@ -288,7 +288,7 @@ def test_keyswitch_moddown_does_not_mutate_public_p_residues() -> None:
     if not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
 
-    engine = Engine(Preset.slots8192_scale40_depth7_int64)
+    engine = Engine(Preset.slots8192_scale40_depth7)
     rns = engine.rns_context("cuda:0")
     depth = 0
     q_row_count = len(rns.rns_layout.prime_ids(depth))
@@ -332,7 +332,7 @@ def test_keyswitch_moddown_does_not_mutate_public_p_residues() -> None:
         ckks_ops.keyswitch_moddown_qp_to_q(
             q_residues,
             p_residues,
-            moddown_inverse_tables(rns)[depth].to(torch.int32),
+            moddown_inverse_tables(rns)[depth].to(torch.int64),
             active_parameters,
             rounding="floor",
         )
@@ -340,7 +340,7 @@ def test_keyswitch_moddown_does_not_mutate_public_p_residues() -> None:
     qp_residues = torch.cat((q_residues, p_residues))
     invalid_key_digit = torch.zeros(
         (2, *qp_residues.shape),
-        dtype=torch.int32,
+        dtype=torch.int64,
         device="cuda:0",
     )
     with pytest.raises(RuntimeError, match="same integral dtype"):
@@ -389,10 +389,6 @@ def test_cpu_and_cuda_complete_native_dispatch_sets_match() -> None:
             "add_contiguous_compressed_plaintext_component_",
             "add_strided_plaintext_component",
             "add_strided_plaintext_component_",
-            "rescale_drop_leading_prime_nearest",
-            "rescale_drop_leading_prime_nearest_",
-            "rescale_drop_leading_prime_truncate",
-            "rescale_drop_leading_prime_truncate_",
             "apply_coefficient_galois_automorphism",
             "apply_ntt_galois_automorphism",
             "keyswitch_moddown_qp_to_q",
@@ -425,7 +421,7 @@ def test_native_binary_op_rejects_incompatible_batch_counts() -> None:
         pytest.skip("CUDA is not available")
 
     engine = Engine(
-        Preset.slots8192_scale40_depth7_int64,
+        Preset.slots8192_scale40_depth7,
         allow_automatic_key_generation=False,
     )
     rns = engine.rns_context("cuda:0")
@@ -452,7 +448,7 @@ def test_standard_subtraction_returns_residues_below_modulus() -> None:
         pytest.skip("CUDA is not available")
 
     engine = Engine(
-        Preset.slots8192_scale40_depth7_int64,
+        Preset.slots8192_scale40_depth7,
         allow_automatic_key_generation=False,
     )
     rns = engine.rns_context("cuda:0")
@@ -483,7 +479,7 @@ def test_native_compressed_arithmetic_rejects_invalid_storage_and_dtype() -> (
         pytest.skip("CUDA is not available")
 
     engine = Engine(
-        Preset.slots8192_scale40_depth7_int64,
+        Preset.slots8192_scale40_depth7,
         allow_automatic_key_generation=False,
     )
     rns = engine.rns_context("cuda:0")
@@ -515,7 +511,7 @@ def test_native_compressed_arithmetic_rejects_invalid_storage_and_dtype() -> (
     with pytest.raises(RuntimeError, match="operand dtypes differ"):
         rns_ops.montgomery_mul_contiguous_compressed(
             valid_ring,
-            compressed.to(torch.int32),
+            compressed.to(torch.int64),
             parameters,
         )
 
@@ -535,7 +531,7 @@ def test_mixed_radix_output_buffers_and_table_extents(
     from fhelium.backend.rns.tables import centered_basis_extension_tables
     from fhelium.config import CkksConfig
 
-    config = CkksConfig.parse(Preset.slots32768_scale25_depth24_int32)
+    config = CkksConfig.parse(Preset.slots32768_scale30_depth46)
     context = RnsContext(config, dtype=dtype, device=device)
     target_ids = (0, 17, 18)
     for width in (1, 4, 17):

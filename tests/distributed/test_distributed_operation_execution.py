@@ -257,7 +257,7 @@ def _gloo_ckks_reduction_worker(
         world_size=world_size,
     )
     try:
-        config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+        config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
         rns_context = RnsContext(config, device="cpu")
         arithmetic_backend = OperationBackend(
             OperationImplementationRegistry((NativeRnsLinearImplementation(),)),

@@ -18,7 +18,7 @@ from fhelium.values import Ciphertext, RelinearizationKey
 
 
 def test_eager_factories_follow_torch_default_device() -> None:
-    engine = Engine(Preset.slots8192_scale40_depth7_int64)
+    engine = Engine(Preset.slots8192_scale40_depth7)
 
     encoded = engine.encode([0.125])
     secret_key = engine.create_secret_key()
@@ -33,7 +33,7 @@ def test_first_device_use_shares_one_serial_random_stream_across_threads() -> (
     None
 ):
     engine = Engine(
-        Preset.slots8192_scale40_depth7_int64,
+        Preset.slots8192_scale40_depth7,
         rng_seed=47,
         rng_nonce=19,
     )
@@ -47,7 +47,7 @@ def test_first_device_use_shares_one_serial_random_stream_across_threads() -> (
 
 @pytest.mark.gpu
 def test_eager_boundary_device_selection_is_caller_controlled() -> None:
-    engine = Engine(Preset.slots8192_scale40_depth7_int64)
+    engine = Engine(Preset.slots8192_scale40_depth7)
     message = torch.tensor([0.03125], dtype=torch.float64)
     secret_key = engine.create_secret_key()
     public_key = engine.create_public_key(secret_key)
@@ -79,7 +79,7 @@ def test_eager_boundary_device_selection_is_caller_controlled() -> None:
 @pytest.mark.gpu
 def test_eager_automatic_key_replication_is_opt_in() -> None:
     engine = Engine(
-        Preset.slots8192_scale40_depth7_int64,
+        Preset.slots8192_scale40_depth7,
         allow_automatic_key_replication=True,
     )
     secret_key = engine.create_secret_key(device="cpu")
@@ -102,7 +102,7 @@ def test_eager_automatic_key_replication_is_opt_in() -> None:
 
 
 def test_eager_key_lifecycle_controls_dependent_operations() -> None:
-    preset = Preset.slots8192_scale40_depth7_int64
+    preset = Preset.slots8192_scale40_depth7
     engine = Engine(preset, rng_seed=41, rng_nonce=13)
     runtime = Engine(
         preset,
@@ -131,7 +131,7 @@ def test_eager_key_lifecycle_controls_dependent_operations() -> None:
 
 
 def test_eager_repeated_calls_and_mutated_key_binding_behavior() -> None:
-    preset = Preset.slots8192_scale40_depth7_int64
+    preset = Preset.slots8192_scale40_depth7
     engine = Engine(preset, rng_seed=43, rng_nonce=17)
     runtime = Engine(preset)
     ciphertext = engine.encrypt_message(
@@ -172,7 +172,7 @@ def test_eager_repeated_calls_and_mutated_key_binding_behavior() -> None:
 def test_eager_boundary_calls_reuse_dynamic_state_and_release_replaced_key() -> (
     None
 ):
-    runtime = Engine(Preset.slots8192_scale40_depth7_int64)
+    runtime = Engine(Preset.slots8192_scale40_depth7)
     message = torch.zeros(runtime.num_slots, dtype=torch.float64)
     depth_zero = runtime.encode(message, depth=0)
     depth_one = runtime.encode(message, depth=1)
@@ -191,12 +191,13 @@ def test_eager_boundary_calls_reuse_dynamic_state_and_release_replaced_key() -> 
 
 
 def test_eager_metadata_operations_preserve_payload_and_update_state() -> None:
-    runtime = Engine(Preset.slots8192_scale40_depth7_int64)
+    runtime = Engine(Preset.slots8192_scale40_depth7)
     ciphertext = runtime.encrypt_message(
         torch.full((runtime.num_slots,), 0.01, dtype=torch.float64)
     )
     switched = runtime.mod_switch_to_next_depth(ciphertext)
-    assert torch.equal(switched.data, ciphertext.data[..., 1:, :])
+    rows = list(runtime.config.q_prime_ids(1))
+    assert torch.equal(switched.data, ciphertext.data[..., rows, :])
 
     reinterpreted = runtime.reinterpret_at_scale(
         ciphertext, ciphertext.scale * 2
@@ -209,17 +210,20 @@ def test_eager_metadata_operations_preserve_payload_and_update_state() -> None:
 def test_eager_limb_arithmetic_uses_declared_prime_rows(device: str) -> None:
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    engine = Engine(Preset.slots8192_scale40_depth7_int64)
+    engine = Engine(Preset.slots8192_scale40_depth7)
     moduli = torch.tensor(
         engine.config.q_moduli, dtype=torch.int64, device=device
     )
-    data = moduli.view(1, -1, 1) - torch.randint(
-        1,
-        65536,
-        (2, len(moduli), engine.config.N),
-        dtype=torch.int64,
-        device=device,
-    )
+    data = (
+        moduli.view(1, -1, 1)
+        - torch.randint(
+            1,
+            65536,
+            (2, len(moduli), engine.config.N),
+            dtype=torch.int64,
+            device=device,
+        )
+    ).to(engine.dtype)
     source = Ciphertext(
         data=data, depth=0, scale=2.0**40, prime_ids=tuple(range(len(moduli)))
     )
@@ -250,20 +254,20 @@ def test_secret_key_weight_and_basis_conversion(device):
         pytest.skip("CUDA is unavailable")
     from fhelium import CkksConfig
 
-    config = CkksConfig(
+    config = CkksConfig.suffix_chain(
         logN=8,
         q_depth_groups=((254279681, 253493249), (205651969, 204865537)),
         p_moduli=(257949697, 258605057),
-        default_scale=2.0**40,
+        scale=2.0**40,
         galois_generator=5,
         enforce_security_budget=False,
     )
-    base = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
-    target = CkksConfig(
+    target = CkksConfig.catalog_suffix_chain(
         logN=8,
-        q_depth_groups=base.q_depth_groups[:3],
-        p_moduli=base.p_moduli,
-        default_scale=2.0**40,
+        scale_bits=40,
+        depth=2,
+        p_count=1,
+        catalog_logN=14,
         galois_generator=5,
         enforce_security_budget=False,
     )

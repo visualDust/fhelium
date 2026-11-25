@@ -274,3 +274,53 @@ at::Tensor stochastic_round(const at::Tensor& seed,
   }
   return out;
 }
+
+// Requires the backend to define
+//   template <int Rounds, typename scalar_t>
+//   void seeded_key_into(const int64_t* seed_rows, int64_t digits,
+//                        const scalar_t* moduli, int64_t stride,
+//                        int64_t rows, int64_t ring_dimension, scalar_t* out,
+//                        const at::Tensor& like);
+at::Tensor expand_seeded_key(const at::Tensor& seed_rows,
+                             const at::Tensor& moduli,
+                             int64_t ring_dimension,
+                             int64_t rounds) {
+  constexpr const char* operation = "expand_seeded_key";
+  namespace core = ::fhelium::random::detail;
+  TORCH_CHECK(seed_rows.scalar_type() == at::kLong && seed_rows.dim() == 2 &&
+                  seed_rows.size(1) == core::kSeededKeyRowWords &&
+                  seed_rows.is_contiguous(),
+              operation,
+              " requires contiguous int64 seed rows of shape [key_digit, 6]");
+  TORCH_CHECK(moduli.dim() == 1 && moduli.device() == seed_rows.device() &&
+                  (moduli.scalar_type() == at::kInt ||
+                   moduli.scalar_type() == at::kLong),
+              operation,
+              " requires int32 or int64 row moduli [limb] on the seed device");
+  const int64_t rows = moduli.size(0);
+  const int64_t digits = seed_rows.size(0);
+  TORCH_CHECK(rows < core::kSeededKeyIndexLimit &&
+                  digits < core::kSeededKeyIndexLimit,
+              operation,
+              " requires fewer than 2^16 rows and digits");
+  TORCH_CHECK(ring_dimension > 0 &&
+                  ring_dimension % core::kSeededKeyCoefficientsPerCall == 0 &&
+                  ring_dimension / 4 <= core::kSeededKeySegmentLimit,
+              operation,
+              " requires a ring dimension divisible by 8 and at most 2^26");
+  auto out = at::empty({digits, rows, ring_dimension}, moduli.options());
+  core::dispatch_seeded_key_rounds(rounds, [&](auto rounds_constant) {
+    constexpr int kRounds = decltype(rounds_constant)::value;
+    AT_DISPATCH_INDEX_TYPES(out.scalar_type(), operation, [&] {
+      seeded_key_into<kRounds, index_t>(seed_rows.const_data_ptr<int64_t>(),
+                                        digits,
+                                        moduli.const_data_ptr<index_t>(),
+                                        moduli.stride(0),
+                                        rows,
+                                        ring_dimension,
+                                        out.data_ptr<index_t>(),
+                                        seed_rows);
+    });
+  });
+  return out;
+}

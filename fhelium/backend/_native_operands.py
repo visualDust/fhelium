@@ -51,7 +51,9 @@ def key_switch_options(
         "ntt_backend": str(get("ntt_backend")),
         "digits": flat_digits(get("digits")),
         "key_row_start": int(get("key_row_start", 0)),
-        "modup_method": str(get("modup_method", "exact")),
+        "key_p_row_start": int(attributes.get(prefix + "key_p_row_start", -1)),
+        "key_q_rows": [int(i) for i in attributes.get(prefix + "key_q_rows", ())],
+        "basis_conversion": str(get("basis_conversion", "exact")),
         "p_count": int(get("p_count")),
         "moddown_rounding": str(
             attributes.get(
@@ -61,12 +63,35 @@ def key_switch_options(
         "input_domain": str(get("input_domain", "coefficient")),
         "output_domain": str(get("output_domain", "coefficient")),
         "galois_generator": int(get("galois_generator", 5)),
+        "key_seeds": [],
+        "key_rounds": int(attributes.get(prefix + "key_rounds", 0)),
     }
+
+
+def seeded_key_operands(
+    attributes: Mapping[str, object],
+    inputs: Sequence[torch.Tensor],
+    start: int,
+    count: int,
+    prefix: str = "",
+) -> tuple[dict[str, object], int]:
+    """Return the key-switch options with the seed operands at ``start``.
+
+    Seeded keys (``key_rounds`` > 0) supply ``count`` seed operands after the
+    operation's other operands; dense keys supply none. The second result is
+    the index after the seed operands.
+    """
+    options = key_switch_options(attributes, prefix)
+    if options["key_rounds"]:
+        options["key_seeds"] = list(inputs[start : start + count])
+        start += count
+    return options, start
 
 
 __all__ = [
     "flat_digits",
     "key_switch_options",
+    "seeded_key_operands",
     "mapping_tables",
     "named_tables",
 ]

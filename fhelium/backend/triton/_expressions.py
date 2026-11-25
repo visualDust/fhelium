@@ -16,38 +16,14 @@ from xdsl.dialects.builtin import (
 )
 from xdsl.ir import Operation, SSAValue
 
-from fhelium.ir.dialects import ckks, core, fusion, ntt, rns
+from fhelium.ir._operation_structure import (
+    ComponentBody,
+    OperationStructure,
+)
+from fhelium.ir.dialects import ckks, core, fusion
 
-from ._layout import result_layout
-from ._repeat import graph_nodes, repeat_groups
+from ._layout import generated_structure, result_layout
 
-ARITHMETIC_OPS = (
-    ckks.AddCompressedPlaintextOp,
-    ckks.MultiplyCompressedPlaintextOp,
-    rns.AddStandardOp,
-    rns.SubtractStandardOp,
-    rns.NegateStandardOp,
-    rns.MontgomeryMultiplyOp,
-    rns.AddMontgomeryLazyOp,
-    rns.MultiplyPlaintextOp,
-    rns.AddPlaintextOp,
-    rns.StandardToMontgomeryOp,
-    rns.MontgomeryToStandardOp,
-)
-STRUCTURAL_OPS = (
-    rns.ExtractComponentOp,
-    rns.PackTwoComponentsOp,
-    rns.PackThreeComponentsOp,
-)
-NTT_OPS = (
-    ntt.CoefficientStandardToNttMontgomeryOp,
-    ntt.CoefficientMontgomeryToNttMontgomeryOp,
-    ntt.NttMontgomeryToCoefficientStandardOp,
-    ntt.NttMontgomeryToCoefficientMontgomeryOp,
-)
-SUPPORTED_OPERATIONS = (
-    ARITHMETIC_OPS + STRUCTURAL_OPS + (rns.KeySwitchDigitProductOp,)
-)
 
 
 @dataclass(frozen=True)
@@ -59,10 +35,13 @@ class Expr:
 
 @dataclass(frozen=True)
 class InputLayout:
-    """Describe logical indexing and a preparation-proven pointer owner.
+    r"""Describe logical indexing and a preparation-proven pointer owner.
 
     ``owner`` indexes a region input sharing the allocation; ``offset`` is the
     element displacement from that input's pointer to this logical view.
+    ``row_split`` $(q, g)$ addresses logical row $r\ge q$ at physical row
+    $r+g$; a key digit whose active Q and P rows are stored as two slices uses
+    it with $q$ active Q rows and $g$ unused rows between the slices.
     """
 
     shape: tuple[int, ...]
@@ -70,6 +49,7 @@ class InputLayout:
     component_axis: bool = False
     owner: int | None = None
     offset: int = 0
+    row_split: tuple[int, int] | None = None
 
     @property
     def components(self) -> int:
@@ -107,31 +87,68 @@ class BoundGraph:
     outputs: tuple[ValueExpr, ...]
     roots: Mapping[int, ValueExpr]
     anchors: tuple[Anchor, ...] = ()
-    repeats: tuple[tuple[int, ...], ...] = ()
 
     @property
     def batch_count(self) -> int:
         return max(prod(v.batch_shape) for v in self.roots.values())
 
+    @cached_property
+    def seed_inputs(self) -> frozenset[int]:
+        """Input numbers read as int64 seed rows by seeded key residues."""
+        found: set[int] = set()
+        pending = [
+            e
+            for v in (*self.roots.values(), *(a.source for a in self.anchors))
+            for e in v.components
+        ]
+        seen: set[int] = set()
+        while pending:
+            expr = pending.pop()
+            if id(expr) in seen:
+                continue
+            seen.add(id(expr))
+            if expr.op == "seeded":
+                found.add(expr.data[0])
+            pending.extend(expr.args)
+        return frozenset(found)
+
+
+_COMPONENT_AXES: dict[int, tuple[object, bool]] = {}
+
 
 def component_axis(value_type: object) -> bool:
+    """Report whether storage of ``value_type`` has a leading component axis; cached by type identity."""
+    entry = _COMPONENT_AXES.get(id(value_type))
+    if entry is not None and entry[0] is value_type:
+        return entry[1]
     if isinstance(value_type, ckks.CiphertextType):
-        return True
-    state = getattr(getattr(value_type, "state", None), "data", {})
-    count = state.get("component_count", state.get("components"))
-    return isinstance(count, IntegerAttr)
+        result = True
+    else:
+        state = getattr(getattr(value_type, "state", None), "data", {})
+        count = state.get("component_count", state.get("components"))
+        result = isinstance(count, IntegerAttr)
+    _COMPONENT_AXES[id(value_type)] = (value_type, result)
+    return result
+
+
+def _uncast(value: SSAValue) -> SSAValue:
+    while type(value.owner) is UnrealizedConversionCastOp:
+        op = value.owner
+        if len(op.inputs) != 1 or len(op.outputs) != 1:
+            break
+        value = op.inputs[0]
+    return value
 
 
 def material_view_owners(
     operation: fusion.FusedOp, data_indices: tuple[int, ...]
 ) -> tuple[tuple[int, int, int], ...]:
     """Group fusion data inputs that view one prepared material owner."""
-    from ._mac import uncast
 
     owners: dict[str, tuple[int, int]] = {}
     views = {}
     for number, index in enumerate(data_indices):
-        source = uncast(operation.inputs[index]).owner
+        source = _uncast(operation.inputs[index]).owner
         attribute = getattr(source, "attributes", {}).get(
             "fhelium.material_view"
         )
@@ -163,25 +180,22 @@ class ExpressionGraph:
     operation: fusion.FusedOp
 
     @cached_property
-    def nodes(self):
-        return tuple(
-            graph_nodes(self.operation.body.block.ops, preserve_carried=True)
-        )
+    def nodes(self) -> tuple[Operation, ...]:
+        return tuple(self.operation.body.block.ops)
 
     @cached_property
     def table_arguments(self) -> tuple[SSAValue, ...]:
         arguments = set(self.operation.body.block.args)
         used: set[SSAValue] = set()
         for node in self.nodes:
-            operation = node.operation
-            if isinstance(operation, ckks.RepeatOp):
-                used.add(self._loop_parameter(node))
-            elif isinstance(operation, NTT_OPS):
-                used.update(node.operands[1:])
-            elif isinstance(operation, ARITHMETIC_OPS):
-                used.add(node.operands[-1])
-            elif isinstance(operation, rns.KeySwitchDigitProductOp):
-                used.update(node.operands[1:])
+            structure = generated_structure(node)
+            if structure is not None:
+                used.update(
+                    node.operands[i]
+                    for i in structure.operands(
+                        "parameters", "table", "key", "seed"
+                    )
+                )
         return tuple(
             arg
             for arg in self.operation.body.block.args
@@ -215,74 +229,42 @@ class ExpressionGraph:
     @cached_property
     def parameter_index(self) -> int:
         for node in self.nodes:
-            if isinstance(node.operation, ckks.RepeatOp):
-                return self.table_arguments.index(self._loop_parameter(node))
-            if isinstance(
-                node.operation, ARITHMETIC_OPS + (rns.KeySwitchDigitProductOp,)
-            ):
-                return self.table_arguments.index(node.operands[-1])
+            structure = generated_structure(node)
+            if structure is not None and structure.layout != "transform":
+                for index in structure.operands("parameters"):
+                    return self.table_arguments.index(node.operands[index])
         raise ValueError("Pointwise fusion has no RNS parameter operand")
 
     @cached_property
-    def key_inputs(self) -> tuple[tuple[int, int, int], ...]:
-        return tuple(
-            (
-                self.table_arguments.index(node.operands[1]),
-                int(node.operation.key_digit_index.value.data),
-                int(
-                    cast(
-                        IntegerAttr, node.operation.attributes["key_row_start"]
-                    ).value.data
-                ),
-            )
-            for node in self.nodes
-            if isinstance(node.operation, rns.KeySwitchDigitProductOp)
-        )
+    def key_inputs(self) -> tuple[tuple[int, int, int, int, int, int], ...]:
+        """Return ``(table argument, stored key digit, key_row_start, key_p_row_start, seed table argument, rounds)`` of each key-digit product.
 
-    @cached_property
-    def round_inputs(self) -> dict[int, int]:
-        """Map data inputs read as round-indexed MAC rows to their first row."""
-        from ._mac import round_rows
-
-        data = tuple(
-            arg
-            for arg in self.operation.body.block.args
-            if arg not in self.table_arguments
-        )
-        numbers = {arg: number for number, arg in enumerate(data)}
-        starts: dict[int, int] = {}
+        Dense keys have seed table argument $-1$ and zero rounds.
+        """
+        inputs = []
         for node in self.nodes:
-            if not isinstance(node.operation, ckks.RepeatOp):
+            structure = generated_structure(node)
+            if structure is None:
                 continue
-            for row in round_rows(node.operation) or ():
-                source = node.operands[row.value.index - 1]
-                if source not in numbers:
-                    raise ValueError(
-                        "Round-indexed rows require a batched region input"
+            seeds = structure.operands("seed")
+            for index in structure.operands("key"):
+                inputs.append(
+                    (
+                        self.table_arguments.index(node.operands[index]),
+                        int(node.key_digit_index.value.data),
+                        _integer_attribute(node, "key_row_start"),
+                        _integer_attribute(node, "key_p_row_start"),
+                        self.table_arguments.index(node.operands[seeds[0]])
+                        if seeds
+                        else -1,
+                        _integer_attribute(node, "key_rounds") if seeds else 0,
                     )
-                start = row.start.value.data
-                if starts.setdefault(numbers[source], start) != start:
-                    raise ValueError(
-                        "Round-indexed rows of one input require one first row"
-                    )
-        selected = {data[number] for number in starts}
-        if any(
-            not isinstance(node.operation, ckks.RepeatOp)
-            and selected.intersection(node.operands)
-            for node in self.nodes
-        ):
-            raise ValueError(
-                "A batched input read by round is also read as a whole"
-            )
-        return starts
+                )
+        return tuple(inputs)
 
-    @staticmethod
-    def _loop_parameter(node):
-        from ._mac import mac_body, uncast
-
-        multiply, _ = mac_body(node.operation)
-        parameter = uncast(multiply.operands[-1])
-        return node.operands[parameter.index - 1]
+    @property
+    def seeded_key_count(self) -> int:
+        return sum(entry[4] >= 0 for entry in self.key_inputs)
 
     @cached_property
     def view_owners(self) -> tuple[tuple[int, int, int], ...]:
@@ -301,91 +283,36 @@ class ExpressionGraph:
             )
         return tuple(result)
 
-    def _carried_value(self, node, values, ordinal, steps):
-        loop = node.operation
-        count, shared, width = (
-            loop.count.value.data,
-            loop.shared_count.value.data,
-            loop.table_width.value.data,
-        )
-        local = {
-            arg: values[v]
-            for arg, v in zip(
-                tuple(loop.body.block.args)[1 : 1 + shared],
-                node.operands[:shared],
-                strict=True,
-            )
-            if v in values
-        }
-        for column in range(width):
-            rows = tuple(
-                values[node.operands[shared + i * width + column]]
-                for i in range(count)
-            )
-            first = rows[0]
-            local[loop.body.block.args[1 + shared + column]] = replace(
-                first,
-                components=tuple(
-                    Expr("select", tuple(row.components[c] for row in rows))
-                    for c in range(len(first.components))
-                ),
-            )
-        initial = values[node.operands[-1]]
-        local[loop.body.block.args[-1]] = replace(
-            initial,
-            components=tuple(
-                Expr("carry", data=(c,)) for c in range(len(initial.components))
-            ),
-        )
-        for operation in tuple(loop.body.block.ops)[:-1]:
-            if isinstance(operation, UnrealizedConversionCastOp):
-                local[operation.results[0]] = local[operation.operands[0]]
+    @cached_property
+    def stacked_inputs(self) -> tuple[int, ...]:
+        """Return the region inputs whose leading axis enumerates reduction terms."""
+        arguments = [
+            arg
+            for arg in self.operation.body.block.args
+            if arg not in self.table_arguments
+        ]
+        stacked = []
+        for node in self.nodes:
+            structure = generated_structure(node)
+            reduction = structure.reduction if structure is not None else None
+            if reduction is None or reduction.stacked is None:
                 continue
-            if isinstance(operation, ckks.SelectBatchOp):
-                source = local[operation.value]
-                local[operation.result] = replace(
-                    source,
-                    components=tuple(
-                        Expr(
-                            "indexed_input",
-                            data=(*expr.data, steps[expr.data[0]]),
-                        )
-                        for expr in source.components
-                    ),
+            value = _uncast(node.operands[reduction.stacked])
+            if value not in arguments:
+                raise ValueError(
+                    "A stacked reduction operand must be a fusion region input"
                 )
-                continue
-            operands = [local[v] for v in operation.operands[:-1]]
-            if isinstance(operation, ckks.MultiplyCompressedPlaintextOp):
-                result = compact_value(
-                    type(operation),
-                    operands,
-                    ordinal,
-                    layout=operation.attributes["compression_layout"].data,
-                    ntt_plaintext=True,
-                )
-            else:
-                result = arithmetic_value(type(operation), operands, ordinal)
-            local[operation.results[0]] = result
-        final = local[loop.body.block.last_op.operands[-1]]
-        return replace(
-            final,
-            root=ordinal,
-            components=tuple(
-                Expr("loop", (start, body), (count, c))
-                for c, (start, body) in enumerate(
-                    zip(initial.components, final.components, strict=True)
-                )
-            ),
-        )
+            stacked.append(arguments.index(value))
+        return tuple(stacked)
 
     def bind(self, layouts: tuple[InputLayout, ...]) -> BoundGraph:
         layouts = self._owner_layouts(layouts)
-        # A round-indexed input binds as its first selected row; rounds
-        # advance by the stride of the removed leading batch axis.
+        # A stacked input binds as its first term row; iterations advance by
+        # the stride of the removed leading axis.
         steps = {}
-        if self.round_inputs:
+        if self.stacked_inputs:
             rows = list(layouts)
-            for number, start in self.round_inputs.items():
+            for number in self.stacked_inputs:
                 layout = rows[number]
                 axis = int(layout.component_axis)
                 steps[number] = layout.strides[axis]
@@ -393,7 +320,6 @@ class ExpressionGraph:
                     layout,
                     shape=layout.shape[:axis] + layout.shape[axis + 1 :],
                     strides=layout.strides[:axis] + layout.strides[axis + 1 :],
-                    offset=layout.offset + start * steps[number],
                 )
             layouts = tuple(rows)
         values: dict[SSAValue, ValueExpr] = {}
@@ -416,142 +342,99 @@ class ExpressionGraph:
             roots[value.root] = value
             values[arg] = value
             input_index += 1
-        if input_index + len(self.key_inputs) != len(layouts):
+        if input_index + len(self.key_inputs) + self.seeded_key_count != len(
+            layouts
+        ):
             raise ValueError(
                 "Fusion Tensor inputs do not match the region arguments"
             )
         next_key_input = input_index
+        # Seed rows follow all key views, in key order.
+        next_seed_input = input_index + len(self.key_inputs)
+        key_entries = iter(self.key_inputs)
         outputs: tuple[ValueExpr, ...] = ()
-        for ordinal, node in enumerate(self.nodes):
-            operation = node.operation
+        for ordinal, operation in enumerate(self.nodes):
+            node = operation
             if isinstance(operation, fusion.YieldOp):
                 outputs = tuple(values[v] for v in node.operands)
-                continue
-            if isinstance(operation, ckks.RepeatOp):
-                result = self._carried_value(node, values, ordinal, steps)
-                values[node.results[0]] = result
-                roots[result.root] = result
                 continue
             if isinstance(operation, UnrealizedConversionCastOp):
                 values[node.results[0]] = values[node.operands[0]]
                 continue
-            operands = [
-                values[v]
-                for v in node.operands
-                if v not in self.table_arguments
-            ]
-            if isinstance(operation, rns.ExtractComponentOp):
-                source = operands[0]
-                index = int(operation.component.value.data)
-                result_layout(
-                    type(operation),
-                    [source.shape],
-                    [source.component_axis],
-                    component=index,
+            structure = generated_structure(operation)
+            if structure is None or not structure.accepted:
+                raise ValueError(
+                    f"Selected Triton expression code generation cannot implement {operation.name}"
                 )
+            data = {
+                index: values[node.operands[index]]
+                for index in structure.operands("data", "compact")
+            }
+            operands = list(data.values())
+            first = operands[0]
+            if structure.layout == "select":
+                index = cast(int, structure.component)
+                result_layout(structure, [first.shape], [first.component_axis])
                 values[node.results[0]] = ValueExpr(
-                    (source.components[index],),
-                    source.shape[1:],
+                    (first.components[index],),
+                    first.shape[1:],
                     False,
-                    source.root,
-                    (*source.view, index),
+                    first.root,
+                    (*first.view, index),
                 )
                 continue
-            if isinstance(
-                operation, (rns.PackTwoComponentsOp, rns.PackThreeComponentsOp)
-            ):
-                first = operands[0]
-                result_layout(
-                    type(operation),
-                    [v.shape for v in operands],
-                    [v.component_axis for v in operands],
-                )
-                result = ValueExpr(
-                    tuple(v.components[0] for v in operands),
-                    (len(operands), *first.shape),
-                    True,
-                    ordinal,
-                )
-            elif isinstance(operation, rns.KeySwitchDigitProductOp):
-                digit = operands[0]
-                result_layout(
-                    type(operation), [digit.shape], [digit.component_axis]
-                )
-                key_layout = layouts[next_key_input]
-                if key_layout.shape != (2, *digit.shape[-2:]):
-                    raise ValueError(
-                        "Key-switch key rows or polynomial extent differ from the active digit"
-                    )
-                key_components = tuple(
-                    Expr("input", data=(next_key_input, c)) for c in range(2)
-                )
-                result = ValueExpr(
-                    tuple(
-                        Expr("multiply", (digit.components[0], key))
-                        for key in key_components
-                    ),
-                    (2, *digit.shape),
-                    True,
-                    ordinal,
-                )
-                next_key_input += 1
-            elif isinstance(operation, NTT_OPS):
-                source = operands[0]
+            if structure.layout == "transform":
                 result = ValueExpr(
                     tuple(
                         Expr("anchor", (expr,), (len(anchors), c))
-                        for c, expr in enumerate(source.components)
+                        for c, expr in enumerate(first.components)
                     ),
-                    source.shape,
-                    source.component_axis,
+                    first.shape,
+                    first.component_axis,
                     ordinal,
                 )
                 anchors.append(
                     Anchor(
                         operation,
-                        source,
+                        first,
                         result,
                         tuple(
-                            self.table_arguments.index(v)
-                            for v in node.operands[1:]
+                            self.table_arguments.index(node.operands[i])
+                            for i in structure.operands("parameters", "table")
                         ),
                     )
                 )
-            elif isinstance(
-                operation,
-                (
-                    ckks.AddCompressedPlaintextOp,
-                    ckks.MultiplyCompressedPlaintextOp,
-                ),
-            ):
-                result = compact_value(
-                    type(operation),
-                    operands,
-                    ordinal,
-                    layout=cast(
-                        StringAttr, operation.attributes["compression_layout"]
-                    ).data,
-                    ntt_plaintext=getattr(
-                        operation.attributes.get("polynomial_domain"),
-                        "data",
-                        "coefficient",
+                values[node.results[0]] = result
+                roots[result.root] = result
+                continue
+            keys: dict[int, tuple[Expr, ...]] = {}
+            for index in structure.operands("key"):
+                key_layout = layouts[next_key_input]
+                entry = next(key_entries)
+                seeded = entry[4] >= 0
+                if key_layout.shape != (1 if seeded else 2, *first.shape[-2:]):
+                    raise ValueError(
+                        "Key-switch key rows or polynomial extent differ from the active digit"
                     )
-                    == "ntt",
-                )
-            elif isinstance(operation, ARITHMETIC_OPS):
-                result = arithmetic_value(
-                    type(operation),
-                    operands,
-                    ordinal,
-                    ntt_plaintext=(
-                        isinstance(operation, rns.AddPlaintextOp)
-                        and operation.polynomial_domain.data == "ntt"
-                    ),
-                )
-            else:
-                raise ValueError(
-                    f"Selected Triton expression code generation cannot implement {operation.name}"
-                )
+                if seeded:
+                    # k1 at view row r is generated at stored row
+                    # key_row_start + r, after any row split.
+                    keys[index] = (
+                        Expr("input", data=(next_key_input, 0)),
+                        Expr(
+                            "seeded",
+                            data=(next_seed_input, next_key_input, entry[2], entry[5]),
+                        ),
+                    )
+                    next_seed_input += 1
+                else:
+                    keys[index] = tuple(
+                        Expr("input", data=(next_key_input, c)) for c in range(2)
+                    )
+                next_key_input += 1
+            result = structured_value(
+                structure, data, ordinal, type(operation), keys, steps
+            )
             values[node.results[0]] = result
             roots[result.root] = result
         return BoundGraph(
@@ -559,92 +442,152 @@ class ExpressionGraph:
             outputs,
             roots,
             tuple(anchors),
-            repeat_groups(self.operation),
         )
 
 
-def compact_value(
-    operation_type, operands, root, *, layout, ntt_plaintext=False
-):
-    """Bind compact plaintext indexing and arithmetic to the ciphertext extent."""
-    first, compact, *implicit = operands
-    result_layout(
-        operation_type,
-        [v.shape for v in operands],
-        [v.component_axis for v in operands],
-    )
-    if (layout == "strided_sparse") != bool(implicit) or len(implicit) > 1:
-        raise ValueError(
-            "Compact arithmetic implicit operands must match the layout"
-        )
-    u, n = compact.shape[-1], first.shape[-1]
-    expanded = Expr(
-        "compact",
-        (compact.components[0], *(v.components[0] for v in implicit)),
-        (("cyclic", "contiguous", "strided_sparse").index(layout), u, n // u),
-    )
-    if operation_type is ckks.AddCompressedPlaintextOp:
-        if not ntt_plaintext:
-            expanded = Expr("from_montgomery", (expanded,))
-        components = (
-            Expr("add", (first.components[0], expanded)),
-            *first.components[1:],
-        )
-    else:
-        components = tuple(
-            Expr("multiply", (component, expanded))
-            for component in first.components
-        )
-    return ValueExpr(components, first.shape, first.component_axis, root)
-
-
-def arithmetic_value(
-    operation_type: type[Operation],
-    operands: list[ValueExpr],
+def structured_value(
+    structure: OperationStructure,
+    data: Mapping[int, ValueExpr],
     root: int,
-    *,
-    ntt_plaintext: bool = False,
+    operation_type: type[Operation],
+    keys: Mapping[int, tuple[Expr, ...]] | None = None,
+    steps: Mapping[int, int] | None = None,
 ) -> ValueExpr:
+    """Bind a registered component body to the operands at its ``data``/``compact`` positions.
+
+    A declared reduction whose terms share one layout becomes a runtime loop: the first term initializes the accumulator and each later iteration reads its term operands through ``select`` expressions indexed by the loop variable. A stacked operand, bound at its first row, is read in iteration $j$ at row $j+1$ through the term stride in ``steps``.
+    """
+    if not structure.accepted:
+        raise ValueError(
+            f"Selected Triton expression code generation cannot implement {operation_type.name}"
+        )
+    reduction = structure.reduction
+    if reduction is not None and reduction.stacked is not None:
+        stacked = data[reduction.stacked]
+
+        def advance(expr: Expr) -> Expr:
+            if expr.op == "input":
+                number = expr.data[0]
+                return Expr(
+                    "indexed_input",
+                    data=(*expr.data, cast(Mapping, steps)[number], 1),
+                )
+            return replace(expr, args=tuple(advance(a) for a in expr.args))
+
+        initial = structured_value(
+            reduction.term,
+            {0: data[reduction.terms[0][0]], 1: stacked},
+            root,
+            operation_type,
+        )
+        if len(reduction.terms) == 1:
+            return initial
+        ciphertexts = [data[t[0]] for t in reduction.terms[1:]]
+        selected = {
+            0: replace(
+                ciphertexts[0],
+                components=tuple(
+                    Expr("select", tuple(v.components[c] for v in ciphertexts))
+                    for c in range(len(ciphertexts[0].components))
+                ),
+            ),
+            1: replace(
+                stacked,
+                components=tuple(advance(e) for e in stacked.components),
+            ),
+        }
+        term = structured_value(reduction.term, selected, root, operation_type)
+        return replace(
+            initial,
+            components=tuple(
+                Expr(
+                    "loop",
+                    (start, Expr("add", (Expr("carry", data=(c,)), body))),
+                    (len(reduction.terms) - 1, c),
+                )
+                for c, (start, body) in enumerate(
+                    zip(initial.components, term.components, strict=True)
+                )
+            ),
+        )
+    if reduction is not None and len(reduction.terms) > 1:
+        columns = tuple(zip(*reduction.terms, strict=True))
+        if all(
+            len({(data[i].shape, data[i].component_axis) for i in column}) == 1
+            for column in columns
+        ):
+            initial = structured_value(
+                reduction.term,
+                {k: data[i] for k, i in enumerate(reduction.terms[0])},
+                root,
+                operation_type,
+            )
+            selected = {
+                k: replace(
+                    data[column[1]],
+                    components=tuple(
+                        Expr(
+                            "select",
+                            tuple(data[i].components[c] for i in column[1:]),
+                        )
+                        for c in range(len(data[column[1]].components))
+                    ),
+                )
+                for k, column in enumerate(columns)
+            }
+            term = structured_value(reduction.term, selected, root, operation_type)
+            return replace(
+                initial,
+                components=tuple(
+                    Expr(
+                        "loop",
+                        (start, Expr("add", (Expr("carry", data=(c,)), body))),
+                        (len(reduction.terms) - 1, c),
+                    )
+                    for c, (start, body) in enumerate(
+                        zip(initial.components, term.components, strict=True)
+                    )
+                ),
+            )
+    operands = list(data.values())
     first = operands[0]
     result_layout(
-        operation_type,
+        structure,
         [v.shape for v in operands],
         [v.component_axis for v in operands],
     )
-    code = {
-        rns.AddStandardOp: "add",
-        rns.SubtractStandardOp: "subtract",
-        rns.NegateStandardOp: "negate",
-        rns.AddMontgomeryLazyOp: "add_lazy",
-        rns.MontgomeryMultiplyOp: "multiply",
-        rns.MultiplyPlaintextOp: "multiply",
-        rns.StandardToMontgomeryOp: "to_montgomery",
-        rns.MontgomeryToStandardOp: "from_montgomery",
-        rns.AddPlaintextOp: "add_lazy",
-    }[operation_type]
-    plaintext_op = operation_type in (
-        rns.MultiplyPlaintextOp,
-        rns.AddPlaintextOp,
+    components: dict[int, tuple[Expr, ...]] = {
+        index: value.components for index, value in data.items()
+    }
+    components.update(keys or {})
+    counts = tuple(
+        len(components.get(index, ())) for index in range(len(structure.roles))
     )
-    if operation_type is rns.AddPlaintextOp and not ntt_plaintext:
-        raise ValueError(
-            "Triton plaintext addition requires NTT-domain operands"
-        )
-    components: list[Expr] = []
-    for i, lhs in enumerate(first.components):
-        if operation_type is rns.AddPlaintextOp and i:
-            components.append(lhs)
-            continue
-        args = [lhs]
-        for value in operands[1:]:
-            if plaintext_op:
-                args.append(value.components[0])
-            else:
-                args.append(
-                    value.components[i if len(value.components) > 1 else 0]
-                )
-        components.append(Expr(code, tuple(args)))
-    return ValueExpr(tuple(components), first.shape, first.component_axis, root)
+
+    def lower(item) -> Expr:
+        if item.op == "load":
+            operand, component = item.data
+            return components[operand][component]
+        args = tuple(lower(arg) for arg in item.args)
+        if item.op == "compact":
+            unique = data[item.args[0].data[0]].shape[-1]
+            return Expr(
+                "compact", args, (item.data[0], unique, first.shape[-1] // unique)
+            )
+        return Expr(item.op, args)
+
+    lowered = tuple(
+        lower(item) for item in cast(ComponentBody, structure.body)(counts)
+    )
+    if structure.layout == "pack":
+        shape, axis = (len(operands), *first.shape), True
+    elif structure.layout == "key_product":
+        shape, axis = (2, *first.shape), True
+    elif structure.layout == "component_product":
+        shape, axis = (3, *first.shape[1:]), True
+    else:
+        shape, axis = first.shape, first.component_axis
+    return ValueExpr(lowered, shape, axis, root)
 
 
 class KernelArguments:
@@ -656,13 +599,14 @@ class KernelArguments:
     counts, lengths) are declared as int64
     arguments and recorded in ``scalars`` in first-use order; the caller
     passes ``scalar_values`` in that order after the pointer arguments.
-    Inputs sharing one stride tuple share one stride argument group.
+    Each input has its own stride argument group, so the source does not
+    depend on whether two inputs happen to have equal strides.
     """
 
     def __init__(self, layouts: tuple[InputLayout, ...]):
         self.layouts = layouts
         self.inputs: list[int] = []
-        self._groups: dict[tuple[int, ...], int] = {}
+        self._groups: dict[int, int] = {}
         self.scalars: list[tuple[str, int, str]] = []
         self._named: dict[str, int] = {}
         self._offsets: dict[int, int] = {}
@@ -689,9 +633,17 @@ class KernelArguments:
         index = self._offsets.setdefault(number, len(self._offsets))
         return self.scalar(f"view_offset{index}", self.layouts[number].offset)
 
+    def row_split(self, number: int) -> tuple[str, str]:
+        group = self._groups.setdefault(number, len(self._groups))
+        split, gap = cast(tuple[int, int], self.layouts[number].row_split)
+        return (
+            self.scalar(f"row_split{group}", split),
+            self.scalar(f"row_gap{group}", gap),
+        )
+
     def stride(self, number: int, axis: int) -> str:
         layout = self.layouts[number]
-        group = self._groups.setdefault(layout.strides, len(self._groups))
+        group = self._groups.setdefault(number, len(self._groups))
         return self.scalar(f"ld{group}_{axis}", layout.strides[axis])
 
     @property
@@ -721,6 +673,9 @@ class Emitter:
     prefix: str = ""
     iteration: str | None = None
     pointers: dict[int, str] = field(default_factory=dict)
+    # Elements 8k..8k+7 of the driver's ``index`` vector hold coefficients
+    # 8m..8m+7 of one row, so seeded keys sample each segment once.
+    segment_index: bool = False
 
     def emit(
         self,
@@ -754,6 +709,7 @@ class Emitter:
                 self.arguments,
                 prefix=f"{self.prefix}mac{number}_",
                 iteration=iteration,
+                segment_index=self.segment_index,
             )
             substitutions = dict(overrides or {})
             substitutions[Expr("carry", data=(component,))] = accumulator
@@ -806,7 +762,21 @@ class Emitter:
             self.emit(a, index, row, batch, overrides, mask) for a in expr.args
         ]
         variable = f"{self.prefix}e{len(self.cache)}"
-        if expr.op in {"input", "indexed_input"}:
+        if expr.op == "seeded":
+            seed, key, start, rounds = expr.data
+            names = self.arguments
+            physical = f"({row})"
+            if self.layouts[key].row_split is not None:
+                split, gap = names.row_split(key)
+                physical = f"(({row}) + (({row}) >= {split}).to(tl.int64) * {gap})"
+            group = names._groups.setdefault(key, len(names._groups))
+            first_row = names.scalar(f"key_row_start{group}", start)
+            expression = (
+                f"seeded_key_residue{8 if self.segment_index and index == 'index' else ''}("
+                f"{names.pointer(seed)}, {first_row} + {physical}, "
+                f"{index}, q, {rounds}, RADIX)"
+            )
+        elif expr.op in {"input", "indexed_input"}:
             number, component = expr.data[:2]
             layout = self.layouts[number]
             names = self.arguments
@@ -817,6 +787,12 @@ class Emitter:
                 f"({index}) * {names.stride(number, rank - 1)}",
                 f"({row}) * {names.stride(number, rank - 2)}",
             ]
+            if layout.row_split is not None:
+                split, gap = names.row_split(number)
+                offset[1] = (
+                    f"(({row}) + (({row}) >= {split}).to(tl.int64) * {gap})"
+                    f" * {names.stride(number, rank - 2)}"
+                )
             if layout.component_axis:
                 offset.append(f"{component} * {names.stride(number, 0)}")
             for axis, extent in enumerate(shape):
@@ -830,7 +806,11 @@ class Emitter:
                 step = names.scalar(
                     f"mac_stride{len(names.scalars)}", expr.data[2]
                 )
-                offset.append(f"{self.iteration} * {step}")
+                start = expr.data[3] if len(expr.data) > 3 else 0
+                iteration = (
+                    f"({self.iteration} + {start})" if start else self.iteration
+                )
+                offset.append(f"{iteration} * {step}")
             base_pointer = self.pointers.get(number) or names.pointer(number)
             pointer = f"{base_pointer} + {' + '.join(offset)}"
             # Uniform implicit values have scalar addresses in NTT endpoints.
@@ -870,6 +850,7 @@ class Emitter:
                 layout.owner == base.owner
                 and layout.shape == base.shape
                 and layout.strides == base.strides
+                and layout.row_split == base.row_split
                 and expr.data[1] == first.data[1]
                 and layout.offset == base.offset + i * step
                 for i, (expr, layout) in enumerate(
@@ -888,6 +869,7 @@ class Emitter:
                 layout.shape == base.shape
                 and layout.strides == base.strides
                 and layout.offset == base.offset
+                and layout.row_split == base.row_split
                 and expr.data[1] == first.data[1]
                 for expr, layout in zip(expressions, layouts, strict=True)
             ):
@@ -913,6 +895,7 @@ class Emitter:
                     self.arguments,
                     prefix=pointer + "_",
                     iteration=self.iteration,
+                segment_index=self.segment_index,
                     pointers={first.data[0]: pointer},
                 )
                 result = child.emit(first, index, row, batch, overrides, mask)
@@ -936,9 +919,15 @@ class Emitter:
                 self.arguments,
                 prefix=f"{result}_{i}_",
                 iteration=self.iteration,
+                segment_index=self.segment_index,
             )
             value = child.emit(expression, index, row, batch, overrides, mask)
             self.lines.extend(
                 "    " + line for line in (*child.lines, f"{result} = {value}")
             )
         return result
+
+
+
+def _integer_attribute(operation: Operation, name: str) -> int:
+    return int(cast(IntegerAttr, operation.attributes[name]).value.data)

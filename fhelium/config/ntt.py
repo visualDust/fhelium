@@ -23,36 +23,26 @@ class IndexedRadix2Policy:
 
 @dataclass(frozen=True)
 class CompactRadix2Policy:
-    """Grouped radix-2 execution over compact twiddle rows.
+    r"""Radix-2 execution over compact twiddle rows.
 
-    ``grouped_radix2_stage_count`` counts radix-2 stages fused into a global
-    kernel. The ``smem8`` backend-name suffix records the current native
-    production implementation, whose shared-memory tile and fusion depth are
-    compiled CUDA resources rather than Python policy parameters. Shoup32 tables
-    pair each standard root with its 32-bit quotient word and require CUDA int32
-    residues with primes below 2^30.
+    For $N=2^L$ the transform makes two passes over each prime row. One pass
+    applies $\lfloor L/2 \rfloor$ stages to coefficients spaced
+    $2^{L-\lfloor L/2 \rfloor}$ apart, and the other applies the remaining
+    stages to contiguous tiles; forward transforms run the spaced pass first
+    and inverse transforms run it last. Shoup32 tables pair each standard root
+    with its 32-bit quotient word and require CUDA int32 residues with primes
+    below 2^30.
     """
 
     name: str
     """Name used by the backend registry and engine API."""
 
-    grouped_radix2_stage_count: Literal[2, 3, 4]
-    """Number of radix-2 stages fused by each global-memory kernel."""
-
     twiddle_encoding: Literal["montgomery", "shoup32"] = "montgomery"
-    """Numerical layout of each compact root table, independent of grouping."""
+    """Numerical layout of each compact root table."""
 
     def __post_init__(self) -> None:
         if self.twiddle_encoding not in ("montgomery", "shoup32"):
             raise ValueError("twiddle_encoding must be montgomery or shoup32")
-        if self.grouped_radix2_stage_count not in (2, 3, 4):
-            raise ValueError("grouped_radix2_stage_count must be 2, 3, or 4")
-
-    @property
-    def group_width(self) -> int:
-        """Number of coefficients held by one grouped radix-2 tuple."""
-
-        return 1 << self.grouped_radix2_stage_count
 
 
 @dataclass(frozen=True)
@@ -93,31 +83,9 @@ NttBackendPolicy: TypeAlias = (
 
 _POLICY_SEQUENCE: Final[tuple[NttBackendPolicy, ...]] = (
     IndexedRadix2Policy(name="radix2_indexed"),
+    CompactRadix2Policy(name="radix2_compact"),
     CompactRadix2Policy(
-        name="radix2_compact_group4_smem8",
-        grouped_radix2_stage_count=2,
-    ),
-    CompactRadix2Policy(
-        name="radix2_compact_group8_smem8",
-        grouped_radix2_stage_count=3,
-    ),
-    CompactRadix2Policy(
-        name="radix2_compact_group16_smem8",
-        grouped_radix2_stage_count=4,
-    ),
-    CompactRadix2Policy(
-        name="radix2_compact_group4_shoup32_smem8",
-        grouped_radix2_stage_count=2,
-        twiddle_encoding="shoup32",
-    ),
-    CompactRadix2Policy(
-        name="radix2_compact_group8_shoup32_smem8",
-        grouped_radix2_stage_count=3,
-        twiddle_encoding="shoup32",
-    ),
-    CompactRadix2Policy(
-        name="radix2_compact_group16_shoup32_smem8",
-        grouped_radix2_stage_count=4,
+        name="radix2_compact_shoup32",
         twiddle_encoding="shoup32",
     ),
     CompactFixedRadixPolicy(
@@ -140,9 +108,9 @@ NTT_BACKEND_POLICIES: Final = MappingProxyType(
 SUPPORTED_NTT_BACKENDS: Final = tuple(NTT_BACKEND_POLICIES)
 # This fallback applies across supported ring dimensions and CUDA devices.
 # Execution owners can select another named policy when constructing NTT resources.
-DEFAULT_NTT_BACKEND: Final[str] = "radix2_compact_group16_smem8"
+DEFAULT_NTT_BACKEND: Final[str] = "radix2_compact"
 # The indexed radix-2 policy is the CPU production backend as well as the
-# cross-device validation baseline. Compact/grouped policies remain CUDA.
+# cross-device validation baseline. Compact policies remain GPU-only.
 DEFAULT_CPU_NTT_BACKEND: Final[str] = "radix2_indexed"
 
 
@@ -181,7 +149,7 @@ def compatible_ntt_backends(log_ring_dimension: int) -> tuple[str, ...]:
     """Return registered policy names executable for one ``logN``.
 
     Names retain registry order. Strict fixed-radix policies whose digit width
-    does not divide ``log_ring_dimension`` are omitted; grouped radix-2
+    does not divide ``log_ring_dimension`` are omitted; compact radix-2
     policies remain available for every supported ring dimension. A
     non-positive dimension raises :class:`ValueError`.
     """

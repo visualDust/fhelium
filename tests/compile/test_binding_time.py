@@ -2,19 +2,19 @@
 
 import torch
 
-from fhelium import CkksConfig, Preset, compile as fc
+from fhelium import CkksConfig, compile as fc
 from fhelium.eager import Engine
 from fhelium.ir import Program
 from fhelium.values import Plaintext
 
 
 def _fixture():
-    preset = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
-    config = CkksConfig(
+    config = CkksConfig.catalog_suffix_chain(
         logN=8,
-        q_depth_groups=tuple((prime,) for prime in preset.q_moduli[:3]),
-        p_moduli=preset.p_moduli[:1],
-        default_scale=preset.default_scale,
+        scale_bits=40,
+        depth=2,
+        p_count=1,
+        catalog_logN=14,
         enforce_security_budget=False,
     )
     engine = Engine(config, rng_seed=761)

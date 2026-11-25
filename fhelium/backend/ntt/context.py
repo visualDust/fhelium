@@ -63,14 +63,14 @@ class NttContext:
             rns_params=rns_context.rns_parameter_tensor,
         )
 
-    def _active_row_start(
+    def _active_prime_ids(
         self,
         a: torch.Tensor,
         *,
         include_p: bool,
         parameter_row_start: int | None,
-    ) -> int:
-        return self.rns_context.parameter_row_start_for(
+    ) -> tuple[int, ...]:
+        return self.rns_context.prime_ids_for(
             a,
             include_p=include_p,
             parameter_row_start=parameter_row_start,
@@ -137,12 +137,11 @@ class NttContext:
     def _transform(
         self,
         a: torch.Tensor,
-        row_start: int,
+        ids: tuple[int, ...],
         transition: str,
         *,
         in_place: bool = True,
     ) -> torch.Tensor:
-        ids = tuple(range(row_start, row_start + a.size(-2)))
         operands = (
             a,
             *self.tensor_operands(
@@ -162,12 +161,12 @@ class NttContext:
     ) -> None:
         r"""Apply the negacyclic forward NTT to Montgomery residues in place."""
 
-        row_start = self._active_row_start(
+        ids = self._active_prime_ids(
             a,
             include_p=include_p,
             parameter_row_start=parameter_row_start,
         )
-        self._transform(a, row_start, "forward_montgomery_")
+        self._transform(a, ids, "forward_montgomery_")
 
     def forward_to_montgomery_(
         self,
@@ -178,12 +177,12 @@ class NttContext:
     ) -> None:
         r"""Apply forward NTT and standard-to-Montgomery conversion in place."""
 
-        row_start = self._active_row_start(
+        ids = self._active_prime_ids(
             a,
             include_p=include_p,
             parameter_row_start=parameter_row_start,
         )
-        self._transform(a, row_start, "forward_to_montgomery_")
+        self._transform(a, ids, "forward_to_montgomery_")
 
     def forward_to_montgomery(
         self,
@@ -194,13 +193,13 @@ class NttContext:
     ) -> torch.Tensor:
         r"""Return the non-aliasing forward NTT/Montgomery transition."""
 
-        row_start = self._active_row_start(
+        ids = self._active_prime_ids(
             a,
             include_p=include_p,
             parameter_row_start=parameter_row_start,
         )
         return self._transform(
-            a, row_start, "forward_to_montgomery_", in_place=False
+            a, ids, "forward_to_montgomery_", in_place=False
         )
 
     def inverse_montgomery_(
@@ -212,12 +211,12 @@ class NttContext:
     ) -> None:
         r"""Apply normalized inverse NTT and keep Montgomery form."""
 
-        row_start = self._active_row_start(
+        ids = self._active_prime_ids(
             a,
             include_p=include_p,
             parameter_row_start=parameter_row_start,
         )
-        self._transform(a, row_start, "inverse_montgomery_")
+        self._transform(a, ids, "inverse_montgomery_")
 
     def inverse_to_standard_lazy_(
         self,
@@ -228,12 +227,12 @@ class NttContext:
     ) -> None:
         r"""Inverse NTT to coefficient/standard lazy residues in place."""
 
-        row_start = self._active_row_start(
+        ids = self._active_prime_ids(
             a,
             include_p=include_p,
             parameter_row_start=parameter_row_start,
         )
-        self._transform(a, row_start, "inverse_to_standard_lazy_")
+        self._transform(a, ids, "inverse_to_standard_lazy_")
 
     def inverse_to_standard_(
         self,
@@ -244,12 +243,12 @@ class NttContext:
     ) -> None:
         r"""Inverse NTT to coefficient/standard reduced residues in place."""
 
-        row_start = self._active_row_start(
+        ids = self._active_prime_ids(
             a,
             include_p=include_p,
             parameter_row_start=parameter_row_start,
         )
-        self._transform(a, row_start, "inverse_to_standard_")
+        self._transform(a, ids, "inverse_to_standard_")
 
     def inverse_to_centered_(
         self,
@@ -260,12 +259,12 @@ class NttContext:
     ) -> None:
         r"""Inverse NTT to centered coefficient/standard residues in place."""
 
-        row_start = self._active_row_start(
+        ids = self._active_prime_ids(
             a,
             include_p=include_p,
             parameter_row_start=parameter_row_start,
         )
-        self._transform(a, row_start, "inverse_to_centered_")
+        self._transform(a, ids, "inverse_to_centered_")
 
     def __repr__(self) -> str:
         return self.__str__()

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import math
 from itertools import product
 
 import pytest
+import torch
 
 import fhelium as fh
 from fhelium import CkksConfig, Preset
@@ -25,33 +27,31 @@ def test_prime_catalog_covers_scaling_and_special_widths() -> None:
     assert ckks_ops.preset_names() == [preset.value for preset in Preset]
 
 
-@pytest.mark.parametrize(
-    ("preset", "slots", "max_depth", "total_bits", "dtype"),
-    [
-        (Preset.slots8192_scale25_depth14_int32, 8192, 14, 404, "int32"),
-        (Preset.slots16384_scale40_depth16_int64, 16384, 16, 800, "int64"),
-        (Preset.slots32768_scale50_depth27_int64, 32768, 27, 1640, "int64"),
-        (Preset.slots32768_scale50_depth29_int64, 32768, 29, 1740, "int64"),
-        (Preset.slots65536_scale30_depth95_int64, 65536, 95, 3278, "int64"),
-    ],
-)
-def test_preset_name_records_max_depth_and_exact_parameter_capacity(
-    preset: Preset,
-    slots: int,
-    max_depth: int,
-    total_bits: int,
-    dtype: str,
-) -> None:
+@pytest.mark.parametrize("preset", list(Preset))
+def test_preset_name_records_slots_scale_and_max_depth(preset: Preset) -> None:
     config = CkksConfig.parse(preset)
-    engine = Engine(config)
+    parts = preset.value.split("-")
+    slots, scale_bits, max_depth = (
+        int(part.removeprefix(prefix))
+        for part, prefix in zip(parts[:3], ("slots", "scale", "depth"), strict=True)
+    )
+    # A "-boot{n}" preset reserves the depths before its last n for bootstrapping.
+    application_depths = (
+        int(parts[3].removeprefix("boot")) if len(parts) == 4 else max_depth - 1
+    )
 
     assert config.num_slots == slots
     assert config.max_depth == max_depth
-    assert len(config.q_depth_groups) == max_depth + 1
-    assert config.total_modulus_bits == total_bits
-    assert str(engine.dtype).removeprefix("torch.") == dtype
-    assert f"_depth{max_depth}_" in preset.name
-    assert f"-depth{max_depth}-" in preset.value
+    assert len(config.q_bases) == len(config.scales) == max_depth + 1
+    assert config.q_bases[0] == tuple(range(config.num_q_primes))
+    assert Engine(config).dtype == torch.int32
+    for depth in range(max_depth - application_depths, max_depth + 1):
+        assert abs(math.log2(config.scale_at(depth)) - scale_bits) < 1.5
+    for depth in range(max_depth):
+        ratio = config.transition_ratio(depth, depth + 1)
+        assert ratio > 1
+    final_bits = sum(math.log2(q) for q in config.active_q_moduli(max_depth))
+    assert final_bits >= scale_bits + 9
     config.validate_security_budget()
 
 
@@ -64,37 +64,41 @@ def test_all_presets_resolve_to_exact_distinct_ntt_primes() -> None:
         assert config.depth_remaining(config.max_depth) == 0
 
 
-def test_dump_round_trip_records_exact_depth_groups() -> None:
+def test_dump_round_trip_records_bases_and_scales() -> None:
     config = CkksConfig.parse(
-        Preset.slots8192_scale40_depth7_int64,
+        Preset.slots8192_scale40_depth7,
         galois_generator=5,
     )
     dumped = config.dumps()
 
     assert dumped["fhelium_version"] == fh.__version__
-    assert dumped["q_depth_groups"] == [
-        list(group) for group in config.q_depth_groups
-    ]
+    assert dumped["q_moduli"] == list(config.q_moduli)
+    assert dumped["q_bases"] == [list(b) for b in config.q_bases]
     assert dumped["p_moduli"] == list(config.p_moduli)
     assert CkksConfig.parse(dumped).dumps() == dumped
 
 
-def test_exact_config_rejects_invalid_prime_groups() -> None:
-    baseline = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
-    groups = list(baseline.q_depth_groups)
-    groups[0] = (groups[0][0] + 2,)
+def test_config_rejects_invalid_primes_and_removed_fields() -> None:
+    baseline = CkksConfig.parse(Preset.slots8192_scale40_depth7)
+    q = list(baseline.q_moduli)
+    q[0] += 2
 
     with pytest.raises(ValueError, match="negacyclic NTT"):
         CkksConfig(
-            default_scale=baseline.default_scale,
-            q_depth_groups=tuple(groups),
+            q_moduli=tuple(q),
+            q_bases=baseline.q_bases,
+            scales=baseline.scales,
             p_moduli=baseline.p_moduli,
             logN=baseline.logN,
         )
+    dumped = baseline.dumps()
+    dumped["q_depth_groups"] = [[q] for q in baseline.q_moduli]
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        CkksConfig.parse(dumped)
 
 
 def test_serialized_config_rejects_another_package_version() -> None:
-    dumped = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64).dumps()
+    dumped = CkksConfig.parse(Preset.slots8192_scale40_depth7).dumps()
     dumped["fhelium_version"] = "incompatible-test-version"
 
     with pytest.raises(ValueError, match="requires FHElium"):
@@ -102,8 +106,8 @@ def test_serialized_config_rejects_another_package_version() -> None:
 
 
 def test_config_and_exact_modulus_sequences_are_immutable() -> None:
-    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
     with pytest.raises(AttributeError, match="CkksConfig is immutable"):
         config.sigma = 3.2
     with pytest.raises(AttributeError):
-        config.q_depth_groups.append((1,))  # type: ignore[attr-defined]
+        config.q_moduli.append(1)  # type: ignore[attr-defined]

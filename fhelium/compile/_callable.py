@@ -35,12 +35,8 @@ from ._cache import (
     relocate_materials,
     source_identity,
     runtime_cacheable,
-    structural_entry_key,
-    relocate_structural_materials,
     trace_entry_key,
 )
-from ._structural_cache import StructuralCache, StructuralEntry
-from ._selection_plan import SelectionPlans
 from ._graph import _GraphExecutor
 from ._context import execution_context
 from ._timing import ExecutionTiming
@@ -331,7 +327,6 @@ class CompiledCallable(Generic[_P, _R]):
             if standard and directory is not None
             else None
         )
-        self._structures = StructuralCache(directory) if standard else None
         self._resident_hits = 0
         self._stages: dict[CallSignature, dict[str, object]] = {}
         self._execution_lock = RLock()
@@ -359,8 +354,6 @@ class CompiledCallable(Generic[_P, _R]):
         if isinstance(self._source, Compilation):
             return self._source
         workspace = fresh_workspace(cast(CompileWorkspace, self._workspace))
-        if self._structures is not None:
-            workspace["structural_template_recording"] = True
         return capture_invocation(
             self._source,
             arguments,
@@ -369,105 +362,16 @@ class CompiledCallable(Generic[_P, _R]):
             workspace=workspace,
         )
 
-    def _source_identity(
-        self, *, structural: bool = False
-    ) -> SourceIdentity | None:
-        if (self._structures if structural else self._cache) is None:
+    def _source_identity(self) -> SourceIdentity | None:
+        if self._cache is None:
             return None
         try:
             return source_identity(
-                self._source,
-                material_names=self._material_names,
-                structural=structural,
+                self._source, material_names=self._material_names
             )
         except CacheIneligible as error:
-            self._stages.setdefault("__cache__", {})[
-                "structure_ineligible" if structural else "ineligible"
-            ] = str(error)
+            self._stages.setdefault("__cache__", {})["ineligible"] = str(error)
             return None
-
-    def _instantiate_structure(self, entry, arguments, backend):
-        from fhelium.backend.implementation import (
-            OperationImplementationRegistry,
-        )
-
-        bindings, providers, leaves = relocate_structural_materials(
-            self._source, entry.manifest, material_names=self._material_names
-        )
-        workspace = fresh_workspace(cast(CompileWorkspace, self._workspace))
-        workspace[OperationImplementationRegistry] = backend.registry
-        workspace[SelectionPlans] = SelectionPlans.from_dict(entry.plans)
-        workspace["selection_plan_stats"] = {}
-        workspace["local_plan_stats"] = {}
-        descriptor = entry.template.metadata.get("preparation")
-        if descriptor is not None:
-            from ._binding_time import preparation_guards
-
-            if (
-                preparation_guards(arguments)
-                != entry.template.metadata["preparation_guards"]
-            ):
-                return None, ()
-            plan = PreparationPlan.restore(
-                descriptor,
-                source=self._source,
-                arguments=arguments,
-                bindings=bindings,
-                material_names=self._material_names,
-            )
-            bindings.update(plan.bindings)
-            workspace[PREPARATION] = plan
-        source = entry.template.instantiate(
-            arguments,
-            material_bindings=bindings,
-            leaf_states=leaves,
-            workspace=workspace,
-        )
-        if source is None:
-            return None, ()
-        resources = tuple(
-            engine._dispatcher_for(device).device_resources
-            for engine, device in providers
-        )
-        prepare_material_bindings(source, resources=resources)
-        return source, resources
-
-    def _load_structure(self, arguments, signature, stages, identity, backend):
-        """Instantiate a guarded high-level template with current material owners."""
-        if identity is None or self._structures is None:
-            return None, None, ()
-        family = structural_entry_key(identity, signature)
-        stages["structure_key"] = family
-        started = time.perf_counter()
-        entries, layer = self._structures.load(family)
-        stages["structure_load_seconds"] = time.perf_counter() - started
-        stages["structure_layer"] = layer
-        stages["structure"] = "guard-miss" if entries else "miss"
-        started = time.perf_counter()
-        for entry in reversed(entries):
-            try:
-                source, resources = self._instantiate_structure(
-                    entry, arguments, backend
-                )
-                if source is None:
-                    continue
-            except (
-                CacheIneligible,
-                AttributeError,
-                KeyError,
-                IndexError,
-                TypeError,
-                ValueError,
-            ) as error:
-                stages["structure_guard_reason"] = (
-                    f"{type(error).__name__}: {error}"
-                )
-                continue
-            stages["structure"] = "hit"
-            stages["instantiate_seconds"] = time.perf_counter() - started
-            return source, entry, resources
-        stages["instantiate_seconds"] = time.perf_counter() - started
-        return None, None, ()
 
     def _load_cached(
         self,
@@ -785,73 +689,6 @@ class CompiledCallable(Generic[_P, _R]):
         finally:
             stages["warm_seconds"] = time.perf_counter() - started
 
-    def _record_structure(
-        self, source, arguments, stages, structure_identity, backend
-    ):
-        """Prepare plan recording for a fresh capture and build its structural template.
-
-        Returns the Compilation to transform, the structural entry to store after preparation, and resources of an instantiated template.
-        """
-        structure_entry = None
-        instance_resources = ()
-        if self._structures is not None:
-            source.workspace[SelectionPlans] = SelectionPlans()
-            source.workspace["selection_plan_stats"] = {}
-            source.workspace["local_plan_stats"] = {}
-        if structure_identity is not None:
-            from ._template import build_template
-
-            started = time.perf_counter()
-            template = build_template(source)
-            plan = source.workspace.get(PREPARATION)
-            if template is not None and plan is not None:
-                from ._binding_time import preparation_guards
-
-                try:
-                    template.metadata["preparation"] = plan.descriptor(
-                        structure_identity
-                    )
-                    template.metadata["preparation_guards"] = (
-                        preparation_guards(arguments)
-                    )
-                except ValueError as error:
-                    stages["structure_ineligible"] = str(error)
-                    template = None
-            if template is not None:
-                manifest = build_manifest(
-                    structure_identity,
-                    source.material_bindings,
-                    source.program.material_descriptions,
-                    structural=True,
-                )
-                if manifest is not None:
-                    structure_entry = StructuralEntry.create(
-                        template, manifest, {}
-                    )
-                else:
-                    stages["structure"] = "unlocatable-materials"
-            else:
-                stages["structure"] = "unsupported"
-            stages["template_seconds"] = time.perf_counter() - started
-            if structure_entry is not None and plan is None:
-                started = time.perf_counter()
-                current_source, instance_resources = (
-                    self._instantiate_structure(
-                        structure_entry, arguments, backend
-                    )
-                )
-                if current_source is None:
-                    structure_entry = None
-                    stages["structure"] = "guard-miss"
-                else:
-                    source = current_source
-                stages["instantiate_seconds"] = (
-                    float(stages.get("instantiate_seconds", 0.0))
-                    + time.perf_counter()
-                    - started
-                )
-        return source, structure_entry, instance_resources
-
     def _build(
         self, arguments: Mapping[str, object], signature: CallSignature
     ) -> Specialization:
@@ -878,43 +715,16 @@ class CompiledCallable(Generic[_P, _R]):
                 self._ready_streams[signature].use()
         if variant is None:
             variant = self._load_cached(arguments, signature, stages, identity)
-        structure_entry = None
-        structure_identity = None
-        instance_resources = ()
         if variant is None:
             started = time.perf_counter()
-            structure_identity = (
-                self._source_identity(structural=True)
-                if runtime_cacheable(arguments)
-                else None
-            )
-            stages["structure_identity_seconds"] = time.perf_counter() - started
-            stages["structure"] = (
-                "ineligible" if self._structures is not None else "disabled"
-            )
-            source, structure_entry, instance_resources = self._load_structure(
-                arguments, signature, stages, structure_identity, backend
-            )
+            source = self._capture(arguments)
+            stages["capture_seconds"] = time.perf_counter() - started
             traced = None
-            if source is None:
-                started = time.perf_counter()
-                source = self._capture(arguments)
-                stages["capture_seconds"] = time.perf_counter() - started
-                # Sources without a pre-capture identity are keyed by what they captured.
-                if self._cache is not None and identity is None:
-                    traced = self._load_traced(
-                        source, arguments, signature, stages, backend
-                    )
-                if traced is None:
-                    source, structure_entry, instance_resources = (
-                        self._record_structure(
-                            source,
-                            arguments,
-                            stages,
-                            structure_identity,
-                            backend,
-                        )
-                    )
+            # Sources without a pre-capture identity are keyed by what they captured.
+            if self._cache is not None and identity is None:
+                traced = self._load_traced(
+                    source, arguments, signature, stages, backend
+                )
             if traced is not None:
                 variant = traced
             else:
@@ -932,17 +742,19 @@ class CompiledCallable(Generic[_P, _R]):
                     (report.name, report.seconds)
                     for report in variant.compilation.reports
                 )
-                stages["selection_plans"] = variant.compilation.workspace.get(
-                    "selection_plan_stats", {}
-                )
-                stages["local_plans"] = variant.compilation.workspace.get(
-                    "local_plan_stats", {}
-                )
+                from fhelium.ir._operation_structure import STRUCTURE_LOOKUPS
+
+                from .passes.lowering._select_execution import SelectionDecisions
+
+                selection = variant.compilation.workspace.get(SelectionDecisions)
+                if selection is not None:
+                    stages["selection_decisions"] = selection.stats()
+                stages["structure_lookups"] = dict(STRUCTURE_LOOKUPS)
         started = time.perf_counter()
         from .frontend._eager_capture import CAPTURED_RESOURCES
 
         captured = variant.compilation.workspace.get(CAPTURED_RESOURCES, ())
-        resources = (*self._resources, *instance_resources, *captured)
+        resources = (*self._resources, *captured)
         if variant.artifact is not None and not bind_provided_materials(
             variant.compilation.material_bindings,
             variant.artifact.selections,
@@ -1001,7 +813,7 @@ class CompiledCallable(Generic[_P, _R]):
         plan = variant.compilation.workspace.get(PREPARATION)
         started = time.perf_counter()
         if plan is not None:
-            plan.link(self._cache)
+            plan.link()
         stages["preparation_link_seconds"] = time.perf_counter() - started
         started = time.perf_counter()
         prepared = bind_variant(
@@ -1040,19 +852,6 @@ class CompiledCallable(Generic[_P, _R]):
                 "trace_store_seconds" if store_trace else "cache_store_seconds"
             ] = time.perf_counter() - started
         self._store_artifact(prepared, selections, stages)
-        if structure_entry is not None:
-            started = time.perf_counter()
-            try:
-                plans = variant.compilation.workspace[SelectionPlans]
-                self._structures.store(
-                    stages["structure_key"],
-                    structure_entry.with_plans(plans.to_dict()),
-                )
-            except (OSError, ValueError, CacheIneligible) as error:
-                stages["structure_store_error"] = (
-                    f"{type(error).__name__}: {error}"
-                )
-            stages["structure_store_seconds"] = time.perf_counter() - started
         plan = variant.compilation.workspace.get(PREPARATION)
         if plan is not None:
             stages["plaintext_preparation"] = plan.stats()
@@ -1224,11 +1023,6 @@ class CompiledCallable(Generic[_P, _R]):
                     "cache_store_seconds",
                     "warm_seconds",
                     "identity_seconds",
-                    "structure_identity_seconds",
-                    "structure_load_seconds",
-                    "instantiate_seconds",
-                    "template_seconds",
-                    "structure_store_seconds",
                 )
             )
             graph_records = self._graphs.stats()

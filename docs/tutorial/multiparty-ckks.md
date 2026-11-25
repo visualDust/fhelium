@@ -29,7 +29,7 @@ Here, `N` is the ring dimension and `D` is the stable hybrid key-digit count. Th
 Run the example from the repository root:
 
 ```bash
-python examples/26_experimental_multiparty.py --preset slots8192-scale40-depth7-int64
+python examples/26_experimental_multiparty.py --preset slots8192-scale40-depth7
 ```
 
 ## Follow the application-owned states

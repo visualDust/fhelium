@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import hashlib
 import linecache
 from collections.abc import Callable, Sequence
@@ -17,7 +19,7 @@ from fhelium.config.ntt import NttBackendPolicy
 from xdsl.dialects.builtin import IntegerAttr
 from xdsl.ir import Operation, SSAValue
 
-from fhelium.ir.dialects import ckks, ntt, rns
+from fhelium.ir.dialects import ntt
 
 from ._expressions import (
     Anchor,
@@ -35,8 +37,14 @@ from ._budget import (
 )
 from ._launch import PreparedKernel
 from ._layout import check_ntt_layouts
-from ._ntt_codegen import StageEmitter, compile_endpoint
-from ._repeat import EndpointBody, project_repeats
+from ._ntt_codegen import (
+    StageEmitter,
+    compile_endpoint,
+    radix2_elements,
+    radix2_geometry,
+)
+
+_RADIX2_WARPS = 4
 
 
 def _inverse(anchor: Anchor) -> bool:
@@ -257,21 +265,11 @@ def _fusion_qualified(
     groups. This is an eligibility check, not a latency estimate.
     """
     from fhelium.backend.ntt._selection import select_operation_policy
-    from ._expressions import NTT_OPS, SUPPORTED_OPERATIONS
-    from ._matching import RegionMatcher, _outer, _state
+    from ._layout import generated_structure
 
-    has_repeats = any(isinstance(op, ckks.RepeatOp) for op in operations)
-    if has_repeats:
-        operations = tuple(
-            child
-            for op in operations
-            for child in (
-                tuple(op.body.block.ops)[:-1]
-                if isinstance(op, ckks.RepeatOp)
-                else (op,)
-            )
-        )
-    anchors = tuple(op for op in operations if isinstance(op, NTT_OPS))
+    from ._matching import RegionMatcher, _outer, _state, _transform
+
+    anchors = tuple(op for op in operations if _transform(op))
     if not anchors:
         return True
     layout = RegionMatcher(include_ntt=True).layout
@@ -307,9 +305,6 @@ def _fusion_qualified(
     if all(plan is not None and not plan.whole for plan in schedules):
         return True
 
-    if has_repeats:
-        return False
-
     selected = set(operations)
     anchor_ids: dict[Operation, int] = {
         op: index for index, op in enumerate(anchors)
@@ -332,8 +327,10 @@ def _fusion_qualified(
             nodes.update(pure)
             dependencies.update(prior)
         # Component extraction is a storage view rather than a generated compute.
-        if isinstance(owner, SUPPORTED_OPERATIONS) and not isinstance(
-            owner, rns.ExtractComponentOp
+        structure = generated_structure(owner)
+        if structure is not None and structure.layout not in (
+            "select",
+            "transform",
         ):
             nodes.add(owner)
         return frozenset(nodes), frozenset(dependencies)
@@ -447,6 +444,10 @@ class _Kernel:
     source: str
     inputs: tuple[int, ...]
     scalars: tuple[int, ...]
+    elements: int
+
+
+_ELEMENT_LOAD = re.compile(r"= tl\.load\((?!twiddles|roots|rns_parameters)[^\n]*\bindex\b")
 
 
 def _source(
@@ -455,6 +456,30 @@ def _source(
     step: _Step,
     stores: tuple[tuple[ValueExpr, ...], ...],
     writes: tuple[int, ...],
+) -> _Kernel:
+    """Generate one step at the largest program size within the load budget.
+
+    Every coefficient load of a program may be issued ahead of the arithmetic
+    that consumes it, so a program holds up to ``elements x loads`` values;
+    prologues and epilogues that combine many operands use smaller programs.
+    """
+    elements = radix2_elements(1)
+    while True:
+        kernel = _source_at(graph, schedules, step, stores, writes, elements)
+        loads = len(_ELEMENT_LOAD.findall(kernel.source))
+        smaller = radix2_elements(loads, elements)
+        if smaller == elements:
+            return kernel
+        elements = smaller
+
+
+def _source_at(
+    graph: BoundGraph,
+    schedules: tuple[NttStages, ...],
+    step: _Step,
+    stores: tuple[tuple[ValueExpr, ...], ...],
+    writes: tuple[int, ...],
+    elements: int,
 ) -> _Kernel:
     rows, n = graph.anchors[0].source.shape[-2:]
     batches = prod(graph.anchors[0].source.batch_shape)
@@ -492,8 +517,8 @@ def _source(
         )
 
     lines = [
-        "row = tl.program_id(1).to(tl.int64)",
-        "batch = tl.program_id(2).to(tl.int64)",
+        "batch = tl.program_id(1).to(tl.int64)",
+        "row = tl.program_id(2).to(tl.int64)",
         "q = (tl.load(rns_parameters + row * PARAM_ROW_STRIDE).to(tl.int64) >> 1)",
         "k = tl.load(rns_parameters + 3 * PARAM_STRIDE + row * PARAM_ROW_STRIDE).to(tl.int64) | (tl.load(rns_parameters + 4 * PARAM_STRIDE + row * PARAM_ROW_STRIDE).to(tl.int64) << (RADIX // 2))",
         "r2 = tl.load(rns_parameters + 5 * PARAM_STRIDE + row * PARAM_ROW_STRIDE).to(tl.int64)",
@@ -507,10 +532,14 @@ def _source(
             end=first.end,
             inverse=_inverse(graph.anchors[first.anchor]),
             tiled=first.tiled,
+            radix=schedules[first.anchor].radix,
+            elements=elements,
         )
         indices = stage.indices()
+        segment_index = stage.segment_index
         lines.extend(stage.lines)
     else:
+        segment_index = True
         # Whole transforms own every butterfly and representation transition.
         # Their generated ends evaluate only coefficient-wise expressions.
         indices = ("index",)
@@ -522,20 +551,21 @@ def _source(
         )
     # Each lane carries the completed anchors in this kernel. Earlier transforms
     # that still have consumers are read from their prepared storage instead.
+    # Their loads are placed before the first use, so that a program does not
+    # hold every earlier result in registers across its butterflies.
     overrides: list[dict[Expr, str]] = [{} for _ in indices]
+    prior_loads: dict[str, str] = {}
     for lane, index in enumerate(indices):
         for expr in leaves:
             ordinal, component = expr.data
             count = prod(graph.anchors[ordinal].result.batch_shape)
             name = f"prior_{lane}_{scratch_names[ordinal]}_{component}"
-            lines.append(
+            prior_loads[name] = (
                 f"{name} = tl.load({scratch_names[ordinal]} + {planar(ordinal, component, count, index)}, mask=mask, other=0).to(tl.int64)"
             )
             overrides[lane][expr] = name
 
-    endpoint_bodies = []
     for position, endpoint in enumerate(step.endpoints):
-        body_start = len(lines)
         ordinal = endpoint.anchor
         anchor = graph.anchors[ordinal]
         stage = None
@@ -550,6 +580,7 @@ def _source(
                 radix=schedules[ordinal].radix,
                 twiddle_encoding=schedules[ordinal].twiddle_encoding,
                 prefix=f"a{position}_",
+                elements=elements,
             )
             lines.extend(
                 (
@@ -568,7 +599,7 @@ def _source(
                         f"ROOT_ELEMENT_STRIDE = {table}_RESTRIDE",
                     )
                 )
-        emitter = Emitter(graph.layouts, names)
+        emitter = Emitter(graph.layouts, names, segment_index=segment_index)
         cursor = 0
 
         def emit(expr, lane):
@@ -641,7 +672,7 @@ def _source(
         if endpoint.epilogue:
             # Rebuild the cache after the transform, so its input expressions do
             # not bypass a completed anchor when an output shares a subexpression.
-            emitter = Emitter(graph.layouts, names)
+            emitter = Emitter(graph.layouts, names, segment_index=segment_index)
             cursor = 0
             for lane, index in enumerate(indices):
                 for output in stores[ordinal]:
@@ -650,22 +681,16 @@ def _source(
                         lines.append(
                             f"tl.store({output_names[output.root]} + {planar(ordinal, component, batches, index)}, {value}, mask=mask)"
                         )
-        endpoint_bodies.append(
-            EndpointBody(
-                ordinal,
-                body_start,
-                len(lines),
-                (
-                    endpoint.start,
-                    endpoint.end,
-                    endpoint.tiled,
-                    endpoint.prologue,
-                    endpoint.epilogue,
-                    endpoint.transform,
-                    schedules[ordinal],
-                ),
-            )
-        )
+    if prior_loads:
+        pattern = re.compile(r"\bprior_\w+")
+        placed = []
+        for line in lines:
+            for name in pattern.findall(line):
+                load = prior_loads.pop(name, None)
+                if load is not None:
+                    placed.append(load)
+            placed.append(line)
+        lines = placed
     arguments = [
         *names.pointer_parameters,
         *(scratch_names[i] for i in scratch_ids),
@@ -702,12 +727,6 @@ def _source(
         "BLOCK: tl.constexpr",
         *names.scalar_parameters,
     ]
-    lines, arguments, repeat_counts = project_repeats(
-        lines,
-        arguments,
-        endpoint_bodies,
-        graph.repeats,
-    )
     source = (
         "def endpoint("
         + ", ".join(arguments)
@@ -716,7 +735,7 @@ def _source(
         + "\n"
     )
     return _Kernel(
-        source, tuple(names.inputs), (*names.scalar_values, *repeat_counts)
+        source, tuple(names.inputs), tuple(names.scalar_values), elements
     )
 
 
@@ -956,7 +975,8 @@ class NttExecution:
                         *(f"tables[{i}]" for i in table),
                     ]
                     args = ["(" + ", ".join(operands) + ")"]
-                elif self.schedules[ordinal].radix:
+                else:
+                    # Only fixed-radix schedules have synchronized interiors.
                     namespace[symbol] = (
                         torch.ops.fhelium_ntt_ops.fixed_radix_ntt_stage_range_
                     )
@@ -969,37 +989,32 @@ class NttExecution:
                         str(endpoint.start),
                         str(endpoint.end),
                     ]
-                else:
-                    namespace[symbol] = (
-                        torch.ops.fhelium_ntt_ops.compact_ntt_stage_range_
-                    )
-                    args = [
-                        f"scratch{ordinal}",
-                        f"tables[{table[1]}]",
-                        f"tables[{table[0]}]",
-                        repr(_inverse(anchor)),
-                        str(endpoint.start),
-                        str(endpoint.end),
-                        str(self.schedules[ordinal].group),
-                    ]
                 lines.append(f"        {symbol}({', '.join(args)})")
             else:
                 first = step.endpoints[0]
                 width, spacing = first.partition(
                     n, _inverse(graph.anchors[first.anchor])
                 )
-                grid = (
-                    n // width
-                    if spacing is None
-                    else (n // width + 127) // 128,
-                    rows,
-                    batches,
+                radix2 = (
+                    first.transform
+                    and self.schedules[first.anchor].radix is None
                 )
                 kernel = sources[position]
+                grid = (
+                    radix2_geometry(n, first.start, first.end, kernel.elements)[0]
+                    if radix2
+                    else n // width
+                    if spacing is None
+                    else (n // width + 127) // 128,
+                    # Batches of one row run adjacently and share its tables in L2.
+                    batches,
+                    rows,
+                )
                 symbol = f"launch_{position}"
                 prepared = PreparedKernel(
                     _kernel(kernel.source),
                     grid,
+                    num_warps=_RADIX2_WARPS if radix2 else 4,
                     source=(_kernel, kernel.source),
                 )
                 namespace[symbol] = prepared
@@ -1022,7 +1037,13 @@ class NttExecution:
                     *(f"output_{v.root}" for v in outputs),
                 ]
                 # Warm signature: dtype placeholders for pointers, values for scalars.
-                signature: list[object] = [self.dtype] * len(args)
+                signature: list[object] = [
+                    *(
+                        torch.int64 if i in graph.seed_inputs else self.dtype
+                        for i in kernel.inputs
+                    ),
+                    *[self.dtype] * (len(args) - len(kernel.inputs)),
+                ]
                 for endpoint in step.endpoints:
                     if not endpoint.transform:
                         continue
@@ -1131,8 +1152,10 @@ class NttExecution:
             raise ValueError(
                 "Generated NTT endpoints require CUDA int32/int64 operands"
             )
-        if any(
-            v.device != first.device or v.dtype != first.dtype for v in values
+        if any(v.device != first.device for v in values) or any(
+            v.dtype != first.dtype
+            for i, v in enumerate(values)
+            if i not in graph.seed_inputs
         ):
             raise ValueError("NTT operands must share dtype and device")
         root_ids = tuple(

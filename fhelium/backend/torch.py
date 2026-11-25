@@ -130,23 +130,22 @@ def decode_literal(value: Any) -> Any:
     raise ValueError(f"Unsupported Torch literal {kind!r}")
 
 
-def prepare_tensor_call(
-    function: Callable[..., Any], descriptor: Any
-) -> Callable:
-    """Resolve nested argument descriptors into a direct Torch invocation."""
-    namespace: dict[str, Any] = {"function": function}
+def tensor_call_arguments(
+    descriptor: Any,
+    operand: Callable[[int], str],
+    literal: Callable[[Any], str],
+) -> str:
+    """Return Python source for the arguments of one described Torch call.
 
-    def literal(value):
-        name = f"literal{len(namespace)}"
-        namespace[name] = decode_literal(value)
-        return name
+    ``operand`` names the source of an SSA operand index; ``literal`` binds a decoded literal and returns its name.
+    """
 
     def expression(value):
         if not isinstance(value, dict):
             return literal(value)
         kind = value["kind"]
         if kind == "ssa":
-            return f"inputs[{value['operand']}]"
+            return operand(value["operand"])
         if kind in {"tuple", "list"}:
             items = [expression(item) for item in value["items"]]
             if kind == "list":
@@ -158,7 +157,7 @@ def prepare_tensor_call(
             return (
                 "{"
                 + ", ".join(
-                    f"{literal(key)}: {expression(item)}"
+                    f"{literal(decode_literal(key))}: {expression(item)}"
                     for key, item in value["entries"]
                 )
                 + "}"
@@ -173,19 +172,10 @@ def prepare_tensor_call(
                 + ")"
             )
         if kind == "literal":
-            return literal(value["value"])
+            return literal(decode_literal(value["value"]))
         raise ValueError(f"Unsupported Torch argument descriptor {kind!r}")
 
-    arguments = descriptor["args"]
     kwargs = descriptor["kwargs"]
-    try:
-        positional = [expression(item) for item in arguments["items"]]
-        keyword = [
-            f"{decode_literal(key)}={expression(value)}"
-            for key, value in kwargs["entries"]
-        ]
-    finally:
-        expression = None
     # Keyword names are validated Python identifiers, not executable source.
     import keyword as keywords
 
@@ -196,11 +186,29 @@ def prepare_tensor_call(
         for key, _ in kwargs["entries"]
     ):
         raise ValueError("Torch keyword names must be Python identifiers")
-    source = (
-        "def call(inputs):\n    return (function("
-        + ", ".join((*positional, *keyword))
-        + "),)\n"
+    positional = [expression(item) for item in descriptor["args"]["items"]]
+    keyword = [
+        f"{decode_literal(key)}={expression(value)}"
+        for key, value in kwargs["entries"]
+    ]
+    return ", ".join((*positional, *keyword))
+
+
+def prepare_tensor_call(
+    function: Callable[..., Any], descriptor: Any
+) -> Callable:
+    """Resolve nested argument descriptors into a direct Torch invocation."""
+    namespace: dict[str, Any] = {"function": function}
+
+    def literal(value):
+        name = f"literal{len(namespace)}"
+        namespace[name] = value
+        return name
+
+    arguments = tensor_call_arguments(
+        descriptor, lambda index: f"inputs[{index}]", literal
     )
+    source = f"def call(inputs):\n    return (function({arguments}),)\n"
     exec(compile(source, "<fhelium-torch-call>", "exec"), namespace)
     from fhelium.backend._artifact import rebuild_with
 

@@ -148,11 +148,11 @@ def _configuration(depth: int) -> fh.CkksConfig:
 
 CUDA_NTT_BACKENDS: dict[tuple[int, Mode], str] = {
     (7, "pt-ct"): "radix4_compact",
-    (7, "ct-ct"): "radix2_compact_group4_smem8",
-    (16, "pt-ct"): "radix2_compact_group16_smem8",
-    (16, "ct-ct"): "radix2_compact_group16_smem8",
-    (34, "pt-ct"): "radix2_compact_group16_smem8",
-    (34, "ct-ct"): "radix2_compact_group16_smem8",
+    (7, "ct-ct"): "radix2_compact",
+    (16, "pt-ct"): "radix2_compact",
+    (16, "ct-ct"): "radix2_compact",
+    (34, "pt-ct"): "radix2_compact",
+    (34, "ct-ct"): "radix2_compact",
 }
 
 

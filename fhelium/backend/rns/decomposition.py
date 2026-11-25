@@ -38,9 +38,9 @@ class HybridRnsDecomposition:
     r"""Partition $Q$ into composite RNS digits for hybrid key switching.
 
     Contiguous Q rows form digits whose product is below the special modulus
-    $P$. A single Q prime at or above $P$ forms its own digit. Dropping a Q
-    prefix at a later depth may shrink or remove an active digit, but every
-    remaining digit keeps its depth-zero ``key_digit_index`` so it selects
+    $P$. A single Q prime at or above $P$ forms its own digit. The active
+    basis of a later depth may remove primes from a digit or remove it, but
+    every remaining digit keeps its depth-zero ``key_digit_index`` so it selects
     the correct axis of the depth-zero key-switching key. ``digit_index`` enumerates the active digits at the requested depth; ``key_digit_index`` identifies their stored key planes.
     """
 
@@ -66,12 +66,11 @@ class HybridRnsDecomposition:
         return len(self.depth_zero_digits)
 
     def digits_at_depth(self, depth: int) -> tuple[RnsDecompositionDigit, ...]:
-        self.chain.check_depth(depth)
-        start_row = self.chain.basis_row_starts[depth]
+        basis = set(self.chain.q_prime_ids_at_depth(depth))
         active: list[RnsDecompositionDigit] = []
         for key_digit_index, fixed_digit in enumerate(self.depth_zero_digits):
             prime_ids = tuple(
-                prime_id for prime_id in fixed_digit if prime_id >= start_row
+                prime_id for prime_id in fixed_digit if prime_id in basis
             )
             if prime_ids:
                 active.append(RnsDecompositionDigit(key_digit_index, prime_ids))
@@ -90,9 +89,12 @@ class HybridRnsDecomposition:
     def component_digit_rows(self, depth: int) -> tuple[tuple[int, ...], ...]:
         """Return digit rows relative to a compact depth-specific component."""
 
-        start_row = self.chain.basis_row_starts[depth]
+        position = {
+            prime_id: index
+            for index, prime_id in enumerate(self.chain.q_prime_ids_at_depth(depth))
+        }
         return tuple(
-            tuple(prime_id - start_row for prime_id in digit.prime_ids)
+            tuple(position[prime_id] for prime_id in digit.prime_ids)
             for digit in self.digits_at_depth(depth)
         )
 
@@ -101,7 +103,7 @@ def key_decomposition_facts(
     config: CkksConfig, depth: int, key_prime_ids, digit_prime_ids
 ) -> dict[str, object]:
     """Describe intersections with the Q supports encrypted in stored key planes."""
-    q_ids = tuple(range(config.q_row_start(depth), config.num_q_primes))
+    q_ids = config.q_prime_ids(depth)
     key_prime_ids = tuple(key_prime_ids)
     digit_prime_ids = tuple(tuple(rows) for rows in digit_prime_ids)
     stored_q = tuple(i for rows in digit_prime_ids for i in rows)
@@ -124,15 +126,14 @@ def key_decomposition_facts(
         raise ValueError(
             "Key digit supports do not partition the active Q basis"
         )
-    key_row_start = key_prime_ids.index(q_ids[0])
+    q_rows = tuple(key_prime_ids.index(i) for i in q_ids)
+    key_row_start = q_rows[0]
+    key_p_row_start = len(stored_q)
     qp_ids = (*q_ids, *p_ids)
-    if key_prime_ids[key_row_start : key_row_start + len(qp_ids)] != qp_ids:
-        raise ValueError(
-            "Active QP rows must form a contiguous physical key slice"
-        )
+    contiguous = q_rows == tuple(range(key_row_start, key_row_start + len(q_ids)))
     return {
         "digits": tuple(
-            (rows[0] - q_ids[0], rows[-1] + 1 - q_ids[0], index)
+            (q_ids.index(rows[0]), q_ids.index(rows[-1]) + 1, index)
             for index, rows in active
         ),
         "q_count": len(q_ids),
@@ -141,6 +142,8 @@ def key_decomposition_facts(
         "p_prime_ids": p_ids,
         "qp_prime_ids": qp_ids,
         "key_row_start": key_row_start,
+        "key_p_row_start": key_p_row_start,
+        "key_q_rows": () if contiguous else q_rows,
         "key_prime_ids": key_prime_ids,
         "digit_prime_ids": digit_prime_ids,
     }

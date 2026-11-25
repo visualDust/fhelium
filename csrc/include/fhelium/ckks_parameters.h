@@ -4,10 +4,13 @@
 //! budget table.
 //!
 //! A parameter set defines CKKS over $\mathbb{Z}[X]/(X^N + 1)$ with
-//! $N = 2^{\mathtt{log\_n}}$, ordered Q depth groups, and the special primes
-//! P of hybrid key switching. At depth $d$ the active Q basis is the
-//! concatenation of groups $d, d + 1, \dots$; a rescale removes group $d$.
-//! Every Q and P prime is odd and satisfies $q \equiv 1 \pmod{2N}$.
+//! $N = 2^{\mathtt{log\_n}}$, an ordered Q prime list, the active Q basis and
+//! default scale of every depth, and the catalog of primes reserved for
+//! key-switch auxiliary moduli. The basis $B_d$ of depth $d$ is an increasing
+//! list of Q prime ids. A rescale
+//! from depth $d$ to $d + 1$ divides by the dropped primes $B_d \setminus
+//! B_{d+1}$ and restores the primes $B_{d+1} \setminus B_d$. Every Q and P
+//! prime is odd and satisfies $q \equiv 1 \pmod{2N}$.
 
 #include <c10/util/ArrayRef.h>
 
@@ -15,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <fhelium/export.h>
@@ -25,11 +29,13 @@ namespace fhelium::ckks {
 struct CkksParameters {
   /// $\log_2 N$.
   int64_t log_n = 0;
-  /// Scale of values created without an explicit scale.
-  double default_scale = 0.0;
-  /// Ordered Q depth groups; the last group is the terminal basis.
-  std::vector<std::vector<int64_t>> q_depth_groups;
-  /// Special primes of the key-switch modulus P.
+  /// Ordered Q primes.
+  std::vector<int64_t> q_moduli;
+  /// Increasing Q prime ids of each depth's basis.
+  std::vector<std::vector<int64_t>> q_bases;
+  /// Default scale of each depth.
+  std::vector<double> scales;
+  /// Primes reserved for key-switch auxiliary moduli.
   std::vector<int64_t> p_moduli;
 };
 
@@ -52,12 +58,11 @@ FHELIUM_API std::vector<std::string> preset_names();
 
 /// Resolves the built-in preset `name` to its primes.
 ///
-/// A preset with scaling width $b$, maximum depth $D$, and $k$ special
-/// primes takes the first $D$ scaling candidates of width $b$ as singleton
-/// Q groups, the next candidate as the terminal group, and the first $k$
-/// special candidates not already in Q as P. The default scale is $2^b$.
-/// Special primes are 60 bits for int64 presets and 28 bits for int32
-/// presets.
+/// Every preset uses NTT primes below $2^{30}$: main primes near $2^{30}$
+/// and terminal primes near $2^{25}$. Adjacent bases differ by a rescale
+/// ratio $D/R$ near the scale, and the maximum-depth basis holds about
+/// $s + 10$ bits for scale $2^s$. `scripts/generate_ckks_presets.py`
+/// generates the table.
 FHELIUM_API CkksParameters preset_parameters(std::string_view name);
 
 /// Checks that `moduli` are distinct odd integers above two with

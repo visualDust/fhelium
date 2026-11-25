@@ -33,15 +33,15 @@ _MIB = 1024**2
 
 _FIXED_WORKLOADS: dict[str, dict[str, Any]] = {
     "quick": {
-        "preset": fh.Preset.slots8192_scale40_depth7_int64.value,
-        "ntt_backend": "radix2_compact_group8_smem8",
+        "preset": fh.Preset.slots8192_scale40_depth7.value,
+        "ntt_backend": "radix2_compact",
         "matrix_size": 8,
         "hoist_chunk_size": 7,
         "seed": 20260807,
     },
     "core": {
-        "preset": fh.Preset.slots8192_scale40_depth7_int64.value,
-        "ntt_backend": "radix2_compact_group8_smem8",
+        "preset": fh.Preset.slots8192_scale40_depth7.value,
+        "ntt_backend": "radix2_compact",
         "matrix_size": 128,
         "hoist_chunk_size": 64,
         "seed": 20260807,

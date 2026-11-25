@@ -36,6 +36,7 @@ from .._operation_catalog import (
 )
 from .rns import RnsBundleType
 from .._dependencies import OperationDependencies, operand_relations
+from .._operation_structure import OperationStructure, transform
 
 
 class _NttOp(IRDLOperation):
@@ -44,6 +45,13 @@ class _NttOp(IRDLOperation):
     tables = var_operand_def()
     result = result_def(RnsBundleType)
     traits = traits_def(Pure())
+
+    @staticmethod
+    def structure(
+        operand_count: int, attributes: Mapping[str, object]
+    ) -> OperationStructure:
+        """Describe operand roles for residue code generation."""
+        return transform(operand_count - 2)
 
     def __init__(
         self,
@@ -216,7 +224,6 @@ OPERATION_SPECS: tuple[OperationSpec, ...] = tuple(
         validator=flat_with_attributes(
             "ntt_backend",
             "ntt_algorithm",
-            "ntt_group_width",
             "ntt_radix",
             "ntt_table_layout",
             "ckks_config",

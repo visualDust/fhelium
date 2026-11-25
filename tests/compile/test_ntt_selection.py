@@ -28,12 +28,12 @@ def test_partial_ntt_selection_preserves_supplied_tables_and_open_device(
 ):
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
     context = NttContext(RnsContext(config, device=device))
     ids = (2, 3)
     supplied = context.tensor_operands(ids, inverse=False)
     source = torch.randint(
-        0, 65536, (2, len(ids), config.N), dtype=torch.int64, device=device
+        0, 65536, (2, len(ids), config.N), dtype=context.rns_context.dtype, device=device
     )
 
     def integers(values):
@@ -45,7 +45,7 @@ def test_partial_ntt_selection_preserves_supplied_tables_and_open_device(
             "strides": integers(source.stride()),
             "ring_dimension": IntegerAttr(config.N, 64),
             "prime_ids": integers(ids),
-            "dtype": StringAttr("torch.int64"),
+            "dtype": StringAttr(str(context.rns_context.dtype)),
             "polynomial_domain": StringAttr("coefficient"),
             "residue_representation": StringAttr("standard"),
         }
@@ -85,7 +85,6 @@ def test_partial_ntt_selection_preserves_supplied_tables_and_open_device(
                 algorithm="radix2_indexed"
                 if device == "cpu"
                 else "radix2_compact",
-                group_width=None if device == "cpu" else 16,
             ),
             selection,
         )
@@ -142,7 +141,7 @@ def test_partial_ntt_selection_preserves_supplied_tables_and_open_device(
 
 @pytest.mark.parametrize(
     "policy",
-    ["radix2_compact_group16_smem8", "radix2_compact_group16_shoup32_smem8"],
+    ["radix2_compact", "radix2_compact_shoup32"],
 )
 def test_ntt_fusion_preserves_surrounding_arithmetic_and_escaping_results(
     policy,
@@ -153,12 +152,13 @@ def test_ntt_fusion_preserves_surrounding_arithmetic_and_escaping_results(
     from fhelium.eager import Engine
     from fhelium.ir.dialects import fusion
 
-    base = CkksConfig.parse(Preset.slots8192_scale25_depth14_int32)
-    config = CkksConfig(
+    config = CkksConfig.catalog_suffix_chain(
         logN=8,
-        q_depth_groups=base.q_depth_groups[-3:],
-        p_moduli=base.p_moduli,
-        default_scale=base.default_scale,
+        scale_bits=25,
+        depth=2,
+        p_count=1,
+        p_bits=28,
+        catalog_logN=14,
         enforce_security_budget=False,
     )
     engine = Engine(config, ntt_backend=policy, rng_seed=913, rng_nonce=41)

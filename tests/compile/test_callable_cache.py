@@ -15,7 +15,7 @@ from fhelium.eager import Engine
 
 
 def _fixture(device):
-    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
     engine = Engine(config, rng_seed=7, rng_nonce=0)
     secret = engine.create_secret_key(device=device)
     public = engine.create_public_key(secret, device=device)
@@ -66,7 +66,7 @@ def test_persistent_cache_hit_relinks_current_materials(tmp_path):
     scale = 2.0
 
     def scaled(value):
-        return engine.multiply_scalar(source(value), scale)
+        return engine.multiply_constant(source(value), scale, rescale=False)
 
     other = fc.compile(scaled, cache=tmp_path)
     other(x)

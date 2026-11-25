@@ -5,6 +5,8 @@ These functions derive scale, prime-row, and representation metadata from operat
 
 from __future__ import annotations
 
+from fractions import Fraction
+
 from typing import Literal
 
 from fhelium.config import CkksConfig
@@ -22,8 +24,8 @@ def product_scale(lhs: float, rhs: float) -> float:
     return lhs * rhs
 
 
-def quotient_scale(scale: float, divisor: int) -> float:
-    r"""Return $\Delta_{out}=\Delta/M$ for the complete dropped-group product."""
+def quotient_scale(scale: float, divisor: int | Fraction) -> float:
+    r"""Return $\Delta_{out}=\Delta R/D$ for the rescale ratio $D/R$."""
 
     return scale / float(divisor)
 
@@ -53,10 +55,12 @@ def transform_state(
 def depth_prime_ids(
     config: CkksConfig, depth: int, basis: ModulusBasis
 ) -> tuple[int, ...]:
-    """Select the Q suffix at a depth and retain P rows for a QP value."""
+    """Select the Q basis at a depth and append the P rows for a QP value."""
 
-    stop = config.total_num_primes if basis == "QP" else config.num_q_primes
-    return tuple(range(config.q_row_start(depth), stop))
+    q = config.q_prime_ids(depth)
+    if basis == "QP":
+        return (*q, *range(config.num_q_primes, config.total_num_primes))
+    return q
 
 
 def reinterpreted_scale(

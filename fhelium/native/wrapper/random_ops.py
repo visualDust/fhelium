@@ -63,6 +63,33 @@ def chacha20_keystream(
     )
 
 
+def expand_seeded_key(
+    seed_rows: torch.Tensor,
+    moduli: torch.Tensor,
+    ring_dimension: int,
+    rounds: int,
+) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_random_ops::expand_seeded_key``.
+
+    Torch schema::
+
+        fhelium_random_ops::expand_seeded_key(Tensor seed_rows, Tensor moduli, int ring_dimension, int rounds) -> Tensor
+
+    Args:
+        seed_rows: torch.Tensor.
+        moduli: torch.Tensor.
+        ring_dimension: int.
+        rounds: int.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_random_ops.expand_seeded_key(
+        seed_rows, moduli, ring_dimension, rounds
+    )
+
+
 def gaussian_cdt_table(sigma: float) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_random_ops::gaussian_cdt_table``.

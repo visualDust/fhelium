@@ -6,36 +6,16 @@ from __future__ import annotations
 
 import torch
 
+
 def _require_native() -> None:
     from fhelium.native import require_native
 
     require_native()
 
 
-def compact_ntt_stage_range_(residues: torch.Tensor, compact_twiddles: torch.Tensor, rns_params: torch.Tensor, inverse: bool, start_stage: int, end_stage: int, grouped_stage_count: int) -> None:
-    """
-    Typed wrapper for ``fhelium_ntt_ops::compact_ntt_stage_range_``.
-
-    Torch schema::
-
-        fhelium_ntt_ops::compact_ntt_stage_range_(Tensor(a!) residues, Tensor compact_twiddles, Tensor rns_params, bool inverse, int start_stage, int end_stage, int grouped_stage_count) -> ()
-
-    Args:
-        residues: torch.Tensor (modified in-place).
-        compact_twiddles: torch.Tensor.
-        rns_params: torch.Tensor.
-        inverse: bool.
-        start_stage: int.
-        end_stage: int.
-        grouped_stage_count: int.
-
-    Returns: None.
-    """
-    _require_native()
-    torch.ops.fhelium_ntt_ops.compact_ntt_stage_range_(residues, compact_twiddles, rns_params, inverse, start_stage, end_stage, grouped_stage_count)
-
-
-def compact_twiddles(moduli: list[int], log_n: int, dtype: int, shoup32: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
+def compact_twiddles(
+    moduli: list[int], log_n: int, dtype: int, shoup32: bool = False
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Typed wrapper for ``fhelium_ntt_ops::compact_twiddles``.
 
@@ -52,10 +32,20 @@ def compact_twiddles(moduli: list[int], log_n: int, dtype: int, shoup32: bool = 
     Returns: tuple[torch.Tensor, torch.Tensor].
     """
     _require_native()
-    return torch.ops.fhelium_ntt_ops.compact_twiddles(moduli, log_n, dtype, shoup32)
+    return torch.ops.fhelium_ntt_ops.compact_twiddles(
+        moduli, log_n, dtype, shoup32
+    )
 
 
-def fixed_radix_ntt_stage_range_(residues: torch.Tensor, outer_twiddles: torch.Tensor, root_powers: torch.Tensor, rns_params: torch.Tensor, inverse: bool, start_stage: int, end_stage: int) -> None:
+def fixed_radix_ntt_stage_range_(
+    residues: torch.Tensor,
+    outer_twiddles: torch.Tensor,
+    root_powers: torch.Tensor,
+    rns_params: torch.Tensor,
+    inverse: bool,
+    start_stage: int,
+    end_stage: int,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::fixed_radix_ntt_stage_range_``.
 
@@ -75,36 +65,58 @@ def fixed_radix_ntt_stage_range_(residues: torch.Tensor, outer_twiddles: torch.T
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.fixed_radix_ntt_stage_range_(residues, outer_twiddles, root_powers, rns_params, inverse, start_stage, end_stage)
+    torch.ops.fhelium_ntt_ops.fixed_radix_ntt_stage_range_(
+        residues,
+        outer_twiddles,
+        root_powers,
+        rns_params,
+        inverse,
+        start_stage,
+        end_stage,
+    )
 
 
-def forward_ntt_montgomery_compact_grouped_smem_(montgomery_residues: torch.Tensor, forward_twiddles: torch.Tensor, rns_params: torch.Tensor, grouped_stage_count: int) -> None:
+def forward_ntt_montgomery_compact_(
+    montgomery_residues: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
-    Typed wrapper for ``fhelium_ntt_ops::forward_ntt_montgomery_compact_grouped_smem_``.
+    Typed wrapper for ``fhelium_ntt_ops::forward_ntt_montgomery_compact_``.
 
     Torch schema::
 
-        fhelium_ntt_ops::forward_ntt_montgomery_compact_grouped_smem_(Tensor(a!) montgomery_residues, Tensor forward_twiddles, Tensor rns_params, int grouped_stage_count) -> ()
+        fhelium_ntt_ops::forward_ntt_montgomery_compact_(Tensor(a!) montgomery_residues, Tensor forward_twiddles, Tensor rns_params) -> ()
 
     Args:
         montgomery_residues: torch.Tensor (modified in-place).
         forward_twiddles: torch.Tensor.
         rns_params: torch.Tensor.
-        grouped_stage_count: int.
 
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.forward_ntt_montgomery_compact_grouped_smem_(montgomery_residues, forward_twiddles, rns_params, grouped_stage_count)
+    torch.ops.fhelium_ntt_ops.forward_ntt_montgomery_compact_(
+        montgomery_residues, forward_twiddles, rns_params
+    )
 
 
-def forward_ntt_montgomery_compact_keyswitch_accumulate_(coefficient_digit_qp: torch.Tensor, forward_twiddles: torch.Tensor, rns_params: torch.Tensor, key_digit_qp: torch.Tensor, accumulator0_qp: torch.Tensor, accumulator1_qp: torch.Tensor, key_row_start: int, grouped_stage_count: int = 4) -> None:
+def forward_ntt_montgomery_compact_keyswitch_accumulate_(
+    coefficient_digit_qp: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+    key_digit_qp: torch.Tensor,
+    accumulator0_qp: torch.Tensor,
+    accumulator1_qp: torch.Tensor,
+    key_row_start: int,
+    key_p_row_start: int = -1,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::forward_ntt_montgomery_compact_keyswitch_accumulate_``.
 
     Torch schema::
 
-        fhelium_ntt_ops::forward_ntt_montgomery_compact_keyswitch_accumulate_(Tensor(a!) coefficient_digit_qp, Tensor forward_twiddles, Tensor rns_params, Tensor key_digit_qp, Tensor(b!) accumulator0_qp, Tensor(c!) accumulator1_qp, int key_row_start, int grouped_stage_count=4) -> ()
+        fhelium_ntt_ops::forward_ntt_montgomery_compact_keyswitch_accumulate_(Tensor(a!) coefficient_digit_qp, Tensor forward_twiddles, Tensor rns_params, Tensor key_digit_qp, Tensor(b!) accumulator0_qp, Tensor(c!) accumulator1_qp, int key_row_start, int key_p_row_start=-1) -> ()
 
     Args:
         coefficient_digit_qp: torch.Tensor (modified in-place).
@@ -114,15 +126,30 @@ def forward_ntt_montgomery_compact_keyswitch_accumulate_(coefficient_digit_qp: t
         accumulator0_qp: torch.Tensor (modified in-place).
         accumulator1_qp: torch.Tensor (modified in-place).
         key_row_start: int.
-        grouped_stage_count: int.
+        key_p_row_start: int.
 
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.forward_ntt_montgomery_compact_keyswitch_accumulate_(coefficient_digit_qp, forward_twiddles, rns_params, key_digit_qp, accumulator0_qp, accumulator1_qp, key_row_start, grouped_stage_count)
+    torch.ops.fhelium_ntt_ops.forward_ntt_montgomery_compact_keyswitch_accumulate_(
+        coefficient_digit_qp,
+        forward_twiddles,
+        rns_params,
+        key_digit_qp,
+        accumulator0_qp,
+        accumulator1_qp,
+        key_row_start,
+        key_p_row_start,
+    )
 
 
-def forward_ntt_montgomery_indexed_(montgomery_residues: torch.Tensor, even_indices: torch.Tensor, odd_indices: torch.Tensor, forward_twiddles: torch.Tensor, rns_params: torch.Tensor) -> None:
+def forward_ntt_montgomery_indexed_(
+    montgomery_residues: torch.Tensor,
+    even_indices: torch.Tensor,
+    odd_indices: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::forward_ntt_montgomery_indexed_``.
 
@@ -140,10 +167,21 @@ def forward_ntt_montgomery_indexed_(montgomery_residues: torch.Tensor, even_indi
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.forward_ntt_montgomery_indexed_(montgomery_residues, even_indices, odd_indices, forward_twiddles, rns_params)
+    torch.ops.fhelium_ntt_ops.forward_ntt_montgomery_indexed_(
+        montgomery_residues,
+        even_indices,
+        odd_indices,
+        forward_twiddles,
+        rns_params,
+    )
 
 
-def forward_ntt_montgomery_power_of_two_radix_compact_(montgomery_residues: torch.Tensor, outer_twiddles: torch.Tensor, radix_root_powers: torch.Tensor, rns_params: torch.Tensor) -> None:
+def forward_ntt_montgomery_power_of_two_radix_compact_(
+    montgomery_residues: torch.Tensor,
+    outer_twiddles: torch.Tensor,
+    radix_root_powers: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::forward_ntt_montgomery_power_of_two_radix_compact_``.
 
@@ -160,16 +198,74 @@ def forward_ntt_montgomery_power_of_two_radix_compact_(montgomery_residues: torc
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.forward_ntt_montgomery_power_of_two_radix_compact_(montgomery_residues, outer_twiddles, radix_root_powers, rns_params)
+    torch.ops.fhelium_ntt_ops.forward_ntt_montgomery_power_of_two_radix_compact_(
+        montgomery_residues, outer_twiddles, radix_root_powers, rns_params
+    )
 
 
-def forward_ntt_to_montgomery_compact_add_scaled_(source: torch.Tensor, addend: torch.Tensor, multiplier: torch.Tensor, forward_twiddles: torch.Tensor, rns_params: torch.Tensor, grouped_stage_count: int) -> None:
+def forward_ntt_to_montgomery_compact(
+    standard_residues: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::forward_ntt_to_montgomery_compact``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::forward_ntt_to_montgomery_compact(Tensor standard_residues, Tensor forward_twiddles, Tensor rns_params) -> Tensor
+
+    Args:
+        standard_residues: torch.Tensor.
+        forward_twiddles: torch.Tensor.
+        rns_params: torch.Tensor.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_compact(
+        standard_residues, forward_twiddles, rns_params
+    )
+
+
+def forward_ntt_to_montgomery_compact_(
+    standard_residues: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::forward_ntt_to_montgomery_compact_``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::forward_ntt_to_montgomery_compact_(Tensor(a!) standard_residues, Tensor forward_twiddles, Tensor rns_params) -> ()
+
+    Args:
+        standard_residues: torch.Tensor (modified in-place).
+        forward_twiddles: torch.Tensor.
+        rns_params: torch.Tensor.
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_compact_(
+        standard_residues, forward_twiddles, rns_params
+    )
+
+
+def forward_ntt_to_montgomery_compact_add_scaled_(
+    source: torch.Tensor,
+    addend: torch.Tensor,
+    multiplier: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::forward_ntt_to_montgomery_compact_add_scaled_``.
 
     Torch schema::
 
-        fhelium_ntt_ops::forward_ntt_to_montgomery_compact_add_scaled_(Tensor(a!) source, Tensor addend, Tensor multiplier, Tensor forward_twiddles, Tensor rns_params, int grouped_stage_count) -> ()
+        fhelium_ntt_ops::forward_ntt_to_montgomery_compact_add_scaled_(Tensor(a!) source, Tensor addend, Tensor multiplier, Tensor forward_twiddles, Tensor rns_params) -> ()
 
     Args:
         source: torch.Tensor (modified in-place).
@@ -177,55 +273,22 @@ def forward_ntt_to_montgomery_compact_add_scaled_(source: torch.Tensor, addend: 
         multiplier: torch.Tensor.
         forward_twiddles: torch.Tensor.
         rns_params: torch.Tensor.
-        grouped_stage_count: int.
 
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_compact_add_scaled_(source, addend, multiplier, forward_twiddles, rns_params, grouped_stage_count)
+    torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_compact_add_scaled_(
+        source, addend, multiplier, forward_twiddles, rns_params
+    )
 
 
-def forward_ntt_to_montgomery_compact_grouped_smem(standard_residues: torch.Tensor, forward_twiddles: torch.Tensor, rns_params: torch.Tensor, grouped_stage_count: int) -> torch.Tensor:
-    """
-    Typed wrapper for ``fhelium_ntt_ops::forward_ntt_to_montgomery_compact_grouped_smem``.
-
-    Torch schema::
-
-        fhelium_ntt_ops::forward_ntt_to_montgomery_compact_grouped_smem(Tensor standard_residues, Tensor forward_twiddles, Tensor rns_params, int grouped_stage_count) -> Tensor
-
-    Args:
-        standard_residues: torch.Tensor.
-        forward_twiddles: torch.Tensor.
-        rns_params: torch.Tensor.
-        grouped_stage_count: int.
-
-    Returns: torch.Tensor.
-    """
-    _require_native()
-    return torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_compact_grouped_smem(standard_residues, forward_twiddles, rns_params, grouped_stage_count)
-
-
-def forward_ntt_to_montgomery_compact_grouped_smem_(standard_residues: torch.Tensor, forward_twiddles: torch.Tensor, rns_params: torch.Tensor, grouped_stage_count: int) -> None:
-    """
-    Typed wrapper for ``fhelium_ntt_ops::forward_ntt_to_montgomery_compact_grouped_smem_``.
-
-    Torch schema::
-
-        fhelium_ntt_ops::forward_ntt_to_montgomery_compact_grouped_smem_(Tensor(a!) standard_residues, Tensor forward_twiddles, Tensor rns_params, int grouped_stage_count) -> ()
-
-    Args:
-        standard_residues: torch.Tensor (modified in-place).
-        forward_twiddles: torch.Tensor.
-        rns_params: torch.Tensor.
-        grouped_stage_count: int.
-
-    Returns: None.
-    """
-    _require_native()
-    torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_compact_grouped_smem_(standard_residues, forward_twiddles, rns_params, grouped_stage_count)
-
-
-def forward_ntt_to_montgomery_indexed(standard_residues: torch.Tensor, even_indices: torch.Tensor, odd_indices: torch.Tensor, forward_twiddles: torch.Tensor, rns_params: torch.Tensor) -> torch.Tensor:
+def forward_ntt_to_montgomery_indexed(
+    standard_residues: torch.Tensor,
+    even_indices: torch.Tensor,
+    odd_indices: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_ntt_ops::forward_ntt_to_montgomery_indexed``.
 
@@ -243,10 +306,22 @@ def forward_ntt_to_montgomery_indexed(standard_residues: torch.Tensor, even_indi
     Returns: torch.Tensor.
     """
     _require_native()
-    return torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_indexed(standard_residues, even_indices, odd_indices, forward_twiddles, rns_params)
+    return torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_indexed(
+        standard_residues,
+        even_indices,
+        odd_indices,
+        forward_twiddles,
+        rns_params,
+    )
 
 
-def forward_ntt_to_montgomery_indexed_(standard_residues: torch.Tensor, even_indices: torch.Tensor, odd_indices: torch.Tensor, forward_twiddles: torch.Tensor, rns_params: torch.Tensor) -> None:
+def forward_ntt_to_montgomery_indexed_(
+    standard_residues: torch.Tensor,
+    even_indices: torch.Tensor,
+    odd_indices: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::forward_ntt_to_montgomery_indexed_``.
 
@@ -264,10 +339,21 @@ def forward_ntt_to_montgomery_indexed_(standard_residues: torch.Tensor, even_ind
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_indexed_(standard_residues, even_indices, odd_indices, forward_twiddles, rns_params)
+    torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_indexed_(
+        standard_residues,
+        even_indices,
+        odd_indices,
+        forward_twiddles,
+        rns_params,
+    )
 
 
-def forward_ntt_to_montgomery_power_of_two_radix_compact(standard_residues: torch.Tensor, outer_twiddles: torch.Tensor, radix_root_powers: torch.Tensor, rns_params: torch.Tensor) -> torch.Tensor:
+def forward_ntt_to_montgomery_power_of_two_radix_compact(
+    standard_residues: torch.Tensor,
+    outer_twiddles: torch.Tensor,
+    radix_root_powers: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_ntt_ops::forward_ntt_to_montgomery_power_of_two_radix_compact``.
 
@@ -284,10 +370,17 @@ def forward_ntt_to_montgomery_power_of_two_radix_compact(standard_residues: torc
     Returns: torch.Tensor.
     """
     _require_native()
-    return torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_power_of_two_radix_compact(standard_residues, outer_twiddles, radix_root_powers, rns_params)
+    return torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_power_of_two_radix_compact(
+        standard_residues, outer_twiddles, radix_root_powers, rns_params
+    )
 
 
-def forward_ntt_to_montgomery_power_of_two_radix_compact_(standard_residues: torch.Tensor, outer_twiddles: torch.Tensor, radix_root_powers: torch.Tensor, rns_params: torch.Tensor) -> None:
+def forward_ntt_to_montgomery_power_of_two_radix_compact_(
+    standard_residues: torch.Tensor,
+    outer_twiddles: torch.Tensor,
+    radix_root_powers: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::forward_ntt_to_montgomery_power_of_two_radix_compact_``.
 
@@ -304,7 +397,9 @@ def forward_ntt_to_montgomery_power_of_two_radix_compact_(standard_residues: tor
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_power_of_two_radix_compact_(standard_residues, outer_twiddles, radix_root_powers, rns_params)
+    torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_power_of_two_radix_compact_(
+        standard_residues, outer_twiddles, radix_root_powers, rns_params
+    )
 
 
 def galois_indices(log_n: int, galois_element: int) -> torch.Tensor:
@@ -325,7 +420,9 @@ def galois_indices(log_n: int, galois_element: int) -> torch.Tensor:
     return torch.ops.fhelium_ntt_ops.galois_indices(log_n, galois_element)
 
 
-def indexed_radix2_plan(moduli: list[int], log_n: int, dtype: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+def indexed_radix2_plan(
+    moduli: list[int], log_n: int, dtype: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Typed wrapper for ``fhelium_ntt_ops::indexed_radix2_plan``.
 
@@ -344,27 +441,38 @@ def indexed_radix2_plan(moduli: list[int], log_n: int, dtype: int) -> tuple[torc
     return torch.ops.fhelium_ntt_ops.indexed_radix2_plan(moduli, log_n, dtype)
 
 
-def inverse_ntt_montgomery_compact_grouped_smem_(montgomery_residues: torch.Tensor, inverse_twiddles: torch.Tensor, rns_params: torch.Tensor, grouped_stage_count: int) -> None:
+def inverse_ntt_montgomery_compact_(
+    montgomery_residues: torch.Tensor,
+    inverse_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
-    Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_montgomery_compact_grouped_smem_``.
+    Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_montgomery_compact_``.
 
     Torch schema::
 
-        fhelium_ntt_ops::inverse_ntt_montgomery_compact_grouped_smem_(Tensor(a!) montgomery_residues, Tensor inverse_twiddles, Tensor rns_params, int grouped_stage_count) -> ()
+        fhelium_ntt_ops::inverse_ntt_montgomery_compact_(Tensor(a!) montgomery_residues, Tensor inverse_twiddles, Tensor rns_params) -> ()
 
     Args:
         montgomery_residues: torch.Tensor (modified in-place).
         inverse_twiddles: torch.Tensor.
         rns_params: torch.Tensor.
-        grouped_stage_count: int.
 
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.inverse_ntt_montgomery_compact_grouped_smem_(montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count)
+    torch.ops.fhelium_ntt_ops.inverse_ntt_montgomery_compact_(
+        montgomery_residues, inverse_twiddles, rns_params
+    )
 
 
-def inverse_ntt_montgomery_indexed_(montgomery_residues: torch.Tensor, even_indices: torch.Tensor, odd_indices: torch.Tensor, inverse_twiddles: torch.Tensor, rns_params: torch.Tensor) -> None:
+def inverse_ntt_montgomery_indexed_(
+    montgomery_residues: torch.Tensor,
+    even_indices: torch.Tensor,
+    odd_indices: torch.Tensor,
+    inverse_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_montgomery_indexed_``.
 
@@ -382,10 +490,21 @@ def inverse_ntt_montgomery_indexed_(montgomery_residues: torch.Tensor, even_indi
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.inverse_ntt_montgomery_indexed_(montgomery_residues, even_indices, odd_indices, inverse_twiddles, rns_params)
+    torch.ops.fhelium_ntt_ops.inverse_ntt_montgomery_indexed_(
+        montgomery_residues,
+        even_indices,
+        odd_indices,
+        inverse_twiddles,
+        rns_params,
+    )
 
 
-def inverse_ntt_montgomery_power_of_two_radix_compact_(montgomery_residues: torch.Tensor, outer_twiddles: torch.Tensor, radix_root_powers: torch.Tensor, rns_params: torch.Tensor) -> None:
+def inverse_ntt_montgomery_power_of_two_radix_compact_(
+    montgomery_residues: torch.Tensor,
+    outer_twiddles: torch.Tensor,
+    radix_root_powers: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_montgomery_power_of_two_radix_compact_``.
 
@@ -402,30 +521,43 @@ def inverse_ntt_montgomery_power_of_two_radix_compact_(montgomery_residues: torc
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.inverse_ntt_montgomery_power_of_two_radix_compact_(montgomery_residues, outer_twiddles, radix_root_powers, rns_params)
+    torch.ops.fhelium_ntt_ops.inverse_ntt_montgomery_power_of_two_radix_compact_(
+        montgomery_residues, outer_twiddles, radix_root_powers, rns_params
+    )
 
 
-def inverse_ntt_to_centered_compact_grouped_smem_(montgomery_residues: torch.Tensor, inverse_twiddles: torch.Tensor, rns_params: torch.Tensor, grouped_stage_count: int) -> None:
+def inverse_ntt_to_centered_compact_(
+    montgomery_residues: torch.Tensor,
+    inverse_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
-    Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_to_centered_compact_grouped_smem_``.
+    Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_to_centered_compact_``.
 
     Torch schema::
 
-        fhelium_ntt_ops::inverse_ntt_to_centered_compact_grouped_smem_(Tensor(a!) montgomery_residues, Tensor inverse_twiddles, Tensor rns_params, int grouped_stage_count) -> ()
+        fhelium_ntt_ops::inverse_ntt_to_centered_compact_(Tensor(a!) montgomery_residues, Tensor inverse_twiddles, Tensor rns_params) -> ()
 
     Args:
         montgomery_residues: torch.Tensor (modified in-place).
         inverse_twiddles: torch.Tensor.
         rns_params: torch.Tensor.
-        grouped_stage_count: int.
 
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.inverse_ntt_to_centered_compact_grouped_smem_(montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count)
+    torch.ops.fhelium_ntt_ops.inverse_ntt_to_centered_compact_(
+        montgomery_residues, inverse_twiddles, rns_params
+    )
 
 
-def inverse_ntt_to_centered_indexed_(montgomery_residues: torch.Tensor, even_indices: torch.Tensor, odd_indices: torch.Tensor, inverse_twiddles: torch.Tensor, rns_params: torch.Tensor) -> None:
+def inverse_ntt_to_centered_indexed_(
+    montgomery_residues: torch.Tensor,
+    even_indices: torch.Tensor,
+    odd_indices: torch.Tensor,
+    inverse_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_to_centered_indexed_``.
 
@@ -443,10 +575,21 @@ def inverse_ntt_to_centered_indexed_(montgomery_residues: torch.Tensor, even_ind
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.inverse_ntt_to_centered_indexed_(montgomery_residues, even_indices, odd_indices, inverse_twiddles, rns_params)
+    torch.ops.fhelium_ntt_ops.inverse_ntt_to_centered_indexed_(
+        montgomery_residues,
+        even_indices,
+        odd_indices,
+        inverse_twiddles,
+        rns_params,
+    )
 
 
-def inverse_ntt_to_centered_power_of_two_radix_compact_(montgomery_residues: torch.Tensor, outer_twiddles: torch.Tensor, radix_root_powers: torch.Tensor, rns_params: torch.Tensor) -> None:
+def inverse_ntt_to_centered_power_of_two_radix_compact_(
+    montgomery_residues: torch.Tensor,
+    outer_twiddles: torch.Tensor,
+    radix_root_powers: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_to_centered_power_of_two_radix_compact_``.
 
@@ -463,30 +606,43 @@ def inverse_ntt_to_centered_power_of_two_radix_compact_(montgomery_residues: tor
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.inverse_ntt_to_centered_power_of_two_radix_compact_(montgomery_residues, outer_twiddles, radix_root_powers, rns_params)
+    torch.ops.fhelium_ntt_ops.inverse_ntt_to_centered_power_of_two_radix_compact_(
+        montgomery_residues, outer_twiddles, radix_root_powers, rns_params
+    )
 
 
-def inverse_ntt_to_standard_compact_grouped_smem_(montgomery_residues: torch.Tensor, inverse_twiddles: torch.Tensor, rns_params: torch.Tensor, grouped_stage_count: int) -> None:
+def inverse_ntt_to_standard_compact_(
+    montgomery_residues: torch.Tensor,
+    inverse_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
-    Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_to_standard_compact_grouped_smem_``.
+    Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_to_standard_compact_``.
 
     Torch schema::
 
-        fhelium_ntt_ops::inverse_ntt_to_standard_compact_grouped_smem_(Tensor(a!) montgomery_residues, Tensor inverse_twiddles, Tensor rns_params, int grouped_stage_count) -> ()
+        fhelium_ntt_ops::inverse_ntt_to_standard_compact_(Tensor(a!) montgomery_residues, Tensor inverse_twiddles, Tensor rns_params) -> ()
 
     Args:
         montgomery_residues: torch.Tensor (modified in-place).
         inverse_twiddles: torch.Tensor.
         rns_params: torch.Tensor.
-        grouped_stage_count: int.
 
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.inverse_ntt_to_standard_compact_grouped_smem_(montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count)
+    torch.ops.fhelium_ntt_ops.inverse_ntt_to_standard_compact_(
+        montgomery_residues, inverse_twiddles, rns_params
+    )
 
 
-def inverse_ntt_to_standard_indexed_(montgomery_residues: torch.Tensor, even_indices: torch.Tensor, odd_indices: torch.Tensor, inverse_twiddles: torch.Tensor, rns_params: torch.Tensor) -> None:
+def inverse_ntt_to_standard_indexed_(
+    montgomery_residues: torch.Tensor,
+    even_indices: torch.Tensor,
+    odd_indices: torch.Tensor,
+    inverse_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_to_standard_indexed_``.
 
@@ -504,30 +660,47 @@ def inverse_ntt_to_standard_indexed_(montgomery_residues: torch.Tensor, even_ind
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.inverse_ntt_to_standard_indexed_(montgomery_residues, even_indices, odd_indices, inverse_twiddles, rns_params)
+    torch.ops.fhelium_ntt_ops.inverse_ntt_to_standard_indexed_(
+        montgomery_residues,
+        even_indices,
+        odd_indices,
+        inverse_twiddles,
+        rns_params,
+    )
 
 
-def inverse_ntt_to_standard_lazy_compact_grouped_smem_(montgomery_residues: torch.Tensor, inverse_twiddles: torch.Tensor, rns_params: torch.Tensor, grouped_stage_count: int) -> None:
+def inverse_ntt_to_standard_lazy_compact_(
+    montgomery_residues: torch.Tensor,
+    inverse_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
-    Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_to_standard_lazy_compact_grouped_smem_``.
+    Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_to_standard_lazy_compact_``.
 
     Torch schema::
 
-        fhelium_ntt_ops::inverse_ntt_to_standard_lazy_compact_grouped_smem_(Tensor(a!) montgomery_residues, Tensor inverse_twiddles, Tensor rns_params, int grouped_stage_count) -> ()
+        fhelium_ntt_ops::inverse_ntt_to_standard_lazy_compact_(Tensor(a!) montgomery_residues, Tensor inverse_twiddles, Tensor rns_params) -> ()
 
     Args:
         montgomery_residues: torch.Tensor (modified in-place).
         inverse_twiddles: torch.Tensor.
         rns_params: torch.Tensor.
-        grouped_stage_count: int.
 
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.inverse_ntt_to_standard_lazy_compact_grouped_smem_(montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count)
+    torch.ops.fhelium_ntt_ops.inverse_ntt_to_standard_lazy_compact_(
+        montgomery_residues, inverse_twiddles, rns_params
+    )
 
 
-def inverse_ntt_to_standard_lazy_indexed_(montgomery_residues: torch.Tensor, even_indices: torch.Tensor, odd_indices: torch.Tensor, inverse_twiddles: torch.Tensor, rns_params: torch.Tensor) -> None:
+def inverse_ntt_to_standard_lazy_indexed_(
+    montgomery_residues: torch.Tensor,
+    even_indices: torch.Tensor,
+    odd_indices: torch.Tensor,
+    inverse_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_to_standard_lazy_indexed_``.
 
@@ -545,10 +718,21 @@ def inverse_ntt_to_standard_lazy_indexed_(montgomery_residues: torch.Tensor, eve
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.inverse_ntt_to_standard_lazy_indexed_(montgomery_residues, even_indices, odd_indices, inverse_twiddles, rns_params)
+    torch.ops.fhelium_ntt_ops.inverse_ntt_to_standard_lazy_indexed_(
+        montgomery_residues,
+        even_indices,
+        odd_indices,
+        inverse_twiddles,
+        rns_params,
+    )
 
 
-def inverse_ntt_to_standard_lazy_power_of_two_radix_compact_(montgomery_residues: torch.Tensor, outer_twiddles: torch.Tensor, radix_root_powers: torch.Tensor, rns_params: torch.Tensor) -> None:
+def inverse_ntt_to_standard_lazy_power_of_two_radix_compact_(
+    montgomery_residues: torch.Tensor,
+    outer_twiddles: torch.Tensor,
+    radix_root_powers: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_to_standard_lazy_power_of_two_radix_compact_``.
 
@@ -565,10 +749,17 @@ def inverse_ntt_to_standard_lazy_power_of_two_radix_compact_(montgomery_residues
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.inverse_ntt_to_standard_lazy_power_of_two_radix_compact_(montgomery_residues, outer_twiddles, radix_root_powers, rns_params)
+    torch.ops.fhelium_ntt_ops.inverse_ntt_to_standard_lazy_power_of_two_radix_compact_(
+        montgomery_residues, outer_twiddles, radix_root_powers, rns_params
+    )
 
 
-def inverse_ntt_to_standard_power_of_two_radix_compact_(montgomery_residues: torch.Tensor, outer_twiddles: torch.Tensor, radix_root_powers: torch.Tensor, rns_params: torch.Tensor) -> None:
+def inverse_ntt_to_standard_power_of_two_radix_compact_(
+    montgomery_residues: torch.Tensor,
+    outer_twiddles: torch.Tensor,
+    radix_root_powers: torch.Tensor,
+    rns_params: torch.Tensor,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::inverse_ntt_to_standard_power_of_two_radix_compact_``.
 
@@ -585,7 +776,9 @@ def inverse_ntt_to_standard_power_of_two_radix_compact_(montgomery_residues: tor
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.inverse_ntt_to_standard_power_of_two_radix_compact_(montgomery_residues, outer_twiddles, radix_root_powers, rns_params)
+    torch.ops.fhelium_ntt_ops.inverse_ntt_to_standard_power_of_two_radix_compact_(
+        montgomery_residues, outer_twiddles, radix_root_powers, rns_params
+    )
 
 
 def negacyclic_root(modulus: int, log_n: int) -> int:
@@ -606,7 +799,9 @@ def negacyclic_root(modulus: int, log_n: int) -> int:
     return torch.ops.fhelium_ntt_ops.negacyclic_root(modulus, log_n)
 
 
-def power_of_two_radix_twiddles(moduli: list[int], log_n: int, radix: int, dtype: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+def power_of_two_radix_twiddles(
+    moduli: list[int], log_n: int, radix: int, dtype: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Typed wrapper for ``fhelium_ntt_ops::power_of_two_radix_twiddles``.
 
@@ -623,10 +818,14 @@ def power_of_two_radix_twiddles(moduli: list[int], log_n: int, radix: int, dtype
     Returns: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor].
     """
     _require_native()
-    return torch.ops.fhelium_ntt_ops.power_of_two_radix_twiddles(moduli, log_n, radix, dtype)
+    return torch.ops.fhelium_ntt_ops.power_of_two_radix_twiddles(
+        moduli, log_n, radix, dtype
+    )
 
 
-def subring_indexed_radix2_plan(moduli: list[int], log_n: int, log_extent: int, dtype: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def subring_indexed_radix2_plan(
+    moduli: list[int], log_n: int, log_extent: int, dtype: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Typed wrapper for ``fhelium_ntt_ops::subring_indexed_radix2_plan``.
 
@@ -643,10 +842,19 @@ def subring_indexed_radix2_plan(moduli: list[int], log_n: int, log_extent: int, 
     Returns: tuple[torch.Tensor, torch.Tensor, torch.Tensor].
     """
     _require_native()
-    return torch.ops.fhelium_ntt_ops.subring_indexed_radix2_plan(moduli, log_n, log_extent, dtype)
+    return torch.ops.fhelium_ntt_ops.subring_indexed_radix2_plan(
+        moduli, log_n, log_extent, dtype
+    )
 
 
-def transform(residues: torch.Tensor, table_names: list[str], tables: list[torch.Tensor], ntt_backend: str, basis: str, transition: str) -> torch.Tensor:
+def transform(
+    residues: torch.Tensor,
+    table_names: list[str],
+    tables: list[torch.Tensor],
+    ntt_backend: str,
+    basis: str,
+    transition: str,
+) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_ntt_ops::transform``.
 
@@ -665,10 +873,19 @@ def transform(residues: torch.Tensor, table_names: list[str], tables: list[torch
     Returns: torch.Tensor.
     """
     _require_native()
-    return torch.ops.fhelium_ntt_ops.transform(residues, table_names, tables, ntt_backend, basis, transition)
+    return torch.ops.fhelium_ntt_ops.transform(
+        residues, table_names, tables, ntt_backend, basis, transition
+    )
 
 
-def transform_(residues: torch.Tensor, table_names: list[str], tables: list[torch.Tensor], ntt_backend: str, basis: str, transition: str) -> None:
+def transform_(
+    residues: torch.Tensor,
+    table_names: list[str],
+    tables: list[torch.Tensor],
+    ntt_backend: str,
+    basis: str,
+    transition: str,
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::transform_``.
 
@@ -687,10 +904,14 @@ def transform_(residues: torch.Tensor, table_names: list[str], tables: list[torc
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.transform_(residues, table_names, tables, ntt_backend, basis, transition)
+    torch.ops.fhelium_ntt_ops.transform_(
+        residues, table_names, tables, ntt_backend, basis, transition
+    )
 
 
-def validate_indexed_schedule(even_indices: torch.Tensor, odd_indices: torch.Tensor, ring_dimension: int) -> None:
+def validate_indexed_schedule(
+    even_indices: torch.Tensor, odd_indices: torch.Tensor, ring_dimension: int
+) -> None:
     """
     Typed wrapper for ``fhelium_ntt_ops::validate_indexed_schedule``.
 
@@ -706,4 +927,6 @@ def validate_indexed_schedule(even_indices: torch.Tensor, odd_indices: torch.Ten
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_ntt_ops.validate_indexed_schedule(even_indices, odd_indices, ring_dimension)
+    torch.ops.fhelium_ntt_ops.validate_indexed_schedule(
+        even_indices, odd_indices, ring_dimension
+    )

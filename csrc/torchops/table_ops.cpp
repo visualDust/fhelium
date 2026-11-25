@@ -13,27 +13,29 @@
 // same names. These functions take no Tensor arguments, so one kernel serves
 // every dispatch key. Each registered kernel is the public function itself,
 // except preset_parameters, whose CkksParameters result is returned as
-// (log_n, default_scale, q_moduli, q_group_sizes, p_moduli).
+// (log_n, q_moduli, flattened basis rows, basis sizes, scales, p_moduli).
 
 namespace {
 
 std::tuple<int64_t,
-           double,
            std::vector<int64_t>,
            std::vector<int64_t>,
+           std::vector<int64_t>,
+           std::vector<double>,
            std::vector<int64_t>>
 preset_parameters_op(std::string_view name) {
   auto parameters = fhelium::ckks::preset_parameters(name);
-  std::vector<int64_t> q_moduli;
-  std::vector<int64_t> q_group_sizes;
-  for (const auto& group : parameters.q_depth_groups) {
-    q_moduli.insert(q_moduli.end(), group.begin(), group.end());
-    q_group_sizes.push_back(static_cast<int64_t>(group.size()));
+  std::vector<int64_t> rows;
+  std::vector<int64_t> sizes;
+  for (const auto& basis : parameters.q_bases) {
+    rows.insert(rows.end(), basis.begin(), basis.end());
+    sizes.push_back(static_cast<int64_t>(basis.size()));
   }
   return {parameters.log_n,
-          parameters.default_scale,
-          std::move(q_moduli),
-          std::move(q_group_sizes),
+          std::move(parameters.q_moduli),
+          std::move(rows),
+          std::move(sizes),
+          std::move(parameters.scales),
           std::move(parameters.p_moduli)};
 }
 
@@ -58,7 +60,11 @@ TORCH_LIBRARY_FRAGMENT(fhelium_rns_ops, m) {
       "-> (Tensor, Tensor, Tensor)");
   m.def(
       "crt_basis_extension_tables(int[] source, int[] target, bool "
-      "normalized, ScalarType dtype) -> (Tensor, Tensor, Tensor, Tensor)");
+      "normalized, ScalarType dtype) -> (Tensor, Tensor, Tensor, Tensor, "
+      "Tensor)");
+  m.def(
+      "crt_quotient_tables(int[] source, int[] target, int[] divisor, "
+      "ScalarType dtype) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
   m.def(
       "trailing_quotient_inverses(int[] moduli, int drop_count, ScalarType "
       "dtype) -> Tensor");
@@ -74,6 +80,7 @@ TORCH_LIBRARY_IMPL(fhelium_rns_ops, CompositeImplicitAutograd, m) {
   m.impl("mixed_radix_tables", &fhelium::rns::mixed_radix_tables);
   m.impl("crt_basis_extension_tables",
          &fhelium::rns::crt_basis_extension_tables);
+  m.impl("crt_quotient_tables", &fhelium::rns::crt_quotient_tables);
   m.impl("trailing_quotient_inverses",
          &fhelium::rns::trailing_quotient_inverses);
   m.impl("rescale_inverse_matrix", &fhelium::rns::rescale_inverse_matrix);
@@ -119,7 +126,9 @@ TORCH_LIBRARY_FRAGMENT(fhelium_ckks_ops, m) {
   m.def("scaling_primes(int prime_bits, int ring_dimension) -> int[]");
   m.def("special_primes(int prime_bits, int ring_dimension) -> int[]");
   m.def("preset_names() -> str[]");
-  m.def("preset_parameters(str name) -> (int, float, int[], int[], int[])");
+  m.def(
+      "preset_parameters(str name) -> (int, int[], int[], int[], float[], "
+      "int[])");
   m.def("validate_moduli(int log_n, int[] moduli) -> ()");
   m.def("modulus_bits(int[] moduli) -> int");
   m.def("key_digit_sizes(int[] q_moduli, int[] p_moduli) -> int[]");

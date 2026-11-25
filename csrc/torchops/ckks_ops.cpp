@@ -40,27 +40,14 @@ TORCH_LIBRARY_FRAGMENT(fhelium_ckks_ops, m) {
       "Tensor strided_plaintext, Tensor implicit_plaintext, Tensor "
       "rns_params) -> ()");
   m.def(
-      "rescale_drop_leading_prime_nearest(Tensor remaining_residues, Tensor "
-      "drop_prime_inverse_mont, Tensor dropped_residue, Tensor rns_params, int "
-      "half_drop_prime) -> Tensor");
-  m.def(
-      "rescale_drop_leading_prime_nearest_(Tensor(a!) remaining_residues, "
-      "Tensor drop_prime_inverse_mont, Tensor dropped_residue, Tensor "
-      "rns_params, int half_drop_prime) -> ()");
-  m.def(
-      "rescale_drop_leading_prime_truncate(Tensor remaining_residues, Tensor "
-      "drop_prime_inverse_mont, Tensor dropped_residue, Tensor rns_params) -> "
-      "Tensor");
-  m.def(
-      "rescale_drop_leading_prime_truncate_(Tensor(a!) remaining_residues, "
-      "Tensor drop_prime_inverse_mont, Tensor dropped_residue, Tensor "
-      "rns_params) -> ()");
-  m.def(
       "apply_coefficient_galois_automorphism(Tensor residues, Tensor "
       "source_indices, Tensor source_sign, Tensor twice_modulus) -> Tensor");
   m.def(
       "apply_ntt_galois_automorphism(Tensor residues_ntt, Tensor "
       "source_indices) -> Tensor");
+  m.def(
+      "add_ntt_galois_automorphism_(Tensor(a!) target, Tensor residues_ntt, "
+      "Tensor source_indices, Tensor rns_params) -> ()");
   m.def(
       "keyswitch_moddown_qp_to_q(Tensor q_residues, Tensor p_residues, Tensor "
       "moddown_p_drop_inverses_montgomery, Tensor rns_params, "
@@ -69,13 +56,14 @@ TORCH_LIBRARY_FRAGMENT(fhelium_ckks_ops, m) {
       "keyswitch_accumulate_digit_products_(Tensor(a!) accumulator0_qp, "
       "Tensor(b!) accumulator1_qp, Tensor extended_digit_ntt_qp, Tensor "
       "key_switch_key_digit, Tensor rns_params, int key_digit_row_start, "
-      "Tensor? source_indices=None) -> "
-      "()");
+      "int key_p_row_start=-1, Tensor? source_indices=None, "
+      "Tensor? key_seed=None, int key_rounds=0) -> ()");
   m.def(
-      "keyswitch_accumulate_products_(Tensor(a!) accumulator0_qp, "
-      "Tensor(b!) accumulator1_qp, Tensor[] extended_digits_ntt_qp, Tensor "
-      "key_switch_key, Tensor rns_params, int key_digit_row_start, "
-      "Tensor? source_indices=None) -> ()");
+      "keyswitch_accumulate_products_(Tensor(a!)[] accumulators0_qp, "
+      "Tensor(b!)[] accumulators1_qp, Tensor[] extended_digits_ntt_qp, "
+      "Tensor[] key_switch_keys, Tensor rns_params, int key_digit_row_start, "
+      "int key_p_row_start, Tensor[] source_indices, Tensor[] key_seeds, "
+      "int key_rounds) -> ()");
 }
 
 #if defined(FHELIUM_WITH_CPU)
@@ -98,18 +86,12 @@ TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CPU, m) {
          &fhelium::ckks::add_strided_plaintext_component);
   m.impl("add_strided_plaintext_component_",
          &fhelium::ckks::add_strided_plaintext_component_);
-  m.impl("rescale_drop_leading_prime_nearest",
-         &fhelium::ckks::rescale_drop_leading_prime_nearest);
-  m.impl("rescale_drop_leading_prime_nearest_",
-         &fhelium::ckks::rescale_drop_leading_prime_nearest_);
-  m.impl("rescale_drop_leading_prime_truncate",
-         &fhelium::ckks::rescale_drop_leading_prime_truncate);
-  m.impl("rescale_drop_leading_prime_truncate_",
-         &fhelium::ckks::rescale_drop_leading_prime_truncate_);
   m.impl("apply_coefficient_galois_automorphism",
          &fhelium::ckks::apply_coefficient_galois_automorphism);
   m.impl("apply_ntt_galois_automorphism",
          &fhelium::ckks::apply_ntt_galois_automorphism);
+  m.impl("add_ntt_galois_automorphism_",
+         &fhelium::ckks::add_ntt_galois_automorphism_);
   m.impl("keyswitch_moddown_qp_to_q",
          &fhelium::ckks::keyswitch_moddown_qp_to_q);
   m.impl("keyswitch_accumulate_digit_products_",
@@ -137,18 +119,12 @@ TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
          &fhelium::ckks::add_strided_plaintext_component);
   m.impl("add_strided_plaintext_component_",
          &fhelium::ckks::add_strided_plaintext_component_);
-  m.impl("rescale_drop_leading_prime_nearest",
-         &fhelium::ckks::rescale_drop_leading_prime_nearest);
-  m.impl("rescale_drop_leading_prime_nearest_",
-         &fhelium::ckks::rescale_drop_leading_prime_nearest_);
-  m.impl("rescale_drop_leading_prime_truncate",
-         &fhelium::ckks::rescale_drop_leading_prime_truncate);
-  m.impl("rescale_drop_leading_prime_truncate_",
-         &fhelium::ckks::rescale_drop_leading_prime_truncate_);
   m.impl("apply_coefficient_galois_automorphism",
          &fhelium::ckks::apply_coefficient_galois_automorphism);
   m.impl("apply_ntt_galois_automorphism",
          &fhelium::ckks::apply_ntt_galois_automorphism);
+  m.impl("add_ntt_galois_automorphism_",
+         &fhelium::ckks::add_ntt_galois_automorphism_);
   m.impl("keyswitch_moddown_qp_to_q",
          &fhelium::ckks::keyswitch_moddown_qp_to_q);
   m.impl("keyswitch_accumulate_digit_products_",

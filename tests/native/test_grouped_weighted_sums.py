@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 import torch
 
-from fhelium import CkksConfig, Preset
+from fhelium import CkksConfig
 from fhelium.backend.rns.context import RnsContext
 from fhelium.native.wrapper import rns_ops
 
@@ -17,16 +17,13 @@ from fhelium.native.wrapper import rns_ops
 def test_grouped_products_match_independent_groups(device, dtype):
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    preset = (
-        Preset.slots8192_scale25_depth14_int32
-        if dtype == torch.int32
-        else Preset.slots32768_scale40_depth34_int64
-    )
-    base = CkksConfig.parse(preset)
-    config = CkksConfig.parse(
-        base.dumps(),
+    config = CkksConfig.catalog_suffix_chain(
         logN=8,
-        q_depth_groups=base.q_depth_groups[:2],
+        scale_bits=25 if dtype == torch.int32 else 40,
+        depth=1,
+        p_count=1,
+        p_bits=28 if dtype == torch.int32 else 60,
+        catalog_logN=14,
         enforce_security_budget=False,
     )
     context = RnsContext(config, device=device)
@@ -81,16 +78,13 @@ def test_represented_weighted_sums_preserve_mixed_layouts_and_strides(
 
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    preset = (
-        Preset.slots8192_scale25_depth14_int32
-        if dtype == torch.int32
-        else Preset.slots8192_scale40_depth7_int64
-    )
-    base = CkksConfig.parse(preset)
-    config = CkksConfig.parse(
-        base.dumps(),
+    config = CkksConfig.catalog_suffix_chain(
         logN=8,
-        q_depth_groups=base.q_depth_groups[:2],
+        scale_bits=25 if dtype == torch.int32 else 40,
+        depth=1,
+        p_count=1,
+        p_bits=28 if dtype == torch.int32 else 60,
+        catalog_logN=14,
         enforce_security_budget=False,
     )
     engine = Engine(config)

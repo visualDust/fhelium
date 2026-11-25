@@ -17,23 +17,23 @@ where:
 - $\ell(v)$ is the public Q-chain depth stored as `value.depth`;
 - $\Delta(v)$ is the positive finite binary64 actual scale stored as `value.scale`;
 - $I(v)$ is the ordered tuple `value.prime_ids` that maps each dense limb row to one configured parameter prime;
-- $B(v)$ is the modulus basis, either $Q_\ell$ or $Q_\ell P$.
+- $B(v)$ is the modulus basis, either the active Q basis $B_\ell$ or $B_\ell\cup P$.
 
-`depth` and `scale` are independent coordinates. Depth selects the active Q suffix, basis independently selects Q or QP, and `prime_ids` records the resulting RNS rows. Stored operation state also includes shape, polynomial domain, residue representation, component count, dtype, and device. The caller separately ensures the operands use compatible CKKS parameters.
+`depth` and `scale` are independent coordinates. Depth selects the active Q basis, basis independently selects Q or QP, and `prime_ids` records the resulting RNS rows. Stored operation state also includes shape, polynomial domain, residue representation, component count, dtype, and device. The caller separately ensures the operands use compatible CKKS parameters.
 
 ## Default scale and actual scale
 
-`config.default_scale` is the default encoding and planning value $\Delta_0$. Its scale-bit description is $\log_2\Delta_0$.
+`config.scale_at(d)` is the default encoding and planning scale $\Delta_d$ of depth $d$; `config.scales` lists the values of every depth. Its scale-bit description is $\log_2\Delta_d$.
 
-`engine.plaintext`, `engine.encode`, and `engine.encrypt_message` select $\Delta_0$ when their `scale` argument is `None`. Once a value exists, its `scale` field is the actual scale used by subsequent arithmetic and decoding.
+`engine.plaintext`, `engine.encode`, and `engine.encrypt_message` select $\Delta_d$ of the requested depth when their `scale` argument is `None`. Once a value exists, its `scale` field is the actual scale used by subsequent arithmetic and decoding.
 
-The product $M_d$ of one configured Q depth group is commonly selected near $\Delta_0$, but it is a distinct integer. Consequently, a default-scale product followed by rescale normally has
+The rescale ratio $\rho_d$ from depth $d$ to $d+1$ is a rational number determined by the configured primes. Built-in presets derive their default scales from the ratios, $\Delta_d=\sqrt{\Delta_{d+1}\rho_d}$, so that
 
 $$
-\frac{\Delta_0^2}{M_d}\ne\Delta_0.
+\frac{\Delta_d^2}{\rho_d}=\Delta_{d+1}
 $$
 
-FHElium records the binary64 quotient by the actual group product.
+up to binary64 rounding. FHElium records the binary64 quotient by the actual ratio; scales chosen by the caller follow the same quotient law.
 
 All public scale entry points and value constructors require a value that can be represented as a finite Python `float` and satisfies
 
@@ -43,31 +43,23 @@ $$
 
 NaN, infinity, zero, negative values, booleans, and strings are rejected with `InvalidScaleError`. A scale multiplication or division that overflows or underflows the finite-positive range is rejected at the operation that produces it.
 
-## Depth addresses active Q groups
+## Depth addresses active Q bases
 
-Let the configured Q chain be
+The configuration orders the Q primes $q_0,\ldots,q_{L-1}$ and assigns each public depth $d$ a contiguous interval $B_d$ of that order, with $B_0$ containing every Q prime. `max_depth` is $D$.
 
-$$
-(G_0,G_1,\ldots,G_D).
-$$
-
-At public depth $d$, the active Q basis contains the flattened primes from $G_d$ through the terminal group $G_D$. `max_depth` is $D$.
-
-In the current parameter order, a complete Q value has
+A complete Q value at depth $d$ has
 
 ```python
-value.prime_ids == tuple(
-    range(engine.config.q_row_start(value.depth), engine.config.num_q_primes)
-)
+value.prime_ids == engine.config.q_prime_ids(value.depth)
 ```
 
-and a QP value at the same depth appends the special P prime IDs from `range(engine.config.num_q_primes, engine.config.total_num_primes)`. `depth` selects the active Q suffix, and `prime_ids` maps each dense limb to its modulus. QP is the auxiliary basis at that depth.
+and a QP value at the same depth appends the special P prime IDs from `range(engine.config.num_q_primes, engine.config.total_num_primes)`. `depth` selects the active Q basis, and `prime_ids` maps each dense limb to its modulus. QP is the auxiliary basis at that depth.
 
 ```mermaid
 flowchart LR
-    L0["public depth 0<br/>G0 G1 ... GD"]
-    L1["public depth 1<br/>G1 ... GD"]
-    LF["max depth D<br/>GD"]
+    L0["public depth 0<br/>B0 = all Q primes"]
+    L1["public depth 1<br/>B1"]
+    LF["max depth D<br/>BD"]
 
     L0 -->|"rescale or modulus switch"| L1
     L1 -->|"zero or more public transitions"| LF
@@ -79,7 +71,7 @@ $$
 \mathtt{engine.max\_depth}-\ell.
 $$
 
-The built-in bootstrap accepts depth `engine.max_depth - 1`. Its entry rescale removes that Q group and reaches the ordinary terminal group at `engine.max_depth`. Its scale schedule is documented in [Composable CKKS bootstrapping](composable-bootstrapping.md).
+The built-in bootstrap accepts depth `engine.max_depth - 1`. Its entry rescale reaches the ordinary terminal basis at `engine.max_depth`. Its scale schedule is documented in [Composable CKKS bootstrapping](composable-bootstrapping.md).
 
 ## Scale-depth transition laws
 
@@ -89,13 +81,13 @@ The following laws define multiplication, rescale, modulus switch, and scale rei
 flowchart TB
     S["state (depth=l, scale=s, rows=I_l)"]
     M["multiply<br/>(l, s*t, I_l)"]
-    R["rescale<br/>(l+1, s/M_d, I_(l+1))"]
+    R["rescale<br/>(l+1, s/rho_l, I_(l+1))"]
     MS["mod_switch_to_depth(t)<br/>(t, s, I_t)"]
     RI["reinterpret_at_scale(u)<br/>(l, u, I_l)<br/>same residues"]
 
     S -->|"multiply by scale t"| M
-    S -->|"divide, round, drop"| R
-    S -->|"restrict rows; preserve scale"| MS
+    S -->|"multiply by R, divide by D, round"| R
+    S -->|"restrict rows or rescale to B_t"| MS
     S -->|"replace scale metadata; preserve residues"| RI
 ```
 
@@ -118,17 +110,19 @@ $$
 =\Delta(c)\Delta_s.
 $$
 
-The Eager default is $\Delta_s=\Delta(c)$. Rescale remains a separate operation; after a separately invoked rescale, the recorded scale is $\Delta(c)\Delta_s/M_d$. Integer scalar multiplication has no encoding scale and preserves $\Delta(c)$.
+The Eager default is $\Delta_s=\Delta(c)$. Rescale remains a separate operation; after a separately invoked rescale, the recorded scale is $\Delta(c)\Delta_s/\rho_\ell$. Integer scalar multiplication has no encoding scale and preserves $\Delta(c)$.
 
 Real scalar addition quantizes its addend at a caller-selected $\Delta_s$ but preserves the ciphertext scale. It therefore changes the represented message by approximately $a\Delta_s/\Delta(c)$. Eager selects $\Delta_s=\Delta(c)$ when the argument is omitted.
 
 ### Rescale changes depth, scale, rows, and payload
 
-At depth $d< D$, let $M_d=\prod_{q\in G_d}q$ and let $k_d=|G_d|$. `rescale_to_next_depth` computes
+At depth $\ell<D$, let $D_\ell=B_\ell\setminus B_{\ell+1}$ be the dropped primes, $R_\ell=B_{\ell+1}\setminus B_\ell$ the introduced primes, and $\rho_\ell=\prod D_\ell/\prod R_\ell$. `rescale_to_next_depth` computes, for every coefficient,
 
 $$
-c'=\operatorname{Round}\left(\frac{c}{M_d}\right)
-\pmod{B_{\ell+1}}
+c'=\left\lfloor\frac{c\prod R_\ell+H}{\prod D_\ell}\right\rfloor
+\pmod{B_{\ell+1}},
+\qquad
+H=\begin{cases}\lfloor\prod D_\ell/2\rfloor,&\texttt{rounding="nearest"},\\0,&\texttt{rounding="floor"},\end{cases}
 $$
 
 and records
@@ -136,16 +130,16 @@ and records
 $$
 \ell'=\ell+1,
 \qquad
-\Delta'=\frac{\Delta}{M_d},
+\Delta'=\frac{\Delta}{\rho_\ell},
 \qquad
-I'=I[k_d:].
+I'=\mathtt{q\_prime\_ids}(\ell+1).
 $$
 
-For QP input, the leading Q-group rows are removed and every P row is retained. `rounding="nearest"` and `rounding="floor"` select different quotient laws but have the same metadata transition.
+The dropped set is divided in one rounding step. For QP input, the Q rows change in the same way and every P row is retained. `rounding="nearest"` and `rounding="floor"` select different quotient laws but have the same metadata transition.
 
-### Modulus switch advances depth and preserves scale
+### Modulus switch advances depth
 
-For a target public depth $t\ge\ell$, `mod_switch_to_depth` restricts each residue polynomial to the target active basis:
+For a target public depth $t>\ell$ whose basis is contained in the source basis, $B_t\subseteq B_\ell$, `mod_switch_to_depth` restricts each residue polynomial to the target basis:
 
 $$
 c'=c\pmod{B_t},
@@ -155,7 +149,20 @@ c'=c\pmod{B_t},
 \Delta'=\Delta.
 $$
 
-The operation restricts residues to the target basis while preserving their coefficient representatives. Message preservation requires that the centered represented value remain within the smaller target modulus.
+The operation preserves the coefficient representatives. Message preservation requires that the centered represented value remain within the smaller target modulus.
+
+When $B_t\not\subseteq B_\ell$, the target basis contains primes that the source does not represent. With $\rho=\prod(B_\ell\setminus B_t)/\prod(B_t\setminus B_\ell)$, the operation multiplies by the integer $k=\operatorname{round}(\Delta_t\rho/\Delta)$ and performs one rescale from $B_\ell$ to $B_t$:
+
+$$
+c'=\left\lfloor\frac{k\,c\prod(B_t\setminus B_\ell)+H}{\prod(B_\ell\setminus B_t)}\right\rfloor
+\pmod{B_t},
+\qquad
+\ell'=t,
+\qquad
+\Delta'=\Delta_t.
+$$
+
+The recorded scale $\Delta_t$ differs from the arithmetic scale $k\Delta/\rho$ by a relative amount of at most $1/(2k)$.
 
 ### Scale reinterpretation changes metadata and decoded meaning
 
@@ -196,14 +203,14 @@ The caller must also select operands produced under compatible CKKS parameters; 
 Programs align the two axes separately:
 
 1. choose encoding scales and multiplication histories that produce compatible actual scales;
-2. use `mod_switch_to_depth` when only the active Q depth must advance;
+2. use `mod_switch_to_depth` when only the active Q depth must advance; a target basis outside the source basis yields the target depth's default scale;
 3. apply guarded `reinterpret_at_scale` when the resulting message-ratio change is part of the numerical policy.
 
 ## Scale and depth effects by operation family
 
 | Operation family | Depth requirements and effects | Scale requirements and effects |
 | --- | --- | --- |
-| `plaintext`, `encode`, `encrypt_message` | Set the requested public depth | Set the requested scale; an omitted argument selects `config.default_scale` |
+| `plaintext`, `encode`, `encrypt_message` | Set the requested public depth | Set the requested scale; an omitted argument selects `config.scale_at(depth)` |
 | `encrypt`, `decrypt` | Preserve | Preserve |
 | RNS, NTT, coefficient-domain, and residue conversions | Preserve | Preserve |
 | `add`, `subtract`, `sum_ciphertexts` | Require matching ciphertext state and depth; preserve | Require binary64 equality; preserve |
@@ -211,30 +218,30 @@ Programs align the two axes separately:
 | `negate`, `relinearize`, `switch_key`, rotations, conjugation | Preserve | Preserve |
 | `multiply`, `multiply_plaintext` | Require equality; preserve | Record the product of operand scales |
 | `add_scalar` | Preserve | Preserve; the scalar quantization scale is caller-selected and defaults to the ciphertext scale |
-| `multiply_scalar` | Preserve | Multiply by the selected scalar scale, which defaults to the ciphertext scale |
+| `multiply_constant` | Advance by one; preserve with `rescale=False` | Set the selected output scale, which defaults to $\Delta_{\ell+1}$; with `rescale=False`, multiply by $\Delta'/\Delta$, which defaults to the ciphertext scale |
 | `multiply_integer_scalar` | Preserve | Preserve |
-| `rescale_to_next_depth` | Advance by one | Divide by the actual dropped Q-group product |
-| `mod_switch_to_next_depth` | Advance by one | Preserve |
-| `mod_switch_to_depth` | Set the requested reachable public depth | Preserve |
+| `rescale_to_next_depth` | Advance by one | Divide by the rescale ratio $\rho_\ell$ |
+| `mod_switch_to_next_depth` | Advance by one | Preserve when $B_{\ell+1}\subseteq B_\ell$; otherwise set $\Delta_{\ell+1}$ |
+| `mod_switch_to_depth` | Set the requested reachable public depth | Preserve when $B_t\subseteq B_\ell$; otherwise set $\Delta_t$ |
 | `reinterpret_at_scale` | Preserve | Replace with the requested scale |
 
 Functional arithmetic returns output storage, while an in-place form mutates the selected input and requires valid storage lifetimes. Primitive representation, domain, and residue conversions are defined in [State transitions and orthogonality](state-transitions-and-orthogonality.md). Arithmetic, component-count, and key-dependent effects are described in [Evaluator operation transitions](evaluator-operation-transitions.md).
 
 ## Query the rescale transition
 
-The engine exposes the same depth-dependent divisor and binary64 quotient used by `rescale_to_next_depth`:
+The engine exposes the rescale ratio $\rho_d$, as a `fractions.Fraction`, and the binary64 quotient used by `rescale_to_next_depth`:
 
 ```python
-drop_divisor = engine.rescale_divisor(depth=ciphertext.depth)
+ratio = engine.rescale_divisor(depth=ciphertext.depth)
 predicted_scale = engine.rescale_output_scale(
     input_scale=pre_rescale_scale,
     depth=ciphertext.depth,
 )
 
-assert predicted_scale == pre_rescale_scale / drop_divisor
+assert predicted_scale == pre_rescale_scale / float(ratio)
 ```
 
-These queries return the modulus and scale arithmetic of one transition from a provided source depth and input scale.
+These queries return the ratio and scale arithmetic of one transition from a provided source depth and input scale.
 
 Binary64 expression ordering is observable. Branches that will be added use a common scale calculation history so their scale metadata satisfies binary64 equality.
 

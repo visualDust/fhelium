@@ -532,21 +532,19 @@ def render_init(specs_by_namespace: dict[str, list[OpSpec]]) -> str:
 
 
 def render_fake_module(specs_by_namespace: dict[str, list[OpSpec]]) -> str:
-    all_specs = [
-        spec for specs in specs_by_namespace.values() for spec in specs
-    ]
     # Operators without Tensor arguments run their host kernel under fake
     # tensor modes, and CompositeImplicitAutograd operators decompose into
     # registered operators; neither needs a fake implementation.
-    fake_ops = [
-        render_fake(spec)
+    fake_specs = [
+        spec
         for specs in specs_by_namespace.values()
         for spec in specs
         if not spec.decomposes
         and any("Tensor" in arg.type_repr for arg in spec.args)
     ]
+    fake_ops = [render_fake(spec) for spec in fake_specs]
     return (
-        f"{render_header(specs_need_any(all_specs), require_native=False)}\n\n"
+        f"{render_header(specs_need_any(fake_specs), require_native=False)}\n\n"
         + "\n\n\n".join(fake_ops)
         + "\n"
     )

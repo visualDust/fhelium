@@ -1,15 +1,15 @@
 # Explicit residency plans and CUDA leases
 
-**Example source:** [`examples/19_residency_manual.py`](https://github.com/VisualDust/fhelium/blob/main/examples/19_residency_manual.py)
+**Example source:** [`examples/20_residency_manual.py`](https://github.com/VisualDust/fhelium/blob/main/examples/20_residency_manual.py)
 
 This example places live FHElium plaintext, key, and ciphertext values under a `ResidencyManager`. It performs residency transitions, dry-runs one named stage plan with a CUDA reservation, runs real CKKS evaluation on an indexed CUDA consumer stream, observes unbudgeted pageable accounting beside strict pinned/CUDA budgets, and ends each managed logical value.
 
 ## Run the example
 
 ```bash
-python examples/19_residency_manual.py \
+python examples/20_residency_manual.py \
   --device cuda:0 \
-  --preset slots8192-scale40-depth7-int64
+  --preset slots8192-scale40-depth7
 ```
 
 CUDA is required. The workload rotates one encrypted message by one slot, multiplies it by a prepared `0.5` plaintext, rescales, decrypts, and compares with the cleartext result.
@@ -217,7 +217,7 @@ residency.close()
 The evaluator output remains an ordinary application-owned ciphertext in this example.
 
 ::: details Source
-<<< @/../examples/19_residency_manual.py
+<<< @/../examples/20_residency_manual.py
 :::
 
 ## Related concepts and guides

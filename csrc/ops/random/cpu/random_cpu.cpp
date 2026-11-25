@@ -135,6 +135,35 @@ void keystream_into(const at::Tensor& seed,
       });
 }
 
+template <int Rounds, typename scalar_t>
+void seeded_key_into(const int64_t* seed_rows,
+                     int64_t digits,
+                     const scalar_t* moduli,
+                     int64_t stride,
+                     int64_t rows,
+                     int64_t ring_dimension,
+                     scalar_t* out,
+                     const at::Tensor& like) {
+  namespace core = ::fhelium::random::detail;
+  TORCH_CHECK(like.is_cpu(), "CPU seeded-key expansion requires CPU seed rows");
+  constexpr int kCall = core::kSeededKeyCoefficientsPerCall;
+  at::parallel_for(0, digits * rows, 1, [&](int64_t begin, int64_t end) {
+    std::make_unsigned_t<scalar_t> values[kCall];
+    for (int64_t index = begin; index < end; ++index) {
+      const int64_t digit = index / rows;
+      const int64_t row = index % rows;
+      const auto q = static_cast<uint64_t>(moduli[row * stride]);
+      scalar_t* target = out + index * ring_dimension;
+      for (int64_t first = 0; first < ring_dimension; first += kCall) {
+        core::seeded_key_residues<Rounds>(
+            seed_rows + digit * core::kSeededKeyRowWords, row, first, q, values);
+        for (int j = 0; j < kCall; ++j)
+          target[first + j] = static_cast<scalar_t>(values[j]);
+      }
+    }
+  });
+}
+
 #include "../random_ops.inl"
 
 }  // namespace fhelium::random::cpu

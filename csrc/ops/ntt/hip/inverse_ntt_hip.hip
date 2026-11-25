@@ -14,12 +14,10 @@
 //------------------------------------------------------------------
 
 // Device kernels and launch helpers must be declared before entry points.
-#include "inverse_ntt_compact_detail.hpp"
 #include "inverse_ntt_indexed_detail.hpp"
 #include "inverse_ntt_power_of_two_radix_detail.hpp"
 
 // Public CUDA entry points.
-#include "inverse_ntt_compact_hip.inc.hpp"
 #include "inverse_ntt_montgomery_indexed_hip.inc.hpp"
 #include "inverse_ntt_power_of_two_radix_hip.inc.hpp"
 #include "inverse_ntt_to_centered_indexed_hip.inc.hpp"
@@ -27,23 +25,6 @@
 #include "inverse_ntt_to_standard_lazy_indexed_hip.inc.hpp"
 
 // Unnormalized stage ranges compose with generated producer/consumer kernels.
-void inverse_ntt_compact_stage_range_hip(
-    torch::Tensor residues, const torch::Tensor twiddles,
-    const torch::Tensor parameters, int64_t start_stage, int64_t end_stage,
-    int64_t grouped_stage_count) {
-  auto operand = view_rns_batch_3d(residues, "residues");
-  const auto device_id = residues.device().index();
-  hipSetDevice(device_id);
-  auto stream = c10::hip::getCurrentHIPStream(device_id);
-  AT_DISPATCH_INTEGRAL_TYPES(residues.scalar_type(),
-                            "inverse_ntt_compact_stage_range_hip", ([&] {
-    launch_inverse_ntt_compact_grouped_stage_range_hip<scalar_t>(
-        operand, twiddles, parameters, static_cast<int>(grouped_stage_count),
-        static_cast<int>(operand.size(1)), static_cast<int>(start_stage),
-        static_cast<int>(end_stage), stream);
-  }));
-}
-
 template <typename scalar_t, int BITS, int RADIX>
 void inverse_ntt_fixed_radix_range(
     torch::Tensor operand, const torch::Tensor outer,

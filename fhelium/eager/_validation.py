@@ -162,17 +162,17 @@ class CkksValidator:
             p_rows = key.prime_ids[len(q_rows) :]
             if (
                 not q_rows
-                or q_rows != tuple(range(q_rows[0], self.config.num_q_primes))
+                or any(i >= self.config.num_q_primes for i in q_rows)
                 or key.prime_ids[: len(q_rows)] != q_rows
                 or not p_rows
                 or any(i >= self.config.total_num_primes for i in key.prime_ids)
             ):
                 raise ValueError(
-                    "Key-switch rows must store a Q suffix followed by distinct auxiliary catalog rows"
+                    "Key-switch rows must store Q rows followed by distinct auxiliary catalog rows"
                 )
             expected_shape = (
                 len(key.digit_prime_ids),
-                2,
+                key.data.size(1),
                 len(key.prime_ids),
                 self.config.N,
             )

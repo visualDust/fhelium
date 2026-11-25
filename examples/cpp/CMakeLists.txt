@@ -6,5 +6,5 @@ project(fhelium_cpp_example LANGUAGES CXX)
 # torch.utils.cmake_prefix_path of one Python environment; see examples/README.md.
 find_package(FHElium CONFIG REQUIRED)
 
-add_executable(rns_ckks_example rns_ckks_example.cpp)
-target_link_libraries(rns_ckks_example PRIVATE FHElium::fhelium)
+add_executable(ckks_matrix_vector ckks_matrix_vector.cpp)
+target_link_libraries(ckks_matrix_vector PRIVATE FHElium::fhelium)

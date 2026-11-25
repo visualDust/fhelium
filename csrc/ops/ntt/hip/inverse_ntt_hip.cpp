@@ -74,66 +74,6 @@ void inverse_ntt_to_centered_indexed_(at::Tensor& montgomery_residues,
                                               rns_params);
 }
 
-void inverse_ntt_montgomery_compact_grouped_smem_(
-    at::Tensor& montgomery_residues,
-    const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
-  fhelium::ntt::validate_compact_tables(
-      montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count);
-  inverse_ntt_montgomery_compact_grouped_smem_inplace_hip(
-      montgomery_residues,
-      inverse_twiddles,
-      rns_params,
-      grouped_stage_count,
-      fhelium::ntt::kNttDefaultSharedMemoryLogN);
-}
-
-void inverse_ntt_to_standard_lazy_compact_grouped_smem_(
-    at::Tensor& montgomery_residues,
-    const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
-  fhelium::ntt::validate_compact_tables(
-      montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count);
-  inverse_ntt_to_standard_lazy_compact_grouped_smem_inplace_hip(
-      montgomery_residues,
-      inverse_twiddles,
-      rns_params,
-      grouped_stage_count,
-      fhelium::ntt::kNttDefaultSharedMemoryLogN);
-}
-
-void inverse_ntt_to_standard_compact_grouped_smem_(
-    at::Tensor& montgomery_residues,
-    const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
-  fhelium::ntt::validate_compact_tables(
-      montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count);
-  inverse_ntt_to_standard_compact_grouped_smem_inplace_hip(
-      montgomery_residues,
-      inverse_twiddles,
-      rns_params,
-      grouped_stage_count,
-      fhelium::ntt::kNttDefaultSharedMemoryLogN);
-}
-
-void inverse_ntt_to_centered_compact_grouped_smem_(
-    at::Tensor& montgomery_residues,
-    const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
-  fhelium::ntt::validate_compact_tables(
-      montgomery_residues, inverse_twiddles, rns_params, grouped_stage_count);
-  inverse_ntt_to_centered_compact_grouped_smem_inplace_hip(
-      montgomery_residues,
-      inverse_twiddles,
-      rns_params,
-      grouped_stage_count,
-      fhelium::ntt::kNttDefaultSharedMemoryLogN);
-}
-
 void inverse_ntt_montgomery_power_of_two_radix_compact_(
     at::Tensor& montgomery_residues,
     const at::Tensor& outer_twiddles,

@@ -22,11 +22,11 @@ from fhelium.values import (
 )
 
 
-CONFIG = CkksConfig(
+CONFIG = CkksConfig.suffix_chain(
     logN=4,
     q_depth_groups=((97,), (193,), (257,)),
     p_moduli=(769, 1153),
-    default_scale=8.0,
+    scale=8.0,
     enforce_security_budget=False,
 )
 

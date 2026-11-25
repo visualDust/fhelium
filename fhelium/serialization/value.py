@@ -12,12 +12,14 @@ from fhelium.values import (
     Ciphertext,
     CompressedPlaintext,
     ConjugationKey,
+    EncapsulationKey,
     KeySwitchKey,
     Plaintext,
     PublicKey,
     RelinearizationKey,
     RotationKey,
     SecretKey,
+    SeedSpec,
     TensorResident,
 )
 from fhelium.values.state import (
@@ -40,6 +42,7 @@ _KEY_TYPES: dict[str, type] = {
         RotationKey,
         RelinearizationKey,
         ConjugationKey,
+        EncapsulationKey,
     )
 }
 
@@ -173,8 +176,23 @@ def _envelope_from_value(
                     if isinstance(value, RotationKey)
                     else {}
                 ),
+                **(
+                    {"direction": value.direction}
+                    if isinstance(value, EncapsulationKey)
+                    else {}
+                ),
+                **(
+                    {"seed": _seed_metadata(value.seed_spec)}
+                    if isinstance(value, KeySwitchKey) and value.seed_spec is not None
+                    else {}
+                ),
             },
-            tensors={"data": key_value.data},
+            tensors=(
+                # A key with a seed is written compact: k_0 and the seed rows.
+                {"data": value.data[:, :1], "seed": value.seed}
+                if isinstance(value, KeySwitchKey) and value.seed is not None
+                else {"data": key_value.data}
+            ),
         )
 
     supported = [
@@ -389,12 +407,19 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
         required_key_metadata.add("digit_prime_ids")
     if key_type is RotationKey:
         required_key_metadata.add("rotation_step")
+    if key_type is EncapsulationKey:
+        required_key_metadata.add("direction")
+    if issubclass(key_type, KeySwitchKey) and "seed" in metadata:
+        required_key_metadata.add("seed")
     _require_metadata_fields(
         metadata,
         value_type,
         required_key_metadata,
     )
-    _require_tensor_names(tensors, value_type, {"data"})
+    seeded = issubclass(key_type, KeySwitchKey) and "seed" in metadata
+    _require_tensor_names(
+        tensors, value_type, {"data", "seed"} if seeded else {"data"}
+    )
     key_arguments: dict[str, Any] = dict(
         data=_required_tensor(tensors, "data", value_type),
         prime_ids=_metadata_prime_ids(metadata, value_type),
@@ -414,7 +439,30 @@ def _value_from_envelope(envelope: ValueEnvelope) -> TensorResident:
         key_arguments["rotation_step"] = _metadata_integer(
             metadata, "rotation_step", value_type
         )
+    if key_type is EncapsulationKey:
+        key_arguments["direction"] = _metadata_string(
+            metadata, "direction", value_type
+        )
+    if seeded:
+        key_arguments["seed"] = _required_tensor(tensors, "seed", value_type)
+        key_arguments["seed_spec"] = _seed_spec(metadata, value_type)
     return key_type(**key_arguments)
+
+
+def _seed_metadata(spec: SeedSpec) -> dict[str, Any]:
+    return {"prf": spec.prf, "rounds": spec.rounds, "moduli": list(spec.moduli)}
+
+
+def _seed_spec(metadata: dict[str, Any], value_type: str) -> SeedSpec:
+    """Return the seed specification of a key with a seed."""
+    spec = metadata["seed"]
+    if not isinstance(spec, dict) or not isinstance(spec.get("moduli"), list):
+        raise ValueError(f"{value_type} seed specification {spec!r} is malformed")
+    return SeedSpec(
+        prf=spec.get("prf"),
+        rounds=spec.get("rounds"),
+        moduli=tuple(int(q) for q in spec["moduli"]),
+    )
 
 
 def supported_value_types() -> tuple[str, ...]:
@@ -631,11 +679,20 @@ def validate_value_description(
         fields.add("digit_prime_ids")
     if key_type is RotationKey:
         fields.add("rotation_step")
+    if key_type is EncapsulationKey:
+        fields.add("direction")
+    if issubclass(key_type, KeySwitchKey) and "seed" in typed_metadata:
+        fields.add("seed")
     _require_metadata_fields(typed_metadata, value_type, fields)
     if key_type is RotationKey:
         _metadata_integer(typed_metadata, "rotation_step", value_type)
     _validate_required_rns_metadata(typed_metadata, value_type)
-    _require_tensor_names_by_name(tensor_names, value_type, {"data"})
+    seeded = issubclass(key_type, KeySwitchKey) and "seed" in typed_metadata
+    if seeded:
+        _seed_spec(typed_metadata, value_type)
+    _require_tensor_names_by_name(
+        tensor_names, value_type, {"data", "seed"} if seeded else {"data"}
+    )
 
 
 def _validate_required_rns_metadata(

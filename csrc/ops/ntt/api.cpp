@@ -47,40 +47,34 @@ at::Tensor forward_ntt_to_montgomery_indexed(
                            rns_params);
 }
 
-void forward_ntt_montgomery_compact_grouped_smem_(
+void forward_ntt_montgomery_compact_(
     at::Tensor& montgomery_residues,
     const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
-  FHELIUM_DISPATCH_GPU(forward_ntt_montgomery_compact_grouped_smem_,
+    const at::Tensor& rns_params) {
+  FHELIUM_DISPATCH_GPU(forward_ntt_montgomery_compact_,
                        montgomery_residues,
                        forward_twiddles,
-                       rns_params,
-                       grouped_stage_count);
+                       rns_params);
 }
 
-void forward_ntt_to_montgomery_compact_grouped_smem_(
+void forward_ntt_to_montgomery_compact_(
     at::Tensor& standard_residues,
     const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
-  FHELIUM_DISPATCH_GPU(forward_ntt_to_montgomery_compact_grouped_smem_,
+    const at::Tensor& rns_params) {
+  FHELIUM_DISPATCH_GPU(forward_ntt_to_montgomery_compact_,
                        standard_residues,
                        forward_twiddles,
-                       rns_params,
-                       grouped_stage_count);
+                       rns_params);
 }
 
-at::Tensor forward_ntt_to_montgomery_compact_grouped_smem(
+at::Tensor forward_ntt_to_montgomery_compact(
     const at::Tensor& standard_residues,
     const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
-  FHELIUM_DISPATCH_GPU(forward_ntt_to_montgomery_compact_grouped_smem,
+    const at::Tensor& rns_params) {
+  FHELIUM_DISPATCH_GPU(forward_ntt_to_montgomery_compact,
                        standard_residues,
                        forward_twiddles,
-                       rns_params,
-                       grouped_stage_count);
+                       rns_params);
 }
 
 void forward_ntt_to_montgomery_compact_add_scaled_(
@@ -88,15 +82,13 @@ void forward_ntt_to_montgomery_compact_add_scaled_(
     const at::Tensor& addend,
     const at::Tensor& multiplier,
     const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
+    const at::Tensor& rns_params) {
   FHELIUM_DISPATCH_GPU(forward_ntt_to_montgomery_compact_add_scaled_,
                        source,
                        addend,
                        multiplier,
                        forward_twiddles,
-                       rns_params,
-                       grouped_stage_count);
+                       rns_params);
 }
 
 void forward_ntt_montgomery_compact_keyswitch_accumulate_(
@@ -107,7 +99,7 @@ void forward_ntt_montgomery_compact_keyswitch_accumulate_(
     at::Tensor& accumulator0_qp,
     at::Tensor& accumulator1_qp,
     int64_t key_row_start,
-    int64_t grouped_stage_count) {
+    int64_t key_p_row_start) {
   FHELIUM_DISPATCH_GPU(forward_ntt_montgomery_compact_keyswitch_accumulate_,
                        coefficient_digit_qp,
                        forward_twiddles,
@@ -116,7 +108,7 @@ void forward_ntt_montgomery_compact_keyswitch_accumulate_(
                        accumulator0_qp,
                        accumulator1_qp,
                        key_row_start,
-                       grouped_stage_count);
+                       key_p_row_start);
 }
 
 void forward_ntt_montgomery_power_of_two_radix_compact_(
@@ -207,52 +199,44 @@ void inverse_ntt_to_centered_indexed_(at::Tensor& montgomery_residues,
                            rns_params);
 }
 
-void inverse_ntt_montgomery_compact_grouped_smem_(
+void inverse_ntt_montgomery_compact_(
     at::Tensor& montgomery_residues,
     const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
-  FHELIUM_DISPATCH_GPU(inverse_ntt_montgomery_compact_grouped_smem_,
+    const at::Tensor& rns_params) {
+  FHELIUM_DISPATCH_GPU(inverse_ntt_montgomery_compact_,
                        montgomery_residues,
                        inverse_twiddles,
-                       rns_params,
-                       grouped_stage_count);
+                       rns_params);
 }
 
-void inverse_ntt_to_standard_lazy_compact_grouped_smem_(
+void inverse_ntt_to_standard_lazy_compact_(
     at::Tensor& montgomery_residues,
     const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
-  FHELIUM_DISPATCH_GPU(inverse_ntt_to_standard_lazy_compact_grouped_smem_,
+    const at::Tensor& rns_params) {
+  FHELIUM_DISPATCH_GPU(inverse_ntt_to_standard_lazy_compact_,
                        montgomery_residues,
                        inverse_twiddles,
-                       rns_params,
-                       grouped_stage_count);
+                       rns_params);
 }
 
-void inverse_ntt_to_standard_compact_grouped_smem_(
+void inverse_ntt_to_standard_compact_(
     at::Tensor& montgomery_residues,
     const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
-  FHELIUM_DISPATCH_GPU(inverse_ntt_to_standard_compact_grouped_smem_,
+    const at::Tensor& rns_params) {
+  FHELIUM_DISPATCH_GPU(inverse_ntt_to_standard_compact_,
                        montgomery_residues,
                        inverse_twiddles,
-                       rns_params,
-                       grouped_stage_count);
+                       rns_params);
 }
 
-void inverse_ntt_to_centered_compact_grouped_smem_(
+void inverse_ntt_to_centered_compact_(
     at::Tensor& montgomery_residues,
     const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count) {
-  FHELIUM_DISPATCH_GPU(inverse_ntt_to_centered_compact_grouped_smem_,
+    const at::Tensor& rns_params) {
+  FHELIUM_DISPATCH_GPU(inverse_ntt_to_centered_compact_,
                        montgomery_residues,
                        inverse_twiddles,
-                       rns_params,
-                       grouped_stage_count);
+                       rns_params);
 }
 
 void inverse_ntt_montgomery_power_of_two_radix_compact_(
@@ -303,23 +287,6 @@ void inverse_ntt_to_centered_power_of_two_radix_compact_(
                        rns_params);
 }
 
-void compact_ntt_stage_range_(at::Tensor& residues,
-                              const at::Tensor& compact_twiddles,
-                              const at::Tensor& rns_params,
-                              bool inverse,
-                              int64_t start_stage,
-                              int64_t end_stage,
-                              int64_t grouped_stage_count) {
-  FHELIUM_DISPATCH_GPU(compact_ntt_stage_range_,
-                       residues,
-                       compact_twiddles,
-                       rns_params,
-                       inverse,
-                       start_stage,
-                       end_stage,
-                       grouped_stage_count);
-}
-
 void fixed_radix_ntt_stage_range_(at::Tensor& residues,
                                   const at::Tensor& outer_twiddles,
                                   const at::Tensor& root_powers,
@@ -343,20 +310,6 @@ void fixed_radix_ntt_stage_range_(at::Tensor& residues,
 #define FHELIUM_DISPATCH_NAMESPACE "fhelium::ntt::diagnostic::"
 
 namespace fhelium::ntt::diagnostic {
-
-void forward_ntt_montgomery_compact_grouped_smem_override_(
-    at::Tensor& montgomery_residues,
-    const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params,
-    int64_t grouped_stage_count,
-    int64_t shared_memory_log_n) {
-  FHELIUM_DISPATCH_GPU(forward_ntt_montgomery_compact_grouped_smem_override_,
-                       montgomery_residues,
-                       forward_twiddles,
-                       rns_params,
-                       grouped_stage_count,
-                       shared_memory_log_n);
-}
 
 void forward_ntt_montgomery_power_of_two_radix_compact_override_(
     at::Tensor& montgomery_residues,

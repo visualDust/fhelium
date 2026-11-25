@@ -150,13 +150,14 @@ def crt_basis_extend(
     target_reciprocals: torch.Tensor,
     source_normalizers: torch.Tensor | None = None,
     source_reciprocals: torch.Tensor | None = None,
+    target_offsets: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_rns_ops::crt_basis_extend``.
 
     Torch schema::
 
-        fhelium_rns_ops::crt_basis_extend(Tensor source_residues, Tensor source_parameters, Tensor target_parameters, Tensor matrix, Tensor target_reciprocals, Tensor? source_normalizers=None, Tensor? source_reciprocals=None) -> Tensor
+        fhelium_rns_ops::crt_basis_extend(Tensor source_residues, Tensor source_parameters, Tensor target_parameters, Tensor matrix, Tensor target_reciprocals, Tensor? source_normalizers=None, Tensor? source_reciprocals=None, Tensor? target_offsets=None) -> Tensor
 
     Args:
         source_residues: torch.Tensor.
@@ -166,6 +167,7 @@ def crt_basis_extend(
         target_reciprocals: torch.Tensor.
         source_normalizers: torch.Tensor | None.
         source_reciprocals: torch.Tensor | None.
+        target_offsets: torch.Tensor | None.
 
     Returns: torch.Tensor.
     """
@@ -178,6 +180,7 @@ def crt_basis_extend(
         target_reciprocals,
         source_normalizers,
         source_reciprocals,
+        target_offsets,
     )
 
 
@@ -189,6 +192,7 @@ def crt_basis_extend_out_(
     target_reciprocals: torch.Tensor,
     source_normalizers: torch.Tensor | None,
     source_reciprocals: torch.Tensor | None,
+    target_offsets: torch.Tensor | None,
     output: torch.Tensor,
 ) -> None:
     """
@@ -196,7 +200,7 @@ def crt_basis_extend_out_(
 
     Torch schema::
 
-        fhelium_rns_ops::crt_basis_extend_out_(Tensor source_residues, Tensor source_parameters, Tensor target_parameters, Tensor matrix, Tensor target_reciprocals, Tensor? source_normalizers, Tensor? source_reciprocals, Tensor(a!) output) -> ()
+        fhelium_rns_ops::crt_basis_extend_out_(Tensor source_residues, Tensor source_parameters, Tensor target_parameters, Tensor matrix, Tensor target_reciprocals, Tensor? source_normalizers, Tensor? source_reciprocals, Tensor? target_offsets, Tensor(a!) output) -> ()
 
     Args:
         source_residues: torch.Tensor.
@@ -206,6 +210,7 @@ def crt_basis_extend_out_(
         target_reciprocals: torch.Tensor.
         source_normalizers: torch.Tensor | None.
         source_reciprocals: torch.Tensor | None.
+        target_offsets: torch.Tensor | None.
         output: torch.Tensor (modified in-place).
 
     Returns: None.
@@ -219,19 +224,22 @@ def crt_basis_extend_out_(
         target_reciprocals,
         source_normalizers,
         source_reciprocals,
+        target_offsets,
         output,
     )
 
 
 def crt_basis_extension_tables(
     source: list[int], target: list[int], normalized: bool, dtype: int
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]:
     """
     Typed wrapper for ``fhelium_rns_ops::crt_basis_extension_tables``.
 
     Torch schema::
 
-        fhelium_rns_ops::crt_basis_extension_tables(int[] source, int[] target, bool normalized, ScalarType dtype) -> (Tensor, Tensor, Tensor, Tensor)
+        fhelium_rns_ops::crt_basis_extension_tables(int[] source, int[] target, bool normalized, ScalarType dtype) -> (Tensor, Tensor, Tensor, Tensor, Tensor)
 
     Args:
         source: list[int].
@@ -239,11 +247,37 @@ def crt_basis_extension_tables(
         normalized: bool.
         dtype: int.
 
-    Returns: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor].
+    Returns: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor].
     """
     _require_native()
     return torch.ops.fhelium_rns_ops.crt_basis_extension_tables(
         source, target, normalized, dtype
+    )
+
+
+def crt_quotient_tables(
+    source: list[int], target: list[int], divisor: list[int], dtype: int
+) -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]:
+    """
+    Typed wrapper for ``fhelium_rns_ops::crt_quotient_tables``.
+
+    Torch schema::
+
+        fhelium_rns_ops::crt_quotient_tables(int[] source, int[] target, int[] divisor, ScalarType dtype) -> (Tensor, Tensor, Tensor, Tensor, Tensor)
+
+    Args:
+        source: list[int].
+        target: list[int].
+        divisor: list[int].
+        dtype: int.
+
+    Returns: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor].
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.crt_quotient_tables(
+        source, target, divisor, dtype
     )
 
 
@@ -944,6 +978,35 @@ def quotient_offset_residues(
     )
 
 
+def rational_rescale(
+    source: torch.Tensor,
+    table_names: list[str],
+    tables: list[torch.Tensor],
+    input_domain: str,
+    ntt_backend: str,
+) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_rns_ops::rational_rescale``.
+
+    Torch schema::
+
+        fhelium_rns_ops::rational_rescale(Tensor source, str[] table_names, Tensor[] tables, str input_domain, str ntt_backend) -> Tensor
+
+    Args:
+        source: torch.Tensor.
+        table_names: list[str].
+        tables: list[torch.Tensor].
+        input_domain: str.
+        ntt_backend: str.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.rational_rescale(
+        source, table_names, tables, input_domain, ntt_backend
+    )
+
+
 def reduce_to_standard_(
     lazy_residues: torch.Tensor, rns_params: torch.Tensor
 ) -> None:
@@ -962,90 +1025,6 @@ def reduce_to_standard_(
     """
     _require_native()
     torch.ops.fhelium_rns_ops.reduce_to_standard_(lazy_residues, rns_params)
-
-
-def rescale_drop_leading_primes(
-    source: torch.Tensor,
-    table_names: list[str],
-    tables: list[torch.Tensor],
-    drop_count: int,
-    half_primes: list[int],
-    rounding: str,
-    input_domain: str,
-    ntt_backend: str,
-) -> torch.Tensor:
-    """
-    Typed wrapper for ``fhelium_rns_ops::rescale_drop_leading_primes``.
-
-    Torch schema::
-
-        fhelium_rns_ops::rescale_drop_leading_primes(Tensor source, str[] table_names, Tensor[] tables, int drop_count, int[] half_primes, str rounding, str input_domain, str ntt_backend) -> Tensor
-
-    Args:
-        source: torch.Tensor.
-        table_names: list[str].
-        tables: list[torch.Tensor].
-        drop_count: int.
-        half_primes: list[int].
-        rounding: str.
-        input_domain: str.
-        ntt_backend: str.
-
-    Returns: torch.Tensor.
-    """
-    _require_native()
-    return torch.ops.fhelium_rns_ops.rescale_drop_leading_primes(
-        source,
-        table_names,
-        tables,
-        drop_count,
-        half_primes,
-        rounding,
-        input_domain,
-        ntt_backend,
-    )
-
-
-def rescale_drop_leading_primes_(
-    source: torch.Tensor,
-    table_names: list[str],
-    tables: list[torch.Tensor],
-    drop_count: int,
-    half_primes: list[int],
-    rounding: str,
-    input_domain: str,
-    ntt_backend: str,
-) -> torch.Tensor:
-    """
-    Typed wrapper for ``fhelium_rns_ops::rescale_drop_leading_primes_``.
-
-    Torch schema::
-
-        fhelium_rns_ops::rescale_drop_leading_primes_(Tensor(a!) source, str[] table_names, Tensor[] tables, int drop_count, int[] half_primes, str rounding, str input_domain, str ntt_backend) -> Tensor(a!)
-
-    Args:
-        source: torch.Tensor (modified in-place).
-        table_names: list[str].
-        tables: list[torch.Tensor].
-        drop_count: int.
-        half_primes: list[int].
-        rounding: str.
-        input_domain: str.
-        ntt_backend: str.
-
-    Returns: torch.Tensor.
-    """
-    _require_native()
-    return torch.ops.fhelium_rns_ops.rescale_drop_leading_primes_(
-        source,
-        table_names,
-        tables,
-        drop_count,
-        half_primes,
-        rounding,
-        input_domain,
-        ntt_backend,
-    )
 
 
 def rescale_inverse_matrix(moduli: list[int], dtype: int) -> torch.Tensor:

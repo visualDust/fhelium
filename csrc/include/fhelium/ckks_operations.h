@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ATen/core/Tensor.h>
+#include <fhelium/ckks_keys.h>
 #include <fhelium/export.h>
 #include <fhelium/tensor_table.h>
 
@@ -40,8 +41,20 @@ struct KeySwitchOptions {
   std::vector<int64_t> digits;
   /// First key row that corresponds to QP row zero.
   int64_t key_row_start = 0;
-  /// `exact` (Garner), `crt`, or `normalized_crt` digit lifting.
-  std::string modup_method = "exact";
+  /// First key row of the trailing auxiliary rows, or $-1$ when the active
+  /// QP rows are one key interval starting at `key_row_start`.
+  int64_t key_p_row_start = -1;
+  /// Key rows of the active Q rows, in operand order, when they do not form
+  /// one interval starting at `key_row_start`; empty otherwise. A nonempty
+  /// list requires `key_p_row_start`, and each run of consecutive key rows
+  /// is one contiguous digit product.
+  std::vector<int64_t> key_q_rows;
+  /// Digit lift: `exact` (Garner) reads `digit{i}_*`; `crt` (raw CRT) and
+  /// `normalized_crt` (centered CRT) read `digit{i}_crt_*`. ModDown divides
+  /// by $P$ with the centered CRT remainder when the table holds
+  /// `moddown_crt_*` (`fhelium::rns::moddown_qp_to_q`) and exactly
+  /// otherwise.
+  std::string basis_conversion = "exact";
   /// Number of auxiliary rows that trail the Q rows of the QP accumulator.
   int64_t p_count = 0;
   /// `nearest` or `floor` ModDown rounding.
@@ -54,6 +67,13 @@ struct KeySwitchOptions {
   std::string output_domain = "coefficient";
   /// Generator of the slot rotation group: 5 or 3.
   int64_t galois_generator = 5;
+  /// Seed rows `[key_digit, 6]` of seeded keys, one per key operand in
+  /// operand order; empty when the keys are dense. A seeded key stores only
+  /// $k_0$ as `[key_digit, 1, key_rows, N]`, and the products generate $k_1$
+  /// (`keyswitch_accumulate_digit_products_`).
+  std::vector<at::Tensor> key_seeds;
+  /// ChaCha rounds of the seeded keys; 0 for dense keys.
+  int64_t key_rounds = 0;
 };
 
 /// Joint ModDown and rescale of a relinearization
@@ -227,6 +247,69 @@ FHELIUM_API at::Tensor encapsulated_modulus_raise(
     int64_t target_row_start,
     int64_t q_count);
 
+/// Key operands of `KeySwitchKey` type. Each overload equals its Tensor form
+/// with the key data and, for compact keys, `options.key_seeds` and
+/// `options.key_rounds` taken from the keys; the keys of one call share one
+/// form.
+FHELIUM_API at::Tensor key_switch_products(
+    const at::Tensor& component,
+    const KeySwitchKey& key,
+    const TensorTable& tables,
+    const KeySwitchOptions& options,
+    const std::optional<at::Tensor>& accumulator = std::nullopt);
+FHELIUM_API at::Tensor key_switch(const at::Tensor& source,
+                                  const KeySwitchKey& key,
+                                  const TensorTable& tables,
+                                  const KeySwitchOptions& options,
+                                  bool conjugate);
+FHELIUM_API at::Tensor relinearize(
+    const at::Tensor& source,
+    const KeySwitchKey& key,
+    const TensorTable& tables,
+    const KeySwitchOptions& options,
+    const std::optional<JointRescaleOptions>& rescale_options = std::nullopt);
+FHELIUM_API at::Tensor rotate(const at::Tensor& source,
+                              const KeySwitchKey& key,
+                              int64_t step,
+                              const TensorTable& tables,
+                              const KeySwitchOptions& options);
+FHELIUM_API at::Tensor rotate_hoisted(const at::Tensor& c0,
+                                      const at::Tensor& hoisted_digits,
+                                      const KeySwitchKey& key,
+                                      int64_t step,
+                                      const TensorTable& tables,
+                                      const KeySwitchOptions& options);
+FHELIUM_API std::vector<at::Tensor> rotate_many(
+    const at::Tensor& source,
+    const std::vector<KeySwitchKey>& keys,
+    c10::IntArrayRef steps,
+    const TensorTable& tables,
+    const KeySwitchOptions& options);
+FHELIUM_API at::Tensor rotation_sum(at::TensorList sources,
+                                    const std::vector<KeySwitchKey>& keys,
+                                    c10::IntArrayRef steps,
+                                    const TensorTable& tables,
+                                    const KeySwitchOptions& options,
+                                    int64_t remaining_q_count);
+FHELIUM_API at::Tensor grouped_rotation_weighted_sum(
+    const at::Tensor& source,
+    const std::vector<KeySwitchKey>& keys,
+    c10::IntArrayRef baby_steps,
+    at::TensorList plaintexts,
+    int64_t group_count,
+    const TensorTable& tables,
+    const KeySwitchOptions& options);
+FHELIUM_API at::Tensor encapsulated_modulus_raise(
+    const at::Tensor& source,
+    const KeySwitchKey& low_key,
+    const KeySwitchKey& return_key,
+    const TensorTable& tables,
+    const KeySwitchOptions& low_options,
+    int64_t return_drop_count,
+    int64_t target_row_start,
+    int64_t q_count);
+
+
 /// Returns `ciphertext` with the compressed plaintext `compressed` added to
 /// component zero.
 ///
@@ -292,7 +375,9 @@ FHELIUM_API at::Tensor scalar_arithmetic(const at::Tensor& ciphertext,
 /// `pre`, extended conjugate-symmetrically, transformed by a forward FFT, and
 /// multiplied by the twist `twister` (`slot_permutations`, `slot_twist`).
 /// Rounding reads the stream `seed` at its current nonce; the caller advances
-/// the nonce by one.
+/// the nonce by one. Every scaled coefficient must satisfy $|c\Delta| <
+/// 2^{63}$; otherwise the call raises `c10::ValueError` with the largest
+/// magnitude and the scale.
 FHELIUM_API at::Tensor encode(const at::Tensor& message,
                               const at::Tensor& pre,
                               const at::Tensor& twister,

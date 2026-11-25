@@ -19,7 +19,7 @@ def test_seeded_streams_reproduce_and_advance() -> None:
 
 
 def test_cpu_engine_rng_uses_the_configured_int32_dtype() -> None:
-    config = CkksConfig.parse(Preset.slots8192_scale25_depth14_int32)
+    config = CkksConfig.parse(Preset.slots8192_scale30_depth9)
     engine = Engine(config)
     ciphertext = engine.encrypt_message(
         torch.zeros(16, dtype=torch.float64), device="cpu"
@@ -28,7 +28,7 @@ def test_cpu_engine_rng_uses_the_configured_int32_dtype() -> None:
 
 
 def test_engine_owns_seeded_rng_configuration() -> None:
-    config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
     first = Engine(config, rng_seed=7, rng_nonce=11)
     second = Engine(config, rng_seed=7, rng_nonce=11)
     assert torch.equal(first._rng_for("cpu").seed, second._rng_for("cpu").seed)
@@ -40,7 +40,7 @@ def test_engine_owns_seeded_rng_configuration() -> None:
 
 def test_engine_passes_configured_gaussian_sigma() -> None:
     config = CkksConfig.parse(
-        Preset.slots8192_scale40_depth7_int64,
+        Preset.slots8192_scale40_depth7,
         sigma=4.25,
         enforce_security_budget=False,
     )

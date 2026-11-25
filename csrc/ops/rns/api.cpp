@@ -145,12 +145,12 @@ at::Tensor lift_integer_coefficients(const at::Tensor& coefficients,
 #if defined(FHELIUM_WITH_CUDA)
 namespace {
 
-// The CUDA kernel holds one int32 coefficient tile of source rows and the
-// matrix in 48 KiB of shared memory; other inputs use the portable sum.
+// The CUDA kernel stages a 16-target int32 matrix chunk in 48 KiB of shared
+// memory, which admits up to 768 source rows; other inputs use the portable
+// sum.
 bool crt_kernel_applies(const at::Tensor& source, const at::Tensor& matrix) {
   return source.is_cuda() && source.scalar_type() == at::kInt &&
-         matrix.size(0) * (128 + matrix.size(1)) * source.element_size() <=
-             48 * 1024;
+         matrix.size(0) * 16 * source.element_size() <= 48 * 1024;
 }
 
 }  // namespace
@@ -163,6 +163,7 @@ void crt_basis_extend_out_(const at::Tensor& source_residues,
                            const at::Tensor& target_reciprocals,
                            const std::optional<at::Tensor>& source_normalizers,
                            const std::optional<at::Tensor>& source_reciprocals,
+                           const std::optional<at::Tensor>& target_offsets,
                            at::Tensor& output) {
 #if defined(FHELIUM_WITH_CUDA)
   if (crt_kernel_applies(source_residues, matrix)) {
@@ -173,6 +174,7 @@ void crt_basis_extend_out_(const at::Tensor& source_residues,
                                target_reciprocals,
                                source_normalizers,
                                source_reciprocals,
+                               target_offsets,
                                output);
     return;
   }
@@ -182,7 +184,8 @@ void crt_basis_extend_out_(const at::Tensor& source_residues,
                                                    source_parameters,
                                                    target_parameters,
                                                    matrix,
-                                                   source_normalizers));
+                                                   source_normalizers,
+                                                   target_offsets));
 }
 
 at::Tensor crt_basis_extend(
@@ -192,7 +195,8 @@ at::Tensor crt_basis_extend(
     const at::Tensor& matrix,
     const at::Tensor& target_reciprocals,
     const std::optional<at::Tensor>& source_normalizers,
-    const std::optional<at::Tensor>& source_reciprocals) {
+    const std::optional<at::Tensor>& source_reciprocals,
+    const std::optional<at::Tensor>& target_offsets) {
 #if defined(FHELIUM_WITH_CUDA)
   if (crt_kernel_applies(source_residues, matrix)) {
     return gpu::crt_basis_extend(source_residues,
@@ -201,14 +205,16 @@ at::Tensor crt_basis_extend(
                                  matrix,
                                  target_reciprocals,
                                  source_normalizers,
-                                 source_reciprocals);
+                                 source_reciprocals,
+                                 target_offsets);
   }
 #endif
   return detail_operations::portable_crt_basis_extend(source_residues,
                                                       source_parameters,
                                                       target_parameters,
                                                       matrix,
-                                                      source_normalizers);
+                                                      source_normalizers,
+                                                      target_offsets);
 }
 
 at::Tensor mixed_radix_modup_tiled(const at::Tensor& source_residues,

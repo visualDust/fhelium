@@ -50,7 +50,7 @@ A gap below 3% is treated as a near tie. If the stable fallback is in that set, 
 
 The backends produce the same power-of-two NTT result, but organize its factorization and stages differently:
 
-- `radix2_compact_group4_smem8`, `group8`, and `group16` fuse groups of radix-2 stages and use a compiled shared-memory region;
+- `radix2_compact` and `radix2_compact_shoup32` execute radix-2 stages in two passes over each prime row, using Montgomery or Shoup32 twiddles respectively;
 - `radix4_compact`, `radix8_compact`, and `radix16_compact` use genuine strict high-radix butterflies and require divisibility;
 - `radix2_indexed` stores expanded schedules, is the CPU production default, and provides the cross-device validation baseline for compact CUDA policies; CUDA deployment screening ordinarily compares the compact candidates.
 
@@ -148,11 +148,11 @@ Use the pattern, not only the aggregate rank:
 
 The CKKS primitive suite times key use but excludes key generation. Its `multiply_relinearize` measurement includes multiplication and relinearization; `rotate_many_by_steps[4]` includes grouped decomposition/hoisting and four rotations. Measure the selected policy again in the Eager or Compile workload being deployed.
 
-One RTX A6000 measurement illustrates the final application check. For `logN = 15`, the CKKS primitive suite recommended `radix2_compact_group4_smem8`, while the staged graph-captured 128 x 128 rotation-parallel matvec selected `radix8_compact`. The primitive result was a shortlist decision; the production evaluator changed NTT call composition, rotation schedule, diagonal policy, and live working set. Preserve both results under their actual measured scopes rather than treating either as a contradiction.
+A primitive-suite recommendation is a shortlist decision. The deployed evaluator can change NTT call composition, rotation schedule, diagonal policy, and live working set, so the application benchmark can select a different policy. Record each result under its measured scope.
 
 ## Profile only after the ranking poses a question
 
-Do not collect every metric for every backend first. Use the recommendation to form one contrast, such as “radix16 has fewer launches but loses inverse NTT to group8.” Then profile the two candidates with the same input rows and inspect:
+Do not collect every metric for every backend first. Use the recommendation to form one contrast, such as “radix16 has fewer launches but loses inverse NTT to radix2_compact.” Then profile the two candidates with the same input rows and inspect:
 
 1. kernel launch count and duration;
 2. registers and shared memory per launch;

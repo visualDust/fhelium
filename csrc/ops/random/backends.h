@@ -14,6 +14,7 @@ decltype(::fhelium::random::sample_centered_binomial) sample_centered_binomial;
 decltype(::fhelium::random::sample_ternary) sample_ternary;
 decltype(::fhelium::random::add_discrete_gaussian_) add_discrete_gaussian_;
 decltype(::fhelium::random::stochastic_round) stochastic_round;
+decltype(::fhelium::random::expand_seeded_key) expand_seeded_key;
 }  // namespace fhelium::random::cpu
 
 namespace fhelium::random::gpu {
@@ -24,4 +25,5 @@ decltype(::fhelium::random::sample_centered_binomial) sample_centered_binomial;
 decltype(::fhelium::random::sample_ternary) sample_ternary;
 decltype(::fhelium::random::add_discrete_gaussian_) add_discrete_gaussian_;
 decltype(::fhelium::random::stochastic_round) stochastic_round;
+decltype(::fhelium::random::expand_seeded_key) expand_seeded_key;
 }  // namespace fhelium::random::gpu

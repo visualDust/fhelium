@@ -24,7 +24,7 @@ result = compiled(prototype_ciphertext)
 print(compiled.stats()["graphs"])
 ```
 
-This example opts into Graph capture; ordinary `fc.compile` defaults to `graph=False`. The first call prepares the specialization and runs the linked function; the next call attempts capture. The default `copy_output=True` returns owned Graph results. CPU inputs, autograd outputs or capture failures retain prepared execution, with a reason in statistics. Call `compiled.clear()` when finished; it releases Graphs before shared pools. Example 18 exposes this path with `--compile`.
+This example opts into Graph capture; ordinary `fc.compile` defaults to `graph=False`. The first call prepares the specialization and runs the linked function; the next call attempts capture. The default `copy_output=True` returns owned Graph results. CPU inputs, autograd outputs or capture failures retain prepared execution, with a reason in statistics. Call `compiled.clear()` when finished; it releases Graphs before shared pools. Example 19 exposes this path with `--compile`.
 
 Use the following direct `CudaGraphProgram` workflow when the application needs capture timing, replay streams, split input staging or pool ownership controls.
 
@@ -39,7 +39,7 @@ def evaluator(source):
 schedule = evaluator
 ```
 
-Before capture, record output error against a clear-message oracle, output depth and actual scale, polynomial domain, modulus basis, component count, synchronized latency, and peak allocated/reserved memory. `examples/18_runtime_cuda_graph.py` provides a complete matrix-vector evaluator with fixed diagonals and rotation keys.
+Before capture, record output error against a clear-message oracle, output depth and actual scale, polynomial domain, modulus basis, component count, synchronized latency, and peak allocated/reserved memory. `examples/19_runtime_cuda_graph.py` provides a complete matrix-vector evaluator with fixed diagonals and rotation keys.
 
 ## 2. Separate static and dynamic state
 

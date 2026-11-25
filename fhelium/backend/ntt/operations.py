@@ -161,13 +161,12 @@ def prepare_transition(transition: str, policy_name: str, *, in_place: bool):
             output = source.clone() if copy_input else source
             return native(output, even, odd, twiddles, parameters)
     elif isinstance(policy, CompactRadix2Policy):
-        group = policy.grouped_radix2_stage_count
         native = compact_radix2.prepare_transition(transition)
 
         def call(values):
             source, parameters, twiddles = values
             output = source.clone() if copy_input else source
-            return native(output, twiddles, parameters, group)
+            return native(output, twiddles, parameters)
     else:
         native = power_of_two_radix.prepare_transition(transition)
 

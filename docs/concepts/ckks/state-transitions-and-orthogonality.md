@@ -143,7 +143,7 @@ Evaluator state management also includes depth, scale, component count, key rela
 
 | Axis or relation | APIs | Semantics |
 | --- | --- | --- |
-| Depth and scale | `rescale_to_next_depth`, `rescale_to_next_depth_` | Drop one complete leading Q depth group and divide actual scale by that group's product |
+| Depth and scale | `rescale_to_next_depth`, `rescale_to_next_depth_` | Replace the active Q basis by the next depth's basis and divide actual scale by the rescale ratio |
 | Depth only | `mod_switch_to_next_depth`, `mod_switch_to_next_depth_`, `mod_switch_to_depth`, `mod_switch_to_depth_` | Restrict the active Q basis while preserving scale and arithmetic state |
 | Scale metadata | `reinterpret_at_scale`, `reinterpret_at_scale_` | Preserve residues and replace scale metadata under a provided relative-change bound |
 | Component count and arithmetic state | `relinearize` | Convert CT3 `(ntt, montgomery)` to CT2 through key switching; select coefficient/standard or NTT/Montgomery output while preserving depth and scale |

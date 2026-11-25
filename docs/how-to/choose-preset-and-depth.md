@@ -11,40 +11,35 @@ Write the clear-message calculation and define output precision and input magnit
 Preset names have the form
 
 ```text
-slots{capacity}_scale{target}_depth{maximum}_{default_rns_dtype}
+slots{capacity}_scale{target}_depth{maximum}
 ```
 
-For example, `slots32768_scale50_depth27_int64` resolves to a configuration with 32,768 complex slots, default scale $2^{50}$, public depths `0..27`, and primes that select `torch.int64` as the Engine's default RNS dtype.
+For example, `slots16384_scale40_depth16` resolves to a configuration with 16,384 complex slots, terminal default scale $2^{40}$, and public depths `0..16`.
 
-The scale field describes `log2(config.default_scale)`. The depth field is `config.max_depth`; it is already the number of public rescale transitions available from depth zero. The dtype field reports the default native residue format implied by the preset's prime values.
+The scale field describes $\log_2$ of `config.scale_at(config.max_depth)`; the default scales of earlier depths are derived from the rescale ratios and stay within about one bit of it, except that depth zero may hold a larger scale when its first rescale ratio exceeds the target. The depth field is `config.max_depth`; it is already the number of public rescale transitions available from depth zero. Every built-in preset uses primes below $2^{30}$, so the Engine selects `torch.int32` residues.
 
 [Scale, depth, and native RNS dispatch](../concepts/ckks/scale-depth-and-execution-format.md) traces how these quantities interact.
 
 ## Built-in parameter baselines
 
-Every Preset resolves to prime values in `q_depth_groups` and `p_moduli`. The table lists the current complete QP product and built-in security budget.
+Every Preset resolves to prime values in `q_moduli` and `p_moduli` and to the per-depth bases `depth_bases`. The table lists the Q and P row counts, the complete QP product, and the built-in security budget.
 
-| Python member | `logN` | slots | default scale bits | max depth | Q / P rows | QP bits / budget |
+| Python member | `logN` | slots | scale bits | max depth | Q / P rows | QP bits / budget |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Preset.slots8192_scale25_depth14_int32` | 14 | 8,192 | 25 | 14 | 15 / 1 | 404 / 430 |
-| `Preset.slots8192_scale30_depth9_int64` | 14 | 8,192 | 30 | 9 | 10 / 1 | 360 / 430 |
-| `Preset.slots8192_scale40_depth7_int64` | 14 | 8,192 | 40 | 7 | 8 / 1 | 381 / 430 |
-| `Preset.slots8192_scale50_depth5_int64` | 14 | 8,192 | 50 | 5 | 6 / 1 | 361 / 430 |
-| `Preset.slots16384_scale25_depth29_int32` | 15 | 16,384 | 25 | 29 | 30 / 2 | 812 / 868 |
-| `Preset.slots16384_scale30_depth21_int64` | 15 | 16,384 | 30 | 21 | 22 / 2 | 781 / 868 |
-| `Preset.slots16384_scale40_depth16_int64` | 15 | 16,384 | 40 | 16 | 17 / 2 | 800 / 868 |
-| `Preset.slots16384_scale50_depth12_int64` | 15 | 16,384 | 50 | 12 | 13 / 2 | 770 / 868 |
-| `Preset.slots32768_scale25_depth24_int32` | 16 | 32,768 | 25 | 24 | 25 / 4 | 740 / 1,747 |
-| `Preset.slots32768_scale30_depth45_int64` | 16 | 32,768 | 30 | 45 | 46 / 4 | 1,620 / 1,747 |
-| `Preset.slots32768_scale40_depth34_int64` | 16 | 32,768 | 40 | 34 | 35 / 4 | 1,640 / 1,747 |
-| `Preset.slots32768_scale50_depth27_int64` | 16 | 32,768 | 50 | 27 | 28 / 4 | 1,640 / 1,747 |
-| `Preset.slots32768_scale50_depth29_int64` | 16 | 32,768 | 50 | 29 | 30 / 4 | 1,740 / 1,747 |
-| `Preset.slots65536_scale25_depth14_int32` | 17 | 65,536 | 25 | 14 | 15 / 6 | 543 / 3,523 |
-| `Preset.slots65536_scale30_depth95_int64` | 17 | 65,536 | 30 | 95 | 96 / 6 | 3,278 / 3,523 |
-| `Preset.slots65536_scale40_depth72_int64` | 17 | 65,536 | 40 | 72 | 73 / 6 | 3,280 / 3,523 |
-| `Preset.slots65536_scale50_depth58_int64` | 17 | 65,536 | 50 | 58 | 59 / 6 | 3,310 / 3,523 |
+| `Preset.slots8192_scale30_depth9` | 14 | 8,192 | 30 | 9 | 11 / 3 | 410 / 430 |
+| `Preset.slots8192_scale40_depth7` | 14 | 8,192 | 40 | 7 | 12 / 3 | 430 / 430 |
+| `Preset.slots8192_scale50_depth5` | 14 | 8,192 | 50 | 5 | 11 / 3 | 400 / 430 |
+| `Preset.slots16384_scale30_depth22` | 15 | 16,384 | 30 | 22 | 24 / 5 | 860 / 868 |
+| `Preset.slots16384_scale40_depth16` | 15 | 16,384 | 40 | 16 | 24 / 5 | 850 / 868 |
+| `Preset.slots16384_scale50_depth11` | 15 | 16,384 | 50 | 11 | 21 / 5 | 760 / 868 |
+| `Preset.slots32768_scale30_depth46` | 16 | 32,768 | 30 | 46 | 48 / 10 | 1,727 / 1,747 |
+| `Preset.slots32768_scale40_depth34` | 16 | 32,768 | 40 | 34 | 48 / 10 | 1,717 / 1,747 |
+| `Preset.slots32768_scale50_depth27` | 16 | 32,768 | 50 | 27 | 48 / 10 | 1,708 / 1,747 |
+| `Preset.slots65536_scale30_depth100` | 17 | 65,536 | 30 | 100 | 102 / 16 | 3,503 / 3,523 |
+| `Preset.slots65536_scale40_depth75` | 17 | 65,536 | 40 | 75 | 103 / 16 | 3,514 / 3,523 |
+| `Preset.slots65536_scale50_depth55` | 17 | 65,536 | 50 | 55 | 95 / 16 | 3,269 / 3,523 |
 
-Preset recipes are reviewed fixed baselines. `CkksConfig.parse(preset)` resolves a recipe to prime values. To define another parameter set, construct a `CkksConfig` with the desired nested Q groups and P primes.
+Preset recipes are reviewed fixed baselines. `CkksConfig.parse(preset)` resolves a recipe to prime values. To define another parameter set, construct a `CkksConfig` from `q_moduli`, `depth_bases`, `scales`, and `p_moduli`, or build a suffix chain from ordered prime groups with `CkksConfig.suffix_chain`. `CkksConfig.catalog_suffix_chain(logN=..., scale_bits=..., depth=..., p_count=...)` builds a suffix chain with one catalog prime of `scale_bits` bits per depth; primes of 30 or more bits select `torch.int64` residues.
 
 ## 1. Specify the cleartext workload
 
@@ -78,14 +73,14 @@ For each value, annotate:
 operation
 depth before
 actual scale before
-Q group removed, if any
+Q primes dropped and introduced, if any
 depth after
 actual scale after
 ```
 
-Count `rescale_to_next_depth` calls on every execution path. Addition preserves depth. Multiplication preserves depth and multiplies actual scales. One rescale consumes one complete Q depth group.
+Count `rescale_to_next_depth` calls on every execution path. Addition preserves depth. Multiplication preserves depth and multiplies actual scales. One rescale moves from the basis of depth $d$ to the basis of depth $d+1$ and divides the actual scale by the rescale ratio $\rho_d$.
 
-Verify that the largest depth reached is at most `config.max_depth`. Use `config.rescale_divisor(depth)` to calculate each scale transition rather than assuming a prime width from the Preset name.
+Verify that the largest depth reached is at most `config.max_depth`. Use `config.transition_ratio(depth, depth + 1)` or `engine.rescale_output_scale(input_scale=..., depth=...)` to calculate each scale transition, and `config.scale_at(depth)` for the default scale of each depth, rather than assuming a prime width from the Preset name.
 
 ## 4. Check precision and range
 
@@ -108,8 +103,8 @@ At each important depth, record the active Q-row count and value size. Evaluatio
 Store or report:
 
 - Preset, when one was used;
-- `CkksConfig.dumps()` output or its Q-group and P-prime values;
-- default and actual scales;
+- `CkksConfig.dumps()` output or its Q primes, depth bases, scales, and P primes;
+- default scales of the depths used and actual scales;
 - `max_depth` and checkpoint depths;
 - active `prime_ids` at a failure;
 - Engine RNS dtype and target device;

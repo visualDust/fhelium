@@ -170,7 +170,7 @@ Select the window that satisfies the memory cap with acceptable transfer and lat
 
 ## Verify the outcome
 
-Run several tiles with changing data, compare decoded outputs with the all-resident reference, and report peak manager charges and process memory separately. `examples/17_runtime_double_buffer.py`, `examples/19_residency_manual.py`, and `examples/20_residency_automatic.py` provide the three concrete execution patterns.
+Run several tiles with changing data, compare decoded outputs with the all-resident reference, and report peak manager charges and process memory separately. `examples/18_runtime_double_buffer.py`, `examples/20_residency_manual.py`, and `examples/21_residency_automatic.py` provide the three concrete execution patterns.
 
 ## Related documentation
 

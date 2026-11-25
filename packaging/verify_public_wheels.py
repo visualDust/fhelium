@@ -185,7 +185,7 @@ if {configuration.has_gpu!r}:
     assert get_cuda_device_properties()
     from fhelium.eager import Engine
     from fhelium import compile as fc
-    engine = Engine(fhelium.Preset.slots8192_scale40_depth7_int64, rng_seed=24, rng_nonce=7)
+    engine = Engine(fhelium.Preset.slots8192_scale40_depth7, rng_seed=24, rng_nonce=7)
     secret = engine.create_secret_key(device="cuda:0")
     public = engine.create_public_key(secret)
     message = torch.linspace(-0.02, 0.03, engine.num_slots, dtype=torch.float64, device="cuda:0")

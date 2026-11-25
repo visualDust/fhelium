@@ -23,7 +23,7 @@ Both sequence methods accept `use_hoisting`. `True` forms one scheduled group fr
 
 ```bash
 python examples/06_eager_rotation_hoisting.py \
-  --preset slots32768-scale40-depth34-int64 \
+  --preset slots32768-scale40-depth34 \
   --counts 4,8,16 \
   --warmup 5 \
   --runs 20
@@ -33,7 +33,7 @@ Start with fewer runs when checking a new environment:
 
 ```bash
 python examples/06_eager_rotation_hoisting.py \
-  --preset slots8192-scale40-depth7-int64 \
+  --preset slots8192-scale40-depth7 \
   --counts 2,4 \
   --warmup 1 \
   --runs 3

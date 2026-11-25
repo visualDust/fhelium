@@ -308,6 +308,7 @@ def analyze_state_flow(
                 source = states[operation.value]
                 depth, rows = source.field("depth"), source.field("prime_ids")
                 drop = operation.attributes.get("joint_drop_prime_ids")
+                target = operation.attributes.get("joint_target_prime_ids")
                 updates.update(
                     depth=StateFact.known(int(depth.value) + 1)
                     if depth.status == "known" and isinstance(depth.value, int)
@@ -316,6 +317,10 @@ def analyze_state_flow(
                     shape=_DYNAMIC,
                     strides=_DYNAMIC,
                     prime_ids=StateFact.known(
+                        tuple(int(x.value.data) for x in target)
+                    )
+                    if isinstance(target, ArrayAttr)
+                    else StateFact.known(
                         tuple(
                             i
                             for i in rows.value

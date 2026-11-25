@@ -8,7 +8,7 @@ This example accumulates three-component products before relinearization and reu
 
 ```bash
 python examples/05_eager_ntt_reuse.py \
-  --preset slots8192-scale40-depth7-int64 \
+  --preset slots8192-scale40-depth7 \
   --pair-count 3
 ```
 

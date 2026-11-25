@@ -13,7 +13,7 @@ def test_rotations_with_distinct_steps_call_one_body():
     if not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
     device = "cuda:0"
-    engine = Engine(Preset.slots8192_scale40_depth7_int64, rng_seed=211)
+    engine = Engine(Preset.slots8192_scale40_depth7, rng_seed=211)
     secret = engine.create_secret_key(device=device)
     public = engine.create_public_key(secret, device=device)
     keys = [

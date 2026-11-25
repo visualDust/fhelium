@@ -33,7 +33,7 @@ import fhelium as fh
 import torch
 from fhelium.eager import Engine
 
-config = fh.CkksConfig.parse(fh.Preset.slots8192_scale40_depth7_int64)
+config = fh.CkksConfig.parse(fh.Preset.slots8192_scale40_depth7)
 engine = Engine(config)
 
 torch.set_default_device("cuda:0")

@@ -109,7 +109,7 @@ The output inserts the group axis as the first batch axis, preserves depth and r
 
 `sum_rotated_plaintext_product_groups` first forms the caller's direct rotation group, retaining NTT/Montgomery outputs, then applies the same grouped plaintext matrix. A `None` key denotes the unrotated term. The compressed path reuses those rotated terms across groups and keeps compact plaintext storage throughout.
 
-Capture expands the grouped APIs into visible multiplication, addition, rotation, and batch-composition operations. The ordinary Compile passes can then select compatible fusion and reuse. These APIs execute the supplied grouping; the caller or a linear-transform pass supplies matrix layout and rotation membership. `experimental/bootstrap/linear/evaluators.py` is one consumer of the grouped interfaces.
+Capture expands the grouped APIs into visible multiplication, addition, rotation, and batch-composition operations. The ordinary Compile passes can then select compatible fusion and reuse. These APIs execute the supplied grouping; the caller or a linear-transform pass supplies matrix layout and rotation membership. `fhelium/algorithms/linear/_evaluators.py` is one consumer of the grouped interfaces.
 
 ## Source and related mechanisms
 

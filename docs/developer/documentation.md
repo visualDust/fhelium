@@ -78,7 +78,7 @@ Keep diagrams focused on one question and provide equivalent meaning in nearby p
 
 ## Mathematical and operation documentation
 
-Use the symbols, value-state coordinates, tensor-axis names, and term distinctions defined in [Terminology and mathematical model](../concepts/terminology-and-mathematical-model.md). Use ASCII code identifiers such as `default_scale`, `prime_ids`, and `polynomial_domain` in code spans. In Python docstrings containing LaTeX backslashes, use a raw docstring where needed to avoid invalid escape sequences. Write mathematical symbols in docstrings and implementation comments with LaTeX rather than raw UTF-8 mathematical glyphs.
+Use the symbols, value-state coordinates, tensor-axis names, and term distinctions defined in [Terminology and mathematical model](../concepts/terminology-and-mathematical-model.md). Use ASCII code identifiers such as `depth_bases`, `prime_ids`, and `polynomial_domain` in code spans. In Python docstrings containing LaTeX backslashes, use a raw docstring where needed to avoid invalid escape sequences. Write mathematical symbols in docstrings and implementation comments with LaTeX rather than raw UTF-8 mathematical glyphs.
 
 An arithmetic-operation docstring states:
 

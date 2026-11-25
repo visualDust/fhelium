@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from fractions import Fraction
+
 import pytest
 import torch
 
@@ -18,7 +20,7 @@ def _assert_congruent(
     depth: int,
 ) -> None:
     moduli = torch.tensor(
-        engine.config.q_moduli[depth:],
+        engine.config.active_q_moduli(depth),
         dtype=lhs.dtype,
         device=lhs.device,
     ).view(*([1] * (lhs.ndim - 2)), -1, 1)
@@ -34,7 +36,7 @@ def test_ntt_domain_ckks_operations_match_coefficient_results(
     torch.manual_seed(20260905)
     with torch.device(device):
         engine = Engine(
-            Preset.slots8192_scale40_depth7_int64,
+            Preset.slots8192_scale40_depth7,
             allow_automatic_key_generation=False,
         )
         secret = engine.create_secret_key()
@@ -153,8 +155,8 @@ def test_ntt_domain_ckks_operations_match_coefficient_results(
 @pytest.mark.parametrize(
     "preset",
     [
-        Preset.slots8192_scale40_depth7_int64,
-        Preset.slots8192_scale25_depth14_int32,
+        Preset.slots8192_scale40_depth7,
+        Preset.slots8192_scale30_depth9,
     ],
 )
 def test_plaintext_product_sum_matches_individual_operations(
@@ -184,7 +186,7 @@ def test_plaintext_product_sum_matches_individual_operations(
                 engine.encode(
                     torch.full_like(message, (index + 1) / 7),
                     depth=source.depth,
-                    scale=engine.config.default_scale,
+                    scale=engine.config.scale_at(source.depth),
                 )
             )
             for index in range(4)
@@ -275,16 +277,17 @@ def test_plaintext_product_sum_matches_individual_operations(
 def test_group_rescale_matches_integer_quotients(device: str) -> None:
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    base = CkksConfig.parse(Preset.slots8192_scale25_depth14_int32)
+    base = CkksConfig.parse(Preset.slots8192_scale30_depth9)
     q = base.q_moduli[:6]
-    config = CkksConfig(
-        default_scale=2.0**50,
+    config = CkksConfig.suffix_chain(
+        scale=2.0**50,
         q_depth_groups=(q[:2], q[2:3], q[3:]),
         p_moduli=base.p_moduli,
         logN=13,
+        enforce_security_budget=False,
     )
     engine = Engine(config)
-    divisor = config.rescale_divisor(0)
+    divisor = int(config.rescale_divisor(0))
     x = (
         torch.arange(config.N, dtype=torch.int64, device=device) - config.N // 2
     ) * 2**40
@@ -326,3 +329,69 @@ def test_group_rescale_matches_integer_quotients(device: str) -> None:
                 assert torch.equal(coefficient_result.data, expected)
                 assert result.depth == 1
                 assert result.scale == source.scale / divisor
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+def test_rational_rescale_matches_integer_quotients(device: str) -> None:
+    r"""Check $\lfloor(xR+H)/D\rfloor$ for a transition that restores a prime."""
+
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    base = CkksConfig.parse(Preset.slots8192_scale30_depth9)
+    q = base.q_moduli[:4]
+    config = CkksConfig(
+        q_moduli=q,
+        q_bases=((0, 1, 2, 3), (0, 1, 2), (1, 2, 3)),
+        scales=(2.0**30,) * 3,
+        p_moduli=base.p_moduli[:1],
+        logN=8,
+        enforce_security_budget=False,
+    )
+    engine = Engine(config)
+    source_moduli, target_moduli = q[:3], q[1:]
+    modulus, dropped, restored = q[0] * q[1] * q[2], q[0], q[3]
+    generator = torch.Generator().manual_seed(17)
+    words = torch.randint(
+        0, 1 << 30, (2, config.N, 4), generator=generator
+    ).tolist()
+    coefficients = [
+        [
+            (w[0] | w[1] << 30 | w[2] << 60 | w[3] << 90) % modulus
+            - modulus // 2
+            for w in component
+        ]
+        for component in words
+    ]
+
+    def residues(values, moduli):
+        return torch.tensor(
+            [[[x % m for x in row] for m in moduli] for row in values],
+            dtype=engine.dtype,
+            device=device,
+        )
+
+    source = Ciphertext(
+        data=residues(coefficients, source_moduli),
+        depth=1,
+        scale=2.0**60,
+        prime_ids=(0, 1, 2),
+    )
+    assert config.transition_ratio(1, 2) == Fraction(dropped, restored)
+    for rounding, offset in (("floor", 0), ("nearest", (dropped - 1) // 2)):
+        expected = residues(
+            [
+                [(x * restored + offset) // dropped for x in row]
+                for row in coefficients
+            ],
+            target_moduli,
+        )
+        for value in (source, engine.coefficient_domain_to_ntt_domain(source)):
+            result = engine.rescale_to_next_depth(value, rounding=rounding)
+            assert result.depth == 2
+            assert result.prime_ids == (1, 2, 3)
+            assert result.scale == engine.rescale_output_scale(
+                source.scale, depth=1
+            )
+            if result.polynomial_domain == "ntt":
+                result = engine.ntt_domain_to_coefficient_domain(result)
+            assert torch.equal(result.data, expected)

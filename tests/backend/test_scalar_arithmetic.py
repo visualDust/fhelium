@@ -24,7 +24,7 @@ class _ScalarFixture:
 @pytest.fixture(scope="module")
 def scalar_fixture() -> _ScalarFixture:
     engine = Engine(
-        Preset.slots8192_scale40_depth7_int64,
+        Preset.slots8192_scale40_depth7,
         rng_seed=611,
         rng_nonce=29,
     )
@@ -58,7 +58,7 @@ def _decode(fixture: _ScalarFixture, value: Ciphertext) -> torch.Tensor:
 
 def test_scalar_arithmetic_supports_int32_residues() -> None:
     engine = Engine(
-        Preset.slots8192_scale25_depth14_int32,
+        Preset.slots8192_scale30_depth9,
         rng_seed=431,
     )
     secret_key = engine.create_secret_key()
@@ -75,7 +75,7 @@ def test_scalar_arithmetic_supports_int32_residues() -> None:
 
     decoded_source = decode(source)
     added = engine.add_scalar(source, -0.125)
-    real_product = engine.multiply_scalar(source, -0.75)
+    real_product = engine.multiply_constant(source, -0.75, rescale=False)
     integer_product = engine.multiply_integer_scalar(source, -7)
     assert added.data.dtype == torch.int32
     assert real_product.data.dtype == torch.int32
@@ -140,7 +140,7 @@ def test_add_scalar_uses_the_caller_selected_scale(
     )
 
 
-def test_multiply_scalar_records_product_scale_without_rescaling(
+def test_multiply_constant_without_rescale_records_product_scale(
     scalar_fixture: _ScalarFixture,
 ) -> None:
     fixture = scalar_fixture
@@ -148,7 +148,7 @@ def test_multiply_scalar_records_product_scale_without_rescaling(
     scalar = -0.75
     scalar_scale = source.scale
 
-    result = fixture.engine.multiply_scalar(source, scalar)
+    result = fixture.engine.multiply_constant(source, scalar, rescale=False)
 
     assert result.scale == source.scale * scalar_scale
     assert result.depth == source.depth
@@ -160,10 +160,11 @@ def test_multiply_scalar_records_product_scale_without_rescaling(
         rtol=0.0,
     )
 
-    dropped_prime = fixture.engine.config.moduli[source.prime_ids[0]]
     rescaled = fixture.engine.rescale_to_next_depth(result)
     assert rescaled.depth == source.depth + 1
-    assert rescaled.scale == result.scale / dropped_prime
+    assert rescaled.scale == result.scale / float(
+        fixture.engine.rescale_divisor(depth=source.depth)
+    )
     torch.testing.assert_close(
         _decode(fixture, rescaled),
         fixture.decoded_input * scalar,
@@ -232,7 +233,7 @@ def test_scalar_multiplication_preserves_ntt_montgomery_representation(
         fixture.engine.add_scalar(source_ntt, 0.25)
 
     integer = fixture.engine.multiply_integer_scalar(source_ntt, -3)
-    real = fixture.engine.multiply_scalar(source_ntt, 0.5)
+    real = fixture.engine.multiply_constant(source_ntt, 0.5, rescale=False)
     assert integer.polynomial_domain == "ntt"
     assert integer.residue_representation == "montgomery"
     assert integer.scale == source_ntt.scale
@@ -253,6 +254,27 @@ def test_scalar_multiplication_preserves_ntt_montgomery_representation(
     torch.testing.assert_close(
         _decode(fixture, real_coefficients),
         fixture.decoded_input * 0.5,
+        atol=2e-6,
+        rtol=0.0,
+    )
+
+
+def test_multiply_constant_rescales_complex_constant_to_target_scale(
+    scalar_fixture: _ScalarFixture,
+) -> None:
+    fixture = scalar_fixture
+    engine, source = fixture.engine, fixture.ciphertext
+    constant = complex(0.5, -0.25)
+    result = engine.multiply_constant(source, constant)
+    assert result.depth == source.depth + 1
+    assert result.scale == engine.config.scale_at(source.depth + 1)
+    assert result.polynomial_domain == source.polynomial_domain
+    rotated = engine.multiply_by_monomial(result, engine.config.N)
+    assert (rotated.depth, rotated.scale) == (result.depth, result.scale)
+    decoded = engine.decode(engine.decrypt(rotated, fixture.secret_key))
+    torch.testing.assert_close(
+        decoded,
+        fixture.decoded_input.to(torch.complex128) * -constant,
         atol=2e-6,
         rtol=0.0,
     )

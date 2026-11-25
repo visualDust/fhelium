@@ -3,7 +3,7 @@
 """Plan and track actual per-value CKKS scales across two plaintext products.
 
 Run:
-    python examples/04_eager_scale_management.py --preset slots8192-scale40-depth7-int64
+    python examples/04_eager_scale_management.py --preset slots8192-scale40-depth7
 """
 
 from __future__ import annotations
@@ -40,8 +40,8 @@ def multiply_twice_then_rescale_to_next_depth(
     $$
     \Delta(c_1)=\Delta(c_0)\Delta(p_1),\qquad
     \Delta(c_2)=\Delta(c_1)\Delta(p_2),\qquad
-    \Delta(c_3)=\frac{\Delta(c_2)}{M_{\mathrm{drop}}},
-    \qquad M_{\mathrm{drop}}=\prod_{q\in G_d}q.
+    \Delta(c_3)=\frac{\Delta(c_2)}{\rho_d},
+    \qquad \rho_d=\frac{\prod_{q\in D_d}q}{\prod_{q\in R_d}q}.
     $$
 
     Decoded slots satisfy $m_3\mathrel{\approx}m_0m_1m_2$ up to CKKS
@@ -110,11 +110,11 @@ def main() -> None:
     """Run the scale-planning and guarded-reinterpretation example."""
 
     parser = argparse.ArgumentParser(description=__doc__)
-    add_engine_args(parser, default_preset="slots8192-scale40-depth7-int64")
+    add_engine_args(parser, default_preset="slots8192-scale40-depth7")
     parser.add_argument(
         "--reinterpret-bound",
         type=float,
-        default=1e-2,
+        default=5e-2,
         help=(
             "Maximum symmetric relative scale change accepted by the guarded "
             "reinterpretation."
@@ -124,22 +124,28 @@ def main() -> None:
 
     engine = make_engine(args)
     slots = engine.num_slots
-    default_scale = engine.config.default_scale
-
     message = 0.01 * torch.sin(torch.arange(slots, dtype=torch.float64) * 0.013)
     first_message = torch.linspace(0.8, 1.2, slots, dtype=torch.float64)
     second_message = torch.linspace(1.1, 0.9, slots, dtype=torch.float64)
     expected_product = message * first_message * second_message
 
-    source = engine.encrypt_message(message, scale=default_scale)
-    dropped_divisor = engine.rescale_divisor(depth=source.depth)
+    source = engine.encrypt_message(message)
+    rescale_ratio = engine.rescale_divisor(depth=source.depth)
 
-    # The first factor receives a precision allocation. The second
-    # scale completes the product required to reach default_scale after
-    # division by the actual leading Q-group product.
-    default_scale_bits = math.floor(math.log2(default_scale))
-    first_scale = float(1 << (default_scale_bits // 2))
-    second_scale = default_scale * dropped_divisor / (source.scale * first_scale)
+    # Depth alignment is independent of scale alignment. The planned branch
+    # targets the scale of the source after a depth-only modulus switch, so
+    # the two branches become directly add-compatible.
+    depth_aligned_source = engine.mod_switch_to_depth(source, source.depth + 1)
+    target_scale = depth_aligned_source.scale
+
+    # The first factor receives a precision allocation. The second scale
+    # completes the product required to reach the target scale after division
+    # by the rescale ratio rho_0 = D/R.
+    target_scale_bits = math.floor(math.log2(target_scale))
+    first_scale = float(1 << (target_scale_bits // 2))
+    second_scale = target_scale * float(rescale_ratio) / (
+        source.scale * first_scale
+    )
     planned_first, planned_pre, planned = (
         multiply_twice_then_rescale_to_next_depth(
             engine,
@@ -154,18 +160,16 @@ def main() -> None:
         planned_pre.scale,
         depth=planned_pre.depth,
     )
-    assert planned.scale == predicted_scale == default_scale
-
-    # Depth alignment is independent of scale alignment. Because the planned
-    # branch reaches default_scale exactly, a depth-only modulus switch makes
-    # the original branch directly add-compatible.
-    depth_aligned_source = engine.mod_switch_to_depth(source, planned.depth)
+    assert planned.scale == predicted_scale == target_scale
     planned_sum = engine.add(planned, depth_aligned_source)
 
-    # The comparison allocation uses a plaintext-scale product of Delta.
-    # Rescale records Delta^2 divided by the leading Q-group product, so the
-    # result does not meet the matching-scale precondition for addition.
-    approximate_second_scale = default_scale / first_scale
+    # The comparison allocation replaces rho_0 by the nearest power of two.
+    # Rescale divides by the actual rho_0, so the result does not meet the
+    # matching-scale precondition for addition.
+    nominal_ratio = 2.0 ** round(math.log2(rescale_ratio))
+    approximate_second_scale = target_scale * nominal_ratio / (
+        source.scale * first_scale
+    )
     approximate_first, approximate_pre, approximate = (
         multiply_twice_then_rescale_to_next_depth(
             engine,
@@ -178,19 +182,19 @@ def main() -> None:
     )
     scale_difference = approximate.scale / depth_aligned_source.scale - 1.0
 
-    # Guarded reinterpretation records the configured target scale while
-    # preserving residues. The bound limits the accepted message bias.
+    # Guarded reinterpretation records the target scale while preserving
+    # residues. The bound limits the accepted message bias.
     reinterpreted = engine.reinterpret_at_scale(
         approximate,
-        default_scale,
+        target_scale,
         max_relative_change=args.reinterpret_bound,
     )
     reinterpreted_sum = engine.add(reinterpreted, depth_aligned_source)
     sync_if_cuda(torch.get_default_device())
 
     print(engine)
-    print(f"default scale Delta: {default_scale:.17g}")
-    print(f"depth-0 rescale divisor: {dropped_divisor}")
+    print(f"target scale at depth {planned.depth}: {target_scale:.17g}")
+    print(f"depth-{source.depth} rescale ratio log2: {math.log2(rescale_ratio):.6f}")
     print(
         f"allocated plaintext scales: p1={first_scale:.17g}, p2={second_scale:.17g}"
     )
@@ -203,8 +207,8 @@ def main() -> None:
             scale_row("planned before rescale", planned_pre),
             scale_row("planned after rescale", planned),
             scale_row("depth-only switched source", depth_aligned_source),
-            scale_row("Delta-product before rescale", approximate_pre),
-            scale_row("actual Delta^2/M0 result", approximate),
+            scale_row("power-of-two product before rescale", approximate_pre),
+            scale_row("power-of-two product result", approximate),
             scale_row("explicitly reinterpreted", reinterpreted),
         ],
     )
@@ -221,7 +225,7 @@ def main() -> None:
         [
             error_row("planned product", engine, planned, expected_product),
             error_row(
-                "actual-scale Delta-product",
+                "power-of-two product",
                 engine,
                 approximate,
                 expected_product,

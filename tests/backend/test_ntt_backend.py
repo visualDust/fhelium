@@ -23,23 +23,19 @@ from fhelium.eager import Engine
 from fhelium.native.wrapper import ntt_diagnostic_ops, ntt_ops, rns_ops
 
 INDEXED_BACKEND = "radix2_indexed"
-RADIX2_PRODUCTION_BACKENDS = (
-    "radix2_compact_group4_smem8",
-    "radix2_compact_group8_smem8",
-    "radix2_compact_group16_smem8",
-)
+RADIX2_PRODUCTION_BACKENDS = ("radix2_compact", "radix2_compact_shoup32")
 FIXED_RADIX_CASES = (
-    (Preset.slots8192_scale40_depth7_int64, "radix4_compact"),
-    (Preset.slots16384_scale40_depth16_int64, "radix8_compact"),
-    (Preset.slots32768_scale40_depth34_int64, "radix16_compact"),
+    (Preset.slots8192_scale40_depth7, "radix4_compact"),
+    (Preset.slots16384_scale40_depth16, "radix8_compact"),
+    (Preset.slots32768_scale40_depth34, "radix16_compact"),
 )
 EXACT_BACKEND_CASES = (
     (
-        Preset.slots8192_scale40_depth7_int64,
+        Preset.slots8192_scale40_depth7,
         (*RADIX2_PRODUCTION_BACKENDS, "radix4_compact"),
     ),
-    (Preset.slots16384_scale40_depth16_int64, ("radix8_compact",)),
-    (Preset.slots32768_scale40_depth34_int64, ("radix16_compact",)),
+    (Preset.slots16384_scale40_depth16, ("radix8_compact",)),
+    (Preset.slots32768_scale40_depth34, ("radix16_compact",)),
 )
 
 
@@ -95,7 +91,7 @@ def _cpu_indexed_runtime(
         forward_indices=forward_indices, inverse_indices=inverse_indices
     )
     parameters = rns_ops.parameter_table(
-        list(config.moduli), config.logN, config.default_scale, dtype
+        list(config.moduli), config.logN, config.scale_at(0), dtype
     )
 
     def to_montgomery(table: torch.Tensor) -> torch.Tensor:
@@ -122,8 +118,8 @@ def _cpu_indexed_runtime(
 @pytest.mark.parametrize(
     "preset",
     [
-        Preset.slots8192_scale25_depth14_int32,
-        Preset.slots8192_scale30_depth9_int64,
+        Preset.slots8192_scale30_depth9,
+        Preset.slots8192_scale30_depth9,
     ],
 )
 def test_cpu_indexed_ntt_uses_the_same_exact_schema_and_representation(
@@ -264,7 +260,7 @@ def test_indexed_ntt_preparation_rejects_invalid_schedules_and_execution_checks_
     None
 ):
     config, tables, parameters = _cpu_indexed_runtime(
-        Preset.slots8192_scale25_depth14_int32
+        Preset.slots8192_scale30_depth9
     )
     dtype = RnsExecutionFormat.select(config.moduli).dtype
     plan, forward_twiddles, _ = tables
@@ -477,7 +473,7 @@ def test_production_backend_families_match_reference_exactly(
 @pytest.mark.parametrize(
     ("backend", "family"),
     [
-        ("radix2_compact_group8_smem8", "compact_radix2"),
+        ("radix2_compact", "compact_radix2"),
         ("radix4_compact", "fixed_radix"),
     ],
 )
@@ -486,7 +482,7 @@ def test_native_ntt_schema_families_reject_invalid_twiddle_shapes(
     family: str,
 ) -> None:
     _require_cuda()
-    engine = _cuda_runtime(Preset.slots8192_scale40_depth7_int64, backend)
+    engine = _cuda_runtime(Preset.slots8192_scale40_depth7, backend)
     tables = engine.ntt.ntt_tables
     operand = _standard_rows(engine)
     engine.rns.to_montgomery_(operand, include_p=True)
@@ -494,11 +490,10 @@ def test_native_ntt_schema_families_reject_invalid_twiddle_shapes(
     if family == "compact_radix2":
         assert isinstance(tables, CompactRadix2Tables)
         with pytest.raises(RuntimeError, match="Compact twiddles"):
-            ntt_ops.forward_ntt_montgomery_compact_grouped_smem_(
+            ntt_ops.forward_ntt_montgomery_compact_(
                 operand,
                 tables.forward_twiddles[:, :-1],
                 engine.rns.rns_parameter_tensor,
-                3,
             )
     else:
         assert isinstance(tables, CompactPowerOfTwoRadixTables)
@@ -516,17 +511,17 @@ def test_native_ntt_schema_families_reject_invalid_twiddle_shapes(
     ("preset", "backend", "shared_memory_limits"),
     [
         (
-            Preset.slots8192_scale40_depth7_int64,
+            Preset.slots8192_scale40_depth7,
             "radix4_compact",
             (1, 2, 4, 6, 8),
         ),
         (
-            Preset.slots16384_scale40_depth16_int64,
+            Preset.slots16384_scale40_depth16,
             "radix8_compact",
             (2, 3, 5, 6, 8),
         ),
         (
-            Preset.slots32768_scale40_depth34_int64,
+            Preset.slots32768_scale40_depth34,
             "radix16_compact",
             (3, 4, 7, 8),
         ),

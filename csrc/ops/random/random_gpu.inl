@@ -68,6 +68,33 @@ __global__ void keystream_kernel(const int64_t* seed,
   }
 }
 
+// One thread per (digit, row, eight-coefficient call) of a seeded key.
+template <int Rounds, typename scalar_t>
+__global__ void __launch_bounds__(kThreads)
+    seeded_key_kernel(const int64_t* seed_rows,
+                      const scalar_t* moduli,
+                      int64_t stride,
+                      int64_t rows,
+                      int64_t calls,
+                      scalar_t* out) {
+  namespace core = ::fhelium::random::detail;
+  constexpr int kCall = core::kSeededKeyCoefficientsPerCall;
+  const int64_t call = static_cast<int64_t>(blockIdx.x) * kThreads + threadIdx.x;
+  if (call >= calls) {
+    return;
+  }
+  const int64_t row = blockIdx.y;
+  const int64_t digit = blockIdx.z;
+  const auto q = static_cast<uint64_t>(moduli[row * stride]);
+  std::make_unsigned_t<scalar_t> values[kCall];
+  core::seeded_key_residues<Rounds>(
+      seed_rows + digit * core::kSeededKeyRowWords, row, call * kCall, q, values);
+  scalar_t* target = out + ((digit * rows + row) * calls + call) * kCall;
+  for (int j = 0; j < kCall; ++j) {
+    target[j] = static_cast<scalar_t>(values[j]);
+  }
+}
+
 inline unsigned grid_for(int64_t blocks) {
   return static_cast<unsigned>((blocks + kThreads - 1) / kThreads);
 }
@@ -121,6 +148,32 @@ void keystream_into(const at::Tensor& seed,
                          0,
                          FHELIUM_RANDOM_GPU_STREAM(seed.device().index())>>>(
           seed.const_data_ptr<int64_t>(), first_block, block_count, out);
+  FHELIUM_RANDOM_GPU_CHECK_LAUNCH();
+}
+
+template <int Rounds, typename scalar_t>
+void seeded_key_into(const int64_t* seed_rows,
+                     int64_t digits,
+                     const scalar_t* moduli,
+                     int64_t stride,
+                     int64_t rows,
+                     int64_t ring_dimension,
+                     scalar_t* out,
+                     const at::Tensor& like) {
+  TORCH_CHECK(like.is_cuda(), "GPU seeded-key expansion requires GPU seed rows");
+  if (digits == 0 || rows == 0) {
+    return;
+  }
+  const int64_t calls =
+      ring_dimension / ::fhelium::random::detail::kSeededKeyCoefficientsPerCall;
+  const c10::DeviceGuard guard(like.device());
+  const dim3 grid(detail_gpu::grid_for(calls),
+                  static_cast<unsigned>(rows),
+                  static_cast<unsigned>(digits));
+  detail_gpu::seeded_key_kernel<Rounds, scalar_t>
+      <<<grid, detail_gpu::kThreads, 0,
+         FHELIUM_RANDOM_GPU_STREAM(like.device().index())>>>(
+          seed_rows, moduli, stride, rows, calls, out);
   FHELIUM_RANDOM_GPU_CHECK_LAUNCH();
 }
 

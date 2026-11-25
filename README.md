@@ -1,4 +1,4 @@
-# FHElium: FHE, built from the tensor up
+<p align="center"><img src="https://fhelium.550w.host/brand/fhelium-readme-banner.svg" alt="FHElium: tensor-native CKKS for inspectable encrypted execution" width="100%"></p>
 
 > Pronounced **“philium”** /ˈfɪliəm/ or **“F-helium”** /ˌɛf ˈhiːliəm/.
 
@@ -10,23 +10,7 @@ FHElium is a full-stack CKKS framework for Python and PyTorch. It provides nativ
 
 ## Install
 
-FHElium supports CPython 3.12 and 3.13 on Linux x86-64, Windows x86-64, and macOS Apple Silicon. It builds against the PyTorch installation selected by the user. CUDA builds require a compatible CUDA toolkit and a compiler supporting the selected PyTorch build's C++ standard (C++17 or C++20); macOS uses the CPU implementation rather than PyTorch MPS.
-
-Use the [installation selector](https://fhelium.550w.host/#install-fhelium) to choose the operating system, Python version, PyTorch version, and CPU or CUDA configuration. The selector provides a prebuilt-wheel command when a wheel for that combination is published and a source-build command otherwise.
-
-For a source installation, install the intended PyTorch package first, then build FHElium in the same environment:
-
-```bash
-python -m pip install "scikit-build-core==1.0.3" "cmake>=3.18" ninja
-python -m pip install \
-  --no-binary=fhelium \
-  --no-build-isolation --no-cache-dir --verbose \
-  fhelium
-```
-
-`--no-build-isolation` keeps the selected Torch build available to CMake, and `--no-cache-dir` prevents reuse of a wheel compiled for another Torch or CUDA environment. Set `CMAKE_ARGS="-DFHELIUM_NATIVE_BACKENDS=CPU"` for a CPU-only build, `CUDA` for CUDA-only, or `CPU+CUDA` for both implementations. Experimental AMD ROCm support is available through Linux source builds using `HIP` or `CPU+HIP` with the selected ROCm PyTorch and HIP toolkit; AMD GPU Tensors retain PyTorch's `cuda` device type.
-
-See the [installation guide](https://fhelium.550w.host/tutorial/installation) for compiler requirements, CUDA architecture selection, and troubleshooting.
+FHElium supports CPython 3.12 and 3.13 on Linux x86-64, Windows x86-64, and macOS Apple Silicon, and builds against the PyTorch installation in the active environment. Use the [installation selector](https://fhelium.550w.host/#install-fhelium) to obtain the command for a given platform, Python, PyTorch, and CPU or CUDA configuration. The [installation guide](https://fhelium.550w.host/tutorial/installation) covers source builds, native backend selection, AMD ROCm, and troubleshooting.
 
 ## Programming models
 
@@ -46,7 +30,7 @@ from fhelium.eager import Engine
 
 # Change this to "cuda:0" to create inputs and keys on CUDA.
 torch.set_default_device("cpu")
-engine = Engine(fh.Preset.slots8192_scale40_depth7_int64)
+engine = Engine(fh.Preset.slots8192_scale40_depth7)
 
 x = torch.linspace(-0.05, 0.05, 32, dtype=torch.float64)
 y = torch.linspace(0.02, -0.02, 32, dtype=torch.float64)
@@ -107,13 +91,13 @@ print(compiled.program.to_text())
 print(compiled.reports)
 ```
 
-A caller can continue from the same `Compilation` with CKKS state assignment, transition placement, CKKS-to-RNS/NTT lowering, key analysis, Backend linking, or custom passes. See [`examples/12_compile_pipeline.py`](./examples/12_compile_pipeline.py) for an encrypted end-to-end execution and [`examples/14_compile_custom_pass.py`](./examples/14_compile_custom_pass.py) for a caller-defined BSGS transformation.
+A caller can continue from the same `Compilation` with CKKS state assignment, transition placement, CKKS-to-RNS/NTT lowering, key analysis, Backend linking, or custom passes. See [`examples/13_compile_pipeline.py`](./examples/13_compile_pipeline.py) for an encrypted end-to-end execution and [`examples/15_compile_custom_pass.py`](./examples/15_compile_custom_pass.py) for a caller-defined BSGS transformation.
 
-`fh_compile.compile` also provides a bare function decorator that captures Tensor materials and uses the `default_lower_and_fuse_pipeline` recipe when no pipeline is supplied. Backend and pipeline overrides expose finer control over the same compilation stages as the manual path. See [`examples/11_compile_jit.py`](./examples/11_compile_jit.py) for prepared execution and component/NTT fusion.
+`fh_compile.compile` also provides a bare function decorator that captures Tensor materials and uses the `default_lower_and_fuse_pipeline` recipe when no pipeline is supplied. Backend and pipeline overrides expose finer control over the same compilation stages as the manual path. See [`examples/12_compile_jit.py`](./examples/12_compile_jit.py) for prepared execution and component/NTT fusion.
 
 ## Runtime and distributed execution
 
-`fhelium.runtime` provides device observations, reusable value buffers, and CUDA Graph execution. `fhelium.residency` manages live value placement and lifetime accounting. `fhelium.distributed` provides rank-local value transport and CKKS-aware collectives. Bootstrapping and multiparty CKKS interfaces are available under `fhelium.experimental`.
+`fhelium.runtime` provides device observations, reusable value buffers, and CUDA Graph execution. `fhelium.residency` manages live value placement and lifetime accounting. `fhelium.distributed` provides rank-local value transport and CKKS-aware collectives. `fhelium.algorithms` provides polynomial evaluation and linear transforms, and `fhelium.bootstrap` composes CKKS bootstrapping from them; multiparty CKKS interfaces are available under `fhelium.experimental`.
 
 The runtime components can be used independently around an evaluator:
 
@@ -149,7 +133,7 @@ from fhelium.eager import Engine
 def main():
     dist.init()
     torch.set_default_device(dist.local_device())
-    engine = Engine(fh.Preset.slots32768_scale40_depth34_int64)
+    engine = Engine(fh.Preset.slots32768_scale40_depth34)
 
     weight = (
         engine.encode(torch.ones(16, dtype=torch.float64))
@@ -199,7 +183,7 @@ Running `fhelium benchmark` without a subcommand opens the interactive benchmark
 - [API reference](https://fhelium.550w.host/api/)
 - [Developer guide](https://fhelium.550w.host/developer/)
 
-Start with [`examples/01_eager_basics.py`](./examples/01_eager_basics.py) or browse [`examples/README.md`](./examples/README.md) for Eager, Compile, value persistence, Runtime, Residency, Distributed, and Experimental examples.
+Start with [`examples/01_eager_basics.py`](./examples/01_eager_basics.py) or browse [`examples/README.md`](./examples/README.md) for Eager, Algorithms, value persistence, Compile, Runtime, Residency, Distributed, and Experimental examples.
 
 ## Development
 
@@ -224,7 +208,7 @@ If you use FHElium in research or software, cite the project as:
   author  = {Zhaoting Gong and Jiaming Liang and Ran Ran and Wujie Wen},
   title   = {FHElium: A Cross-Stack CKKS Research Framework for CPU and CUDA},
   year    = {2026},
-  version = {0.40.1rc2},
+  version = {0.50.0},
   url     = {https://github.com/VisualDust/fhelium}
 }
 ```

@@ -119,15 +119,25 @@ const learningSidebar = [
     ],
   },
   {
+    text: 'Algorithms',
+    collapsed: false,
+    items: [
+      {
+        text: '09 - Bootstrapping',
+        link: '/tutorial/composable-ckks-bootstrap',
+      },
+    ],
+  },
+  {
     text: 'Values, Serialization, and Artifacts',
     collapsed: false,
     items: [
       {
-        text: '09 - Value movement and files',
+        text: '10 - Value movement and files',
         link: '/tutorial/value-memory-and-persistence',
       },
       {
-        text: '10 - Named artifacts and generations',
+        text: '11 - Named artifacts and generations',
         link: '/tutorial/artifact-store',
       },
     ],
@@ -137,27 +147,27 @@ const learningSidebar = [
     collapsed: false,
     items: [
       {
-        text: '11 - JIT compilation',
+        text: '12 - JIT compilation',
         link: '/tutorial/compile-jit',
       },
       {
-        text: '12 - Caller-composed Compile pipeline',
+        text: '13 - Caller-composed Compile pipeline',
         link: '/tutorial/compose-and-execute-compile-pipeline',
       },
       {
-        text: '13 - Textual Program IR',
+        text: '14 - Textual Program IR',
         link: '/tutorial/ir-textual-program',
       },
       {
-        text: '14 - Custom BSGS transformation',
+        text: '15 - Custom BSGS transformation',
         link: '/tutorial/customize-compile-pass-and-pipeline',
       },
       {
-        text: '15 - Generated Python',
+        text: '16 - Generated Python',
         link: '/tutorial/generate-python',
       },
       {
-        text: '16 - Program materials and persistence',
+        text: '17 - Program materials and persistence',
         link: '/tutorial/compile-material-persistence',
       },
     ],
@@ -167,11 +177,11 @@ const learningSidebar = [
     collapsed: false,
     items: [
       {
-        text: '17 - Double-buffered execution',
+        text: '18 - Double-buffered execution',
         link: '/tutorial/reusable-value-buffer',
       },
       {
-        text: '18 - CUDA Graph replay',
+        text: '19 - CUDA Graph replay',
         link: '/tutorial/cuda-graph-matvec',
       },
     ],
@@ -181,11 +191,11 @@ const learningSidebar = [
     collapsed: false,
     items: [
       {
-        text: '19 - Manual Residency',
+        text: '20 - Manual Residency',
         link: '/tutorial/explicit-residency',
       },
       {
-        text: '20 - Automatic Residency admission',
+        text: '21 - Automatic Residency admission',
         link: '/tutorial/automatic-residency',
       },
     ],
@@ -195,19 +205,19 @@ const learningSidebar = [
     collapsed: false,
     items: [
       {
-        text: '21 - Data-parallel encrypted batches',
+        text: '22 - Data-parallel encrypted batches',
         link: '/tutorial/spmd-independent-ciphertexts',
       },
       {
-        text: '22 - Additive partial results',
+        text: '23 - Additive partial results',
         link: '/tutorial/spmd-rotation-parallel-matvec',
       },
       {
-        text: '23 - RNS-sharded execution',
+        text: '24 - RNS-sharded execution',
         link: '/tutorial/spmd-limb-parallel-pipeline',
       },
       {
-        text: '24 - Rank-local collective IR',
+        text: '25 - Rank-local collective IR',
         link: '/tutorial/rank-local-collective-ir',
       },
     ],
@@ -216,10 +226,6 @@ const learningSidebar = [
     text: 'Experimental',
     collapsed: false,
     items: [
-      {
-        text: '25 - Experimental bootstrapping',
-        link: '/tutorial/composable-ckks-bootstrap',
-      },
       {
         text: '26 - Experimental multiparty CKKS',
         link: '/tutorial/multiparty-ckks',

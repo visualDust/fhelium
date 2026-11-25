@@ -18,7 +18,7 @@ from fhelium.values import Ciphertext, KeySwitchKey, RelinearizationKey, Rotatio
 from .specification import PRIMITIVE_WORKLOADS, SEED, SuiteCell
 from .polynomial import COEFFICIENTS, METHODS, POLYNOMIAL
 from .primitives import analytic_ntt_rows, ntt_operands, rns_operands
-from fhelium.experimental.bootstrap import BootstrapArithmetic
+from fhelium.algorithms import polynomial as algorithms_polynomial
 
 
 @dataclass
@@ -137,7 +137,7 @@ class WorkloadInputs:
                 self.config, rns.montgomery_parameters.R
             )
         basis = rns.basis_parameters(cell.depth)
-        rows = slice(basis.parameter_row_start, basis.parameter_row_stop)
+        rows = list(basis.prime_ids)
         coefficients, transformed = ntt_operands(
             basis.moduli, rns.montgomery_parameters.R,
             self._analytic_ntt_rows[0][rows], self._analytic_ntt_rows[1][rows],
@@ -257,12 +257,11 @@ class WorkloadInputs:
             evaluate = lambda: e.sum_plaintext_products((ntt,) * len(plains), plains)
             expected = message.square() * sum(factors)
         elif cell.workload in ("multiply_coefficient", "advance_depth"):
-            arithmetic = BootstrapArithmetic(e, constant_cache={}, retain_ntt=True)
             if cell.workload == "multiply_coefficient":
-                evaluate = lambda: arithmetic.multiply_scalar(ntt, -0.3)
+                evaluate = lambda: e.multiply_constant(ntt, -0.3)
                 expected = message * -0.3
             else:
-                evaluate = lambda: arithmetic.advance_depth(ntt)
+                evaluate = lambda: e.multiply_constant(ntt, 1.0)
             output_depth += 1
         else:
             raise ValueError(f"Unknown suite operation {cell.workload}")
@@ -282,14 +281,13 @@ class WorkloadInputs:
         message = torch.stack([torch.roll(grid, shifts=i * 17) for i in range(cell.batch)])
         source = e.encrypt_message(message, self.public, depth=cell.depth, device=self.device)
         key = self.relin
-        arithmetic = BootstrapArithmetic(e, constant_cache={}, retain_ntt=True)
         coordinates = message.numpy().astype(np.longdouble)
         reference = np.zeros_like(coordinates)
         for coefficient in reversed(COEFFICIENTS):
             reference = reference * coordinates + np.longdouble(coefficient)
         expected = torch.from_numpy(reference.astype(np.float64))
         return PreparedWorkload(
-            lambda: evaluator.evaluate(arithmetic, source, POLYNOMIAL, relinearization_key=key),
+            lambda: algorithms_polynomial.evaluate(e, source, POLYNOMIAL, evaluator, keys=key),
             self.decrypt, expected, self.key_bytes([], relin=True), source.scale,
             cell.depth + evaluator.required_depths(POLYNOMIAL),
         )

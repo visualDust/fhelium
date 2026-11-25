@@ -79,6 +79,11 @@ at::Tensor encapsulated_modulus_raise(const at::Tensor& source,
   const auto low_tables = tables.with_prefix("low_");
   auto low = low_options;
   low.output_domain = "coefficient";
+  const bool seeded = !low_options.key_seeds.empty();
+  TORCH_CHECK_VALUE(!seeded || low_options.key_seeds.size() == 2,
+                    "Seeded encapsulated modulus raising requires the low and "
+                    "return key seeds");
+  if (seeded) low.key_seeds = {low_options.key_seeds[0]};
   const auto switched = key_switch(source, low_key, low_tables, low, false);
   const auto raised =
       rns::centered_basis_extend(switched, tables.with_prefix("raise_"));
@@ -98,7 +103,13 @@ at::Tensor encapsulated_modulus_raise(const at::Tensor& source,
                                        component,
                                        return_key.select(0, 0),
                                        tables.at("return_parameters"),
-                                       0);
+                                       0,
+                                       -1,
+                                       std::nullopt,
+                                       seeded ? std::optional<at::Tensor>(
+                                                    low_options.key_seeds[1].select(0, 0))
+                                              : std::nullopt,
+                                       low_options.key_rounds);
   ntt::transform_(products,
                   tables,
                   low_options.ntt_backend,
@@ -114,7 +125,7 @@ at::Tensor encapsulated_modulus_raise(const at::Tensor& source,
                                               low_options.moddown_rounding);
   auto output =
       quotient
-          .narrow(-2, target_row_start, quotient.size(-2) - target_row_start)
+          .narrow(-2, target_row_start, q_count - target_row_start)
           .contiguous();
   auto output0 = output.select(0, 0);
   rns::add_standard_(output0,
@@ -309,7 +320,16 @@ at::Tensor encode(const at::Tensor& message,
           ? at::constant_pad_nd(full, {0, slots - full.size(-1)}, 0)
           : full;
   const auto coefficients = inverse_embed_slots(padded, pre, twister);
-  return stochastic_round(coefficients * scale, seed);
+  const auto scaled = coefficients * scale;
+  // Rounded coefficients are stored as int64.
+  const auto magnitude = at::abs(scaled).max().item<double>();
+  TORCH_CHECK_VALUE(magnitude < 0x1p63,
+                    "Encoded coefficient magnitude ",
+                    magnitude,
+                    " at scale ",
+                    scale,
+                    " reaches the signed 64-bit integer range 2^63");
+  return stochastic_round(scaled, seed);
 }
 
 at::Tensor decode(const at::Tensor& coefficients,

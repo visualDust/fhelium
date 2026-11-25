@@ -17,10 +17,6 @@ namespace fhelium::detail_operations {
 
 namespace {
 
-bool starts_with(std::string_view text, std::string_view prefix) {
-  return text.substr(0, prefix.size()) == prefix;
-}
-
 int64_t log2_exact(int64_t value) {
   int64_t bits = 0;
   while ((int64_t{1} << bits) < value) {
@@ -51,19 +47,14 @@ CacheKey cache_key(int64_t n, int64_t g, const at::Device& device) {
 
 NttPolicy ntt_policy(std::string_view name) {
   if (name == "radix2_indexed") {
-    return {NttFamily::kIndexed, 0};
+    return {NttFamily::kIndexed};
   }
-  constexpr std::string_view compact = "radix2_compact_group";
-  if (starts_with(name, compact)) {
-    const auto rest = name.substr(compact.size());
-    const auto width = rest.substr(0, rest.find('_'));
-    if (width == "4" || width == "8" || width == "16") {
-      return {NttFamily::kCompact, log2_exact(std::stoll(std::string(width)))};
-    }
+  if (name == "radix2_compact" || name == "radix2_compact_shoup32") {
+    return {NttFamily::kCompact};
   }
   if (name == "radix4_compact" || name == "radix8_compact" ||
       name == "radix16_compact") {
-    return {NttFamily::kFixedRadix, 0};
+    return {NttFamily::kFixedRadix};
   }
   TORCH_CHECK_VALUE(false, "Unsupported NTT backend '", name, "'");
 }
@@ -129,8 +120,7 @@ at::Tensor forward_add_scaled(at::Tensor correction,
         addend,
         multiplier,
         tables.at(operand(basis, "forward", 1)),
-        parameters,
-        policy.grouped_stage_count);
+        parameters);
     return correction;
   }
   ntt::transform_(
@@ -232,16 +222,16 @@ at::Tensor hybrid_modup_digit(const at::Tensor& source,
 
 at::Tensor lift_key_switch_digit(const at::Tensor& source,
                                  const TensorTable& tables,
-                                 std::string_view modup_method,
+                                 std::string_view basis_conversion,
                                  int64_t digit_index,
                                  const DigitSpan& span,
                                  const at::Tensor& out,
                                  const at::Tensor& scratch) {
-  if (modup_method == "exact") {
+  if (basis_conversion == "exact") {
     return hybrid_modup_digit(source, tables, digit_index, span, out, scratch);
   }
-  TORCH_CHECK_VALUE(modup_method == "crt" || modup_method == "normalized_crt",
-                    "modup_method must be exact, crt, or normalized_crt");
+  TORCH_CHECK_VALUE(basis_conversion == "crt" || basis_conversion == "normalized_crt",
+                    "basis_conversion must be exact, crt, or normalized_crt");
   const auto prefix = "digit" + std::to_string(digit_index) + "_crt_";
   const auto digit = source.narrow(-2, span.start, span.stop - span.start);
   const auto& normalizers = tables.at(prefix + "source_normalizers");
@@ -250,6 +240,8 @@ at::Tensor lift_key_switch_digit(const at::Tensor& source,
       normalized ? std::optional<at::Tensor>(normalizers) : std::nullopt;
   const std::optional<at::Tensor> source_reciprocals =
       normalized ? tables.get(prefix + "source_reciprocals") : std::nullopt;
+  const std::optional<at::Tensor> target_offsets =
+      normalized ? tables.get(prefix + "target_offsets") : std::nullopt;
   if (!out.defined()) {
     return rns::crt_basis_extend(digit,
                                  tables.at(prefix + "source_parameters"),
@@ -257,7 +249,8 @@ at::Tensor lift_key_switch_digit(const at::Tensor& source,
                                  tables.at(prefix + "matrix"),
                                  tables.at(prefix + "target_reciprocals"),
                                  source_normalizers,
-                                 source_reciprocals);
+                                 source_reciprocals,
+                                 target_offsets);
   }
   auto output = out;
   rns::crt_basis_extend_out_(digit,
@@ -267,6 +260,7 @@ at::Tensor lift_key_switch_digit(const at::Tensor& source,
                              tables.at(prefix + "target_reciprocals"),
                              source_normalizers,
                              source_reciprocals,
+                             target_offsets,
                              output);
   return output;
 }
@@ -363,26 +357,25 @@ void transform_(at::Tensor& residues,
       break;
     }
     case NttFamily::kCompact: {
-      const auto group = policy.grouped_stage_count;
       switch (transition) {
         case Transition::kForwardMontgomery:
-          return forward_ntt_montgomery_compact_grouped_smem_(
-              residues, twiddles, parameters, group);
+          return forward_ntt_montgomery_compact_(
+              residues, twiddles, parameters);
         case Transition::kForwardToMontgomery:
-          return forward_ntt_to_montgomery_compact_grouped_smem_(
-              residues, twiddles, parameters, group);
+          return forward_ntt_to_montgomery_compact_(
+              residues, twiddles, parameters);
         case Transition::kInverseMontgomery:
-          return inverse_ntt_montgomery_compact_grouped_smem_(
-              residues, twiddles, parameters, group);
+          return inverse_ntt_montgomery_compact_(
+              residues, twiddles, parameters);
         case Transition::kInverseToStandardLazy:
-          return inverse_ntt_to_standard_lazy_compact_grouped_smem_(
-              residues, twiddles, parameters, group);
+          return inverse_ntt_to_standard_lazy_compact_(
+              residues, twiddles, parameters);
         case Transition::kInverseToStandard:
-          return inverse_ntt_to_standard_compact_grouped_smem_(
-              residues, twiddles, parameters, group);
+          return inverse_ntt_to_standard_compact_(
+              residues, twiddles, parameters);
         case Transition::kInverseToCentered:
-          return inverse_ntt_to_centered_compact_grouped_smem_(
-              residues, twiddles, parameters, group);
+          return inverse_ntt_to_centered_compact_(
+              residues, twiddles, parameters);
       }
       break;
     }
@@ -431,8 +424,7 @@ at::Tensor transform(const at::Tensor& residues,
             twiddles,
             parameters);
       case NttFamily::kCompact:
-        return forward_ntt_to_montgomery_compact_grouped_smem(
-            residues, twiddles, parameters, policy.grouped_stage_count);
+        return forward_ntt_to_montgomery_compact(residues, twiddles, parameters);
       case NttFamily::kFixedRadix:
         return forward_ntt_to_montgomery_power_of_two_radix_compact(
             residues, twiddles, tables.at(operand(basis, true, 2)), parameters);

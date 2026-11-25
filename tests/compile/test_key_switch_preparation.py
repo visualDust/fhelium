@@ -15,12 +15,14 @@ from fhelium.ir.dialects import ckks
 def test_compound_relinearization_consumes_a_complete_group(device, domain):
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    preset = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
-    config = CkksConfig(
+    catalog = CkksConfig.catalog_suffix_chain(
+        logN=14, scale_bits=40, depth=3, p_count=1
+    )
+    config = CkksConfig.suffix_chain(
         logN=8,
-        q_depth_groups=(preset.q_moduli[:2], preset.q_moduli[2:4]),
-        p_moduli=preset.p_moduli,
-        default_scale=preset.default_scale,
+        q_depth_groups=(catalog.q_moduli[:2], catalog.q_moduli[2:4]),
+        p_moduli=catalog.p_moduli,
+        scale=2.0**40,
         enforce_security_budget=False,
     )
     engine = Engine(config, rng_seed=271)
@@ -74,7 +76,7 @@ def test_compound_relinearization_consumes_a_complete_group(device, domain):
 def test_expression_rotation_prepares_whole_and_lowered_routes(device):
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    engine = Engine(Preset.slots8192_scale40_depth7_int64, rng_seed=163)
+    engine = Engine(Preset.slots8192_scale40_depth7, rng_seed=163)
     config = engine.config
     secret = engine.create_secret_key(device=device)
     public = engine.create_public_key(secret, device=device)
@@ -156,9 +158,9 @@ def test_expression_rotation_prepares_whole_and_lowered_routes(device):
                 reference.prime_ids,
             )
             encrypted = engine.negate(encrypted)
-            key.data.copy_(
-                engine.create_rotation_key(1, secret, device=device).data
-            )
+            replacement = engine.create_rotation_key(1, secret, device=device)
+            key.data.copy_(replacement.data)
+            key.seed.copy_(replacement.seed)
         original = dict(compilation.material_bindings)
         assert (
             fc.prepare_material_bindings(
@@ -176,7 +178,7 @@ def test_expression_rotation_prepares_whole_and_lowered_routes(device):
 def test_frontends_share_one_pipeline_and_request_local_materials(device):
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    engine = Engine(Preset.slots8192_scale40_depth7_int64, rng_seed=191)
+    engine = Engine(Preset.slots8192_scale40_depth7, rng_seed=191)
     config = engine.config
     secret = engine.create_secret_key(device=device)
     public = engine.create_public_key(secret, device=device)
@@ -256,15 +258,15 @@ def test_frontends_share_one_pipeline_and_request_local_materials(device):
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda:0"])
-@pytest.mark.parametrize("modup_method", ["exact", "crt", "normalized_crt"])
+@pytest.mark.parametrize("basis_conversion", ["exact", "crt", "normalized_crt"])
 def test_lowered_ntt_switch_keeps_live_coefficient_input_and_key(
-    device, modup_method
+    device, basis_conversion
 ):
     from fhelium import CkksConfig
 
     if device.startswith("cuda") and not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    base = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+    base = CkksConfig.parse(Preset.slots8192_scale40_depth7)
     config = CkksConfig.parse(
         base.dumps(), logN=8, enforce_security_budget=False
     )
@@ -285,7 +287,7 @@ def test_lowered_ntt_switch_keeps_live_coefficient_input_and_key(
             key,
             output_domain="ntt",
             moddown_rounding=rounding,
-            modup_method=modup_method,
+            basis_conversion=basis_conversion,
         )
 
     backend = OperationBackend()
@@ -321,9 +323,11 @@ def test_lowered_ntt_switch_keeps_live_coefficient_input_and_key(
                 expected.residue_representation,
             )
             value = engine.negate(value)
-            key.data.copy_(
-                engine.create_key_switch_key(secret, secret, device=device).data
+            replacement = engine.create_key_switch_key(
+                secret, secret, device=device
             )
+            key.data.copy_(replacement.data)
+            key.seed.copy_(replacement.seed)
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda:0"])
@@ -338,12 +342,12 @@ def test_material_free_program_rebinds_independent_keys(
     from fhelium.serialization import load_compilation, save_compilation
     from fhelium.values import EvaluationKeySet
 
-    preset = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
-    config = CkksConfig(
+    config = CkksConfig.catalog_suffix_chain(
         logN=8,
-        q_depth_groups=tuple((q,) for q in preset.q_moduli[:4]),
-        p_moduli=preset.p_moduli[:1],
-        default_scale=preset.default_scale,
+        scale_bits=40,
+        depth=3,
+        p_count=1,
+        catalog_logN=14,
         enforce_security_budget=False,
     )
 
@@ -390,7 +394,7 @@ def test_material_free_program_rebinds_independent_keys(
             fc.InsertRelinearizationPass(),
             fc.InsertRescalePass(),
             fc.AssignCkksDepthsPass(entry_depth=1),
-            fc.AssignCkksScalesPass(entry_scale=config.default_scale),
+            fc.AssignCkksScalesPass(entry_scale=config.scale_at(0)),
         )
     ).run(captured)
     layouts = {
@@ -481,7 +485,7 @@ def test_material_free_program_rebinds_independent_keys(
             == ()
         )
         encrypted = engine.encrypt_message(
-            clear, public, depth=1, scale=config.default_scale, device=device
+            clear, public, depth=1, scale=config.scale_at(0), device=device
         )
         executable = backend.link(bound)
         result = executable.run(encrypted)
@@ -494,7 +498,7 @@ def test_material_free_program_rebinds_independent_keys(
         assert result.depth == 2
         assert result.component_count == 2
         assert result.prime_ids == (2, 3)
-        assert result.scale == config.default_scale**2 / config.rescale_divisor(
+        assert result.scale == config.scale_at(0)**2 / config.rescale_divisor(
             1
         )
         executions.append((executable, encrypted, result.data.clone()))

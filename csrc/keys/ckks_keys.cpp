@@ -59,7 +59,52 @@ at::Tensor public_key(const at::Tensor& secret,
   return at::stack({rns::sub_lazy(error, product, parameters), a});
 }
 
+// Seed rows [digit, 6] of a key: the first ten words of the stream block at
+// the current nonce as five int64 values, followed by the digit index.
+at::Tensor seed_rows(at::Tensor& stream, int64_t digits) {
+  auto words = random::chacha20_keystream(stream, 0, 1)
+                   .select(0, 0)
+                   .narrow(0, 0, 10)
+                   .to(at::kLong)
+                   .bitwise_and(0xffffffffLL);
+  auto packed = words.slice(0, 0, 10, 2).bitwise_or(
+      words.slice(0, 1, 10, 2).bitwise_left_shift(32));
+  advance(stream);
+  auto index = at::arange(digits, packed.options()).unsqueeze(1);
+  return at::cat({packed.unsqueeze(0).expand({digits, 5}), index}, 1);
+}
+
+at::Tensor key_moduli(const SeedSpec& spec, const at::Tensor& like) {
+  return at::tensor(spec.moduli, at::TensorOptions().dtype(at::kLong))
+      .to(like.device(), like.scalar_type());
+}
+
 }  // namespace
+
+KeySwitchKey expand_key_switch_key(const KeySwitchKey& key) {
+  if (key.expanded()) {
+    return key;
+  }
+  TORCH_CHECK_VALUE(key.seed_rows.has_value(),
+                    "A compact key requires seed rows");
+  TORCH_CHECK_VALUE(key.spec.prf == "chacha",
+                    "Unsupported key seed generator ", key.spec.prf);
+  auto uniform = random::expand_seeded_key(*key.seed_rows,
+                                           key_moduli(key.spec, key.data),
+                                           key.data.size(-1),
+                                           key.spec.rounds);
+  return {at::stack({key.data.select(1, 0), uniform}, 1), key.seed_rows,
+          key.spec};
+}
+
+KeySwitchKey compact_key_switch_key(const KeySwitchKey& key) {
+  TORCH_CHECK_VALUE(key.seed_rows.has_value(),
+                    "A key without seed rows cannot be compacted");
+  if (!key.expanded()) {
+    return key;
+  }
+  return {key.data.narrow(1, 0, 1).clone(), key.seed_rows, key.spec};
+}
 
 at::Tensor create_secret_key(int64_t ring_dimension,
                              const TensorTable& tables,
@@ -103,7 +148,7 @@ at::Tensor create_public_key(
                     error_coefficients);
 }
 
-at::Tensor create_key_switch_key(
+KeySwitchKey create_key_switch_key(
     const at::Tensor& source_secret_key,
     const at::Tensor& destination_secret_key,
     const TensorTable& tables,
@@ -120,21 +165,60 @@ at::Tensor create_key_switch_key(
       scaled, product, parameters.narrow(1, 0, q_count));
   const auto twice_modulus = parameters.select(0, 0);
 
-  // Contiguous runs of the key rows: active Q, then the auxiliary rows.
-  std::vector<std::pair<int64_t, int64_t>> runs{
-      {layout.q_row_start, q_count - layout.q_row_start}};
-  for (const int64_t row : layout.p_rows) {
-    auto& last = runs.back();
-    if (last.first + last.second == row) {
-      ++last.second;
-    } else {
-      runs.emplace_back(row, 1);
-    }
+  int64_t q_row_count = 0;
+  for (const int64_t size : layout.digit_sizes) {
+    q_row_count += size;
   }
+  TORCH_CHECK_VALUE(
+      q_row_count > 0 &&
+          q_row_count == static_cast<int64_t>(layout.q_rows.size()),
+      "Key digits must partition the active Q rows");
+  for (const int64_t row : layout.q_rows) {
+    TORCH_CHECK_VALUE(row >= 0 && row < q_count,
+                      "Active key rows must be Q rows");
+  }
+  // Maximal runs of consecutive parameter rows in `rows[first, last)`.
+  const auto runs_of = [](const std::vector<int64_t>& rows,
+                          size_t first,
+                          size_t last) {
+    std::vector<std::pair<int64_t, int64_t>> runs;
+    for (size_t i = first; i < last; ++i) {
+      if (!runs.empty() && runs.back().first + runs.back().second == rows[i]) {
+        ++runs.back().second;
+      } else {
+        runs.emplace_back(rows[i], 1);
+      }
+    }
+    return runs;
+  };
+  std::vector<int64_t> key_rows(layout.q_rows);
+  key_rows.insert(key_rows.end(), layout.p_rows.begin(), layout.p_rows.end());
+  const auto runs = runs_of(key_rows, 0, key_rows.size());
 
   auto stream = seed.clone();
+  const auto digit_count = static_cast<int64_t>(layout.digit_sizes.size());
+  std::optional<at::Tensor> seeds;
+  SeedSpec spec;
+  auto uniform = uniform_by_digit;
+  if (!uniform.has_value()) {
+    // Seeded key: k_1 is the seed expansion on the key rows, placed at their
+    // parameter rows for the public-key construction.
+    seeds = seed_rows(stream, digit_count);
+    const auto rows = at::tensor(key_rows, at::TensorOptions().dtype(at::kLong));
+    const auto moduli = twice_modulus.to(at::kCPU).to(at::kLong).index_select(0, rows)
+                            .div(2, "floor");
+    spec.moduli.assign(moduli.data_ptr<int64_t>(),
+                       moduli.data_ptr<int64_t>() + moduli.numel());
+    const auto expanded = random::expand_seeded_key(
+        *seeds, key_moduli(spec, parameters), destination_secret_key.size(-1),
+        spec.rounds);
+    auto full = at::zeros({digit_count, parameters.size(1), expanded.size(-1)},
+                          expanded.options());
+    full.index_copy_(1, rows.to(full.device()), expanded);
+    uniform = full;
+  }
   std::vector<at::Tensor> digits;
-  int64_t row = layout.q_row_start;
+  size_t offset = 0;
   for (size_t j = 0; j < layout.digit_sizes.size(); ++j) {
     const auto index = static_cast<int64_t>(j);
     auto key = public_key(
@@ -143,29 +227,30 @@ at::Tensor create_key_switch_key(
         stream,
         cdt_table,
         layout.ntt_backend,
-        uniform_by_digit.has_value()
-            ? std::optional<at::Tensor>(uniform_by_digit->select(0, index))
-            : std::nullopt,
+        std::optional<at::Tensor>(uniform->select(0, index)),
         error_by_digit.has_value()
             ? std::optional<at::Tensor>(error_by_digit->select(0, index))
             : std::nullopt);
-    const int64_t size = layout.digit_sizes[j];
-    auto c0 = key.select(0, 0).narrow(0, row, size);
-    c0.copy_(rns::add_lazy_with_twice_modulus(
-        c0, scaled.narrow(0, row, size), twice_modulus.narrow(0, row, size)));
+    const auto size = static_cast<size_t>(layout.digit_sizes[j]);
+    for (const auto& [row, length] :
+         runs_of(layout.q_rows, offset, offset + size)) {
+      auto c0 = key.select(0, 0).narrow(0, row, length);
+      c0.copy_(rns::add_lazy_with_twice_modulus(
+          c0,
+          scaled.narrow(0, row, length),
+          twice_modulus.narrow(0, row, length)));
+    }
     std::vector<at::Tensor> rows;
     for (const auto& [start, length] : runs) {
       rows.push_back(key.narrow(1, start, length));
     }
     digits.push_back(at::cat(rows, 1));
-    row += size;
+    offset += size;
   }
-  TORCH_CHECK_VALUE(row == q_count,
-                    "Key digits must cover the Q rows from q_row_start");
-  return at::stack(digits);
+  return {at::stack(digits), seeds, spec};
 }
 
-at::Tensor create_relinearization_key(
+KeySwitchKey create_relinearization_key(
     const at::Tensor& secret_key,
     const TensorTable& tables,
     const at::Tensor& seed,
@@ -185,7 +270,7 @@ at::Tensor create_relinearization_key(
                                error_by_digit);
 }
 
-at::Tensor create_galois_key(const at::Tensor& secret_key,
+KeySwitchKey create_galois_key(const at::Tensor& secret_key,
                              int64_t galois_element,
                              const TensorTable& tables,
                              const at::Tensor& seed,

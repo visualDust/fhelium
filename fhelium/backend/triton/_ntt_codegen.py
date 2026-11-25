@@ -15,11 +15,15 @@ def compile_endpoint(source: str) -> Any:
 
     from ._arithmetic import (
         add_lazy,
+        butterfly_sum,
+        narrow,
         canonicalize,
         montgomery_mul,
         montgomery_reduce,
         subtract_lazy,
         shoup32_mul,
+        seeded_key_residue,
+        seeded_key_residue8,
     )
 
     filename = f"<fhelium-ntt-{hashlib.sha256(source.encode()).hexdigest()}>"
@@ -35,9 +39,13 @@ def compile_endpoint(source: str) -> Any:
         "montgomery_reduce": montgomery_reduce,
         "__name__": __name__,
         "add_lazy": add_lazy,
+        "butterfly_sum": butterfly_sum,
+        "narrow": narrow,
         "subtract_lazy": subtract_lazy,
         "canonicalize": canonicalize,
         "shoup32_mul": shoup32_mul,
+        "seeded_key_residue": seeded_key_residue,
+        "seeded_key_residue8": seeded_key_residue8,
     }
     exec(compile(source, filename, "exec", dont_inherit=True), namespace)
     function = namespace.pop("endpoint")
@@ -76,12 +84,46 @@ def _parameter_policy(function: Any) -> tuple[list[str], list[str]]:
     return alignment_independent, scalars
 
 
+_PROGRAM_ELEMENTS = 2048
+_ROUND_BITS = 4
+# Coefficient values per program that loads may hold in registers: eight
+# loads of a full 2048-coefficient program.
+_LOAD_ELEMENTS = 8 * _PROGRAM_ELEMENTS
+
+
+def radix2_elements(loads: int, elements: int = _PROGRAM_ELEMENTS) -> int:
+    """Return the program size, at most ``elements``, for ``loads`` coefficient loads."""
+    while elements > 128 and elements * loads > _LOAD_ELEMENTS:
+        elements //= 2
+    return elements
+
+
+def radix2_geometry(
+    n: int, start: int, end: int, elements: int = _PROGRAM_ELEMENTS
+) -> tuple[int, int]:
+    """Return (programs, lanes) of one radix-2 stage interval.
+
+    A lane is one contiguous tile or one coefficient column of ``2^(end-start)``
+    coefficients; each program transforms ``lanes`` of them.
+    """
+    stages = end - start
+    groups = n >> stages
+    lanes = max(1, min(elements >> stages, groups))
+    return groups // lanes, lanes
+
+
 class StageEmitter:
     """Emit compact-table butterflies for one NTT stage interval.
 
-    Tiled intervals exchange lanes through reshapes and permutations. Global
-    intervals keep a register tuple per lane, matching grouped native stages.
-    All butterflies retain the native lazy interval and operation order.
+    A radix-2 interval of M stages transforms lanes of 2^M coefficients, each
+    a contiguous tile or a coefficient column, with the coefficient position r
+    in [0, 2^M). The program holds 2^K register vectors whose element e covers
+    r bits [lo, lo + K) of its slot. Rounds of K stages run in registers and
+    exchange r bits between rounds through a reshape and permutation. Loaded
+    and transformed values use the window lo = M - K, matching the native
+    compact passes. Fixed-radix intervals exchange tiled lanes per digit and
+    keep a register tuple per strided lane. All butterflies retain the native
+    lazy interval and operation order.
     """
 
     def __init__(
@@ -95,6 +137,7 @@ class StageEmitter:
         radix: int | None = None,
         twiddle_encoding: str = "montgomery",
         prefix: str = "",
+        elements: int = _PROGRAM_ELEMENTS,
     ) -> None:
         self.n = n
         self.log_n = n.bit_length() - 1
@@ -109,13 +152,27 @@ class StageEmitter:
         self.roots: dict[int, str] = {}
         self.lines: list[str] = []
         self.serial = 0
+        self.stages = end - start
+        self.bits = min(_ROUND_BITS, self.stages)
+        self.programs, self.lanes = radix2_geometry(n, start, end, elements)
+        self.slots = self.lanes << (self.stages - self.bits)
 
     def name(self, prefix: str) -> str:
         self.serial += 1
         return f"{self.prefix}{prefix}_{self.serial}"
 
+    @property
+    def segment_index(self) -> bool:
+        """Whether index elements 8k..8k+7 hold coefficients 8m..8m+7."""
+        if self.radix == 2:
+            m, k = self.stages, self.bits
+            return (1 << (m - k) if self.tiled else self.lanes) >= 8
+        return self.tiled and self.end - self.start >= 3
+
     def indices(self) -> tuple[str, ...]:
         """Return coefficient-index vectors loaded by this endpoint."""
+        if self.radix == 2:
+            return self._radix2_indices()
         if self.tiled:
             width = 1 << (self.end - self.start)
             self.lines.extend(
@@ -187,14 +244,11 @@ class StageEmitter:
         self, u: str, v: str, twiddle: tuple[str, ...]
     ) -> tuple[str, str]:
         lo, hi = self.name("lo"), self.name("hi")
-        total, difference = self.name("sum"), self.name("difference")
         if self.inverse:
+            difference = self.name("difference")
             self.lines.extend(
                 (
-                    f"{total} = {u} + {v}",
-                    f"{difference} = {u} + 2 * q - {v}",
-                    f"{difference} = tl.where({difference} < 2 * q, {difference}, {difference} - 2 * q)",
-                    f"{lo} = tl.where({total} < 2 * q, {total}, {total} - 2 * q)",
+                    f"{lo}, {difference} = butterfly_sum({u}, {v}, q, RADIX)",
                     f"{hi} = {self._product(difference, twiddle)}",
                 )
             )
@@ -203,10 +257,7 @@ class StageEmitter:
             self.lines.extend(
                 (
                     f"{product} = {self._product(v, twiddle)}",
-                    f"{total} = {u} + {product}",
-                    f"{difference} = {u} + 2 * q - {product}",
-                    f"{lo} = tl.where({total} < 2 * q, {total}, {total} - 2 * q)",
-                    f"{hi} = tl.where({difference} < 2 * q, {difference}, {difference} - 2 * q)",
+                    f"{lo}, {hi} = butterfly_sum({u}, {product}, q, RADIX)",
                 )
             )
         return lo, hi
@@ -214,54 +265,142 @@ class StageEmitter:
     def transform(self, values: tuple[str, ...]) -> tuple[str, ...]:
         if self.radix != 2:
             return self._fixed(values)
-        if self.tiled:
-            return (self._tile(values[0]),)
-        registers = list(values)
-        group = len(registers)
-        for stage in range(self.start, self.end):
-            r = stage - self.start
-            stride = 1 << (r if self.inverse else self.end - stage - 1)
-            for base in range(0, group, 2 * stride):
-                subgroup = base // (2 * stride)
-                if self.inverse:
-                    group_index = f"initial_group * {1 << (self.end - stage - 1)} + {subgroup}"
-                    table_base = self.n >> (stage + 1)
-                else:
-                    group_index = f"initial_group * {1 << r} + {subgroup}"
-                    table_base = 1 << stage
-                twiddle = self._twiddle(
-                    f"{table_base} + {group_index}", masked=True
-                )
-                for offset in range(stride):
-                    low, high = base + offset, base + offset + stride
-                    registers[low], registers[high] = self._butterfly(
-                        registers[low], registers[high], twiddle
+        m, k = self.stages, self.bits
+        packed = self.name("registers")
+        self.lines.append(
+            f"{packed} = tl.permute(tl.reshape({values[0]}, {(*(2,) * k, self.slots)!r}), {(k, *range(k))!r})"
+        )
+        registers = self._unpack(packed, k)
+        window = m - k
+        for round_ in range((m + k - 1) // k):
+            if self.inverse:
+                low = min(round_ * k, m - k)
+            else:
+                low = max(m - (round_ + 1) * k, 0)
+            registers = self._exchange(registers, window, low)
+            window = low
+            first = self._first_index(low)
+            twiddles: dict[tuple[int, int], tuple[str, ...]] = {}
+            for local in range(round_ * k, min((round_ + 1) * k, m)):
+                stage = self.start + local
+                bit = (local if self.inverse else m - 1 - local) - low
+                for e in range(1 << k):
+                    if e & (1 << bit):
+                        continue
+                    offset = e >> (bit + 1)
+                    twiddle = twiddles.get((stage, offset))
+                    if twiddle is None:
+                        index = (
+                            f"{self.n >> (stage + 1)} + ({first} >> {stage + 1}) + {offset}"
+                            if self.inverse
+                            else f"{1 << stage} + ({first} >> {self.log_n - stage}) + {offset}"
+                        )
+                        twiddle = self._twiddle(index, masked=False)
+                        twiddles[stage, offset] = twiddle
+                    high = e | (1 << bit)
+                    registers[e], registers[high] = self._butterfly(
+                        registers[e], registers[high], twiddle
                     )
-        return tuple(registers)
+        registers = self._exchange(registers, window, m - k)
+        result = self.name("transformed")
+        self.lines.append(
+            f"{result} = tl.reshape(tl.permute({self._pack(registers, k)}, {(*range(1, k + 1), 0)!r}), ({self.slots << k},))"
+        )
+        return (result,)
 
-    def _tile(self, value: str) -> str:
-        width = 1 << (self.end - self.start)
-        for stage in range(self.start, self.end):
-            stride = 1 << (stage if self.inverse else self.log_n - stage - 1)
-            groups = width // (2 * stride)
-            even, odd = self.name("even"), self.name("odd")
-            lo_index = self.name("lo_index")
-            self.lines.extend(
-                (
-                    f"{even}, {odd} = tl.split(tl.reshape({value}, ({groups}, 2, {stride})).permute(0, 2, 1))",
-                    f"{lo_index} = tile_base + tl.arange(0, {groups})[:, None] * {2 * stride} + tl.arange(0, {stride})[None, :]",
-                )
+    def _radix2_indices(self) -> tuple[str, ...]:
+        m, k = self.stages, self.bits
+        rest = 1 << (m - k)
+        lane = f"slot // {rest}" if self.tiled else f"slot % {self.lanes}"
+        offset = f"slot % {rest}" if self.tiled else f"slot // {self.lanes}"
+        step = 1 << (m - k) if self.tiled else (self.n >> m) << (m - k)
+        # Element e * slots + slot holds register e of the slot, so pointwise
+        # expressions are emitted once for the whole program.
+        self.lines.extend(
+            (
+                f"element = tl.arange(0, {self.slots << k})",
+                f"slot = element % {self.slots}",
+                f"lane_group = tl.program_id(0).to(tl.int64) * {self.lanes} + {lane}",
+                f"lane_rest = {offset}",
+                f"index = {self._first_index(m - k)} + (element // {self.slots}) * {step}",
+                "mask = index < N",
+                f"lane_rest = tl.arange(0, {self.slots}) % {rest}"
+                if self.tiled
+                else f"lane_rest = tl.arange(0, {self.slots}) // {self.lanes}",
+                f"lane_group = tl.program_id(0).to(tl.int64) * {self.lanes} + "
+                + (
+                    f"tl.arange(0, {self.slots}) // {rest}"
+                    if self.tiled
+                    else f"tl.arange(0, {self.slots}) % {self.lanes}"
+                ),
             )
-            table_base = self.n >> (stage + 1) if self.inverse else 1 << stage
-            twiddle = self._twiddle(
-                f"{table_base} + {lo_index} // {2 * stride}", masked=False
+        )
+        return ("index",)
+
+    def _first_index(self, low: int) -> str:
+        """Coefficient index of register 0 for the window starting at bit low."""
+        m, k = self.stages, self.bits
+        position = (
+            "lane_rest"
+            if low + k == m
+            else f"((lane_rest & {(1 << low) - 1}) | ((lane_rest >> {low}) << {low + k}))"
+        )
+        if self.tiled:
+            return f"(lane_group * {1 << m} + {position})"
+        return f"({position} * {self.n >> m} + lane_group)"
+
+    def _sequence(self, low: int) -> list[object]:
+        """Flattened axis order of packed registers, most significant first."""
+        m, k = self.stages, self.bits
+        rest = [*range(m - 1, low + k - 1, -1), *range(low - 1, -1, -1)]
+        window = list(range(low + k - 1, low - 1, -1))
+        return (
+            ["lane", *rest, *window]
+            if self.tiled
+            else [*rest, "lane", *window]
+        )
+
+    def _exchange(self, registers: list[str], source: int, target: int) -> list[str]:
+        """Move register values from the source window to the target window."""
+        if source == target:
+            return registers
+        m, k = self.stages, self.bits
+        bounds = sorted({0, m, source, source + k, target, target + k})
+        segment = {
+            bit: index
+            for index, (lo, hi) in enumerate(zip(bounds, bounds[1:]))
+            for bit in range(lo, hi)
+        }
+
+        def axes(low: int) -> list[object]:
+            order: list[object] = []
+            for token in self._sequence(low):
+                label = "lane" if token == "lane" else segment[token]
+                if not order or order[-1] != label:
+                    order.append(label)
+            return order
+
+        before, after = axes(source), axes(target)
+        sizes = {
+            label: self.lanes
+            if label == "lane"
+            else 1 << (bounds[label + 1] - bounds[label])
+            for label in before
+        }
+        packed = self.name("narrow")
+        self.lines.append(f"{packed} = narrow({self._pack(registers, k)}, RADIX)")
+        shaped, permuted = self.name("shaped"), self.name("permuted")
+        shape = tuple(sizes[label] for label in before)
+        order = tuple(before.index(label) for label in after)
+        self.lines.extend(
+            (
+                f"{shaped} = tl.reshape({packed}, {shape!r})",
+                f"{permuted} = tl.reshape(tl.permute({shaped}, {order!r}), {(self.slots, *(2,) * k)!r})",
             )
-            low, high = self._butterfly(even, odd, twiddle)
-            value = self.name("tile")
-            self.lines.append(
-                f"{value} = tl.reshape(tl.join({low}, {high}).permute(0, 2, 1), ({width},))"
-            )
-        return value
+        )
+        widened = self.name("widened")
+        self.lines.append(f"{widened} = {permuted}.to(tl.int64)")
+        return self._unpack(widened, k)
 
     def _cyclic4(self, values: list[str]) -> list[str]:
         names = [self.name("radix4") for _ in range(9)]

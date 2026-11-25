@@ -91,13 +91,35 @@ mixed_radix_tables(at::IntArrayRef source,
 /// $D_i u_i R \bmod p$ for the raw lift and $D_i R \bmod p$ when
 /// `normalized` is true. `target_reciprocals` holds $\lfloor 2^{64}/p
 /// \rfloor$ as int64. For the normalized lift, `source_normalizers` holds
-/// $u_i$ and `source_reciprocals` holds $\lfloor 2^{64}/q_i \rfloor$; both
+/// $u_i$, `source_reciprocals` holds $\lfloor 2^{64}/q_i \rfloor$, and
+/// `target_offsets` holds $-\sum_i \frac{q_i-1}{2} D_i R \bmod p$, which makes
+/// `crt_basis_extend` lift the centered residues $[a_i u_i]_{q_i}$; all three
 /// are empty for the raw lift.
-FHELIUM_API std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+FHELIUM_API std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 crt_basis_extension_tables(at::IntArrayRef source,
                            at::IntArrayRef target,
                            bool normalized,
                            at::ScalarType dtype);
+
+/// Returns the centered CRT tables whose lift from `source` into `target`
+/// yields the negated quotient correction of an approximate division.
+///
+/// With $D = \Pi_{\mathtt{source}}$, $E = \Pi_{\mathtt{divisor}}$ (1 when
+/// `divisor` is empty) and $u_i = (D/q_i)^{-1} \bmod q_i$, `matrix` holds
+/// $-(q_i E)^{-1} \bmod p$ in standard form and `target_offsets` holds
+/// $-\sum_i \frac{q_i-1}{2}\,\mathtt{matrix}_{i,p} \bmod p$; the
+/// remaining outputs equal those of the normalized
+/// `crt_basis_extension_tables`. For source residues $a_i$ of an integer $x$,
+/// `crt_basis_extend` with these tables returns $-(r + kD)/(DE) \bmod p$, where
+/// $r$ is the centered remainder of $x$ modulo $D$ and $|k|$ is below half the
+/// source count. Adding $x(DE)^{-1} \bmod p$ gives $(x-r-kD)/(DE)$, which
+/// approximate ModDown (`moddown_crt_*`, $E=1$) and joint ModDown with rescale
+/// (`joint_crt_*`) consume.
+FHELIUM_API std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+crt_quotient_tables(at::IntArrayRef source,
+                    at::IntArrayRef target,
+                    at::IntArrayRef divisor,
+                    at::ScalarType dtype);
 
 /// Returns the inverses for removing the last `drop_count` moduli one at a
 /// time.

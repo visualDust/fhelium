@@ -50,12 +50,10 @@ _PRESERVING_TYPES = (
     ckks.RelinearizeOp,
     ckks.SwitchKeyOp,
     ckks.ConjugateOp,
-    ckks.ModSwitchOp,
     ckks.ModulusRaiseOp,
     ckks.EncapsulatedModulusRaiseOp,
     ckks.AddScalarOp,
     ckks.MultiplyIntegerScalarOp,
-    ckks.SelectBatchOp,
 )
 
 
@@ -116,7 +114,7 @@ def _represented_depth(value: SSAValue, *, operation: str) -> int:
 class AssignCkksScalesPass:
     """Propagate actual scales through an already scheduled CKKS Program.
 
-    The pass updates represented scale metadata while preserving the arithmetic operations. Add/sub joins require equal binary64 scales. Rescale divides the input scale by ``config.rescale_divisor(depth)``, the product of the dropped Q group.
+    The pass updates represented scale metadata while preserving the arithmetic operations. Add/sub joins require equal binary64 scales. Rescale divides the input scale by ``config.rescale_divisor(depth)``, the ratio $D/R$ of the primes leaving and entering the Q basis. Multiplication operands prepared with ``default_scale`` take the configured scale of the ciphertext depth.
     """
 
     entry_scale: float | None = None
@@ -163,7 +161,7 @@ class AssignCkksScalesPass:
         function = program.function("main")
         block = program.single_block("main")
         if any(
-            (operation.regions and not isinstance(operation, ckks.RepeatOp))
+            operation.regions
             or operation.successors
             for operation in block.walk()
         ):
@@ -227,22 +225,7 @@ class AssignCkksScalesPass:
                 "CKKS scale assignment requires an encrypted entry"
             )
 
-        from ..._repeat import (
-            sync_repeat_inputs,
-            sync_repeat_results,
-            sync_iteration,
-        )
-
         for operation in tuple(block.walk()):
-            if isinstance(operation, ckks.RepeatOp):
-                sync_repeat_inputs(operation)
-                continue
-            if isinstance(operation, ckks.RepeatYieldOp):
-                sync_repeat_results(operation.parent_op())
-                continue
-            if isinstance(operation, ckks.RepeatIterationOp):
-                sync_iteration(operation)
-                continue
             if isinstance(operation, ReturnOp):
                 continue
             if isinstance(operation, UnrealizedConversionCastOp):
@@ -311,7 +294,11 @@ class AssignCkksScalesPass:
                 if mode is None:
                     raise ValueError(f"{operation.name} lacks scale_mode")
                 if mode.data == "default_scale":
-                    scale = config.default_scale
+                    scale = config.scale_at(
+                        _represented_depth(
+                            operation.ciphertext, operation=operation.name
+                        )
+                    )
                 elif mode.data == "runtime_plaintext_scale":
                     scale = require(operation.public, operation=operation.name)
                 else:
@@ -409,6 +396,14 @@ class AssignCkksScalesPass:
                     operation.scale.value.data,
                     label="reinterpreted scale",
                 )
+            elif isinstance(operation, ckks.ModSwitchOp):
+                scale = require(operation.value, operation=operation.name)
+                source_depth = _represented_depth(
+                    operation.value, operation=operation.name
+                )
+                target_depth = int(operation.target_depth.value.data)
+                if not config.is_subbasis(source_depth, target_depth):
+                    scale = config.scale_at(target_depth)
             elif isinstance(operation, _PRESERVING_TYPES):
                 scale = require(operation.operands[0], operation=operation.name)
             elif any(

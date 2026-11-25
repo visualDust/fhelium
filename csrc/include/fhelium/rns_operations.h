@@ -10,7 +10,7 @@
 
 //! Whole RNS operations over named numerical operands: hybrid-digit ModUp,
 //! centered basis extension, ModDown by the auxiliary product, joint ModDown
-//! and rescale, rounded trailing quotients, and leading-prime rescale.
+//! and rescale, rounded trailing quotients, and rational rescale.
 //!
 //! Each function reads prepared tables from a `TensorTable`
 //! (`fhelium/tensor_table.h`) and lists the names it reads. Residue operands
@@ -67,7 +67,13 @@ FHELIUM_API at::Tensor rounded_trailing_quotient(const at::Tensor& source,
 /// residues whose trailing `p_count` rows are the auxiliary primes.
 ///
 /// Reads `moddown_inverses`, `qp_parameters`, and `moddown_half` for nearest
-/// rounding.
+/// rounding. When the table holds the centered quotient tables, named
+/// `moddown_crt_` followed by the operands of `fhelium::rns::crt_basis_extend`
+/// with source P, target Q, and standard-form matrix entries
+/// $-p_j^{-1} \bmod q_i$, the result is $(x - r - kP)/P \bmod Q$, where
+/// $r + kP$ is the centered CRT value of the P rows and $|k|$ is below half
+/// the P row count. It also reads `p_inverse` ($P^{-1} R \bmod q_i$) and
+/// `q_parameters`, and `rounding` does not apply.
 FHELIUM_API at::Tensor moddown_qp_to_q(const at::Tensor& source,
                                        const TensorTable& tables,
                                        int64_t p_count,
@@ -82,7 +88,9 @@ FHELIUM_API at::Tensor moddown_qp_to_q(const at::Tensor& source,
 /// correction of component zero before the forward transform. The result
 /// holds NTT Montgomery Q residues in the lazy range. Reads `qp_parameters`,
 /// `q_parameters`, `moddown_inverses`, `p_inverse`, the optional
-/// `moddown_half`, and the `p` inverse and `q` forward schedules.
+/// `moddown_half`, and the `p` inverse and `q` forward schedules. The
+/// centered quotient tables `moddown_crt_*` select the remainder of
+/// `moddown_qp_to_q`.
 FHELIUM_API at::Tensor moddown_ntt_qp_to_q(
     const at::Tensor& source,
     const std::optional<at::Tensor>& coefficient_c0,
@@ -106,7 +114,17 @@ FHELIUM_API at::Tensor moddown_ntt_qp_to_q(
 /// `joint_p_times_base`, `joint_dropped_offset`, `joint_dropped_parameters`,
 /// `joint_remaining_offset`, `joint_remaining_parameters`, `joint_inverses`,
 /// `joint_ordered_parameters`, `joint_product_inverse`, and the
-/// `joint_dropped` inverse and `joint_remaining` schedules.
+/// `joint_dropped` inverse and `joint_remaining` schedules. When a restored
+/// prime set $R$ is present, the result is $\lfloor (R(v + Pa) + H)/(PD)
+/// \rfloor$ over $B'$: `joint_restore` holds the Montgomery multipliers of
+/// $R$ for the product rows described by `joint_product_parameters`,
+/// `joint_p_times_base` holds $PR$, the `joint_remaining` tables describe
+/// $B'$, and `joint_target_keep_positions` places the surviving Q rows in
+/// $B'$. When the table holds `joint_crt_t_matrix`, the quotient by $P$ uses
+/// the centered CRT remainder of the P rows (`joint_crt_d_*` into the D rows,
+/// `joint_crt_t_*` into $B'$, `joint_crt_p_inverse`), and the following
+/// quotient by $D$ is exact (`joint_crt_inverses`,
+/// `joint_crt_ordered_parameters`, nearest when `joint_crt_half` is present).
 FHELIUM_API at::Tensor moddown_add_rescale(const at::Tensor& products,
                                            const at::Tensor& base,
                                            const TensorTable& tables,
@@ -116,35 +134,30 @@ FHELIUM_API at::Tensor moddown_add_rescale(const at::Tensor& products,
                                            bool joint_drop_is_prefix,
                                            std::string_view output_domain);
 
-/// Divides by the product of the leading `drop_count` rows, one prime at a
-/// time: each step replaces $x$ by $\lfloor (x + h_k) / q_k \rceil$ on the
-/// remaining rows, with $h_k$ = `half_primes[k]` $= (q_k - 1)/2$ for nearest
-/// rounding and $0$ for floor (`truncate`).
+/// Rescales a value from basis $B$ to basis $B'$ by the ratio $D/R$, with
+/// $D = B \setminus B'$ and $R = B' \setminus B$.
 ///
-/// `input_domain` is `coefficient` (standard residues) or `ntt` (Montgomery
-/// residues); the result has the same domain over the remaining rows. Reads
-/// `step{k}_parameters` and `step{k}_inverse` for each step, and for NTT input
-/// `prefix_inverse` with the `dropped` inverse and `remaining` forward
-/// schedules.
-FHELIUM_API at::Tensor rescale_drop_leading_primes(
-    const at::Tensor& source,
-    const TensorTable& tables,
-    int64_t drop_count,
-    c10::IntArrayRef half_primes,
-    std::string_view rounding,
-    std::string_view input_domain,
-    std::string_view ntt_backend);
-
-/// In-place form of `rescale_drop_leading_primes`. The quotient replaces the
-/// remaining rows of `source`, and the returned Tensor is the view of `source`
-/// that holds them.
-FHELIUM_API at::Tensor rescale_drop_leading_primes_(
-    at::Tensor& source,
-    const TensorTable& tables,
-    int64_t drop_count,
-    c10::IntArrayRef half_primes,
-    std::string_view rounding,
-    std::string_view input_domain,
-    std::string_view ntt_backend);
+/// `source` holds coefficient standard residues or, for `input_domain =
+/// "ntt"`, NTT Montgomery residues of $x$ over $B$ in the row order of
+/// `source_parameters`. The result over the rows of `target_parameters` is
+/// $\lfloor (xR + H)/D \rfloor$ in the input domain, with $H = (D - 1)/2$
+/// for nearest rounding and $0$ for floor rounding, computed with one exact
+/// mixed-radix division by $D$. Rows of $R$ hold $\lfloor (xR + H)/D
+/// \rfloor \bmod r$ although $xR \equiv 0 \pmod r$.
+///
+/// Reads `source_parameters`, `target_parameters`, `dropped_parameters`,
+/// `ordered_parameters` (target rows followed by D rows), `drop_positions`
+/// and `keep_positions` (rows of $B$), `inverses` (the trailing-quotient
+/// inverses of the ordered rows), `dropped_offset` and `target_offset`
+/// (residues of $H$), and, when $R$ is nonempty, `restore` (Montgomery
+/// multipliers of $R$ for the rows of $B$) and `target_keep_positions` (rows
+/// of $B'$ holding $B \cap B'$). Without `target_keep_positions`, the kept
+/// rows are the rows of $B'$ in order. NTT input also reads `product_inverse` ($D^{-1}$ for
+/// the target rows), the `dropped` inverse schedule, and the `target`
+/// forward schedule.
+FHELIUM_API at::Tensor rational_rescale(const at::Tensor& source,
+                                        const TensorTable& tables,
+                                        std::string_view input_domain,
+                                        std::string_view ntt_backend);
 
 }  // namespace fhelium::rns

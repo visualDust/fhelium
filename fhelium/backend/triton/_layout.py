@@ -6,11 +6,27 @@ from collections.abc import Sequence
 from math import prod
 
 from xdsl.dialects.builtin import ArrayAttr, IntegerAttr
-from xdsl.ir import Operation
 
+from fhelium.ir._operation_structure import (
+    OperationStructure,
+    operation_structure,
+)
 from fhelium.ir.dialects import ckks, rns
 
 Shape = tuple[int, ...] | None
+
+GENERATED_LAYOUTS = frozenset(
+    ("same", "select", "pack", "key_product", "component_product", "transform")
+)
+"""Result layouts whose access the Triton code generator emits. ``permute`` and ``reduce_rows`` operations are region boundaries."""
+
+
+def generated_structure(operation) -> OperationStructure | None:
+    """Return the registered structure of ``operation`` when its layout is in :data:`GENERATED_LAYOUTS`."""
+    structure = operation_structure(operation)
+    if structure is None or structure.layout not in GENERATED_LAYOUTS:
+        return None
+    return structure
 
 
 def polynomial_shape(value_type: object) -> ArrayAttr[IntegerAttr] | None:
@@ -48,13 +64,21 @@ def polynomial_shape(value_type: object) -> ArrayAttr[IntegerAttr] | None:
 
 
 def result_layout(
-    operation_type: type[Operation],
+    structure: OperationStructure,
     shapes: Sequence[Shape],
     component_axes: Sequence[bool],
-    *,
-    component: int | None = None,
 ) -> tuple[Shape, bool]:
-    """Check known extents and infer an output layout; unknown shapes stay unknown."""
+    """Check known extents and infer an output layout; unknown shapes stay unknown.
+
+    ``shapes`` and ``component_axes`` describe the operands with ``data`` or ``compact`` roles, in operand order.
+    """
+    reduction = structure.reduction
+    if reduction is not None and reduction.stacked is not None:
+        # The leading term axis of a stacked operand is reduced away.
+        position = structure.operands("data", "compact").index(reduction.stacked)
+        stacked = shapes[position]
+        shapes = list(shapes)
+        shapes[position] = None if stacked is None else stacked[1:]
     first = shapes[0]
     axis = component_axes[0]
     for shape in shapes:
@@ -62,7 +86,8 @@ def result_layout(
             raise ValueError(
                 "Triton RNS values require prime and polynomial axes"
             )
-    if operation_type is rns.ExtractComponentOp:
+    if structure.layout == "select":
+        component = structure.component
         if not axis:
             raise ValueError(
                 "Fusion component extraction requires a component axis"
@@ -77,27 +102,30 @@ def result_layout(
                 "Fusion component extraction is outside its source extent"
             )
         return (None if first is None else first[1:]), False
-    if operation_type in (rns.PackTwoComponentsOp, rns.PackThreeComponentsOp):
+    if structure.layout == "pack":
         if any(component_axes):
             raise ValueError("Fusion packing requires polynomial operands")
         known = [shape for shape in shapes if shape is not None]
         if known and any(shape != known[0] for shape in known):
             raise ValueError("Fusion packing requires equal polynomial shapes")
         return (None if first is None else (len(shapes), *first)), True
-    if operation_type is rns.KeySwitchDigitProductOp:
+    if structure.layout == "key_product":
         if axis:
             raise ValueError(
                 "A key-switch digit requires one polynomial bundle"
             )
         return (None if first is None else (2, *first)), True
-    compact = operation_type in (
-        ckks.AddCompressedPlaintextOp,
-        ckks.MultiplyCompressedPlaintextOp,
-    )
-    plaintext = compact or operation_type in (
-        rns.MultiplyPlaintextOp,
-        rns.AddPlaintextOp,
-    )
+    if structure.layout == "component_product":
+        if not all(component_axes) or any(
+            shape is not None and shape[0] != 2 for shape in shapes
+        ):
+            raise ValueError("A tensor product requires two-component operands")
+        known = [shape for shape in shapes if shape is not None]
+        if known and any(shape != known[0] for shape in known):
+            raise ValueError("A tensor product requires equal operand shapes")
+        return (None if first is None else (3, *first[1:])), True
+    compact = "compact" in structure.roles
+    plaintext = structure.plaintext
     for shape, rhs_axis in zip(shapes[1:], component_axes[1:], strict=True):
         if plaintext and rhs_axis:
             raise ValueError("Prepared plaintext cannot carry a component axis")

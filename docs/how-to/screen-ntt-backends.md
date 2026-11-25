@@ -36,7 +36,7 @@ The command ranks an equal-weight geometric mean of per-operation median latency
 ```bash
 fhelium benchmark recommend ntt \
   --suite kernel \
-  --preset slots32768-scale40-depth34-int64 \
+  --preset slots32768-scale40-depth34 \
   --device cuda:0 \
   --output results/ntt-kernel.json
 ```
@@ -48,7 +48,7 @@ The command tests every compatible production backend using forward NTT, inverse
 ```bash
 fhelium benchmark recommend ntt \
   --suite ckks-primitive \
-  --preset slots32768-scale40-depth34-int64 \
+  --preset slots32768-scale40-depth34 \
   --device cuda:0 \
   --output results/ntt-ckks-primitives.json
 ```
@@ -66,37 +66,18 @@ Key generation and correctness checking remain outside the timed region.
 
 The complete-CKKS comparison gives every measured operation equal weight. A production workload does not. Confirm the remaining candidates with representative depths, batch sizes, numbers of relinearizations and rotations, and whether the application uses ordinary eager calls or captured CUDA Graph replay. Preserve the two reports with the application measurement so that the scope of each decision remains visible.
 
-## Worked example: why group16 is selected
+## Worked example
 
-The following historical measurement used GPU 1 on an otherwise idle two-GPU host. Its FHElium 0.10.0 identity is retained; it is not a measurement of the current Eager implementation:
-
-- NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition (compute capability 12.0, also written `sm_120`);
-- `slots32768-scale40-depth34-int64`, whose ring dimension is $2^{16}$;
-- FHElium 0.10.0, PyTorch 2.13.0+cu130, and CUDA 13.0;
-- 3 warmups, 10 timed runs per operation, and 3 repetitions; and
-- seed `20260823`; each repetition started with a different backend to reduce measurement-order bias.
-
-<NttBackendSelectionChart />
+This example screens the compatible GPU policies for `slots32768-scale40-depth34`, whose ring dimension is $2^{16}$, on an NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition with a 300 W power limit (compute capability 12.0, also written `sm_120`). It uses 3 warmups, 10 timed runs per operation, 3 repetitions, and seed `20260823`; each repetition starts with a different backend to reduce measurement-order bias.
 
 | Backend | NTT-only relative latency | Complete-CKKS relative latency | Meaning for this example |
 | --- | ---: | ---: | --- |
-| `radix2_compact_group8_smem8` | fastest | +4.004% | Keep after the first test; do not select after the second. |
-| `radix2_compact_group16_smem8` | +0.891% | fastest | Keep after the first test; select after the second. |
-| `radix16_compact` | +1.445% | +3.456% | Keep after the first test; do not select after the second. |
-| `radix2_compact_group4_smem8` | +5.524% | +6.347% | Remove after the first test. |
-| `radix4_compact` | +6.991% | +7.144% | Remove after the first test. |
+| `radix2_compact` | pending | pending | pending |
+| `radix2_compact_shoup32` | pending | pending | pending |
+| `radix4_compact` | pending | pending | pending |
+| `radix16_compact` | pending | pending | pending |
 
-### Result of test 1
-
-Group8 is fastest under the NTT-only calculation. Group16's relative latency is 0.891% higher and radix16's is 1.445% higher. Because both differences are at most 3%, the first test keeps all three candidates. Group4 and radix4 have relative latency more than 5% higher than group8, so they can be removed for this preset and device. The recorded second test still measured all five backends so that the table shows the complete results.
-
-### Result of test 2
-
-Group16 is fastest under the complete-CKKS calculation in all three repetitions. Radix16's relative latency is 3.456% higher and group8's is 4.004% higher. Both exceed 3%, so the rule that retains the current default for a close result does not apply. The command selects group16.
-
-For every timed operation, the command divides the sample standard deviation by the sample mean; this **coefficient of variation** describes how tightly the repeated timings cluster. The median of those values for group16 is 0.784%. The command labels the recommendation **medium confidence** because group16 is fastest in every repetition and its lead exceeds 3%, but the lead does not reach the 5% required for high confidence.
-
-The first test did not select group8 for deployment; it only prevented group16 and radix16 from being removed too early. The second test provides a more relevant shortlist for composed operations, but it does not replace measurement with the current eager `Engine`.
+The relative latencies of the current policies are pending re-measurement. The first test keeps every candidate within 3% of the NTT-only winner; the second test selects the complete-CKKS winner and retains the current default when it is within 3% of that winner. The command reports the median within-run **coefficient of variation**, the sample standard deviation divided by the sample mean of each timed operation, alongside the confidence label.
 
 ## Apply the measured choice
 
@@ -109,12 +90,12 @@ from fhelium.eager import Engine
 
 torch.set_default_device("cuda:0")
 engine = Engine(
-    fh.Preset.slots32768_scale40_depth34_int64,
-    ntt_backend="radix2_compact_group16_smem8",
+    fh.Preset.slots32768_scale40_depth34,
+    ntt_backend="radix2_compact",
 )
 ```
 
-Re-run the recommendation when the GPU model, CUDA/PyTorch stack, FHElium version, preset, or workload changes. Confirm the recommended group16 policy in the application benchmark before applying it to that workload.
+Re-run the recommendation when the GPU model, CUDA/PyTorch stack, FHElium version, preset, or workload changes. Confirm the recommended policy in the application benchmark before applying it to that workload.
 
 ## Compare a focused candidate set
 
@@ -123,8 +104,8 @@ Repeat `--backend` to restrict a follow-up comparison:
 ```bash
 fhelium benchmark recommend ntt \
   --suite ckks-primitive \
-  --preset slots32768-scale40-depth34-int64 \
-  --backend radix2_compact_group16_smem8 \
+  --preset slots32768-scale40-depth34 \
+  --backend radix2_compact \
   --backend radix16_compact
 ```
 

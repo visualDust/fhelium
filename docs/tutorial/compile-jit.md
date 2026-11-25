@@ -2,14 +2,14 @@
 
 `@fc.compile` returns a `CompiledCallable` using the same Program, passes and Backend as manual compilation. The first call with a new input specialization prepares it and then executes it; later compatible calls use the resident specialization. Eligible Programs persist on disk by default. Execution stays on the prepared route (`graph=False`); `graph="auto"` or `graph=True` enables automatic CUDA Graph capture after its first prepared call.
 
-Example 11 compares two encrypted workloads with their original Eager functions:
+Example 12 compares two encrypted workloads with their original Eager functions:
 
 | Workload | Computation | Default size |
 | --- | --- | --- |
 | 1. CKKS weighted product | $z_i=2x_i y_i w_i$, with encrypted $x,y$ and plaintext $w$ | 8192 slots, one ciphertext per input |
 | 2. CKKS matrix multiplication | $Y=AX$, with plaintext $A$ and encrypted $X$ | $A:128\times128$, $X:128\times8$, BSGS baby step 8 |
 
-Both use `slots8192_scale40_depth7_int64`: $N=16384$, eight active Q rows at entry depth 0, and int64 polynomial storage. The functions contain the encrypted computation; key generation, input encoding, encryption and output decryption remain outside them.
+Both use `slots8192_scale40_depth7`: $N=16384$, eight active Q rows at entry depth 0, and int64 polynomial storage. The functions contain the encrypted computation; key generation, input encoding, encryption and output decryption remain outside them.
 
 ## Set up the weighted product
 
@@ -22,7 +22,7 @@ from fhelium.config import CkksConfig
 from fhelium.eager import Engine
 from fhelium.values import Ciphertext, Plaintext
 
-config = CkksConfig.parse(Preset.slots8192_scale40_depth7_int64)
+config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
 device = torch.device("cpu")
 engine = Engine(config, rng_seed=24)
 secret_key = engine.create_secret_key(device=device)
@@ -162,11 +162,10 @@ Fixed references, including lists and dictionaries, remain live bindings. JIT ca
 
 ## Reuse Programs and inspect execution
 
-Reuse checks a resident executable for the same `CallSignature`, an optimized Program for the input specialization, and a structural template for the source family. A source family shares captured computation across supported changes in CKKS depth, actual scale and prime-row extent. A template hit derives a new instance from current input and material state without rerunning Python source or Engine capture adapters. Python reads of value metadata carry guards; a changed observation can require recapture.
+Reuse checks a resident executable for the same `CallSignature` and then an optimized Program for the input specialization. A new depth, actual scale or prime-row extent is a new input specialization: it is captured and prepared for its concrete value states.
 
-`cache=True` enables the default disk cache at `FHELIUM_CACHE_DIR`, or `$XDG_CACHE_HOME/fhelium/compile` with `~/.cache` as the default base. Structural templates use its `structures` subdirectory. A path selects another directory; `cache=False` preserves resident and process-memory template reuse while disabling disk access. Material Tensor contents are omitted and rebound from the current callable, so compatible fresh key contents can use the same declared layout. Custom pipelines, Backends, workspaces and ineligible source patterns compile normally without these caches. See [Compile and reuse a callable](../how-to/compile-callable.md) for eligibility and invalidation.
+`cache=True` enables the default disk cache at `FHELIUM_CACHE_DIR`, or `$XDG_CACHE_HOME/fhelium/compile` with `~/.cache` as the default base. A path selects another directory; `cache=False` preserves resident specializations while disabling disk access. Material Tensor contents are omitted and rebound from the current callable, so compatible fresh key contents can use the same declared layout. Custom pipelines, Backends, workspaces and ineligible source patterns compile normally without these caches. See [Compile and reuse a callable](../how-to/compile-callable.md) for eligibility and invalidation.
 
-Supported CKKS and registered Tensor/semantic operations can reuse templates and guarded lowering/fusion plans. CKKS templates use a reduced instance recipe; semantic templates still perform full instance scheduling. Uncovered codec, grouped-RNS or replacement operations retain ordinary capture. The workload and selected configuration determine which reuse levels apply.
 
 The default `graph=False` retains prepared execution. With `graph="auto"` or `graph=True`, the callable captures eligible CUDA execution after its first prepared call and shares pools across its Graphs. CPU inputs, autograd outputs and capture failures retain prepared execution; inspect the reason rather than assuming a replay occurred. `copy_output=True` is the default and includes an output copy. With `False`, consume or clone borrowed outputs before the corresponding Graph replays or the callable is cleared.
 
@@ -177,16 +176,16 @@ print("Resident hits:", statistics["resident_cache_hits"])
 print("Graph states:", statistics["graphs"])
 ```
 
-The example reports instance-cache status, structural lookup layer and lowering/fusion plan counts alongside host preparation, dispatch and completed execution. Clear the callable before releasing material owners when execution is finished; clearing releases Graphs before their pools.
+The example reports instance-cache status and reused selection probes alongside host preparation, dispatch and completed execution. Clear the callable before releasing material owners when execution is finished; clearing releases Graphs before their pools.
 
 ## Run the example
 
 ```bash
-python examples/11_compile_jit.py --device cpu
-python examples/11_compile_jit.py --device cuda:0
-python examples/11_compile_jit.py --device cuda:0 --print-ir
-python examples/11_compile_jit.py --device cuda:0 --warmup 10 --runs 100
-python examples/11_compile_jit.py --device cuda:0 --graph --no-cache --borrow-output
+python examples/12_compile_jit.py --device cpu
+python examples/12_compile_jit.py --device cuda:0
+python examples/12_compile_jit.py --device cuda:0 --print-ir
+python examples/12_compile_jit.py --device cuda:0 --warmup 10 --runs 100
+python examples/12_compile_jit.py --device cuda:0 --graph --no-cache --borrow-output
 ```
 
 The example reports sizes, output states, clear-message errors, residue differences, pass durations and selected implementations. First-call latency, which includes preparation, is separate from warmed Eager/compiled medians, their ratio and percentage change. Samples alternate execution order and use the same inputs. Timing covers Python submission through completion with CUDA synchronization; setup, key generation, encoding, encryption, decryption and numerical comparisons are excluded from warm intervals. Inherited PyTorch thread settings are preserved and printed.
@@ -196,6 +195,6 @@ The example completes prepared startup and any requested capture before warm sam
 <details>
 <summary>Source</summary>
 
-<<< ../../examples/11_compile_jit.py
+<<< ../../examples/12_compile_jit.py
 
 </details>
