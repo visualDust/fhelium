@@ -81,7 +81,7 @@ at::Tensor key_moduli(const SeedSpec& spec, const at::Tensor& like) {
 
 }  // namespace
 
-KeySwitchKey expand(const KeySwitchKey& key) {
+KeySwitchKey expand_key_switch_key(const KeySwitchKey& key) {
   if (key.expanded()) {
     return key;
   }
@@ -97,7 +97,7 @@ KeySwitchKey expand(const KeySwitchKey& key) {
           key.spec};
 }
 
-KeySwitchKey compact(const KeySwitchKey& key) {
+KeySwitchKey compact_key_switch_key(const KeySwitchKey& key) {
   TORCH_CHECK_VALUE(key.seed_rows.has_value(),
                     "A key without seed rows cannot be compacted");
   if (!key.expanded()) {

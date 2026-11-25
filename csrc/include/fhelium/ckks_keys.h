@@ -71,13 +71,13 @@ struct KeySwitchKey {
 /// Returns `key` with $k_1$ generated from its seed on the key's device; the
 /// result shares `seed_rows` and holds both components in new storage. An
 /// expanded key is returned as is.
-FHELIUM_API KeySwitchKey expand(const KeySwitchKey& key);
+FHELIUM_API KeySwitchKey expand_key_switch_key(const KeySwitchKey& key);
 
 /// Returns `key` holding $k_0$ and the seed: $k_0$ is copied into new storage
 /// and `seed_rows` is shared, so the memory of $k_1$ is released with the last
 /// reference to the expanded key. Requires `seed_rows`; a compact key is
 /// returned as is.
-FHELIUM_API KeySwitchKey compact(const KeySwitchKey& key);
+FHELIUM_API KeySwitchKey compact_key_switch_key(const KeySwitchKey& key);
 
 /// Rows of a hybrid key-switching key.
 struct KeySwitchKeyLayout {

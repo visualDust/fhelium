@@ -187,7 +187,7 @@ bool check_matrix_vector(const torch::Device& device) {
   // seed, halving key memory; the key products generate k_1 from the seed.
   std::vector<fhelium::ckks::KeySwitchKey> galois_keys;
   for (int64_t i = 1; i < kDimension; ++i) {
-    galois_keys.push_back(fhelium::ckks::compact(fhelium::ckks::create_galois_key(
+    galois_keys.push_back(fhelium::ckks::compact_key_switch_key(fhelium::ckks::create_galois_key(
         secret_key,
         fhelium::ckks::rotation_galois_element(parameters.log_n, -i, kGenerator),
         key_tables,
@@ -382,7 +382,7 @@ bool check_matrix_vector(const torch::Device& device) {
 
   // The expanded form of a key gives the same rotation bitwise.
   const bool forms_match = fhelium::ckks::rotate(
-      ciphertext, fhelium::ckks::expand(galois_keys[0]), -1, rotation_tables,
+      ciphertext, fhelium::ckks::expand_key_switch_key(galois_keys[0]), -1, rotation_tables,
       options).equal(fhelium::ckks::rotate(
           ciphertext, galois_keys[0], -1, rotation_tables, options));
 

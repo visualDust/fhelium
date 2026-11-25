@@ -105,7 +105,7 @@ at::Tensor expand_key_switch_key_op(const at::Tensor& data,
                                     c10::IntArrayRef moduli,
                                     std::string_view prf,
                                     int64_t rounds) {
-  return fhelium::ckks::expand(key_value(data, seed_rows, moduli, prf, rounds)).data;
+  return fhelium::ckks::expand_key_switch_key(key_value(data, seed_rows, moduli, prf, rounds)).data;
 }
 
 at::Tensor compact_key_switch_key_op(const at::Tensor& data,
@@ -113,7 +113,7 @@ at::Tensor compact_key_switch_key_op(const at::Tensor& data,
                                      c10::IntArrayRef moduli,
                                      std::string_view prf,
                                      int64_t rounds) {
-  return fhelium::ckks::compact(key_value(data, seed_rows, moduli, prf, rounds)).data;
+  return fhelium::ckks::compact_key_switch_key(key_value(data, seed_rows, moduli, prf, rounds)).data;
 }
 
 KeyTuple create_key_switch_key_op(const at::Tensor& source_secret_key,
