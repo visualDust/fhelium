@@ -72,7 +72,11 @@ function measurementPanel({
   markRecommendation: boolean
 }) {
   const order = rows.map((row) => row.display)
-  const xScale = { domain: [-0.35, 8], nice: false }
+  const largest = Math.max(
+    thresholdPercent,
+    ...rows.map((row) => Number(row[valueField])),
+  )
+  const xScale = { domain: [-0.04 * largest, 1.08 * largest], nice: false }
   const xAxis = {
     title: 'Relative latency above the fastest result (%)',
     titleColor: palette.foreground,
@@ -80,7 +84,7 @@ function measurementPanel({
     titlePadding: 10,
     labelColor: palette.secondary,
     labelFontSize: 11,
-    values: [0, 1, 2, 3, 4, 5, 6, 7, 8],
+    tickCount: 6,
     grid: true,
     gridColor: palette.grid,
     gridOpacity: 0.85,

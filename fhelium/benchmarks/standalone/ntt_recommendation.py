@@ -172,9 +172,7 @@ def _primitive_setup(
         "encrypt_message": lambda: engine.encrypt_message(
             message_x, device=device
         ),
-        "decrypt_message": lambda: engine.decrypt_message(
-            ciphertext_x, device="cpu"
-        ),
+        "decrypt_message": lambda: engine.decrypt_message(ciphertext_x).cpu(),
         "multiply_relinearize": lambda: engine.relinearize(
             engine.multiply(ciphertext_x_ntt, ciphertext_y_ntt),
             relinearization_key,
@@ -187,7 +185,7 @@ def _primitive_setup(
         ),
     }
 
-    decrypted = engine.decrypt_message(ciphertext_x, device="cpu")
+    decrypted = engine.decrypt_message(ciphertext_x).cpu()
     decrypt_error = float(torch.max(torch.abs(decrypted - message_x)).item())
     multiplied = engine.relinearize(
         engine.multiply(ciphertext_x_ntt, ciphertext_y_ntt),
@@ -196,8 +194,7 @@ def _primitive_setup(
     multiply_error = float(
         torch.max(
             torch.abs(
-                engine.decrypt_message(multiplied, device="cpu")
-                - message_x * message_y
+                engine.decrypt_message(multiplied).cpu() - message_x * message_y
             )
         ).item()
     )
@@ -205,7 +202,7 @@ def _primitive_setup(
     rotate_error = float(
         torch.max(
             torch.abs(
-                engine.decrypt_message(rotated, device="cpu")
+                engine.decrypt_message(rotated).cpu()
                 - torch.roll(message_x, shifts=rotation_steps[0])
             )
         ).item()
@@ -215,7 +212,7 @@ def _primitive_setup(
         float(
             torch.max(
                 torch.abs(
-                    engine.decrypt_message(value, device="cpu")
+                    engine.decrypt_message(value).cpu()
                     - torch.roll(message_x, shifts=step)
                 )
             ).item()
@@ -649,7 +646,7 @@ def recommend_ntt_backend(
                 else cuda_device_info.compute_capability
             ),
             "fhelium_version": fhelium.__version__,
-            "torch_version": torch.__version__,
+            "torch_version": str(torch.__version__),
             "torch_cuda_version": torch.version.cuda,
             "backends": list(backends),
             "operations": list(operations),

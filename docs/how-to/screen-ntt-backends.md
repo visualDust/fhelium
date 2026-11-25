@@ -70,14 +70,25 @@ The complete-CKKS comparison gives every measured operation equal weight. A prod
 
 This example screens the compatible GPU policies for `slots32768-scale40-depth34`, whose ring dimension is $2^{16}$, on an NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition with a 300 W power limit (compute capability 12.0, also written `sm_120`). It uses 3 warmups, 10 timed runs per operation, 3 repetitions, and seed `20260823`; each repetition starts with a different backend to reduce measurement-order bias.
 
+<NttBackendSelectionChart />
+
 | Backend | NTT-only relative latency | Complete-CKKS relative latency | Meaning for this example |
 | --- | ---: | ---: | --- |
-| `radix2_compact` | pending | pending | pending |
-| `radix2_compact_shoup32` | pending | pending | pending |
-| `radix4_compact` | pending | pending | pending |
-| `radix16_compact` | pending | pending | pending |
+| `radix2_compact` | 1.115 | 1.000 | Complete-CKKS winner and current default |
+| `radix2_compact_shoup32` | 1.000 | 1.004 | NTT-only winner; within 3% of the default in complete CKKS |
+| `radix4_compact` | 2.035 | 1.229 | Removed by the NTT-only test |
+| `radix16_compact` | 1.605 | 1.133 | Removed by the NTT-only test |
 
-The relative latencies of the current policies are pending re-measurement. The first test keeps every candidate within 3% of the NTT-only winner; the second test selects the complete-CKKS winner and retains the current default when it is within 3% of that winner. The command reports the median within-run **coefficient of variation**, the sample standard deviation divided by the sample mean of each timed operation, alongside the confidence label.
+Relative latency is the equal-weight geometric mean of per-operation latency ratios, normalized to the fastest backend of each test. The NTT-only test ran at a median SM clock of 2272 MHz and the complete-CKKS test at 2220 MHz. `radix2_compact_shoup32` wins every NTT-only repetition by 11.5%, but in complete CKKS operations the two radix-2 policies differ by 0.4%, so the command retains `radix2_compact` with a low-confidence label. The first test keeps every candidate within 3% of the NTT-only winner; the second test selects the complete-CKKS winner and retains the current default when it is within 3% of that winner. The command reports the median within-run **coefficient of variation**, the sample standard deviation divided by the sample mean of each timed operation, alongside the confidence label; here it is at most 2.2% in the NTT-only test and 0.4% in the complete-CKKS test.
+
+The same commands on an NVIDIA RTX A6000 with a 300 W power limit (compute capability 8.6, median SM clock 1800 MHz in the NTT-only test and 1875 MHz in the complete-CKKS test) rank `radix2_compact` first in both tests:
+
+| Backend | NTT-only relative latency | Complete-CKKS relative latency |
+| --- | ---: | ---: |
+| `radix2_compact` | 1.000 | 1.000 |
+| `radix2_compact_shoup32` | 1.134 | 1.017 |
+| `radix4_compact` | 2.291 | 1.374 |
+| `radix16_compact` | 1.512 | 1.163 |
 
 ## Apply the measured choice
 

@@ -25,7 +25,7 @@ def make_residue_rows(ntt: NttContext, *, seed: int) -> torch.Tensor:
             0,
             modulus,
             (ntt.config.N,),
-            dtype=torch.int64,
+            dtype=ntt.rns_context.dtype,
             generator=generator,
             device="cpu",
         )

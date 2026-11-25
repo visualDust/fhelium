@@ -29,7 +29,7 @@ from fhelium.eager import Engine
 
 torch.set_default_device("cuda:0")
 engine = Engine(
-    fh.Preset.slots8192_scale40_depth7_int64
+    fh.Preset.slots8192_scale40_depth7
 )
 
 ciphertext = engine.encrypt_message(message)
@@ -64,10 +64,10 @@ compiled = pipeline.run(captured)
 print(compiled.program.to_text())
 print(compiled.reports)
 
-executable = OperationBackend(
-    keys=keys,
-    materializer=resources,
-).link(compiled)
+fh_compile.prepare_material_bindings(
+    compiled, resources=resources, keys=keys
+)
+executable = OperationBackend().link(compiled)
 result = executable.run(ciphertext)`,
   },
   {

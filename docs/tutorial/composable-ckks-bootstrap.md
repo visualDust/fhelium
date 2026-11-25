@@ -130,17 +130,20 @@ No profile searches this design space or chooses a security target for the calle
 
 ## 6. Performance and material footprint
 
-These measurements were collected on November 24, 2026, on an **NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition** (300 W power limit) at 2272 MHz SM clock, with $N=65536$, 32768 complex slots, int32 residues, a uniform ternary main secret, `intermediate_weight=48`, `basis_conversion="normalized_crt"` and one ciphertext per request. Inputs are uniformly random complex messages with $|\Re z|,|\Im z|\le1$ encrypted at the preset's maximum depth. Every configuration refreshes to depth 16.
+These measurements were collected on November 24, 2026, on an **NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition** (300 W power limit) at 2272 MHz SM clock, with $N=65536$, 32768 complex slots, int32 residues, a uniform ternary main secret, `intermediate_weight=48`, `basis_conversion="normalized_crt"`, the profile `"3/38"` and one ciphertext per request. Inputs are uniformly random complex messages with $|\Re z|,|\Im z|\le1$ encrypted at the preset's maximum depth. Every configuration refreshes to depth 16, so the application depths after refresh equal the maximum depth minus 16.
 
-| Preset | Depth transition | Graph latency (ms) | Max absolute error | Keys (GiB) | Graph peak allocated (GiB) |
-|---|---|---:|---:|---:|---:|
-| `slots32768-scale40-depth20-boot4` | 20 → 16 | 25.15 | 2.56e-06 | 2.10 | 3.07 |
-| `slots32768-scale40-depth24-boot8` | 24 → 16 | 31.96 | 2.34e-06 | 2.99 | 4.21 |
-| `slots32768-scale40-depth29-boot13` | 29 → 16 | 41.71 | 2.82e-06 | 5.15 | 6.58 |
-| `slots32768-scale50-depth24-boot8` | 24 → 16 | 36.06 | 2.6e-06 | 3.75 | 5.11 |
-| `slots32768-scale50-depth28-boot12` | 28 → 16 | 49.75 | 2.6e-06 | 6.92 | 8.45 |
+| Preset | Key storage | Depth transition | Graph latency (ms) | Eager latency (ms) | Max absolute error | Keys (GiB) | Graph peak allocated (GiB) |
+|---|---|---|---:|---:|---:|---:|---:|
+| `slots32768-scale40-depth20-boot4` | expanded | 20 → 16 | 19.48 | 21.52 | 2.62e-06 | 2.10 | 3.09 |
+| `slots32768-scale40-depth24-boot8` | expanded | 24 → 16 | 24.61 | 26.59 | 2.29e-06 | 2.99 | 4.21 |
+| `slots32768-scale40-depth29-boot13` | expanded | 29 → 16 | 32.09 | 35.66 | 2.58e-06 | 5.15 | 6.58 |
+| `slots32768-scale40-depth29-boot13` | compact | 29 → 16 | 34.35 | 39.29 | 2.58e-06 | 2.58 | 4.00 |
+| `slots32768-scale50-depth24-boot8` | expanded | 24 → 16 | 27.87 | 30.84 | 2.60e-06 | 3.75 | 5.11 |
+| `slots32768-scale50-depth28-boot12` | expanded | 28 → 16 | 38.12 | 42.66 | 2.48e-06 | 6.92 | 8.46 |
 
-Graph latency is the median of five single replays of the captured `PreparedBootstrap`, separated by one second of idle time; key generation, preparation, input copying and capture are outside the timed interval. Under back-to-back replay this GPU reaches its power limit and lowers its clock, and the boot13 replay then takes 45.8–46.2 ms. Keys are the retained payloads of the complete bootstrap inventory, including the two encapsulation keys. Peak allocated memory covers capture and replay and includes keys, encoded diagonals and constants, input/output and workspace. The error is the maximum over all slots of $|\mathrm{decrypt}-z|$ for the Graph output.
+Graph latency is the median of nine single replays of the captured `PreparedBootstrap`, separated by one second of idle time; key generation, preparation, input copying and capture are outside the timed interval. Eager latency is the median of five calls of the `PreparedBootstrap`. Expanded keys are the default `Engine(expand_keys=True)`; compact keys (`expand_keys=False`) store each key-switching key's uniform component as seed rows and regenerate it inside key products. Under back-to-back replay this GPU reaches its power limit and lowers its clock, and the expanded boot13 replay then takes 34.0–35.2 ms. Keys are the retained payloads of the complete bootstrap inventory, including the two encapsulation keys. Peak allocated memory covers capture and replay and includes keys, encoded diagonals and constants, input/output and workspace. The error is the maximum over all slots of $|\mathrm{decrypt}-z|$ for the Graph output.
+
+On an **NVIDIA RTX A6000** (300 W power limit, 1770–1905 MHz SM clock during replay), `slots32768-scale40-depth29-boot13` with expanded keys refreshes in 101.21 ms (Graph) and 117.34 ms (Eager) with maximum error 2.57e-06 and the same key and peak-memory footprint.
 
 ## Example sources
 
