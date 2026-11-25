@@ -334,6 +334,8 @@ class RecursiveChebyshevPlan:
 
         def finish(value: Ciphertext, components: int) -> Ciphertext:
             if components == 3:
+                # Three-component products occur only at relinearization depths.
+                assert relinearization_key is not None
                 return arithmetic.relinearize(
                     value,
                     relinearization_key,
@@ -357,9 +359,7 @@ class RecursiveChebyshevPlan:
                 )
             result = finish(product, 3)
             values[step.degree] = (
-                result
-                if step.subtract
-                else arithmetic.add_scalar(result, -1.0)
+                result if step.subtract else arithmetic.add_scalar(result, -1.0)
             )
 
         def evaluate(node: _Node, scale: float) -> tuple[Ciphertext, complex]:

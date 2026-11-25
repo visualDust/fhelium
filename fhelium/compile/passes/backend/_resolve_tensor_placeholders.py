@@ -100,9 +100,11 @@ class ResolveTensorPlaceholdersPass:
                     for nested in region.blocks:
                         refine_interfaces(nested)
                 if isinstance(operation, fusion.FusedOp):
+                    terminator = operation.body.block.last_op
+                    assert isinstance(terminator, fusion.YieldOp)
                     for result, value in zip(
                         operation.outputs,
-                        operation.body.block.last_op.values,
+                        terminator.values,
                         strict=True,
                     ):
                         if result.type != value.type:

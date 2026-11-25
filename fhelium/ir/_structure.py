@@ -7,6 +7,7 @@ import struct
 from collections.abc import Hashable, Mapping
 from enum import Enum
 from io import StringIO
+from typing import cast
 
 from xdsl.ir import (
     Attribute,
@@ -103,12 +104,17 @@ class AttributeDigests:
                 identity,
                 tuple(
                     (name, self(getattr(attribute, name)))
-                    for name, _ in attribute.get_irdl_definition().parameters
+                    for name, _ in cast(ParametrizedAttribute, attribute)
+                    .get_irdl_definition()
+                    .parameters
                 ),
             )
         elif kind == "data":
             try:
-                content = (identity, self._data(attribute.data))
+                content = (
+                    identity,
+                    self._data(cast(Data[object], attribute).data),
+                )
             except _UnsupportedPayload:
                 if self.strict:
                     raise ValueError("unsupported attribute payload") from None
@@ -132,7 +138,7 @@ class AttributeDigests:
         if cls is float:
             return ("float64-bits", struct.pack("!d", value).hex())
         if cls is bytes:
-            return ("bytes", value.hex())
+            return ("bytes", cast(bytes, value).hex())
         if isinstance(value, tuple):
             return ("tuple", tuple(self._data(item) for item in value))
         if isinstance(value, Mapping):

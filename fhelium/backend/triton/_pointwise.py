@@ -8,13 +8,14 @@ from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from math import prod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import torch
 from xdsl.ir import Operation
 
 from fhelium.backend.implementation import FusionMatcher, OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
+from fhelium.ir._operation_structure import StructureDescription
 from fhelium.ir._structure import structural_key
 from fhelium.ir.dialects import ckks, fusion, rns
 
@@ -91,7 +92,7 @@ class _Value:
 
     root: int
     shape: tuple[int, ...]
-    view: tuple[object, ...] = ()
+    view: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -112,8 +113,8 @@ class PointwisePlan:
     compile constants. Extents and strides are non-specialized int64 arguments.
     """
 
-    graph: BoundGraph
-    materialized: tuple[ValueExpr, ...]
+    graph: BoundGraph | _Outputs
+    materialized: tuple[ValueExpr | _Value, ...]
     kernel: PreparedKernel | None
     length: int
     inputs: tuple[int, ...]
@@ -259,7 +260,8 @@ class PointwisePlan:
 
     def warm(self, parameter_strides: tuple[int, int], radix: int) -> int:
         """Compile and load complete-output partitions; return new compilations."""
-        if self.parts:
+        # A plan has either one kernel or partitions.
+        if self.kernel is None:
             return sum(
                 part.warm(parameter_strides, radix) for part in self.parts
             )
@@ -311,7 +313,7 @@ class PointwisePlan:
                 )
                 for v in self.materialized
             }
-        if self.length and not self.parts:
+        if self.length and self.kernel is not None:
             scalars = self.scalars
             if out and len(self.scalar_names) == len(scalars):
                 strides = {
@@ -391,16 +393,22 @@ def execution_parameters(
     return parameters, 32 if first.dtype == torch.int32 else 62
 
 
+_InputDescription = tuple[
+    tuple[int, ...], tuple[int, ...], torch.dtype, torch.device
+]
+"""Extents, strides, dtype and device of one fusion input."""
+
+
 def declared_layouts(
     operation: fusion.FusedOp,
-) -> tuple[tuple[tuple[object, ...], ...], bool] | None:
+) -> tuple[tuple[_InputDescription, ...], bool] | None:
     """Read input extents, strides, dtype and device from fusion input types.
 
     Returns ``(descriptions, fixed)``, or None when an extent, dtype or device is unknown. Missing shapes are reconstructed from polynomial state and missing strides are assumed contiguous; either makes the layout not fixed.
     """
     from xdsl.dialects.builtin import ArrayAttr, IntegerAttr, StringAttr
 
-    descriptions = []
+    descriptions: list[_InputDescription] = []
     fixed = True
     for value in operation.inputs:
         state = getattr(getattr(value.type, "state", None), "data", {})
@@ -621,7 +629,10 @@ class PreparedFusion:
                 tuple(value.stride()),
                 True,
                 row_split=_key_row_split(
-                    all_inputs[table_indices[table]].size(-2), rows, start, p_start
+                    all_inputs[table_indices[table]].size(-2),
+                    rows,
+                    start,
+                    p_start,
                 ),
             )
             for value, (table, _, start, p_start, *_) in zip(
@@ -861,6 +872,12 @@ class TritonFusionImplementation:
         raise RuntimeError("Resolve the fusion operation before execution")
 
 
+class _StructuredOperationType(Protocol):
+    """Operation class that declares its residue structure."""
+
+    structure: StructureDescription
+
+
 ARITHMETIC_OPS = (
     ckks.AddCompressedPlaintextOp,
     ckks.MultiplyCompressedPlaintextOp,
@@ -936,9 +953,10 @@ class TritonRnsImplementation:
                 )
                 for i, layout in enumerate(layouts)
             ]
-            structure = invocation.operation_type.structure(
-                invocation.operand_count, invocation.attributes
-            )
+            # Every operation in ARITHMETIC_OPS declares a structure.
+            structure = cast(
+                _StructuredOperationType, invocation.operation_type
+            ).structure(invocation.operand_count, invocation.attributes)
             output = structured_value(
                 structure,
                 {

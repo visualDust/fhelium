@@ -109,8 +109,9 @@ class _Chain:
         return set(self.main[:m]) | set(self.terminal[:t])
 
     def ratio_bits(self, depth):
-        source, target = self.basis(self.states[depth]), self.basis(
-            self.states[depth + 1]
+        source, target = (
+            self.basis(self.states[depth]),
+            self.basis(self.states[depth + 1]),
         )
         return _bits(source - target) - _bits(target - source)
 
@@ -125,7 +126,10 @@ def _base_state(scale: int, main, terminal, headroom=_HEADROOM_BITS):
     ]
     return min(
         candidates,
-        key=lambda s: (s[0] + s[1], _bits(main[: s[0]]) + _bits(terminal[: s[1]])),
+        key=lambda s: (
+            s[0] + s[1],
+            _bits(main[: s[0]]) + _bits(terminal[: s[1]]),
+        ),
     )
 
 
@@ -142,6 +146,7 @@ def _extend(states, scale, main, terminal):
             key = (abs(ratio - scale), m2 + t2, len(removed))
             if best is None or key < best[0]:
                 best = (key, (m2, t2))
+    assert best is not None
     return states + [best[1]]
 
 
@@ -189,7 +194,9 @@ def _preset_with(log_n: int, scale: int, terminal_count: int) -> Preset:
     order = 2 << log_n
     main = _descending_primes(order, 1 << 30, _MAIN_POOL)
     terminal = _primes_around(order, 25, terminal_count, exclude=main)
-    p_pool = _descending_primes(order, 1 << 30, _MAIN_POOL + _P_COUNT[log_n] + 8)
+    p_pool = _descending_primes(
+        order, 1 << 30, _MAIN_POOL + _P_COUNT[log_n] + 8
+    )
     best = None
     failures = 0
     for depth in range(1, 200):
@@ -201,9 +208,15 @@ def _preset_with(log_n: int, scale: int, terminal_count: int) -> Preset:
         q_main, q_terminal = main[:m_used], terminal[:t_used]
         p = tuple(x for x in p_pool if x not in q_main)[: _P_COUNT[log_n]]
         ratios = [chain.ratio_bits(d) for d in range(depth)]
-        balanced = all(
-            abs(r - scale) <= _RATIO_TOLERANCE_BITS[log_n] for r in ratios[1:]
-        ) and scale - _RATIO_TOLERANCE_BITS[log_n] <= ratios[0] <= scale + _HEADROOM_BITS + 2
+        balanced = (
+            all(
+                abs(r - scale) <= _RATIO_TOLERANCE_BITS[log_n]
+                for r in ratios[1:]
+            )
+            and scale - _RATIO_TOLERANCE_BITS[log_n]
+            <= ratios[0]
+            <= scale + _HEADROOM_BITS + 2
+        )
         if not balanced or (
             _bits(q_main) + _bits(q_terminal) + _bits(p) > _BUDGET[log_n]
         ):
@@ -219,7 +232,11 @@ def _preset_with(log_n: int, scale: int, terminal_count: int) -> Preset:
     p = _fill_budget(order, q_order, p, _BUDGET[log_n])
     return _interval_preset(
         f"slots{1 << (log_n - 1)}-scale{scale}-depth{depth}",
-        log_n, scale, q_order, bases, p,
+        log_n,
+        scale,
+        q_order,
+        bases,
+        p,
     )
 
 
@@ -246,7 +263,13 @@ _BOOT_GROUPS = (
     (27.7, 27.7),
 )
 # (log N, scale bits, application levels) of the bootstrap presets.
-_BOOT_TIERS = ((16, 40, 4), (16, 40, 8), (16, 40, 13), (16, 50, 8), (16, 50, 12))
+_BOOT_TIERS = (
+    (16, 40, 4),
+    (16, 40, 8),
+    (16, 40, 13),
+    (16, 50, 8),
+    (16, 50, 12),
+)
 
 
 def _bootstrap_preset(log_n: int, scale: int, levels: int) -> Preset:
@@ -262,9 +285,7 @@ def _bootstrap_preset(log_n: int, scale: int, levels: int) -> Preset:
     reusable = [p for p in terminal if p in used and p not in application[0]]
     # Main primes of deeper application bases outside the first one fill the
     # leading 29.75-bit EvalMod slots, so depth 0 holds every Q prime.
-    reusable_main = [
-        p for p in main if p in used and p not in application[0]
-    ]
+    reusable_main = [p for p in main if p in used and p not in application[0]]
     groups = []
     for widths in _BOOT_GROUPS:
         group = []
@@ -274,7 +295,7 @@ def _bootstrap_preset(log_n: int, scale: int, levels: int) -> Preset:
             elif width == 29.75 and reusable_main:
                 prime = reusable_main.pop(0)
             else:
-                bits = 25 if width == "t" else width
+                bits = width if isinstance(width, float) else 25
                 prime = _primes_around(order, bits, 1, exclude=used)[0]
             used.add(prime)
             group.append(prime)

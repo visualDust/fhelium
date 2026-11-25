@@ -99,6 +99,23 @@ def _ciphertext_result(
     )
 
 
+@overload
+def weighted_sum_terms(
+    values: Sequence[Ciphertext] | Ciphertext,
+) -> tuple[Ciphertext, ...]: ...
+@overload
+def weighted_sum_terms(
+    values: Sequence[Plaintext | CompressedPlaintext]
+    | Plaintext
+    | CompressedPlaintext,
+) -> tuple[Plaintext | CompressedPlaintext, ...]: ...
+@overload
+def weighted_sum_terms(
+    values: Sequence[Ciphertext | Plaintext | CompressedPlaintext]
+    | Ciphertext
+    | Plaintext
+    | CompressedPlaintext,
+) -> tuple[Ciphertext | Plaintext | CompressedPlaintext, ...]: ...
 def weighted_sum_terms(
     values: Sequence[Ciphertext | Plaintext | CompressedPlaintext]
     | Ciphertext
@@ -148,9 +165,12 @@ def _plaintext_result(
     )
 
 
-class _KeySwitchAttributes(TypedDict, total=False):
+class _KeyLayout(TypedDict, total=False):
     key_prime_ids: tuple[int, ...]
     digit_prime_ids: tuple[tuple[int, ...], ...]
+
+
+class _KeySwitchAttributes(_KeyLayout, total=False):
     key_rounds: int
 
 
@@ -541,7 +561,7 @@ class Engine:
                 return_prime=return_prime,
                 return_p_moduli=tuple(return_p_moduli),
             )
-        return tuple(
+        to_intermediate, to_source = (
             EncapsulationKey(
                 data=key.data,
                 prime_ids=key.prime_ids,
@@ -554,6 +574,7 @@ class Engine:
                 keys, ("to_intermediate", "to_source"), strict=True
             )
         )
+        return to_intermediate, to_source
 
     def create_public_key(
         self,
@@ -1648,10 +1669,18 @@ class Engine:
         if not keys:
             return {}
         first = keys[0]
-        identity = (first.prime_ids, first.digit_prime_ids, first.generated_rounds)
+        identity = (
+            first.prime_ids,
+            first.digit_prime_ids,
+            first.generated_rounds,
+        )
         for key in keys:
             self._validator.validate_key_switch_key(key)
-            if (key.prime_ids, key.digit_prime_ids, key.generated_rounds) != identity:
+            if (
+                key.prime_ids,
+                key.digit_prime_ids,
+                key.generated_rounds,
+            ) != identity:
                 raise ValueError(
                     "A shared key-switch execution group requires matching key rows, digit supports and storage form"
                 )
@@ -2952,7 +2981,10 @@ class Engine:
                 )
             plaintext = self.prepare_compressed_plaintext(
                 torch.full(
-                    (1,), value, dtype=torch.complex128, device=ciphertext.device
+                    (1,),
+                    value,
+                    dtype=torch.complex128,
+                    device=ciphertext.device,
                 ),
                 depth=depth,
                 scale=plaintext_scale,

@@ -22,7 +22,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import torch
 
@@ -42,6 +42,7 @@ from fhelium.values import (
 from ._specialization import CallSignature, _scalar_key
 
 if TYPE_CHECKING:
+    from fhelium.eager import Engine
     from fhelium.ir import Program
 
 _SCALARS = (type(None), bool, int, float, complex, str, bytes)
@@ -713,6 +714,7 @@ def _leaf_layout(value: object) -> object:
     else:
         from ._materials import key_description
 
+        assert isinstance(value, (SecretKey, PublicKey, KeySwitchKey))
         layout = key_description(value)
         layout["data"] = _tensor_layout(value.data)
     # Normalize tuples identically before and after JSON persistence.
@@ -850,7 +852,9 @@ def _leaf_tensors(leaf: object) -> dict[str, torch.Tensor]:
 
 
 def _resolve_path(roots: Mapping[str, object], path: _Path) -> object:
-    value: object = roots
+    # Each step reads an attribute, item or field of the object reached so far.
+    value: Any = roots
+    argument: Any
     for operation, argument in path:
         if operation == "root":
             value = roots[argument]
@@ -957,11 +961,11 @@ def relocate_materials(
     manifest: Mapping[str, Any],
     *,
     material_names: Mapping[str, object] | None = None,
-) -> tuple[dict[str, torch.Tensor], list[tuple[object, torch.device]]]:
+) -> tuple[dict[str, torch.Tensor], list[tuple[Engine, torch.device]]]:
     """Resolve current material objects and providers for an instance Program."""
     roots = {"fn": function, "names": material_names or {}}
     bindings: dict[str, torch.Tensor] = {}
-    providers: dict[tuple[int, str], tuple[object, torch.device]] = {}
+    providers: dict[tuple[int, str], tuple[Engine, torch.device]] = {}
     aliases: dict[int, torch.Tensor] = {}
     reverse_aliases: dict[int, int] = {}
     for symbol, entry in manifest.items():
@@ -994,6 +998,16 @@ def relocate_materials(
             )
         bindings[symbol] = tensor
     return bindings, list(providers.values())
+
+
+class ArtifactRecord(TypedDict):
+    """A linked executable and the facts needed to restore its variant without the Program."""
+
+    payload: bytes
+    selections: Mapping[str, Mapping[str, object] | None]
+    input_names: tuple[str, ...]
+    output_structure: object | None
+    input_fields: dict[str, tuple[str, str]]
 
 
 @dataclass(frozen=True)
@@ -1074,7 +1088,7 @@ class CompileCache:
     def _artifact_path(self, key: str) -> Path:
         return self.directory / key[:2] / (key + ".linked")
 
-    def load_artifact(self, key: str) -> dict[str, object] | None:
+    def load_artifact(self, key: str) -> ArtifactRecord | None:
         """Return a linked-executable artifact record, or None when absent or unreadable."""
         import pickle
 
@@ -1086,7 +1100,7 @@ class CompileCache:
             return None
         return record
 
-    def store_artifact(self, key: str, record: dict[str, object]) -> None:
+    def store_artifact(self, key: str, record: ArtifactRecord) -> None:
         import pickle
 
         self._publish(
@@ -1118,6 +1132,7 @@ class CompileCache:
 
 
 __all__ = [
+    "ArtifactRecord",
     "CacheEntry",
     "artifact_key",
     "CacheIneligible",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from typing import Any, cast
 
 from xdsl.dialects import arith, scf
 from xdsl.dialects.builtin import (
@@ -242,4 +243,4 @@ def emit_host_body(
         return lines
     finally:
         # Recursive builders otherwise retain their bound execution callbacks.
-        emit = None
+        emit = cast(Any, None)

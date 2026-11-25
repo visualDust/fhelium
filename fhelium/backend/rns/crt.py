@@ -58,10 +58,8 @@ def crt_basis_extension_tables(
         source_normalizers,
         source_reciprocals,
         target_offsets,
-    ) = (
-        rns_ops.crt_basis_extension_tables(
-            source_moduli, target_moduli, method == "normalized", context.dtype
-        )
+    ) = rns_ops.crt_basis_extension_tables(
+        source_moduli, target_moduli, method == "normalized", context.dtype
     )
     return {
         "source_parameters": context.rns_parameter_tensor.index_select(
@@ -104,7 +102,7 @@ def centered_quotient_tables(
     :data:`CRT_OPERANDS` names.
     """
     moduli = context.config.moduli
-    tables = dict(
+    tables: dict[str, torch.Tensor] = dict(
         zip(
             CRT_OPERANDS[2:],
             rns_ops.crt_quotient_tables(

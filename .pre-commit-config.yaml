@@ -44,6 +44,20 @@ repos:
         language: system
         pass_filenames: false
         files: ^(fhelium|scripts)/.*\.py$
+      - id: cpp-api-docs
+        name: libfhelium API reference
+        entry: python scripts/generate_cpp_api_docs.py
+        language: system
+        pass_filenames: false
+        files: ^(csrc/include/fhelium/.*\.h|csrc/torchops/.*\.cpp|csrc/ops/[^/]+/api\.cpp|scripts/generate_cpp_api_docs\.py)$
+      # Release build images provide the CUDA compiler and runtime only; ATen
+      # CUDA headers also require the cuBLAS and cuSPARSE development headers.
+      - id: no-aten-cuda-headers
+        name: no ATen CUDA headers in native sources
+        entry: '#\s*include\s*[<"]ATen/cuda/'
+        language: pygrep
+        files: ^csrc/
+        types_or: [c++, c, cuda]
 
   - repo: https://github.com/cheshirekow/cmake-format-precommit
     rev: v0.6.13

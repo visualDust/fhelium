@@ -37,7 +37,7 @@ class LinkArtifact:
     """A persisted linked executable and the provider selections of its generated materials."""
 
     payload: bytes
-    selections: Mapping[str, Mapping[str, object]]
+    selections: Mapping[str, Mapping[str, object] | None]
 
 
 @dataclass(frozen=True)
@@ -192,7 +192,8 @@ class Specialization:
                 else output(self._variant.output_structure)
             )
         finally:
-            output = None
+            # Release the recursive closure's reference to itself.
+            output = cast(Any, None)
         source = f"def execute(values):\n    result = invoke({', '.join(operands)})\n    return {expression}\n"
         exec(compile(source, "<fhelium-matched-call>", "exec"), namespace)
         return namespace.pop("execute")

@@ -12,14 +12,17 @@ import io
 import pickle
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, is_dataclass
+from typing import TypedDict
 from functools import cached_property, partial
 from types import FunctionType, MappingProxyType
 
 import torch
 from xdsl.ir import Attribute, Block, Operation, Region, SSAValue
 
+from .resources import ResourceRequirement
 from .execution import (
     OperationBackend,
+    OperationDispatch,
     ProgramDispatchTable,
     ProgramExecutable,
     _index_value,
@@ -72,7 +75,7 @@ class _Context:
     implementations: tuple[object, ...]
     externals: tuple[object, ...]
     backend: OperationBackend
-    materials: Mapping[str, object]
+    materials: Mapping[str, torch.Tensor]
     relink: Callable[[], ProgramExecutable] | None
 
 
@@ -180,7 +183,7 @@ def export_executable(
 def restore_executable(
     payload: bytes,
     backend: OperationBackend,
-    materials: Mapping[str, object],
+    materials: Mapping[str, torch.Tensor],
     *,
     externals: tuple[object, ...] = (),
     relink: Callable[[], ProgramExecutable] | None = None,
@@ -206,7 +209,21 @@ def restore_executable(
     return executable
 
 
-def _executable_state(executable: ProgramExecutable) -> dict[str, object]:
+class _ExecutableState(TypedDict):
+    """Recorded state from which an artifact restores a ProgramExecutable."""
+
+    source: str
+    bound: Mapping[str, object]
+    requirements: tuple[ResourceRequirement, ...]
+    dispatches: tuple[OperationDispatch, ...]
+    manifest: dict[str, object]
+    schedules: tuple[tuple[str, str], ...]
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+    callee: str | None
+
+
+def _executable_state(executable: ProgramExecutable) -> _ExecutableState:
     from fhelium.ir._structure import _AttributeText
 
     text = _AttributeText()
@@ -251,7 +268,7 @@ def link_resources(
     return bindings.resolve_all(tuple(requirements))
 
 
-def _restore_executable(state: dict[str, object]) -> ProgramExecutable:
+def _restore_executable(state: _ExecutableState) -> ProgramExecutable:
     from fhelium.native.wrapper import ntt_ops
 
     context = _CONTEXT.get()
@@ -322,8 +339,15 @@ class RestoredProgramExecutable(ProgramExecutable):
     Execution, material rebinding and dispatch inspection use the restored state. The linked Program is produced on first access to ``program`` by linking the cached Program again; a restored fusion that meets an operand layout without a prepared plan obtains its region the same way.
     """
 
+    _relink: Callable[[], ProgramExecutable] | None
+    _manifest: Mapping[str, object]
+    _input_texts: tuple[str, ...]
+    _output_texts: tuple[str, ...]
+
     __hash__ = object.__hash__
-    __eq__ = object.__eq__
+
+    def __eq__(self, other: object) -> bool:
+        return True if self is other else NotImplemented
 
     def linked(self) -> ProgramExecutable:
         """Return the executable that linking the cached Program produces for this function."""
@@ -332,9 +356,15 @@ class RestoredProgramExecutable(ProgramExecutable):
         linked = self._relink()
         if self._callee is None:
             return linked
+        from fhelium.compile.passes.backend._link_calls import CalledProgram
+
         for dispatch in linked.dispatch_table.operations.values():
-            if getattr(dispatch.implementation, "symbol", None) == self._callee:
-                return dispatch.implementation.executable
+            implementation = dispatch.implementation
+            if (
+                isinstance(implementation, CalledProgram)
+                and implementation.symbol == self._callee
+            ):
+                return implementation.executable
         raise RuntimeError(f"Called function {self._callee!r} is not linked")
 
     @cached_property

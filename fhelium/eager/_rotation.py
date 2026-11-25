@@ -53,14 +53,15 @@ def iter_rotations_with_keys(
     layout = engine._key_switch_attributes(
         value, [key for key in placed if key is not None]
     )
-    key_rounds = int(cast(int, layout.pop("key_rounds", 0)))
+    key_rounds = layout.get("key_rounds", 0)
     tensors, attributes = engine._dispatcher_for(
         value.device
     ).device_resources.key_switch_operands(
         value.depth,
         moddown_rounding=moddown_rounding,
         basis_conversion=basis_conversion,
-        **layout,
+        key_prime_ids=layout.get("key_prime_ids"),
+        digit_prime_ids=layout.get("digit_prime_ids"),
     )
     for data in iter_rotations(
         value.data,
@@ -154,13 +155,11 @@ def sum_rotations(
                 ),
             )
             # Each contribution reads its own key form; rows and digits are shared.
-            layout = {
-                name: entry
-                for name, entry in engine._key_switch_attributes(
-                    value, [key]
-                ).items()
-                if name != "key_rounds"
-            }
+            attributes = engine._key_switch_attributes(value, [key])
+            layout = (
+                attributes.get("key_prime_ids"),
+                attributes.get("digit_prime_ids"),
+            )
             if key_layout is None:
                 key_layout = layout
                 accumulator.tables = engine._dispatcher_for(
@@ -170,7 +169,8 @@ def sum_rotations(
                     rescale=rescale,
                     rounding=moddown_rounding,
                     basis_conversion=basis_conversion,
-                    **layout,
+                    key_prime_ids=layout[0],
+                    digit_prime_ids=layout[1],
                 )
             elif layout != key_layout:
                 raise ValueError(

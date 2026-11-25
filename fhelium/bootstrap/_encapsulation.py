@@ -10,13 +10,20 @@ where $q_b$ is the source Q product.
 from __future__ import annotations
 
 import math
+from typing import TypedDict
 
 import torch
 
 from fhelium.values import Ciphertext, EncapsulationKey, EvaluationKeySet
 
 
-def _auxiliary_moduli(config, source_depth: int) -> dict[str, object]:
+class _AuxiliaryModuli(TypedDict):
+    low_p_moduli: tuple[int, ...]
+    return_prime: int
+    return_p_moduli: tuple[int, ...]
+
+
+def _auxiliary_moduli(config, source_depth: int) -> _AuxiliaryModuli:
     candidates = sorted(config.p_moduli, reverse=True)
     source = math.prod(config.active_q_moduli(source_depth))
     count, product = 2, 1
@@ -27,14 +34,16 @@ def _auxiliary_moduli(config, source_depth: int) -> dict[str, object]:
         raise ValueError(
             "the P directory cannot hold the encapsulation auxiliary primes"
         )
-    return dict(
+    return _AuxiliaryModuli(
         low_p_moduli=(candidates[0],),
         return_prime=candidates[1],
         return_p_moduli=tuple(candidates[2:count]),
     )
 
 
-def _add_encapsulation_keys(engine, plan, secret_key, inventory, *, device=None):
+def _add_encapsulation_keys(
+    engine, plan, secret_key, inventory, *, device=None
+):
     """Sample the intermediate secret, add both encapsulation keys and drop the secret."""
     method = plan.modulus_raise
     intermediate = engine.create_secret_key(
@@ -51,15 +60,21 @@ def _add_encapsulation_keys(engine, plan, secret_key, inventory, *, device=None)
     inventory.update(keys)
 
 
-def _select_keys(engine, plan, keys, device) -> tuple[EncapsulationKey, EncapsulationKey]:
+def _select_keys(
+    engine, plan, keys, device
+) -> tuple[EncapsulationKey, EncapsulationKey]:
     if not isinstance(keys, EvaluationKeySet):
-        raise TypeError("Encapsulated modulus raise requires an EvaluationKeySet")
+        raise TypeError(
+            "Encapsulated modulus raise requires an EvaluationKeySet"
+        )
     config = engine.config
     auxiliary = _auxiliary_moduli(config, plan.source_depth)
     rows = {
         "to_intermediate": len(config.active_q_moduli(plan.source_depth))
         + len(auxiliary["low_p_moduli"]),
-        "to_source": config.num_q_primes + 1 + len(auxiliary["return_p_moduli"]),
+        "to_source": config.num_q_primes
+        + 1
+        + len(auxiliary["return_p_moduli"]),
     }
     selected = []
     for direction, count in rows.items():

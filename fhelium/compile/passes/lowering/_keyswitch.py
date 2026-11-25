@@ -45,9 +45,9 @@ def galois_tables(
     config: CkksConfig,
     galois_element: int,
     device: Attribute | None,
-) -> tuple[tuple[Operation, ...], tuple[SSAValue, SSAValue]]:
+) -> tuple[tuple[core.MaterialRefOp, ...], tuple[SSAValue, SSAValue]]:
     """Declare the coefficient gather and sign Tensors of $\\sigma_g$."""
-    created: list[Operation] = []
+    created: list[core.MaterialRefOp] = []
     values = []
     for name, dtype in (('source_indices', 'int32'), ('source_sign', 'int8')):
         state: dict[str, Attribute] = {'dtype': StringAttr(f'torch.{dtype}')}

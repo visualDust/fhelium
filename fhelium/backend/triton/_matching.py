@@ -117,7 +117,9 @@ def _type_facts(value_type: object) -> _TypeFacts | None:
             else:
                 valid = device.type == "cuda"
         if valid:
-            result = _TypeFacts(tuple(facts), _integers(state.get("prime_ids")), device)
+            result = _TypeFacts(
+                tuple(facts), _integers(state.get("prime_ids")), device
+            )
     _TYPE_FACTS[id(value_type)] = (value_type, result)
     return result
 
@@ -149,10 +151,10 @@ def _layout_resolver():
             # Storage is shared, but the result type determines which axis
             # represents ciphertext components rather than ordinary batches.
             return shape, component_axis(value.type)
-        structure = (
-            generated_structure(owner) if isinstance(owner, Operation) else None
-        )
-        if structure is not None:
+        if (
+            isinstance(owner, Operation)
+            and (structure := generated_structure(owner)) is not None
+        ):
             facts = [
                 layout(owner.operands[i])
                 for i in structure.operands("data", "compact")
@@ -354,9 +356,12 @@ class OperationAnalysis:
     def _evaluate(self, operation: Operation) -> OperationFacts:
         if EXECUTION_IMPLEMENTATION_ATTRIBUTE in operation.attributes:
             return OperationFacts(False)
-        if not isinstance(
-            operation, (core.MaterialRefOp, UnrealizedConversionCastOp)
-        ) and generated_structure(operation) is None:
+        if (
+            not isinstance(
+                operation, (core.MaterialRefOp, UnrealizedConversionCastOp)
+            )
+            and generated_structure(operation) is None
+        ):
             return OperationFacts(False)
         if isinstance(operation, core.MaterialRefOp):
             return OperationFacts(True)
@@ -407,11 +412,7 @@ class RegionMatcher:
         self.boundary = analysis.boundary
 
     def _check_facts(self, facts: OperationFacts) -> bool:
-        if (
-            not facts.valid
-            or facts.anchors
-            and not self.include_ntt
-        ):
+        if not facts.valid or facts.anchors and not self.include_ntt:
             self._permanent_rejection = True
             return False
         self.count += facts.count

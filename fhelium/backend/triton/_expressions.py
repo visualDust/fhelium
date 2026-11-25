@@ -25,7 +25,6 @@ from fhelium.ir.dialects import ckks, core, fusion
 from ._layout import generated_structure, result_layout
 
 
-
 @dataclass(frozen=True)
 class Expr:
     op: str
@@ -251,7 +250,7 @@ class ExpressionGraph:
                 inputs.append(
                     (
                         self.table_arguments.index(node.operands[index]),
-                        int(node.key_digit_index.value.data),
+                        _integer_attribute(node, "key_digit_index"),
                         _integer_attribute(node, "key_row_start"),
                         _integer_attribute(node, "key_p_row_start"),
                         self.table_arguments.index(node.operands[seeds[0]])
@@ -286,7 +285,7 @@ class ExpressionGraph:
     @cached_property
     def stacked_inputs(self) -> tuple[int, ...]:
         """Return the region inputs whose leading axis enumerates reduction terms."""
-        arguments = [
+        arguments: list[SSAValue] = [
             arg
             for arg in self.operation.body.block.args
             if arg not in self.table_arguments
@@ -423,13 +422,19 @@ class ExpressionGraph:
                         Expr("input", data=(next_key_input, 0)),
                         Expr(
                             "seeded",
-                            data=(next_seed_input, next_key_input, entry[2], entry[5]),
+                            data=(
+                                next_seed_input,
+                                next_key_input,
+                                entry[2],
+                                entry[5],
+                            ),
                         ),
                     )
                     next_seed_input += 1
                 else:
                     keys[index] = tuple(
-                        Expr("input", data=(next_key_input, c)) for c in range(2)
+                        Expr("input", data=(next_key_input, c))
+                        for c in range(2)
                     )
                 next_key_input += 1
             result = structured_value(
@@ -535,7 +540,9 @@ def structured_value(
                 )
                 for k, column in enumerate(columns)
             }
-            term = structured_value(reduction.term, selected, root, operation_type)
+            term = structured_value(
+                reduction.term, selected, root, operation_type
+            )
             return replace(
                 initial,
                 components=tuple(
@@ -572,7 +579,9 @@ def structured_value(
         if item.op == "compact":
             unique = data[item.args[0].data[0]].shape[-1]
             return Expr(
-                "compact", args, (item.data[0], unique, first.shape[-1] // unique)
+                "compact",
+                args,
+                (item.data[0], unique, first.shape[-1] // unique),
             )
         return Expr(item.op, args)
 
@@ -763,13 +772,15 @@ class Emitter:
         ]
         variable = f"{self.prefix}e{len(self.cache)}"
         if expr.op == "seeded":
-            seed, key, start, rounds = expr.data
+            seed, key_input, start, rounds = expr.data
             names = self.arguments
             physical = f"({row})"
-            if self.layouts[key].row_split is not None:
-                split, gap = names.row_split(key)
-                physical = f"(({row}) + (({row}) >= {split}).to(tl.int64) * {gap})"
-            group = names._groups.setdefault(key, len(names._groups))
+            if self.layouts[key_input].row_split is not None:
+                split, gap = names.row_split(key_input)
+                physical = (
+                    f"(({row}) + (({row}) >= {split}).to(tl.int64) * {gap})"
+                )
+            group = names._groups.setdefault(key_input, len(names._groups))
             first_row = names.scalar(f"key_row_start{group}", start)
             expression = (
                 f"seeded_key_residue{8 if self.segment_index and index == 'index' else ''}("
@@ -895,7 +906,7 @@ class Emitter:
                     self.arguments,
                     prefix=pointer + "_",
                     iteration=self.iteration,
-                segment_index=self.segment_index,
+                    segment_index=self.segment_index,
                     pointers={first.data[0]: pointer},
                 )
                 result = child.emit(first, index, row, batch, overrides, mask)
@@ -926,7 +937,6 @@ class Emitter:
                 "    " + line for line in (*child.lines, f"{result} = {value}")
             )
         return result
-
 
 
 def _integer_attribute(operation: Operation, name: str) -> int:

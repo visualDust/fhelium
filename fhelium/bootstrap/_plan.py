@@ -154,7 +154,9 @@ class BootstrapPlan:
         result = []
         depth = self.raise_target_depth
         result.append(
-            BootstrapStage("modulus_raise", self.source_depth, depth, self.input_scale)
+            BootstrapStage(
+                "modulus_raise", self.source_depth, depth, self.input_scale
+            )
         )
         for name, width in (
             ("coeffs_to_slots", self.cts_depth),
@@ -164,7 +166,10 @@ class BootstrapPlan:
         ):
             result.append(
                 BootstrapStage(
-                    name, depth, depth + width, self.target_scales[depth + width]
+                    name,
+                    depth,
+                    depth + width,
+                    self.target_scales[depth + width],
                 )
             )
             depth += width
@@ -332,9 +337,13 @@ def plan(
     """
 
     try:
-        iterations, degree, inverse_stages, default_reduction = _PROFILES[preset]
+        iterations, degree, inverse_stages, default_reduction = _PROFILES[
+            preset
+        ]
     except KeyError:
-        raise ValueError(f"Unknown cosine bootstrap preset {preset!r}") from None
+        raise ValueError(
+            f"Unknown cosine bootstrap preset {preset!r}"
+        ) from None
     config = engine.config
     slots, generator = engine.num_slots, engine.galois_generator
     if generator != 5:
@@ -353,7 +362,7 @@ def plan(
     source_depth = engine.max_depth
     structural = math.prod(config.active_q_moduli(source_depth))
     if input_scale is None:
-        terminal = config.scale_at(source_depth)
+        terminal: float = config.scale_at(source_depth)
         input_scale = (
             terminal
             if preset == "3/38"

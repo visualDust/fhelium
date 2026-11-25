@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
-from typing import cast
+from typing import TypeGuard, cast
 
 from xdsl.dialects.builtin import UnrealizedConversionCastOp
 from xdsl.dialects.func import CallOp, FuncOp, ReturnOp
@@ -59,7 +59,9 @@ def _galois_element(operation: Operation, config: CkksConfig) -> int | None:
     return None
 
 
-def _type_edge(operation: Operation, result_type: Attribute) -> bool:
+def _type_edge(
+    operation: Operation, result_type: Attribute
+) -> TypeGuard[UnrealizedConversionCastOp]:
     return (
         type(operation) is UnrealizedConversionCastOp
         and len(operation.inputs) == len(operation.outputs) == 1
@@ -74,7 +76,9 @@ def _bundle_signature(block: Block) -> None:
     Lowering reads every CKKS argument through a type cast and returns casts of bundle results; the function then carries the bundle types directly.
     """
     for argument in tuple(block.args):
-        if not isinstance(argument.type, (ckks.CiphertextType, ckks.PlaintextType)):
+        if not isinstance(
+            argument.type, (ckks.CiphertextType, ckks.PlaintextType)
+        ):
             continue
         bundle = _rns_type(argument.type)
         users = tuple(use.operation for use in argument.uses)
@@ -92,7 +96,9 @@ def _bundle_signature(block: Block) -> None:
         owner = value.owner
         if (
             isinstance(owner, Operation)
-            and isinstance(value.type, (ckks.CiphertextType, ckks.PlaintextType))
+            and isinstance(
+                value.type, (ckks.CiphertextType, ckks.PlaintextType)
+            )
             and _type_edge(owner, value.type)
             and owner.inputs[0].type == _rns_type(value.type)
         ):

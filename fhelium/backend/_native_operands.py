@@ -8,8 +8,29 @@ operations receive the flattened fields of the C++ ``KeySwitchOptions``.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from typing import TypedDict
 
 import torch
+
+from .implementation import InvocationAttributes
+
+
+class KeySwitchOptions(TypedDict):
+    """Keyword fields of the C++ ``KeySwitchOptions`` taken by native key-switching operations."""
+
+    ntt_backend: str
+    digits: list[int]
+    key_row_start: int
+    key_p_row_start: int
+    key_q_rows: list[int]
+    basis_conversion: str
+    p_count: int
+    moddown_rounding: str
+    input_domain: str
+    output_domain: str
+    galois_generator: int
+    key_seeds: list[torch.Tensor]
+    key_rounds: int
 
 
 def named_tables(
@@ -33,8 +54,8 @@ def flat_digits(digits: Iterable[Iterable[int]]) -> list[int]:
 
 
 def key_switch_options(
-    attributes: Mapping[str, object], prefix: str = ""
-) -> dict[str, object]:
+    attributes: InvocationAttributes, prefix: str = ""
+) -> KeySwitchOptions:
     """Return the key-switch fields of invocation attributes.
 
     ``prefix`` selects attributes of a nested key switch, such as the
@@ -52,7 +73,9 @@ def key_switch_options(
         "digits": flat_digits(get("digits")),
         "key_row_start": int(get("key_row_start", 0)),
         "key_p_row_start": int(attributes.get(prefix + "key_p_row_start", -1)),
-        "key_q_rows": [int(i) for i in attributes.get(prefix + "key_q_rows", ())],
+        "key_q_rows": [
+            int(i) for i in attributes.get(prefix + "key_q_rows", ())
+        ],
         "basis_conversion": str(get("basis_conversion", "exact")),
         "p_count": int(get("p_count")),
         "moddown_rounding": str(
@@ -69,12 +92,12 @@ def key_switch_options(
 
 
 def seeded_key_operands(
-    attributes: Mapping[str, object],
+    attributes: InvocationAttributes,
     inputs: Sequence[torch.Tensor],
     start: int,
     count: int,
     prefix: str = "",
-) -> tuple[dict[str, object], int]:
+) -> tuple[KeySwitchOptions, int]:
     """Return the key-switch options with the seed operands at ``start``.
 
     Seeded keys (``key_rounds`` > 0) supply ``count`` seed operands after the
@@ -89,6 +112,7 @@ def seeded_key_operands(
 
 
 __all__ = [
+    "KeySwitchOptions",
     "flat_digits",
     "key_switch_options",
     "seeded_key_operands",

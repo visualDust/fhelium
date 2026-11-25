@@ -168,7 +168,8 @@ def _minimax_digits(ids, moduli, count):
     for i in ids:
         prefix.append(prefix[-1] * moduli[i])
     n = len(ids)
-    best = {(0, 0): (1, None)}
+    # (runs, stop) -> (largest run product, start of the last run)
+    best: dict[tuple[int, int], tuple[int, int | None]] = {(0, 0): (1, None)}
     for k in range(1, count + 1):
         for stop in range(k, n - count + k + 1):
             best[k, stop] = min(
@@ -182,6 +183,7 @@ def _minimax_digits(ids, moduli, count):
     digits, stop = [], n
     for k in range(count, 0, -1):
         start = best[k, stop][1]
+        assert start is not None
         digits.append(tuple(ids[start:stop]))
         stop = start
     return tuple(reversed(digits))
@@ -253,9 +255,7 @@ class CkksConfig:
             raise ValueError("the depth-0 basis must hold every Q prime")
         for depth in range(len(bases_tuple) - 1):
             if not _transition(bases_tuple, depth, depth + 1)[0]:
-                raise ValueError(
-                    "every rescale must drop at least one Q prime"
-                )
+                raise ValueError("every rescale must drop at least one Q prime")
         if not isinstance(scales, (list, tuple)) or len(scales) != len(
             bases_tuple
         ):
@@ -311,10 +311,14 @@ class CkksConfig:
         the group product. Every depth uses ``scale`` as its default scale.
         """
 
-        if not isinstance(q_depth_groups, (list, tuple)) or any(
-            not isinstance(group, (list, tuple)) or not group
-            for group in q_depth_groups
-        ) or not q_depth_groups:
+        if (
+            not isinstance(q_depth_groups, (list, tuple))
+            or any(
+                not isinstance(group, (list, tuple)) or not group
+                for group in q_depth_groups
+            )
+            or not q_depth_groups
+        ):
             raise TypeError(
                 "q_depth_groups must be a nonempty sequence of prime groups"
             )
@@ -324,7 +328,9 @@ class CkksConfig:
             starts.append(starts[-1] + len(group))
         return cls(
             q_moduli=q_moduli,
-            q_bases=tuple(tuple(range(start, len(q_moduli))) for start in starts),
+            q_bases=tuple(
+                tuple(range(start, len(q_moduli))) for start in starts
+            ),
             scales=(float(scale),) * len(q_depth_groups),
             p_moduli=tuple(p_moduli),
             logN=logN,
@@ -376,12 +382,16 @@ class CkksConfig:
 
     def __setattr__(self, name: str, value: object) -> None:
         if self.__dict__.get("_initialized", False):
-            raise AttributeError("CkksConfig is immutable; construct a new config")
+            raise AttributeError(
+                "CkksConfig is immutable; construct a new config"
+            )
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name: str) -> None:
         if self.__dict__.get("_initialized", False):
-            raise AttributeError("CkksConfig is immutable; construct a new config")
+            raise AttributeError(
+                "CkksConfig is immutable; construct a new config"
+            )
         object.__delattr__(self, name)
 
     @classmethod
@@ -392,6 +402,7 @@ class CkksConfig:
     ) -> "CkksConfig":
         """Resolve a preset or deserialize a CKKS parameter set."""
 
+        parameters: dict[str, Any]
         if isinstance(src, Preset):
             parameters = _preset_parameters(src)
         else:
@@ -432,9 +443,7 @@ class CkksConfig:
             enforce_security_budget=cast(
                 bool, parameters.get("enforce_security_budget", True)
             ),
-            galois_generator=cast(
-                int, parameters.get("galois_generator", 3)
-            ),
+            galois_generator=cast(int, parameters.get("galois_generator", 3)),
         )
 
     def dumps(self) -> dict[str, object]:
@@ -673,7 +682,8 @@ class CkksConfig:
                 target_bits=self.security_bits,
                 secret_distribution="ternary",
                 error_stddev=self.sigma,
-                reason=assessment.reason or "No built-in budget matches this configuration.",
+                reason=assessment.reason
+                or "No built-in budget matches this configuration.",
             )
         if assessment.status == "exceeds":
             maximum = assessment.maximum_modulus_bits

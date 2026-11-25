@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from typing import cast
+from typing import NotRequired, TypeAlias, TypedDict, cast
 
 
 import torch
@@ -14,8 +14,10 @@ from fhelium.values import (
     ConjugationKey,
     KeySwitchKey,
     ModulusBasis,
+    PolynomialDomain,
     PublicKey,
     RelinearizationKey,
+    ResidueRepresentation,
     RotationKey,
     SecretKey,
     SeedSpec,
@@ -32,6 +34,32 @@ from fhelium.backend.rns.context import RnsContext
 from fhelium.backend.rns.decomposition import _partition_q_digits
 from fhelium.values._validation import validate_prime_ids
 from fhelium.backend.random.stream import RandomStream, advance_
+
+_KeySwitchArguments: TypeAlias = tuple[
+    list[str],
+    list[torch.Tensor],
+    torch.Tensor,
+    torch.Tensor,
+    str,
+    list[int],
+    list[int],
+    list[int],
+    torch.Tensor | None,
+    torch.Tensor | None,
+]
+"""Native key-generation arguments after the secret-key operands: table names, tables, seed, CDT table, NTT backend, Q rows, digit sizes, P rows, and optional uniform/error samples."""
+
+
+class _KeySwitchKeyLayout(TypedDict):
+    """KeySwitchKey fields describing the generated layout and, for seeded keys, the seed."""
+
+    prime_ids: tuple[int, ...]
+    digit_prime_ids: tuple[tuple[int, ...], ...]
+    polynomial_domain: PolynomialDomain
+    modulus_basis: ModulusBasis
+    residue_representation: ResidueRepresentation
+    seed: NotRequired[torch.Tensor]
+    seed_spec: NotRequired[SeedSpec]
 
 
 @dataclass(frozen=True)
@@ -450,7 +478,7 @@ class CkksKeyGenerator:
         source_multiplier: int,
         uniform_component_by_key_digit: torch.Tensor | None,
         error_coefficients_by_key_digit: torch.Tensor | None,
-    ) -> tuple[tuple[object, ...], dict[str, object]]:
+    ) -> tuple[_KeySwitchArguments, _KeySwitchKeyLayout]:
         """Select the key rows and digits; return native arguments and metadata."""
         active_q = resources.rns_context.rns_layout.prime_ids(source_depth)
         selected_p = (
@@ -508,7 +536,7 @@ class CkksKeyGenerator:
             uniform_component_by_key_digit,
             error_coefficients_by_key_digit,
         )
-        metadata: dict[str, object] = {
+        metadata: _KeySwitchKeyLayout = {
             "prime_ids": (*active_q, *selected_p),
             "digit_prime_ids": digit_prime_ids,
             "polynomial_domain": "ntt",
@@ -522,13 +550,13 @@ class CkksKeyGenerator:
         cls: type[KeySwitchKey],
         resources: KeyGenerationResource,
         result: tuple[torch.Tensor, torch.Tensor | None, list[int], int],
-        arguments: tuple[object, ...],
-        metadata: dict[str, object],
+        arguments: _KeySwitchArguments,
+        metadata: _KeySwitchKeyLayout,
         **extra: object,
     ) -> KeySwitchKey:
         """Wrap a native key, advance the stream, and compact it unless expanded."""
         data, seed, moduli, rounds = result
-        digits = len(cast(tuple, metadata["digit_prime_ids"]))
+        digits = len(metadata["digit_prime_ids"])
         advance_(
             resources.rng.seed,
             (arguments[-2] is None) + digits * (arguments[-1] is None),
@@ -681,10 +709,14 @@ class CkksKeyGenerator:
             uniform_component_by_key_digit=None,
             error_coefficients_by_key_digit=None,
         )
-        result = ckks_ops.create_relinearization_key(secret_key.data, *arguments)
+        result = ckks_ops.create_relinearization_key(
+            secret_key.data, *arguments
+        )
         return cast(
             RelinearizationKey,
-            self._key(RelinearizationKey, resources, result, arguments, metadata),
+            self._key(
+                RelinearizationKey, resources, result, arguments, metadata
+            ),
         )
 
     def create_rotation_key(

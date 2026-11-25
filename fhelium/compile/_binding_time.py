@@ -18,7 +18,11 @@ from fhelium.ir import Program
 from fhelium.ir.dialects.torch import CallOp
 from fhelium.values import CompressedPlaintext, Plaintext
 
-PREPARATION = "plaintext_preparation"
+from ._workspace import WorkspaceKey
+
+PREPARATION: WorkspaceKey[PreparationPlan] = WorkspaceKey(
+    "plaintext_preparation"
+)
 
 
 def pack_value(value):
@@ -153,14 +157,14 @@ class PreparationRecipe:
 
     def program(self) -> Program:
         from xdsl.dialects.func import ReturnOp
-        from xdsl.ir import Block
+        from xdsl.ir import Block, SSAValue
 
         from fhelium.ir.dialects import core
 
         block = Block(
             arg_types=[core.MessageType() for _ in range(self.inputs)]
         )
-        values = list(block.args)
+        values: list[SSAValue] = list(block.args)
         for target, descriptor, operands in self.calls:
             operation = CallOp(
                 [values[index] for index in operands],
@@ -214,7 +218,9 @@ class PreparationRecipe:
                 lambda position: f"v{operands[position]}",
                 literal,
             )
-            lines.append(f"    v{self.inputs + index} = {function}({arguments})")
+            lines.append(
+                f"    v{self.inputs + index} = {function}({arguments})"
+            )
             released = [
                 f"v{operand}"
                 for operand in dict.fromkeys(operands)

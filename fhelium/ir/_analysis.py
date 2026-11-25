@@ -7,7 +7,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from xdsl.dialects.builtin import IntAttr, IntegerAttr, StringAttr
+from typing import cast
+
+from xdsl.dialects.builtin import ArrayAttr, IntAttr, IntegerAttr, StringAttr
 from xdsl.ir import Attribute, Operation, SSAValue
 
 from fhelium.values import EvaluationKeyRequirements
@@ -152,7 +154,10 @@ def analyze_evaluation_key_requirements(
         elif isinstance(operation, ckks.RotateManyOp):
             rotation_steps.update(
                 int(step.value.data)
-                for step in operation.attributes["rotation_steps"].data
+                for step in cast(
+                    ArrayAttr[IntegerAttr],
+                    operation.attributes["rotation_steps"],
+                ).data
                 if step.value.data
             )
         elif isinstance(operation, ckks.GroupedRotationWeightedSumOp):

@@ -43,7 +43,12 @@ def warm_executable(
 
     from triton.runtime import _async_compile
 
-    counts = {"compiled": 0, "reused": 0, "skipped": 0, "dispatches": 0}
+    counts: dict[str, float] = {
+        "compiled": 0,
+        "reused": 0,
+        "skipped": 0,
+        "dispatches": 0,
+    }
     start = time.perf_counter()
     seen: set[int] = set()
     pending = [executable]

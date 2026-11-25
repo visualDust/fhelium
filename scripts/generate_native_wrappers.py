@@ -243,7 +243,9 @@ def schema_to_spec(schema: torch.FunctionSchema) -> OpSpec:
     used_names: set[str] = set()
     args = []
     for arg in schema.arguments:
-        type_repr = str(arg.type)
+        # ``type`` reports ScalarType, Layout and MemoryFormat as their int
+        # encoding; ``real_type`` keeps the declared schema type.
+        type_repr = str(arg.real_type)
         has_default = arg.has_default_value()
         args.append(
             ArgSpec(

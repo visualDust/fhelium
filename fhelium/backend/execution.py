@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from functools import cached_property
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Generic, TypeVar, cast
 
 import torch
 from xdsl.dialects.builtin import (
@@ -22,7 +22,7 @@ from fhelium.ir import (
     Program,
     value_role,
 )
-from fhelium.ir.dialects import ckks
+from fhelium.ir.dialects import ckks, core
 from fhelium.values._validation import validate_integral_tensor
 
 from fhelium.values import (
@@ -73,11 +73,17 @@ class OperationDispatch:
     prepared_regions: bool = False
 
 
-@dataclass(frozen=True)
-class ProgramDispatchTable:
-    """Map executable Program operations to resolved Backend calls."""
+_DispatchKeyT = TypeVar("_DispatchKeyT")
 
-    operations: Mapping[Operation, OperationDispatch]
+
+@dataclass(frozen=True)
+class ProgramDispatchTable(Generic[_DispatchKeyT]):
+    """Map executable Program operations to resolved Backend calls.
+
+    A linked executable keys dispatches by Program operation; an executable restored from an artifact keys them by dispatch position.
+    """
+
+    operations: Mapping[_DispatchKeyT, OperationDispatch]
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -216,11 +222,11 @@ class ProgramExecutable:
     """
 
     program: Program
-    dispatch_table: ProgramDispatchTable
+    dispatch_table: ProgramDispatchTable[Operation]
     resources: tuple[BoundResource, ...]
     resource_indices: Mapping[Operation, tuple[int, ...]]
     bound_resources: Mapping[Operation, BoundResource]
-    bound_materials: Mapping[Operation, object]
+    bound_materials: Mapping[core.MaterialRefOp, object]
     _requirements: tuple[ResourceRequirement, ...] = field(
         default=(), repr=False, compare=False
     )
@@ -232,6 +238,10 @@ class ProgramExecutable:
         init=False, repr=False, compare=False
     )
     host_source: str = field(init=False, repr=False, compare=False)
+    _material_globals: Mapping[str, str] = field(
+        init=False, repr=False, compare=False
+    )
+    _bound: Mapping[str, object] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         from fhelium.compile.passes.backend._prepare_host import (
@@ -251,10 +261,11 @@ class ProgramExecutable:
         """
         from types import FunctionType
 
-        materials = {
-            operation: bindings.get(operation.symbol.data, value)
-            for operation, value in self.bound_materials.items()
-        }
+        materials = {}
+        for operation, value in self.bound_materials.items():
+            # Linking binds only material references that name a symbol.
+            assert operation.symbol is not None
+            materials[operation] = bindings.get(operation.symbol.data, value)
         namespace = dict(self._call.__globals__)
         namespace.pop("__fhelium_codegen_execute", None)
         for name, symbol in self._material_globals.items():

@@ -103,10 +103,10 @@ def program_resource_requirements(
 def program_material_values(
     program: Program,
     materials: Mapping[str, object],
-) -> dict[Operation, object]:
+) -> dict[core.MaterialRefOp, object]:
     """Match every Program material reference to caller-provided data."""
 
-    bound: dict[Operation, object] = {}
+    bound: dict[core.MaterialRefOp, object] = {}
     for operation in program.single_block("main").walk():
         if not isinstance(operation, core.MaterialRefOp):
             continue

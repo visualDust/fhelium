@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
 from operator import index as integer_index
 from types import MappingProxyType
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 from xdsl.dialects.builtin import (
@@ -35,7 +35,7 @@ from xdsl.ir import Attribute, Block, Operation, SSAValue
 from xdsl.rewriter import Rewriter
 
 from fhelium.eager import Engine
-from fhelium.eager._engine import _KeySwitchAttributes, weighted_sum_terms
+from fhelium.eager._engine import _KeyLayout, weighted_sum_terms
 from fhelium.backend.ckks._key_switch_preparation import (
     key_switch_runtime_attributes,
 )
@@ -69,7 +69,7 @@ from .._materials import (
     named_material_tensors,
     parameter_description,
 )
-from .._workspace import CompileWorkspace
+from .._workspace import CompileWorkspace, WorkspaceKey
 from ._captured_callable import CapturedCallable
 from fhelium.ir.dialects._common import state_attribute
 
@@ -86,6 +86,12 @@ from ._specs import (
 
 
 from ._objects import StaticMapping, StaticObject, python_callable, unwrap
+
+if TYPE_CHECKING:
+    from fhelium.backend.ckks.materialization import CkksDeviceResources
+    from fhelium.config import CkksConfig
+
+    from ._preparation_capture import PreparationRecorder
 
 
 class _Value:
@@ -623,7 +629,7 @@ class _EngineCalls:
             other.engine if isinstance(other, _EngineCalls) else other
         )
 
-    def __getattr__(self, name: str) -> object:
+    def __getattr__(self, name: str) -> Any:
         if name == 'validate_key_switch_key':
             return self.engine.validate_key_switch_key
         if name == 'validate_ciphertext':
@@ -720,7 +726,9 @@ class _EngineCalls:
             prior_config = self.capture.active_config
             self.capture.active_config = self.engine.config
             try:
-                with recorder.pause() if recorder is not None else nullcontext():
+                with (
+                    recorder.pause() if recorder is not None else nullcontext()
+                ):
                     result = self._emit(name, parameters)
             finally:
                 self.capture.active_config = prior_config
@@ -856,11 +864,13 @@ class _EngineCalls:
         )
         if p.get("implementation") is not None:
             # A requested implementation is fixed; otherwise Compile selects one.
-            operation.attributes[EXECUTION_IMPLEMENTATION_ATTRIBUTE] = StringAttr(
-                self.engine.plaintext_product_implementation(
-                    source.device,
-                    compressed=any(x != "dense" for x in layouts),
-                    implementation=p.get("implementation"),
+            operation.attributes[EXECUTION_IMPLEMENTATION_ATTRIBUTE] = (
+                StringAttr(
+                    self.engine.plaintext_product_implementation(
+                        source.device,
+                        compressed=any(x != "dense" for x in layouts),
+                        implementation=p.get("implementation"),
+                    )
                 )
             )
         c.block.add_op(operation)
@@ -897,7 +907,11 @@ class _EngineCalls:
         if type(result) is not _Value:
             return None
         operation = result.value.owner
-        if operation is not block.last_op or len(operation.results) != 1:
+        if (
+            not isinstance(operation, Operation)
+            or operation is not block.last_op
+            or len(operation.results) != 1
+        ):
             return None
         added = block.first_op if before is None else before.next_op
         while added is not operation:
@@ -1006,7 +1020,9 @@ class _EngineCalls:
                             "keys": [key for key in keys if key is not None],
                             "output_domain": "ntt",
                             "use_hoisting": True,
-                            "basis_conversion": p.get("basis_conversion", "exact"),
+                            "basis_conversion": p.get(
+                                "basis_conversion", "exact"
+                            ),
                             "moddown_rounding": p.get(
                                 "moddown_rounding", "nearest"
                             ),
@@ -1377,7 +1393,9 @@ class _EngineCalls:
                             "keys": [key for key in keys if key is not None],
                             "use_hoisting": True,
                             "output_domain": p["output_domain"],
-                            "basis_conversion": p.get("basis_conversion", "exact"),
+                            "basis_conversion": p.get(
+                                "basis_conversion", "exact"
+                            ),
                             "moddown_rounding": p.get(
                                 "moddown_rounding", "nearest"
                             ),
@@ -1577,7 +1595,9 @@ class _EngineCalls:
                             name=name,
                             rescale=rescale,
                             rounding=rounding,
-                            basis_conversion=str(p.get("basis_conversion", "exact")),
+                            basis_conversion=str(
+                                p.get("basis_conversion", "exact")
+                            ),
                             **layout,
                         ),
                     )
@@ -1646,7 +1666,9 @@ class _EngineCalls:
                         moddown_rounding=str(
                             p.get("moddown_rounding", "nearest")
                         ),
-                        basis_conversion=str(p.get("basis_conversion", "exact")),
+                        basis_conversion=str(
+                            p.get("basis_conversion", "exact")
+                        ),
                     )
                     for key in keys
                 ]
@@ -1668,7 +1690,9 @@ class _EngineCalls:
                 IntegerAttr(int(key.rotation_step), 64) for key in keys
             )
             key_values = tuple(
-                c.key_reference(key, role="rotation", step=int(key.rotation_step))
+                c.key_reference(
+                    key, role="rotation", step=int(key.rotation_step)
+                )
                 for key in keys
             )
             operation = ckks.RotateManyOp(
@@ -1718,7 +1742,9 @@ class _EngineCalls:
                         moddown_rounding=str(
                             p.get("moddown_rounding", "nearest")
                         ),
-                        basis_conversion=str(p.get("basis_conversion", "exact")),
+                        basis_conversion=str(
+                            p.get("basis_conversion", "exact")
+                        ),
                     )
                     for step in steps
                 ]
@@ -2032,7 +2058,7 @@ class _EngineCalls:
                 residue_representation=output_residues(domain),
                 components=2,
             )
-            op_type = {
+            key_op_type = {
                 "relinearize": ckks.RelinearizeOp,
                 "conjugate": ckks.ConjugateOp,
                 "switch_key": ckks.SwitchKeyOp,
@@ -2079,7 +2105,7 @@ class _EngineCalls:
             attrs["output_domain"] = StringAttr(domain)
             key_value = c.key_reference(key, role=name)
             return c.emit(
-                op_type(
+                key_op_type(
                     source.value,
                     key_value,
                     typ,
@@ -2295,9 +2321,7 @@ class _EngineCalls:
         )
         return self.capture.emit(operation)
 
-    def _key_layout(
-        self, keys: Sequence[object]
-    ) -> _KeySwitchAttributes | None:
+    def _key_layout(self, keys: Sequence[object]) -> _KeyLayout | None:
         layouts = []
         for key in keys:
             if key is None:
@@ -2467,8 +2491,8 @@ class _Capture:
         material_names: Mapping[str, object] | None = None,
     ) -> None:
         self.workspace = workspace
-        self.active_config = None
-        self.preparation = None
+        self.active_config: CkksConfig | None = None
+        self.preparation: PreparationRecorder | None = None
         self.runtime_inputs = {}
         self.block = block
         self.engines: dict[int, _EngineCalls] = {}
@@ -2488,7 +2512,7 @@ class _Capture:
         # Seed-row operands of seeded key values.
         self.seeds: dict[SSAValue, SSAValue] = {}
         # Device resources of key-switching captures provide lowering tables.
-        self.resources: dict[int, object] = {}
+        self.resources: dict[int, CkksDeviceResources] = {}
         self.type_keys: dict[int, tuple[Attribute, int]] = {}
         self.type_values: dict[Attribute, int] = {}
 
@@ -2581,7 +2605,10 @@ class _Capture:
                 self.seeds[value] = self.material(
                     seed,
                     cast(OpenStateType, value_type(seed)),
-                    {"kind": "KeySeed", "key": cast(StringAttr, key_symbol).data},
+                    {
+                        "kind": "KeySeed",
+                        "key": cast(StringAttr, key_symbol).data,
+                    },
                 )
             return value
         if key is not None:
@@ -2664,7 +2691,8 @@ class _Capture:
                 return self.preparation.torch
             if value is torch.tensor or value is torch.as_tensor:
                 name = "tensor" if value is torch.tensor else "as_tensor"
-                return lambda *args, **kwargs: self.preparation.factory(
+                recorder = self.preparation
+                return lambda *args, **kwargs: recorder.factory(
                     name, args, kwargs
                 )
             if isinstance(
@@ -2999,8 +3027,9 @@ def capture_eager(
     for name, argument in zip(physical, block.args, strict=True):
         argument.name_hint = name
         symbolic[name] = _Value(argument, capture)
-        if isinstance(physical[name], RotationKey):
-            capture.key_steps[argument] = physical[name].rotation_step
+        physical_value = physical[name]
+        if isinstance(physical_value, RotationKey):
+            capture.key_steps[argument] = physical_value.rotation_step
     for name in runtime:
         value = symbolic[name]
         capture.runtime_inputs[id(runtime[name])] = value
@@ -3101,9 +3130,11 @@ def capture_eager(
         for operation in tuple(block.ops):
             if (
                 isinstance(operation, core.MaterialRefOp)
+                and operation.symbol is not None
                 and operation.symbol.data in declarations
                 and operation is not first
             ):
+                assert first is not None
                 block.detach_op(operation)
                 block.insert_op_before(operation, first)
     descriptor = describe(output)
@@ -3141,7 +3172,9 @@ def capture_eager(
     return compilation
 
 
-CAPTURED_RESOURCES = "captured_resources"
+CAPTURED_RESOURCES: WorkspaceKey[tuple[CkksDeviceResources, ...]] = (
+    WorkspaceKey("captured_resources")
+)
 
 
 __all__ = ["CAPTURED_RESOURCES", "capture_eager"]

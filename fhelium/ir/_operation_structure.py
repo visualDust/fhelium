@@ -51,7 +51,9 @@ def load(operand: int, component: int = 0) -> Scalar:
     return Scalar("load", data=(operand, component))
 
 
-StructureDescription: TypeAlias = Callable[[int, Mapping[str, object]], "OperationStructure"]
+StructureDescription: TypeAlias = Callable[
+    [int, Mapping[str, object]], "OperationStructure"
+]
 """Map an operand count and Python attribute values to an operation's structure."""
 
 ComponentBody: TypeAlias = Callable[[tuple[int, ...]], tuple[Scalar, ...]]
@@ -132,7 +134,11 @@ def plaintext_sum(ntt: bool) -> OperationStructure:
         )
 
     return OperationStructure(
-        ("data", "data", "parameters"), "same", body, accepted=ntt, plaintext=True
+        ("data", "data", "parameters"),
+        "same",
+        body,
+        accepted=ntt,
+        plaintext=True,
     )
 
 
@@ -159,7 +165,11 @@ def compressed(
                 Scalar("multiply", (load(0, c), expanded))
                 for c in range(counts[0])
             )
-        term = expanded if ntt_plaintext else Scalar("from_montgomery", (expanded,))
+        term = (
+            expanded
+            if ntt_plaintext
+            else Scalar("from_montgomery", (expanded,))
+        )
         return (
             Scalar("add", (load(0), term)),
             *(load(0, c) for c in range(1, counts[0])),
@@ -181,7 +191,9 @@ def key_product(seeded: bool = False) -> OperationStructure:
     """
 
     def body(counts: tuple[int, ...]) -> tuple[Scalar, ...]:
-        return tuple(Scalar("multiply", (load(0), load(1, c))) for c in range(2))
+        return tuple(
+            Scalar("multiply", (load(0), load(1, c))) for c in range(2)
+        )
 
     roles: tuple[Role, ...] = ("data", "key", "parameters")
     return OperationStructure(
@@ -217,7 +229,9 @@ def select_component(component: int) -> OperationStructure:
 def pack(count: int) -> OperationStructure:
     """Stack ``count`` single-component bundles as components."""
     return OperationStructure(
-        ("data",) * count, "pack", lambda counts: tuple(load(i) for i in range(count))
+        ("data",) * count,
+        "pack",
+        lambda counts: tuple(load(i) for i in range(count)),
     )
 
 
@@ -246,7 +260,9 @@ def reduce_rows(
     ``parameter_names`` counts the trailing constant operands; without it, only the first operand is a residue bundle.
     """
     names = attributes.get("parameter_names")
-    parameter_count = len(names) if isinstance(names, tuple) else operand_count - 1
+    parameter_count = (
+        len(names) if isinstance(names, tuple) else operand_count - 1
+    )
     data_count = operand_count - parameter_count
     return OperationStructure(
         ("data",) * data_count + ("parameters",) * parameter_count,
@@ -263,7 +279,9 @@ def weighted_sum(
     """
     count = int(cast(int, attributes["term_count"]))
     if "plaintext_term_axis" in attributes:
-        (layout,) = cast(tuple[str, ...], attributes.get("plaintext_layouts") or ("dense",))
+        (layout,) = cast(
+            tuple[str, ...], attributes.get("plaintext_layouts") or ("dense",)
+        )
         accepted = (
             attributes["plaintext_term_axis"] == 0
             and operand_count == count + 2
@@ -287,7 +305,9 @@ def weighted_sum(
         )
     layouts = attributes.get("plaintext_layouts") or ("dense",) * count
     layouts = cast(tuple[str, ...], layouts)
-    accepted = operand_count == 2 * count + 1 and "strided_sparse" not in layouts
+    accepted = (
+        operand_count == 2 * count + 1 and "strided_sparse" not in layouts
+    )
     terms = tuple(
         plaintext_product()
         if layout == "dense"
@@ -304,7 +324,9 @@ def weighted_sum(
             def rebase(item: Scalar) -> Scalar:
                 if item.op == "load":
                     return load(positions[item.data[0]], item.data[1])
-                return Scalar(item.op, tuple(rebase(a) for a in item.args), item.data)
+                return Scalar(
+                    item.op, tuple(rebase(a) for a in item.args), item.data
+                )
 
             product = tuple(
                 rebase(item)
@@ -316,15 +338,20 @@ def weighted_sum(
                 product
                 if not total
                 else tuple(
-                    Scalar("add", (a, b)) for a, b in zip(total, product, strict=True)
+                    Scalar("add", (a, b))
+                    for a, b in zip(total, product, strict=True)
                 )
             )
         return total
 
+    data: Role = "data"
+    roles: list[Role] = [data] * count
+    roles.extend(
+        "data" if layout == "dense" else "compact" for layout in layouts
+    )
+    roles.append("parameters")
     return OperationStructure(
-        ("data",) * count
-        + tuple("data" if layout == "dense" else "compact" for layout in layouts)
-        + ("parameters",),
+        tuple(roles),
         "same",
         body,
         accepted=accepted,
@@ -375,13 +402,22 @@ def operation_structure(operation) -> OperationStructure | None:
         or spec.effect != "pure"
     ):
         return None
-    key = (type(operation), len(operation.operands), tuple(operation.attributes.items()))
-    structure = _STRUCTURES.get(key, _STRUCTURES)
-    if structure is not _STRUCTURES:
+    key = (
+        type(operation),
+        len(operation.operands),
+        tuple(operation.attributes.items()),
+    )
+    try:
+        structure = _STRUCTURES[key]
+    except KeyError:
+        pass
+    else:
         STRUCTURE_LOOKUPS["hits"] += 1
         return structure
     STRUCTURE_LOOKUPS["misses"] += 1
-    structure = spec.structure(len(operation.operands), attribute_values(operation))
+    structure = spec.structure(
+        len(operation.operands), attribute_values(operation)
+    )
     _STRUCTURES[key] = structure
     return structure
 

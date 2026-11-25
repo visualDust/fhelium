@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cached_property
 
@@ -59,12 +60,16 @@ class DeferredCompilation(Compilation):
     The workspace, reports and material bindings are available immediately; ``load`` returns a Program owned by this Compilation.
     """
 
+    _load: Callable[[], Program]
+
     __hash__ = object.__hash__
-    __eq__ = object.__eq__
+
+    def __eq__(self, other: object) -> bool:
+        return object.__eq__(self, other)
 
     def __init__(
         self,
-        load,
+        load: Callable[[], Program],
         workspace: CompileWorkspace,
         reports: tuple[PassReport, ...] = (),
         material_bindings: dict[str, torch.Tensor] | None = None,

@@ -6,7 +6,7 @@ import struct
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import ClassVar, Literal, Self, cast
+from typing import ClassVar, Literal, Self, cast, overload
 
 from xdsl.dialects.builtin import (
     ArrayAttr,
@@ -66,6 +66,10 @@ def interned_attribute(key: tuple[object, ...]) -> Attribute:
     )
 
 
+@overload
+def state_attribute(value: str | int | float) -> Attribute: ...
+@overload
+def state_attribute(value: object) -> Attribute | None: ...
 def state_attribute(value: object) -> Attribute | None:
     """Return the shared builtin attribute for one supported metadata field."""
 

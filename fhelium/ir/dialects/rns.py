@@ -13,7 +13,7 @@ Each operation defines a transformation of an RNS bundle and its representation 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Literal
+from typing import Literal, cast
 
 from xdsl.dialects.builtin import (
     ArrayAttr,
@@ -571,8 +571,7 @@ class MontgomeryWeightedSumOp(IRDLOperation):
             or layouts is not None
             and (
                 len(layouts) != 1
-                or layouts.data[0].data
-                not in {"dense", "cyclic", "contiguous"}
+                or layouts.data[0].data not in {"dense", "cyclic", "contiguous"}
             )
         ):
             raise VerifyException(
@@ -799,7 +798,7 @@ class ExtractComponentOp(IRDLOperation):
         operand_count: int, attributes: Mapping[str, object]
     ) -> OperationStructure:
         """Describe operand roles and component bodies for residue code generation."""
-        return select_component(int(attributes["component"]))
+        return select_component(cast(int, attributes["component"]))
 
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
@@ -1038,7 +1037,7 @@ class TensorProductOp(IRDLOperation):
 
     def dependencies(self) -> OperationDependencies:
         """Describe result reads in this operation's value coordinates."""
-        relation = {
+        relation: dict[str, DependencyKind] = {
             'coefficient': 'element',
             'limb': 'element',
             'component': 'reindexed',
@@ -1193,7 +1192,12 @@ class KeySwitchDigitProductOp(IRDLOperation):
         if key_seed is not None:
             attributes["key_rounds"] = IntegerAttr(key_rounds, 64)
         super().__init__(
-            operands=[digit, key, parameters, [] if key_seed is None else [key_seed]],
+            operands=[
+                digit,
+                key,
+                parameters,
+                [] if key_seed is None else [key_seed],
+            ],
             result_types=[result_type],
             attributes=attributes,
         )

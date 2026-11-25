@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 import torch
 
@@ -14,6 +14,7 @@ from fhelium.values import TensorResident
 
 if TYPE_CHECKING:
     from ._preparation import Specialization
+    from ._specialization import CallSignature
 
 
 def _context() -> tuple[object, ...]:
@@ -127,6 +128,21 @@ class _Entry:
         self.fallback_reason = reason
 
 
+class GraphStats(TypedDict):
+    """Observations of one prepared specialization in one execution context."""
+
+    signature: CallSignature
+    device: str | None
+    context: dict[str, object]
+    state: str
+    prepared_calls: int
+    replays: int
+    first_execute_seconds: float | None
+    capture_attempt_seconds: float
+    fallback_reason: str | None
+    capture_stats: dict[str, object] | None
+
+
 class _GraphExecutor:
     """Manage caller-thread capture and device-local shared graph pools.
 
@@ -140,7 +156,7 @@ class _GraphExecutor:
     ) -> None:
         if graph != "auto" and type(graph) is not bool:
             raise ValueError("graph must be 'auto', True, or False")
-        self.graph = graph
+        self.graph: Literal["auto"] | bool = graph
         self.copy_output = copy_output
         self._entries: dict[tuple[int, tuple[object, ...]], _Entry] = {}
         self._pools: dict[torch.device, CudaGraphPool] = {}
@@ -255,7 +271,7 @@ class _GraphExecutor:
         self._entries.clear()
         self._pools.clear()
 
-    def stats(self) -> tuple[dict[str, object], ...]:
+    def stats(self) -> tuple[GraphStats, ...]:
         """Return per-context counts and host-observed preparation costs.
 
         Prepared-call counts cover user invocations; capture statistics report the runtime's additional warmup and validation replay. First-execution and capture-attempt durations are host wall times. Runtime capture memory fields are device allocator snapshots.

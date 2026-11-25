@@ -117,27 +117,30 @@ class _CandidateSet:
         self.fields = {}
         self.previous = None
         self.allowed = self.all
+        analysis = None
+        include_ntt = False
+        tensor_facts = {}
         if type(matcher) is RegionMatcher and matcher.analysis is not None:
             self.kind = "rns"
+            analysis, include_ntt = matcher.analysis, matcher.include_ntt
         elif type(matcher) is TensorRegionMatcher:
             self.kind = "tensor"
+            tensor_facts = matcher.facts
         else:
             self.kind = None
             return
         for index, operation in enumerate(operations):
-            if self.kind == "rns":
-                facts = matcher.analysis.operation(operation)
-                if not facts.valid or (
-                    facts.anchors and not matcher.include_ntt
-                ):
+            if analysis is not None:
+                facts = analysis.operation(operation)
+                if not facts.valid or (facts.anchors and not include_ntt):
                     continue
                 row = dict(facts.known)
                 if facts.parameter is not None:
                     row["_parameter"] = facts.parameter
             else:
-                if operation not in matcher.facts:
-                    matcher.facts[operation] = _operation_facts(operation)
-                facts = matcher.facts[operation]
+                if operation not in tensor_facts:
+                    tensor_facts[operation] = _operation_facts(operation)
+                facts = tensor_facts[operation]
                 if facts is None:
                     continue
                 row = {} if facts[1] is None else {"_tensor": facts[1]}
@@ -351,7 +354,9 @@ class FuseOperationsPass:
         decisions: list[DecisionRecord] = []
         for block in blocks:
             original = tuple(block.ops)
-            scheduled, segments = _fusion_schedule(original, self.implementations)
+            scheduled, segments = _fusion_schedule(
+                original, self.implementations
+            )
             if scheduled != list(block.ops):
                 for operation in tuple(block.ops):
                     block.detach_op(operation)

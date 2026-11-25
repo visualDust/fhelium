@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Self, cast
+from typing import Any, Literal, Self, cast
 
 import torch
 
@@ -183,7 +183,8 @@ def _envelope_from_value(
                 ),
                 **(
                     {"seed": _seed_metadata(value.seed_spec)}
-                    if isinstance(value, KeySwitchKey) and value.seed_spec is not None
+                    if isinstance(value, KeySwitchKey)
+                    and value.seed_spec is not None
                     else {}
                 ),
             },
@@ -457,10 +458,13 @@ def _seed_spec(metadata: dict[str, Any], value_type: str) -> SeedSpec:
     """Return the seed specification of a key with a seed."""
     spec = metadata["seed"]
     if not isinstance(spec, dict) or not isinstance(spec.get("moduli"), list):
-        raise ValueError(f"{value_type} seed specification {spec!r} is malformed")
+        raise ValueError(
+            f"{value_type} seed specification {spec!r} is malformed"
+        )
+    # SeedSpec rejects an unsupported or missing generator description.
     return SeedSpec(
-        prf=spec.get("prf"),
-        rounds=spec.get("rounds"),
+        prf=cast(Literal["chacha"], spec.get("prf")),
+        rounds=cast(int, spec.get("rounds")),
         moduli=tuple(int(q) for q in spec["moduli"]),
     )
 

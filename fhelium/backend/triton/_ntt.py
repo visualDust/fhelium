@@ -447,7 +447,9 @@ class _Kernel:
     elements: int
 
 
-_ELEMENT_LOAD = re.compile(r"= tl\.load\((?!twiddles|roots|rns_parameters)[^\n]*\bindex\b")
+_ELEMENT_LOAD = re.compile(
+    r"= tl\.load\((?!twiddles|roots|rns_parameters)[^\n]*\bindex\b"
+)
 
 
 def _source(
@@ -844,6 +846,19 @@ def _execution_call(source, filename, namespace):
     return namespace.pop("execute")
 
 
+def _warm_kernels(
+    kernels: tuple[tuple[PreparedKernel, tuple[object, ...]], ...],
+) -> tuple[int, int]:
+    """Compile and load generated kernels from their launch signatures; return (compiled, reused)."""
+    compiled = reused = 0
+    for prepared, signature in kernels:
+        if prepared.warm(*signature):
+            compiled += 1
+        else:
+            reused += 1
+    return compiled, reused
+
+
 class _PreparedNttExecution:
     """An NTT execution plan restored from its generated host source and launch symbols."""
 
@@ -880,7 +895,7 @@ class _PreparedNttExecution:
         )
 
     def warm(self) -> tuple[int, int]:
-        return NttExecution.warm(self)
+        return _warm_kernels(self.kernels)
 
     def execute(self, values, tables):
         return self._call(values, tables)
@@ -910,6 +925,7 @@ class NttExecution:
     kernels: tuple[tuple[PreparedKernel, tuple[object, ...]], ...] = field(
         init=False, repr=False, compare=False
     )
+    _symbols: dict[str, object] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
         graph = self.graph
@@ -1001,7 +1017,9 @@ class NttExecution:
                 )
                 kernel = sources[position]
                 grid = (
-                    radix2_geometry(n, first.start, first.end, kernel.elements)[0]
+                    radix2_geometry(n, first.start, first.end, kernel.elements)[
+                        0
+                    ]
                     if radix2
                     else n // width
                     if spacing is None
@@ -1126,13 +1144,7 @@ class NttExecution:
 
     def warm(self) -> tuple[int, int]:
         """Compile and load every generated kernel; return (compiled, reused)."""
-        compiled = reused = 0
-        for prepared, signature in self.kernels:
-            if prepared.warm(*signature):
-                compiled += 1
-            else:
-                reused += 1
-        return compiled, reused
+        return _warm_kernels(self.kernels)
 
     @classmethod
     def build(

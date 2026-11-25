@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, TypeAlias, runtime_checkable
 
 import torch
 from xdsl.dialects.builtin import ArrayAttr, FloatAttr, IntegerAttr, StringAttr
@@ -23,6 +23,10 @@ from fhelium.ir import (
 from fhelium.ir.dialects import core
 
 from .resources import BoundResource, ResourceRequirement
+
+
+InvocationAttributes: TypeAlias = Mapping[str, Any]
+"""Invocation attribute values keyed by name; each operation definition determines the value types."""
 
 
 def _attribute_value(attribute: object) -> object:
@@ -46,7 +50,7 @@ class OperationInvocation:
     operation_type: type[Operation]
     operand_count: int
     result_count: int
-    attributes: Mapping[str, object] = field(default_factory=dict)
+    attributes: InvocationAttributes = field(default_factory=dict)
     operand_prime_ids: tuple[tuple[int, ...] | None, ...] = ()
     operand_bases: tuple[str | None, ...] = ()
     operand_components: tuple[int | None, ...] = ()
@@ -58,7 +62,7 @@ class OperationInvocation:
         operation_type: type[Operation],
         operand_count: int,
         result_count: int,
-        attributes: Mapping[str, object],
+        attributes: InvocationAttributes,
         operand_bases: tuple[str | None, ...] = (),
     ) -> OperationInvocation:
         """Construct a descriptor from Engine-owned typed call metadata."""

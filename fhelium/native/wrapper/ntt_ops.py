@@ -14,7 +14,7 @@ def _require_native() -> None:
 
 
 def compact_twiddles(
-    moduli: list[int], log_n: int, dtype: int, shoup32: bool = False
+    moduli: list[int], log_n: int, dtype: torch.dtype, shoup32: bool = False
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Typed wrapper for ``fhelium_ntt_ops::compact_twiddles``.
@@ -26,7 +26,7 @@ def compact_twiddles(
     Args:
         moduli: list[int].
         log_n: int.
-        dtype: int.
+        dtype: torch.dtype.
         shoup32: bool.
 
     Returns: tuple[torch.Tensor, torch.Tensor].
@@ -421,7 +421,7 @@ def galois_indices(log_n: int, galois_element: int) -> torch.Tensor:
 
 
 def indexed_radix2_plan(
-    moduli: list[int], log_n: int, dtype: int
+    moduli: list[int], log_n: int, dtype: torch.dtype
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Typed wrapper for ``fhelium_ntt_ops::indexed_radix2_plan``.
@@ -433,7 +433,7 @@ def indexed_radix2_plan(
     Args:
         moduli: list[int].
         log_n: int.
-        dtype: int.
+        dtype: torch.dtype.
 
     Returns: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor].
     """
@@ -800,7 +800,7 @@ def negacyclic_root(modulus: int, log_n: int) -> int:
 
 
 def power_of_two_radix_twiddles(
-    moduli: list[int], log_n: int, radix: int, dtype: int
+    moduli: list[int], log_n: int, radix: int, dtype: torch.dtype
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Typed wrapper for ``fhelium_ntt_ops::power_of_two_radix_twiddles``.
@@ -813,7 +813,7 @@ def power_of_two_radix_twiddles(
         moduli: list[int].
         log_n: int.
         radix: int.
-        dtype: int.
+        dtype: torch.dtype.
 
     Returns: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor].
     """
@@ -824,7 +824,7 @@ def power_of_two_radix_twiddles(
 
 
 def subring_indexed_radix2_plan(
-    moduli: list[int], log_n: int, log_extent: int, dtype: int
+    moduli: list[int], log_n: int, log_extent: int, dtype: torch.dtype
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Typed wrapper for ``fhelium_ntt_ops::subring_indexed_radix2_plan``.
@@ -837,7 +837,7 @@ def subring_indexed_radix2_plan(
         moduli: list[int].
         log_n: int.
         log_extent: int.
-        dtype: int.
+        dtype: torch.dtype.
 
     Returns: tuple[torch.Tensor, torch.Tensor, torch.Tensor].
     """

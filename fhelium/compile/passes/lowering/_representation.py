@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Literal, cast
 
 from fractions import Fraction
@@ -17,6 +18,7 @@ from xdsl.ir import Attribute, Operation
 from fhelium.backend.rns.tables import RESCALE_TABLE_NAMES
 from fhelium.config import CkksConfig
 from fhelium.ir.ckks_state import depth_prime_ids
+from fhelium.values.state import ModulusBasis
 from fhelium.config.ntt import (
     CompactRadix2Policy,
     IndexedRadix2Policy,
@@ -40,6 +42,14 @@ from ._types import (
     _cast_to_rns,
     _rns_type,
 )
+
+
+def _modulus_basis(state: Mapping[str, Attribute]) -> ModulusBasis:
+    """Return the represented modulus basis of a value state, Q when unspecified."""
+    basis = state.get("basis")
+    return (
+        cast(ModulusBasis, basis.data) if isinstance(basis, StringAttr) else "Q"
+    )
 
 
 def _ntt_table_count(policy_name: str) -> int:
@@ -265,7 +275,10 @@ def _rescale_materials(
         count = _ntt_table_count(policy_name)
         names.extend(
             f"{part}_{direction}_{i}"
-            for part, direction in (("dropped", "inverse"), ("target", "forward"))
+            for part, direction in (
+                ("dropped", "inverse"),
+                ("target", "forward"),
+            )
             for i in range(count)
         )
         names.append("product_inverse")
@@ -289,7 +302,9 @@ def _rescale_materials(
         )
         for name, reference in zip(names, refs, strict=True)
     }
-    attributes["parameter_names"] = ArrayAttr(StringAttr(name) for name in names)
+    attributes["parameter_names"] = ArrayAttr(
+        StringAttr(name) for name in names
+    )
     return refs, descriptions
 
 
@@ -311,8 +326,7 @@ def _lower_rescale(
     if not isinstance(depth_attr, IntegerAttr):
         raise ValueError("rescale lowering requires concrete ciphertext depth")
     depth = int(depth_attr.value.data)
-    basis_attr = source_rns_type.state.data.get("basis")
-    basis = basis_attr.data if isinstance(basis_attr, StringAttr) else "Q"
+    basis = _modulus_basis(source_rns_type.state.data)
     source_ids = depth_prime_ids(config, depth, basis)
     target_ids = depth_prime_ids(config, depth + 1, basis)
     parameters = tuple(operation.parameters)
@@ -393,7 +407,7 @@ def _lower_mod_switch(
 ) -> LoweredCkksOperation:
     if not isinstance(operation, ckks.ModSwitchOp):
         raise TypeError("Modulus-switch lowering received another operation")
-    state = operation.value.type.state.data
+    state = cast(ckks.CiphertextType, operation.value.type).state.data
     depth_attr = state.get("depth")
     target_depth = int(operation.target_depth.value.data)
     if (
@@ -429,7 +443,7 @@ def _lower_level_reduce(
     $\Delta$, matching ``Engine.mod_switch_to_depth``.
     """
 
-    state = operation.value.type.state.data
+    state = cast(ckks.CiphertextType, operation.value.type).state.data
     source_depth = int(cast(IntegerAttr, state["depth"]).value.data)
     target_depth = int(operation.target_depth.value.data)
     scale_attr = state.get("scale")
@@ -445,13 +459,14 @@ def _lower_level_reduce(
     scaled = ckks.MultiplyIntegerScalarOp(
         operation.value, scalar=IntegerAttr(multiplier, 64)
     )
-    basis_attr = state.get("basis")
-    basis = basis_attr.data if isinstance(basis_attr, StringAttr) else "Q"
+    basis = _modulus_basis(state)
     source_ids = depth_prime_ids(config, source_depth, basis)
     target_ids = depth_prime_ids(config, target_depth, basis)
     domain_attr = state.get("polynomial_domain")
     domain = (
-        domain_attr.data if isinstance(domain_attr, StringAttr) else "coefficient"
+        domain_attr.data
+        if isinstance(domain_attr, StringAttr)
+        else "coefficient"
     )
     attributes: dict[str, Attribute] = {
         name: value

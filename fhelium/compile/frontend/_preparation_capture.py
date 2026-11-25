@@ -9,9 +9,11 @@ import operator
 import time
 import weakref
 from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any, cast, overload
 
 import torch
 from torch.fx import Graph, Node
+from torch.fx.node import Argument
 from torch.utils._python_dispatch import TorchDispatchMode
 
 from fhelium.values import Ciphertext, CompressedPlaintext, Plaintext
@@ -28,6 +30,9 @@ from .._binding_time import (
 )
 from .._errors import CaptureError
 from ._pytorch_encoding import encode_literal
+
+if TYPE_CHECKING:
+    from ._eager_capture import _Capture
 
 
 PREPARATION_METHODS = frozenset(
@@ -90,6 +95,12 @@ class _Tracer:
                         ),
                     )
 
+    @overload
+    def argument(self, value: tuple[Any, ...]) -> tuple[Argument, ...]: ...
+    @overload
+    def argument(self, value: dict[str, Any]) -> dict[str, Argument]: ...
+    @overload
+    def argument(self, value: object) -> Argument: ...
     def argument(self, value):
         if isinstance(value, torch.Tensor):
             node = self.node(value)
@@ -119,9 +130,10 @@ class _Effects(TorchDispatchMode):
     The recorder's tracer receives the ATen calls. This observer also maintains storage ownership and expression identities, including ordered writes through local views.
     """
 
-    def __init__(self, recorder):
+    def __init__(self, recorder: PreparationRecorder) -> None:
         super().__init__()
-        self.recorder = recorder
+        # Released when the recorder closes; the mode is entered only while it runs.
+        self.recorder: PreparationRecorder | None = recorder
         self.values = {}
         self.storage = {}
         self.owners = {}
@@ -171,6 +183,7 @@ class _Effects(TorchDispatchMode):
     def __torch_dispatch__(self, function, types, args=(), kwargs=None):
         kwargs = kwargs or {}
         recorder = self.recorder
+        assert recorder is not None
         if recorder.internal:
             return function(*args, **kwargs)
         self.serial += 1
@@ -212,9 +225,9 @@ class _Effects(TorchDispatchMode):
                 recorder.materialize_views(writes)
         started = time.perf_counter()
         if view is None:
+            tracer = recorder.active_tracer
             if torch.Tag.data_dependent_output in function.tags and any(
-                recorder.tracer.node(tensor) is not None
-                for tensor in input_tensors
+                tracer.node(tensor) is not None for tensor in input_tensors
             ):
                 raise CaptureError(
                     "Plaintext preparation cannot read traced Tensor values into Python"
@@ -222,7 +235,6 @@ class _Effects(TorchDispatchMode):
             # A fresh Tensor literal is copied so that later writes cannot alias it.
             if function is torch.ops.aten.lift_fresh.default:
                 function = torch.ops.aten.lift_fresh_copy.default
-            tracer = recorder.tracer
             node = tracer.graph.call_function(
                 function, tracer.argument(args), tracer.argument(kwargs)
             )
@@ -265,19 +277,20 @@ class _Effects(TorchDispatchMode):
 
 
 class _TorchModule:
-    def __init__(self, recorder):
-        self.recorder = recorder
+    def __init__(self, recorder: PreparationRecorder) -> None:
+        # Released when the recorder closes.
+        self.recorder: PreparationRecorder | None = recorder
 
     def __getattr__(self, name):
         if name in {"tensor", "as_tensor"}:
-            return lambda *args, **kwargs: self.recorder.factory(
-                name, args, kwargs
-            )
+            recorder = self.recorder
+            assert recorder is not None
+            return lambda *args, **kwargs: recorder.factory(name, args, kwargs)
         return getattr(torch, name)
 
 
 class PreparationRecorder:
-    def __init__(self, capture, arguments):
+    def __init__(self, capture: _Capture, arguments) -> None:
         self.capture = capture
         self.arguments = arguments
         self.inputs = []
@@ -296,15 +309,18 @@ class PreparationRecorder:
         self.memo_writes = []
         self.internal = 0
         self.execute_seconds = 0.0
-        self.tracer = None
+        self.tracer: _Tracer | None = None
         self.pending = {}
         self.pending_storage = {}
         self.event = 0
         self.effects = _Effects(self)
         self.torch = _TorchModule(self)
-        self.merged = capture.workspace.get("merge_plaintext_encodings", True)
-        self.residency = capture.workspace.get(
-            "plaintext_preparation_mode", "resident"
+        self.merged = cast(
+            bool, capture.workspace.get("merge_plaintext_encodings", True)
+        )
+        self.residency = cast(
+            str,
+            capture.workspace.get("plaintext_preparation_mode", "resident"),
         )
         if self.residency not in {"resident", "per_call"}:
             raise ValueError(
@@ -341,6 +357,12 @@ class PreparationRecorder:
             external=True,
         )
 
+    @property
+    def active_tracer(self) -> _Tracer:
+        """Return the tracer of the running preparation."""
+        assert self.tracer is not None
+        return self.tracer
+
     @contextmanager
     def pause(self):
         self.internal += 1
@@ -352,14 +374,14 @@ class PreparationRecorder:
     def proxy(self, tensor):
         if self.pending:
             self.materialize(tensor)
-        return self.tracer.node(tensor)
+        return self.active_tracer.node(tensor)
 
     def traced(self, tensor):
         """Return whether a Tensor has a graph value, including a deferred view."""
         entry = self.pending.get(id(tensor))
         if entry is not None and entry[0]() is tensor:
             return True
-        return self.tracer.node(tensor) is not None
+        return self.active_tracer.node(tensor) is not None
 
     def placeholder(self, tensor):
         """Return whether a Tensor is a graph input of the preparation trace."""
@@ -387,9 +409,8 @@ class PreparationRecorder:
         if entry is None or entry[0]() is not tensor:
             return
         _, function, (args, kwargs) = entry
-        self.tracer.track(
-            tensor, self.tracer.graph.call_function(function, args, kwargs)
-        )
+        tracer = self.active_tracer
+        tracer.track(tensor, tracer.graph.call_function(function, args, kwargs))
 
     def materialize_views(self, storages):
         """Place deferred views of written storage before the write."""
@@ -431,9 +452,10 @@ class PreparationRecorder:
                 self.capture.materials[symbol] = tensor
                 self.capture.descriptions[symbol] = {"kind": "Tensor"}
             index = len(self.inputs)
-            self.tracer.track(
+            tracer = self.active_tracer
+            tracer.track(
                 tensor,
-                self.tracer.graph.placeholder(f"preparation_leaf_{index}"),
+                tracer.graph.placeholder(f"preparation_leaf_{index}"),
             )
             self.inputs.append(
                 {
@@ -494,9 +516,10 @@ class PreparationRecorder:
         with self.pause():
             result = tensor_factory(name, args, kwargs)
         self.execute_seconds += time.perf_counter() - started
-        self.tracer.track(
+        tracer = self.active_tracer
+        tracer.track(
             result,
-            self.tracer.graph.call_function(
+            tracer.graph.call_function(
                 tensor_factory, (name, self.mapped(args), self.mapped(kwargs))
             ),
         )
@@ -521,7 +544,7 @@ class PreparationRecorder:
             with self.pause():
                 result = getattr(engine, method)(**parameters)
             self.execute_seconds += time.perf_counter() - started
-            proxy = self.tracer.graph.call_function(
+            proxy = self.active_tracer.graph.call_function(
                 engine_call, (index, method, self.mapped(packed))
             )
             self.codecs[signature] = (result, proxy)
@@ -539,10 +562,11 @@ class PreparationRecorder:
                             for field, tensor in self._fields(result)
                         },
                     )
+        tracer = self.active_tracer
         for output_index, (field, tensor) in enumerate(self._fields(result)):
-            self.tracer.track(
+            tracer.track(
                 tensor,
-                self.tracer.graph.call_function(
+                tracer.graph.call_function(
                     operator.getitem, (proxy, output_index)
                 ),
             )
@@ -586,6 +610,7 @@ class PreparationRecorder:
             self.exports.append(symbol)
             self.outputs.append(tensor)
         else:
+            assert owner is not None
             self.views[symbol] = {
                 "owner": owner_symbol,
                 "offset": tensor.storage_offset() - owner.storage_offset(),
@@ -659,7 +684,7 @@ class PreparationRecorder:
         self.getters = {}
         self.engines = []
         self.memo_writes = []
-        self.capture = None
+        del self.capture
 
     def _run(self, function):
         tracer = self.tracer = _Tracer()
@@ -667,7 +692,7 @@ class PreparationRecorder:
             tracer.track(tensor, tracer.graph.placeholder(f"input_{index}"))
         with self.effects:
             function()
-        tracer.graph.output(tuple(tracer.argument(tuple(self.outputs))))
+        tracer.graph.output(tracer.argument(tuple(self.outputs)))
         graph = tracer.graph
         if not self.exports:
             return None

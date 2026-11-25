@@ -91,13 +91,15 @@ def _lower_add(
     rhs_cast, rhs = _cast_to_rns(operation.rhs)
     parameter_ops, parameters = _parameters(operation, config, compilation)
     counts = tuple(
-        value.type.state.data.get("components")
+        cast(ckks.CiphertextType, value.type).state.data.get("components")
         for value in (operation.lhs, operation.rhs)
     )
     result_type = operation.result.type
     operations: list[Operation] = [lhs_cast, rhs_cast, *parameter_ops]
     if None in counts or counts[0] == counts[1]:
-        logical = rns.AddStandardOp(lhs, rhs, parameters, _rns_type(result_type))
+        logical = rns.AddStandardOp(
+            lhs, rhs, parameters, _rns_type(result_type)
+        )
         operations.append(logical)
         packed = logical.result
     else:
@@ -117,15 +119,24 @@ def _lower_add(
                     operations.append(extract)
                     terms.append(extract.result)
             if len(terms) == 2:
-                total = rns.AddStandardOp(*terms, parameters, polynomial)
+                total = rns.AddStandardOp(
+                    terms[0], terms[1], parameters, polynomial
+                )
                 operations.append(total)
                 terms = [total.result]
             components.append(terms[0])
         pack = (
-            rns.PackThreeComponentsOp
+            rns.PackThreeComponentsOp(
+                components[0],
+                components[1],
+                components[2],
+                _rns_type(result_type),
+            )
             if len(components) == 3
-            else rns.PackTwoComponentsOp
-        )(*components, _rns_type(result_type))
+            else rns.PackTwoComponentsOp(
+                components[0], components[1], _rns_type(result_type)
+            )
+        )
         operations.append(pack)
         packed = pack.result
     result_cast, result = _cast_to_ckks(packed, result_type)

@@ -20,6 +20,7 @@ from fhelium.backend.execution import (
     ProgramDispatchTable,
 )
 from fhelium.backend.implementation import (
+    OperationImplementation,
     OperationImplementationRegistry,
     PreparingOperationImplementation,
     operation_invocation,
@@ -55,7 +56,7 @@ class ResolveBackendOperationsPass:
             )
 
         dispatches = {}
-        prepared: dict[tuple[int, object], object] = {}
+        prepared: dict[tuple[int, object], OperationImplementation] = {}
         decisions: list[DecisionRecord] = []
         linked = shared_data.get(LinkedFunctions, {})
         for operation in operations:

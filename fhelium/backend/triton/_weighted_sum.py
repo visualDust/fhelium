@@ -98,7 +98,9 @@ class TritonWeightedSumImplementation:
                 structure = (
                     plaintext_product()
                     if layout == "dense"
-                    else compressed("multiply", len(operands) + 1, layout, False)
+                    else compressed(
+                        "multiply", len(operands) + 1, layout, False
+                    )
                 )
                 term = structured_value(
                     structure,
@@ -197,5 +199,7 @@ class TritonWeightedSumImplementation:
                         rns_ops.add_standard_(
                             total[component], partial[component], parameters
                         )
+            # ciphertexts is nonempty, so every row has at least one chunk.
+            assert total is not None
             outputs.append(total)
-        return (result if grouped else outputs[0],)
+        return (outputs[0] if result is None else result,)

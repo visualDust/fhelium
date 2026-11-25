@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import linecache
-from typing import Any
+from typing import Any, Literal
 
 
 def compile_endpoint(source: str) -> Any:
@@ -349,18 +349,18 @@ class StageEmitter:
             return f"(lane_group * {1 << m} + {position})"
         return f"({position} * {self.n >> m} + lane_group)"
 
-    def _sequence(self, low: int) -> list[object]:
+    def _sequence(self, low: int) -> list[int | Literal["lane"]]:
         """Flattened axis order of packed registers, most significant first."""
         m, k = self.stages, self.bits
         rest = [*range(m - 1, low + k - 1, -1), *range(low - 1, -1, -1)]
         window = list(range(low + k - 1, low - 1, -1))
         return (
-            ["lane", *rest, *window]
-            if self.tiled
-            else [*rest, "lane", *window]
+            ["lane", *rest, *window] if self.tiled else [*rest, "lane", *window]
         )
 
-    def _exchange(self, registers: list[str], source: int, target: int) -> list[str]:
+    def _exchange(
+        self, registers: list[str], source: int, target: int
+    ) -> list[str]:
         """Move register values from the source window to the target window."""
         if source == target:
             return registers
@@ -372,8 +372,8 @@ class StageEmitter:
             for bit in range(lo, hi)
         }
 
-        def axes(low: int) -> list[object]:
-            order: list[object] = []
+        def axes(low: int) -> list[int | Literal["lane"]]:
+            order: list[int | Literal["lane"]] = []
             for token in self._sequence(low):
                 label = "lane" if token == "lane" else segment[token]
                 if not order or order[-1] != label:
@@ -388,7 +388,9 @@ class StageEmitter:
             for label in before
         }
         packed = self.name("narrow")
-        self.lines.append(f"{packed} = narrow({self._pack(registers, k)}, RADIX)")
+        self.lines.append(
+            f"{packed} = narrow({self._pack(registers, k)}, RADIX)"
+        )
         shaped, permuted = self.name("shaped"), self.name("permuted")
         shape = tuple(sizes[label] for label in before)
         order = tuple(before.index(label) for label in after)

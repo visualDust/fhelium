@@ -230,7 +230,7 @@ def crt_basis_extend_out_(
 
 
 def crt_basis_extension_tables(
-    source: list[int], target: list[int], normalized: bool, dtype: int
+    source: list[int], target: list[int], normalized: bool, dtype: torch.dtype
 ) -> tuple[
     torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
 ]:
@@ -245,7 +245,7 @@ def crt_basis_extension_tables(
         source: list[int].
         target: list[int].
         normalized: bool.
-        dtype: int.
+        dtype: torch.dtype.
 
     Returns: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor].
     """
@@ -256,7 +256,7 @@ def crt_basis_extension_tables(
 
 
 def crt_quotient_tables(
-    source: list[int], target: list[int], divisor: list[int], dtype: int
+    source: list[int], target: list[int], divisor: list[int], dtype: torch.dtype
 ) -> tuple[
     torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
 ]:
@@ -271,7 +271,7 @@ def crt_quotient_tables(
         source: list[int].
         target: list[int].
         divisor: list[int].
-        dtype: int.
+        dtype: torch.dtype.
 
     Returns: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor].
     """
@@ -301,7 +301,7 @@ def from_montgomery_(
     torch.ops.fhelium_rns_ops.from_montgomery_(montgomery_residues, rns_params)
 
 
-def half_product_digits(factors: list[int], dtype: int) -> torch.Tensor:
+def half_product_digits(factors: list[int], dtype: torch.dtype) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_rns_ops::half_product_digits``.
 
@@ -311,7 +311,7 @@ def half_product_digits(factors: list[int], dtype: int) -> torch.Tensor:
 
     Args:
         factors: list[int].
-        dtype: int.
+        dtype: torch.dtype.
 
     Returns: torch.Tensor.
     """
@@ -320,7 +320,7 @@ def half_product_digits(factors: list[int], dtype: int) -> torch.Tensor:
 
 
 def half_product_residues(
-    factors: list[int], targets: list[int], dtype: int
+    factors: list[int], targets: list[int], dtype: torch.dtype
 ) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_rns_ops::half_product_residues``.
@@ -332,7 +332,7 @@ def half_product_residues(
     Args:
         factors: list[int].
         targets: list[int].
-        dtype: int.
+        dtype: torch.dtype.
 
     Returns: torch.Tensor.
     """
@@ -594,7 +594,7 @@ def mixed_radix_modup_tiled_out_(
 
 
 def mixed_radix_tables(
-    source: list[int], destination: list[int], dtype: int
+    source: list[int], destination: list[int], dtype: torch.dtype
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Typed wrapper for ``fhelium_rns_ops::mixed_radix_tables``.
@@ -606,7 +606,7 @@ def mixed_radix_tables(
     Args:
         source: list[int].
         destination: list[int].
-        dtype: int.
+        dtype: torch.dtype.
 
     Returns: tuple[torch.Tensor, torch.Tensor, torch.Tensor].
     """
@@ -895,7 +895,7 @@ def montgomery_weighted_sums(
 
 
 def parameter_table(
-    moduli: list[int], log_n: int, default_scale: float, dtype: int
+    moduli: list[int], log_n: int, default_scale: float, dtype: torch.dtype
 ) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_rns_ops::parameter_table``.
@@ -908,7 +908,7 @@ def parameter_table(
         moduli: list[int].
         log_n: int.
         default_scale: float.
-        dtype: int.
+        dtype: torch.dtype.
 
     Returns: torch.Tensor.
     """
@@ -923,7 +923,7 @@ def product_residues(
     targets: list[int],
     exponent: int,
     montgomery: bool,
-    dtype: int,
+    dtype: torch.dtype,
 ) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_rns_ops::product_residues``.
@@ -937,7 +937,7 @@ def product_residues(
         targets: list[int].
         exponent: int.
         montgomery: bool.
-        dtype: int.
+        dtype: torch.dtype.
 
     Returns: torch.Tensor.
     """
@@ -953,7 +953,7 @@ def quotient_offset_residues(
     p_nearest: bool,
     d_nearest: bool,
     targets: list[int],
-    dtype: int,
+    dtype: torch.dtype,
 ) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_rns_ops::quotient_offset_residues``.
@@ -968,7 +968,7 @@ def quotient_offset_residues(
         p_nearest: bool.
         d_nearest: bool.
         targets: list[int].
-        dtype: int.
+        dtype: torch.dtype.
 
     Returns: torch.Tensor.
     """
@@ -1027,7 +1027,9 @@ def reduce_to_standard_(
     torch.ops.fhelium_rns_ops.reduce_to_standard_(lazy_residues, rns_params)
 
 
-def rescale_inverse_matrix(moduli: list[int], dtype: int) -> torch.Tensor:
+def rescale_inverse_matrix(
+    moduli: list[int], dtype: torch.dtype
+) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_rns_ops::rescale_inverse_matrix``.
 
@@ -1037,7 +1039,7 @@ def rescale_inverse_matrix(moduli: list[int], dtype: int) -> torch.Tensor:
 
     Args:
         moduli: list[int].
-        dtype: int.
+        dtype: torch.dtype.
 
     Returns: torch.Tensor.
     """
@@ -1201,7 +1203,7 @@ def to_montgomery_(
 
 
 def trailing_quotient_inverses(
-    moduli: list[int], drop_count: int, dtype: int
+    moduli: list[int], drop_count: int, dtype: torch.dtype
 ) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_rns_ops::trailing_quotient_inverses``.
@@ -1213,7 +1215,7 @@ def trailing_quotient_inverses(
     Args:
         moduli: list[int].
         drop_count: int.
-        dtype: int.
+        dtype: torch.dtype.
 
     Returns: torch.Tensor.
     """

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from triton.runtime._async_compile import FutureKernel
@@ -39,7 +40,9 @@ class PreparedKernel:
         self.grid = tuple(grid) + (1,) * (3 - len(grid))
         self.num_warps = num_warps
         self.compile_options = compile_options
-        self._prepared = None
+        self._prepared: tuple[tuple[object, ...], Callable[..., Any]] | None = (
+            None
+        )
 
     def __reduce__(self):
         if self.source is None:
@@ -65,7 +68,8 @@ class PreparedKernel:
             knobs.compilation.instrumentation_mode,
         )
 
-    def _bind(self, args, *, warmup: bool):
+    def _bind(self, args, *, warmup: bool) -> Callable[..., Any] | None:
+        """Compile for ``args`` and record the launcher; return None while a warm-up compilation is pending."""
         from triton.runtime.jit import MockTensor
 
         if warmup:
@@ -78,7 +82,11 @@ class PreparedKernel:
             **self.compile_options,
         )
         if isinstance(binary, FutureKernel):
-            return binary
+            if warmup:
+                return None
+            # A launch inside Triton's asynchronous compile mode waits for
+            # the submitted compilation.
+            binary = binary.result()
         if binary is None:
             # The Triton interpreter has no compiled binary; run it directly.
             def launcher(*args, stream=None):
@@ -93,7 +101,7 @@ class PreparedKernel:
         else:
             launcher = binary[self.grid]
         self._prepared = (self._options(), launcher)
-        return binary
+        return launcher
 
     def warm(self, *signature) -> bool:
         """Compile and load this kernel for ``signature``; report a new compilation."""
@@ -103,7 +111,9 @@ class PreparedKernel:
             return False
         from triton.runtime import driver
 
-        device = driver.active.get_current_device()
+        # Triton annotates driver.active as DriverBase; the active GPU driver
+        # defines get_current_device.
+        device = driver.active.get_current_device()  # pyright: ignore[reportAttributeAccessIssue]
         kernel_cache = self.function.device_caches[device][0]
         before = len(kernel_cache)
         self._bind(signature, warmup=True)
@@ -114,8 +124,8 @@ class PreparedKernel:
 
         cached = self._prepared
         if cached is None or cached[0] != self._options():
-            self._bind(args, warmup=False)
-            launcher = self._prepared[1]
+            launcher = self._bind(args, warmup=False)
+            assert launcher is not None  # Only warm-up binding defers.
         else:
             launcher = cached[1]
             for hook in self.function.pre_run_hooks:

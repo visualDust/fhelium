@@ -24,6 +24,7 @@ from fhelium.ir import Program, value_role
 from ._compilation import Compilation, DeferredCompilation
 from ._binding_time import PREPARATION, PreparationPlan
 from ._cache import (
+    ArtifactRecord,
     CacheEntry,
     CacheIneligible,
     CompileCache,
@@ -328,7 +329,8 @@ class CompiledCallable(Generic[_P, _R]):
             else None
         )
         self._resident_hits = 0
-        self._stages: dict[CallSignature, dict[str, object]] = {}
+        # Specialization stages, and "__cache__" for source-cache eligibility.
+        self._stages: dict[CallSignature | str, dict[str, object]] = {}
         self._execution_lock = RLock()
         self._graphs = _GraphExecutor(graph=graph, copy_output=copy_output)
         self._timing = ExecutionTiming()
@@ -461,12 +463,12 @@ class CompiledCallable(Generic[_P, _R]):
 
     def _cached_variant(
         self,
-        signature,
-        arguments,
-        entry,
-        compilation,
-        record=None,
-        artifact=None,
+        signature: CallSignature,
+        arguments: Mapping[str, object],
+        entry: CacheEntry,
+        compilation: Compilation,
+        record: ArtifactRecord | None = None,
+        artifact: LinkArtifact | None = None,
     ) -> _CompiledVariant:
         def restore_source() -> Compilation:
             return Compilation(
@@ -492,7 +494,7 @@ class CompiledCallable(Generic[_P, _R]):
 
     def _load_artifact(
         self, key: str, backend: OperationBackend, stages: dict[str, object]
-    ) -> dict[str, object] | None:
+    ) -> ArtifactRecord | None:
         """Read the linked executable recorded for cache entry ``key``."""
         started = time.perf_counter()
         linked = self._artifact_target(key, backend, stages)
@@ -517,7 +519,7 @@ class CompiledCallable(Generic[_P, _R]):
     def _store_artifact(
         self,
         prepared: Specialization,
-        selections: Mapping[str, object] | None,
+        selections: Mapping[str, Mapping[str, object] | None] | None,
         stages: dict[str, object],
     ) -> None:
         if stages.get("artifact") != "miss" or selections is None:
@@ -744,9 +746,13 @@ class CompiledCallable(Generic[_P, _R]):
                 )
                 from fhelium.ir._operation_structure import STRUCTURE_LOOKUPS
 
-                from .passes.lowering._select_execution import SelectionDecisions
+                from .passes.lowering._select_execution import (
+                    SelectionDecisions,
+                )
 
-                selection = variant.compilation.workspace.get(SelectionDecisions)
+                selection = variant.compilation.workspace.get(
+                    SelectionDecisions
+                )
                 if selection is not None:
                     stages["selection_decisions"] = selection.stats()
                 stages["structure_lookups"] = dict(STRUCTURE_LOOKUPS)

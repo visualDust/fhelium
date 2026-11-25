@@ -74,7 +74,7 @@ def _schedule_operands(
 
 
 def prepare_ntt_schedules(
-    program: Program, materials: Mapping[Operation, object]
+    program: Program, materials: Mapping[core.MaterialRefOp, object]
 ) -> tuple[tuple[str, str], ...]:
     """Validate bound schedules once before constructing the host callable.
 
@@ -94,6 +94,7 @@ def prepare_ntt_schedules(
                 odd_ref, core.MaterialRefOp
             ):
                 continue
+            assert even_ref.symbol is not None and odd_ref.symbol is not None
             symbols[(even_ref.symbol.data, odd_ref.symbol.data)] = None
             even = cast(torch.Tensor, materials[even_ref])
             odd = cast(torch.Tensor, materials[odd_ref])

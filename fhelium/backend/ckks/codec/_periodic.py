@@ -76,11 +76,30 @@ class NativePrepareCompressedPlaintextImplementation:
     def execute(self, invocation, inputs, resources, *, in_place):
         del resources, in_place
         attributes = invocation.attributes
+        (
+            message,
+            pre,
+            twister,
+            seed,
+            parameters,
+            twice_moduli,
+            even,
+            odd,
+            twiddles,
+        ) = inputs
         result = ckks_ops.prepare_periodic_plaintext(
-            *inputs,
+            message,
+            pre,
+            twister,
+            seed,
+            parameters,
+            twice_moduli,
+            even,
+            odd,
+            twiddles,
             int(attributes["ring_dimension"]),
             float(attributes["scale"]),
             str(attributes.get("polynomial_domain", "ntt")),
         )
-        advance_(inputs[3])
+        advance_(seed)
         return tuple(result)

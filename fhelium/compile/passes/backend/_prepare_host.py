@@ -56,6 +56,7 @@ def prepare_host_call(executable: ProgramExecutable):
 
     def reference(operation: Operation) -> str:
         if isinstance(operation, core.MaterialRefOp):
+            assert operation.symbol is not None
             material = operation.symbol.data
             symbol = bind(
                 executable.bound_materials[operation], Material(material)

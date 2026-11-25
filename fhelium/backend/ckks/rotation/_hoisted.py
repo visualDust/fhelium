@@ -7,6 +7,7 @@ from collections.abc import Iterator, Mapping, Sequence
 import torch
 
 from fhelium.backend._native_operands import key_switch_options, mapping_tables
+from fhelium.backend.implementation import InvocationAttributes
 from fhelium.native.wrapper import ckks_ops, ntt_ops
 
 
@@ -15,7 +16,7 @@ def iter_rotations(
     keys: Sequence[torch.Tensor | None],
     steps: Sequence[int],
     tensors: Mapping[str, torch.Tensor],
-    attributes: Mapping[str, object],
+    attributes: InvocationAttributes,
     *,
     seeds: Sequence[torch.Tensor | None] | None = None,
     output_ntt: bool = False,

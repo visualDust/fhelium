@@ -339,7 +339,11 @@ def prepare_material_bindings(
             owner = selected_keys.get(cast(str, description["key"]))
             if owner is None:
                 continue
-            seed = owner.generated_seed
+            seed = (
+                owner.generated_seed
+                if isinstance(owner, KeySwitchKey)
+                else None
+            )
             if seed is None:
                 missing.append(symbol)
             else:
@@ -388,15 +392,16 @@ def _select_provided(providers, selection, cache) -> torch.Tensor | None:
 
 def provided_material_selections(
     compilation: Compilation,
-) -> dict[str | None, dict[str, object] | None]:
+) -> dict[str, dict[str, object] | None]:
     """Record every material symbol with the provider selection its description admits.
 
     Binding these selections reproduces, without the Program, the provider lookups that :func:`prepare_material_bindings` performs for unbound symbols when no keys are supplied. Symbols without a provider description map to None.
     """
     descriptions = compilation.program.material_descriptions
-    selections: dict[str | None, dict[str, object] | None] = {}
+    selections: dict[str, dict[str, object] | None] = {}
     for operation in compilation.program.walk():
         if isinstance(operation, core.MaterialRefOp):
+            assert operation.symbol is not None
             symbol = operation.symbol.data
             if symbol not in selections:
                 selections[symbol] = _provider_selection(
@@ -406,7 +411,7 @@ def provided_material_selections(
 
 
 def bind_provided_materials(
-    bindings: dict[str, object],
+    bindings: dict[str, torch.Tensor],
     selections: Mapping[str, Mapping[str, object] | None],
     resources: Iterable[object],
 ) -> bool:
