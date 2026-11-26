@@ -33,7 +33,11 @@ def test_partial_ntt_selection_preserves_supplied_tables_and_open_device(
     ids = (2, 3)
     supplied = context.tensor_operands(ids, inverse=False)
     source = torch.randint(
-        0, 65536, (2, len(ids), config.N), dtype=context.rns_context.dtype, device=device
+        0,
+        65536,
+        (2, len(ids), config.N),
+        dtype=context.rns_context.dtype,
+        device=device,
     )
 
     def integers(values):
@@ -224,3 +228,38 @@ def test_ntt_fusion_preserves_surrounding_arithmetic_and_escaping_results(
                 reference.residue_representation,
             )
     torch.testing.assert_close(value.data, original, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(
+    ("p_bits", "dtype"), [(28, torch.int32), (60, torch.int64)]
+)
+def test_compiled_ntt_matches_native_ntt_for_each_storage_width(p_bits, dtype):
+    """Compiled transforms, fused or native by device, equal Eager's native NTT."""
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    from fhelium import compile as fc
+    from fhelium.eager import Engine
+
+    config = CkksConfig.catalog_suffix_chain(
+        logN=13,
+        scale_bits=25,
+        depth=4,
+        p_count=1,
+        p_bits=p_bits,
+        enforce_security_budget=False,
+    )
+    engine = Engine(config, rng_seed=3, rng_nonce=0)
+    secret = engine.create_secret_key(device="cuda")
+    public = engine.create_public_key(secret)
+    message = torch.linspace(-0.5, 0.5, config.num_slots, dtype=torch.float64)
+    value = engine.coefficient_domain_to_ntt_domain(
+        engine.encrypt_message(message, public, device="cuda")
+    )
+    assert value.data.dtype == dtype
+
+    def source(x):
+        restored = engine.ntt_domain_to_coefficient_domain(x)
+        return engine.add(restored, restored)
+
+    compiled = fc.compile(source, cache=False, graph=False)
+    assert torch.equal(compiled(value).data, source(value).data)

@@ -148,7 +148,7 @@ def test_incremental_ntt_fusion_tracks_outputs_consumed_inside_region():
             {
                 "shape": ArrayAttr(IntegerAttr(n, 64) for n in shape),
                 "device": StringAttr("cuda:0"),
-                "dtype": StringAttr("int64"),
+                "dtype": StringAttr("int32"),
             }
         )
 
