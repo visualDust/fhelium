@@ -67,8 +67,9 @@ at::Tensor seed_rows(at::Tensor& stream, int64_t digits) {
                    .narrow(0, 0, 10)
                    .to(at::kLong)
                    .bitwise_and(0xffffffffLL);
-  auto packed = words.slice(0, 0, 10, 2).bitwise_or(
-      words.slice(0, 1, 10, 2).bitwise_left_shift(32));
+  auto packed =
+      words.slice(0, 0, 10, 2)
+          .bitwise_or(words.slice(0, 1, 10, 2).bitwise_left_shift(32));
   advance(stream);
   auto index = at::arange(digits, packed.options()).unsqueeze(1);
   return at::cat({packed.unsqueeze(0).expand({digits, 5}), index}, 1);
@@ -88,13 +89,14 @@ KeySwitchKey expand_key_switch_key(const KeySwitchKey& key) {
   TORCH_CHECK_VALUE(key.seed_rows.has_value(),
                     "A compact key requires seed rows");
   TORCH_CHECK_VALUE(key.spec.prf == "chacha",
-                    "Unsupported key seed generator ", key.spec.prf);
+                    "Unsupported key seed generator ",
+                    key.spec.prf);
   auto uniform = random::expand_seeded_key(*key.seed_rows,
                                            key_moduli(key.spec, key.data),
                                            key.data.size(-1),
                                            key.spec.rounds);
-  return {at::stack({key.data.select(1, 0), uniform}, 1), key.seed_rows,
-          key.spec};
+  return {
+      at::stack({key.data.select(1, 0), uniform}, 1), key.seed_rows, key.spec};
 }
 
 KeySwitchKey compact_key_switch_key(const KeySwitchKey& key) {
@@ -169,10 +171,9 @@ KeySwitchKey create_key_switch_key(
   for (const int64_t size : layout.digit_sizes) {
     q_row_count += size;
   }
-  TORCH_CHECK_VALUE(
-      q_row_count > 0 &&
-          q_row_count == static_cast<int64_t>(layout.q_rows.size()),
-      "Key digits must partition the active Q rows");
+  TORCH_CHECK_VALUE(q_row_count > 0 && q_row_count == static_cast<int64_t>(
+                                                          layout.q_rows.size()),
+                    "Key digits must partition the active Q rows");
   for (const int64_t row : layout.q_rows) {
     TORCH_CHECK_VALUE(row >= 0 && row < q_count,
                       "Active key rows must be Q rows");
@@ -204,14 +205,18 @@ KeySwitchKey create_key_switch_key(
     // Seeded key: k_1 is the seed expansion on the key rows, placed at their
     // parameter rows for the public-key construction.
     seeds = seed_rows(stream, digit_count);
-    const auto rows = at::tensor(key_rows, at::TensorOptions().dtype(at::kLong));
-    const auto moduli = twice_modulus.to(at::kCPU).to(at::kLong).index_select(0, rows)
-                            .div(2, "floor");
+    const auto rows =
+        at::tensor(key_rows, at::TensorOptions().dtype(at::kLong));
+    const auto moduli =
+        twice_modulus.to(at::kCPU).to(at::kLong).index_select(0, rows).div(
+            2, "floor");
     spec.moduli.assign(moduli.data_ptr<int64_t>(),
                        moduli.data_ptr<int64_t>() + moduli.numel());
-    const auto expanded = random::expand_seeded_key(
-        *seeds, key_moduli(spec, parameters), destination_secret_key.size(-1),
-        spec.rounds);
+    const auto expanded =
+        random::expand_seeded_key(*seeds,
+                                  key_moduli(spec, parameters),
+                                  destination_secret_key.size(-1),
+                                  spec.rounds);
     auto full = at::zeros({digit_count, parameters.size(1), expanded.size(-1)},
                           expanded.options());
     full.index_copy_(1, rows.to(full.device()), expanded);
@@ -270,16 +275,18 @@ KeySwitchKey create_relinearization_key(
                                error_by_digit);
 }
 
-KeySwitchKey create_galois_key(const at::Tensor& secret_key,
-                             int64_t galois_element,
-                             const TensorTable& tables,
-                             const at::Tensor& seed,
-                             const at::Tensor& cdt_table,
-                             const KeySwitchKeyLayout& layout,
-                             const std::optional<at::Tensor>& uniform_by_digit,
-                             const std::optional<at::Tensor>& error_by_digit) {
+KeySwitchKey create_galois_key(
+    const at::Tensor& secret_key,
+    int64_t galois_element,
+    const TensorTable& tables,
+    const at::Tensor& seed,
+    const at::Tensor& cdt_table,
+    const KeySwitchKeyLayout& layout,
+    const std::optional<at::Tensor>& uniform_by_digit,
+    const std::optional<at::Tensor>& error_by_digit) {
+  // The coefficient automorphism reads residues in [0, q_j).
   auto coefficients = ntt::transform(
-      secret_key, tables, layout.ntt_backend, "", "inverse_montgomery");
+      secret_key, tables, layout.ntt_backend, "", "inverse_to_standard");
   const auto [indices, signs] = coefficient_galois_indices(
       log2_exact(secret_key.size(-1)), galois_element);
   auto mapped = apply_coefficient_galois_automorphism(
@@ -287,7 +294,8 @@ KeySwitchKey create_galois_key(const at::Tensor& secret_key,
       indices.to(secret_key.device()),
       signs.to(secret_key.device()),
       tables.at("parameters").select(0, 0));
-  ntt::transform_(mapped, tables, layout.ntt_backend, "", "forward_montgomery");
+  ntt::transform_(
+      mapped, tables, layout.ntt_backend, "", "forward_to_montgomery");
   return create_key_switch_key(mapped,
                                secret_key,
                                tables,

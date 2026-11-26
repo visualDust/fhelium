@@ -316,7 +316,11 @@ def test_seeded_cpu_cuda_operation_matrix_is_correct_at_multiple_depths(
     bounded_digits: list[tuple[int, ...]] = []
     digit: list[int] = []
     for prime_id, modulus in enumerate(config.q_moduli):
-        if digit and math.prod(config.q_moduli[i] for i in digit) * modulus > p_product:
+        if (
+            digit
+            and math.prod(config.q_moduli[i] for i in digit) * modulus
+            > p_product
+        ):
             bounded_digits.append(tuple(digit))
             digit = []
         digit.append(prime_id)
@@ -1147,3 +1151,43 @@ def test_conjugation_is_correct(engine: Engine) -> None:
         atol=_KEYSWITCH_ATOL,
         operation="conjugate",
     )
+
+
+@pytest.mark.gpu
+def test_cuda_rotation_keys_on_a_chain_with_60_bit_primes() -> None:
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    q_moduli = (
+        1099510054913,
+        1099515691009,
+        1099508121601,
+        1152921504606748673,
+    )
+    config = CkksConfig.suffix_chain(
+        scale=float(1 << 40),
+        logN=14,
+        q_depth_groups=tuple((q,) for q in q_moduli),
+        p_moduli=(1152921504606683137,),
+    )
+    with torch.device("cuda:0"):
+        engine = Engine(config, rng_seed=1)
+        secret_key = engine.create_secret_key()
+        message = torch.linspace(
+            -0.5, 0.5, engine.num_slots, dtype=torch.float64
+        )
+        ciphertext = engine.encrypt_message(
+            message, engine.create_public_key(secret_key)
+        )
+        for step in (1, 2, 3, -2):
+            rotated = engine.rotate_with_key(
+                ciphertext, engine.create_rotation_key(step, secret_key)
+            )
+            decoded = engine.decrypt_message(
+                rotated, secret_key, is_real=True
+            ).cpu()
+            torch.testing.assert_close(
+                decoded,
+                torch.roll(message.cpu(), step),
+                rtol=0,
+                atol=_KEYSWITCH_ATOL,
+            )

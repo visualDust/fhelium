@@ -22,8 +22,8 @@
 //! A transition is one of `forward_montgomery` (coefficient Montgomery to NTT
 //! Montgomery), `forward_to_montgomery` (coefficient standard to NTT
 //! Montgomery), `inverse_montgomery` (NTT Montgomery to coefficient
-//! Montgomery), `inverse_to_standard` (NTT Montgomery to coefficient
-//! standard in $[0, q_j)$), `inverse_to_standard_lazy` (the same in
+//! Montgomery in $[0, 2q_j)$), `inverse_to_standard` (NTT Montgomery to
+//! coefficient standard in $[0, q_j)$), `inverse_to_standard_lazy` (the same in
 //! $[0, 2q_j)$), and `inverse_to_centered` (NTT Montgomery to centered
 //! coefficients).
 
