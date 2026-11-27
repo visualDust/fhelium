@@ -91,7 +91,9 @@ class HybridRnsDecomposition:
 
         position = {
             prime_id: index
-            for index, prime_id in enumerate(self.chain.q_prime_ids_at_depth(depth))
+            for index, prime_id in enumerate(
+                self.chain.q_prime_ids_at_depth(depth)
+            )
         }
         return tuple(
             tuple(position[prime_id] for prime_id in digit.prime_ids)
@@ -130,7 +132,9 @@ def key_decomposition_facts(
     key_row_start = q_rows[0]
     key_p_row_start = len(stored_q)
     qp_ids = (*q_ids, *p_ids)
-    contiguous = q_rows == tuple(range(key_row_start, key_row_start + len(q_ids)))
+    contiguous = q_rows == tuple(
+        range(key_row_start, key_row_start + len(q_ids))
+    )
     return {
         "digits": tuple(
             (q_ids.index(rows[0]), q_ids.index(rows[-1]) + 1, index)

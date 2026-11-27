@@ -12,20 +12,19 @@ A wheel contains the complete FHElium Python package and native extension. Torch
 
 [`packaging/release_matrix.json`](https://github.com/VisualDust/fhelium/blob/main/packaging/release_matrix.json) declares the release cells. Its schema is [`packaging/release_matrix.schema.json`](https://github.com/VisualDust/fhelium/blob/main/packaging/release_matrix.schema.json).
 
-| Configuration | Linux | Windows | Torch |
-|---|---:|---:|---|
-| `torch213-cu130` | yes | yes | `2.13.0+cu130` |
-| `torch213-cpu` | yes | yes | `2.13.0+cpu` |
-| `torch212-cu129` | yes | no | `2.12.1+cu129` |
-| `torch212-cu130` | no | yes | `2.12.1+cu130` |
-| `torch212-cpu` | yes | yes | `2.12.1+cpu` |
+| Configuration | Linux | Windows | Torch | CUDA Toolkit |
+|---|---:|---:|---|---|
+| `torch215-cu132` | yes | yes | `2.15.0+cu132` | 13.2 |
+| `torch215-cpu` | yes | yes | `2.15.0+cpu` | |
+| `torch214-cu130` | yes | yes | `2.14.1+cu130` | 13.0 |
+| `torch214-cpu` | yes | yes | `2.14.1+cpu` | |
 
-CPython 3.12 and 3.13 produce eight Linux and eight Windows cells. The nonrectangular CUDA matrix reflects the official Torch wheel sets: Torch 2.12.1 uses CUDA 12.9 on Linux and CUDA 13.0 on Windows.
+CPython 3.12 and 3.13 produce eight Linux and eight Windows cells. Each CUDA configuration is built with the CUDA Toolkit minor version of its Torch build. Both CUDA configurations run on NVIDIA drivers of version 580 or newer through CUDA 13 minor-version compatibility.
 
 ```bash
 python -I packaging/matrix.py validate
 python -I packaging/matrix.py cells
-python -I packaging/matrix.py show torch213-cu130
+python -I packaging/matrix.py show torch215-cu132
 ```
 
 ## Tool responsibilities
@@ -43,7 +42,7 @@ Archive checks inspect wheel metadata, dependencies, and embedded native images.
 
 ## Linux wheels
 
-Linux cells build in one of three pinned `manylinux_2_28_x86_64` images: CPU, CUDA 12.9, or CUDA 13.0. The builder installs the declared Torch wheel, builds the selected FHElium native backends, repairs the wheel with `auditwheel`, and checks:
+Linux cells build in one of three pinned `manylinux_2_28_x86_64` images: CPU, CUDA 13.0, or CUDA 13.2. The builder installs the declared Torch wheel, builds the selected FHElium native backends, repairs the wheel with `auditwheel`, and checks:
 
 - wheel and CPython ABI tags;
 - pinned Torch metadata and the native build manifest;

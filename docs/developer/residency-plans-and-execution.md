@@ -234,4 +234,4 @@ Constructor and argument schema errors use ordinary `TypeError` or `ValueError`,
 
 - [Residency state and ownership internals](residency-state-and-ownership.md)
 - [Residency lifetimes concept](../concepts/execution/residency-lifetimes.md)
-- [Stream resources with bounded memory](../how-to/stream-bounded-memory.md)
+- [Manage CUDA memory with buffers and Residency](../how-to/manage-cuda-memory.md)

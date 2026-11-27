@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 
-"""Compose built-in Compile passes, link the Program, and execute it."""
+"""Compose built-in Compile passes, link the Program, and execute it.
+
+The first part captures a Python function, runs a caller-selected pass sequence, links the backend-ready Program, and executes it. The second part parses a textual mixed-level Program, prints it back, and runs the front of the same pipeline with an added analysis pass that records operation counts by dialect.
+"""
 
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 from typing import cast
 
 import torch
@@ -41,7 +45,7 @@ def _dialect_counts(program: ir.Program) -> Counter[str]:
     )
 
 
-def main() -> None:
+def captured_pipeline() -> None:
     config = CkksConfig.parse(Preset.slots8192_scale40_depth7)
     device = "cpu"
     backend = OperationBackend()
@@ -198,6 +202,111 @@ def main() -> None:
             for report in compiled.reports
         ],
     )
+
+
+_PROGRAM_TEXT = r'''
+builtin.module attributes {
+  fhelium.schema_version = "1",
+  fhelium.dialect_version = "0.2"
+} {
+  func.func @main(
+    %x: !fhelium_semantic.secret<{role = "encrypted"}>,
+    %gain: !fhelium_semantic.public<{role = "message"}>
+  ) -> !fhelium_semantic.secret<{role = "encrypted"}> {
+    %rotated = "fhelium_semantic.roll"(%x) {shift = 2 : i64, dimension = -1 : i64}
+      : (!fhelium_semantic.secret<{role = "encrypted"}>)
+     -> !fhelium_semantic.secret<{role = "encrypted"}>
+    %mixed = "fhelium_semantic.add"(%x, %rotated)
+      : (!fhelium_semantic.secret<{role = "encrypted"}>,
+         !fhelium_semantic.secret<{role = "encrypted"}>)
+     -> !fhelium_semantic.secret<{role = "encrypted"}>
+    %result = "fhelium_semantic.multiply"(%mixed, %gain)
+      : (!fhelium_semantic.secret<{role = "encrypted"}>,
+         !fhelium_semantic.public<{role = "message"}>)
+     -> !fhelium_semantic.secret<{role = "encrypted"}>
+    func.return %result : !fhelium_semantic.secret<{role = "encrypted"}>
+  }
+}
+'''
+
+
+@dataclass(frozen=True)
+class RecordDialectInventoryPass:
+    """Publish operation counts by dialect without rewriting the Program."""
+
+    name: str = "record-dialect-inventory"
+
+    def run(self, compilation: fh_compile.Compilation) -> fh_compile.PassResult:
+        program = compilation.program
+        shared_data = compilation.workspace
+        counts = Counter(
+            operation.name.split(".", maxsplit=1)[0]
+            for operation in program.walk()
+        )
+        shared_data["textual-ir/dialect-counts"] = dict(sorted(counts.items()))
+        return fh_compile.PassResult.unchanged(
+            program,
+            matched=sum(counts.values()),
+            diagnostics=(f"observed {len(counts)} dialect namespaces",),
+        )
+
+
+def textual_pipeline() -> None:
+    imported = ir.parse(
+        _PROGRAM_TEXT, source_name="inline-compile-example.mlir"
+    )
+    serialized = imported.to_text()
+    round_tripped = ir.parse(
+        serialized,
+        source_name="round-tripped-compile-example.mlir",
+    )
+
+    workspace = fh_compile.CompileWorkspace()
+    pipeline = fh_compile.Pipeline(
+        (
+            RecordDialectInventoryPass(),
+            fh_compile.EliminateDeadValuesPass(),
+            fh_compile.LowerSemanticToLogicalPass(),
+            fh_compile.InsertPlaintextPreparationPass(),
+            fh_compile.InsertMultiplyNttTransitionsPass(),
+            fh_compile.LowerLogicalToCkksPass(),
+            fh_compile.InsertRelinearizationPass(),
+            fh_compile.InsertRescalePass(),
+        )
+    )
+    compiled = pipeline.run(fh_compile.Compilation(round_tripped, workspace))
+    requirements = ir.analyze_evaluation_key_requirements(compiled.program)
+
+    print_table(
+        ["textual Program", "value"],
+        [
+            ["stable round trip", round_tripped.to_text() == serialized],
+            ["dialect counts", workspace["textual-ir/dialect-counts"]],
+            ["rotation steps", sorted(requirements.rotation_steps)],
+            ["relinearization key", requirements.requires_relinearization],
+        ],
+    )
+    print()
+    print_table(
+        ["pass", "matched", "transformed", "diagnostics"],
+        [
+            [
+                report.name,
+                report.stats.matched,
+                report.stats.transformed,
+                "; ".join(report.diagnostics) or "none",
+            ]
+            for report in compiled.reports
+        ],
+    )
+    print()
+    print(serialized)
+
+
+def main() -> None:
+    captured_pipeline()
+    print()
+    textual_pipeline()
 
 
 if __name__ == "__main__":

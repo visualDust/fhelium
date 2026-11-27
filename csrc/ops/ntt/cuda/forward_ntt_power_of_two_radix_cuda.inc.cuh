@@ -129,14 +129,14 @@ void forward_ntt_to_montgomery_power_of_two_radix_compact_inplace_cuda(
       }));
 }
 
-torch::Tensor forward_ntt_to_montgomery_power_of_two_radix_compact_cuda(
+void forward_ntt_to_montgomery_power_of_two_radix_compact_out_cuda(
     const torch::Tensor a,
     const torch::Tensor outer_twiddles,
     const torch::Tensor radix_root_powers,
     const torch::Tensor rns_params,
     const int64_t radix,
-    const int64_t shared_memory_log_n) {
-  torch::Tensor out = torch::empty_like(a);
+    const int64_t shared_memory_log_n,
+    torch::Tensor out) {
   const auto batch_rows = view_rns_batch_3d(a, "standard_residues");
   auto out_batch_rows = view_rns_batch_3d(out, "out");
   AT_DISPATCH_INTEGRAL_TYPES(
@@ -152,5 +152,4 @@ torch::Tensor forward_ntt_to_montgomery_power_of_two_radix_compact_cuda(
                       static_cast<int>(radix),
                       static_cast<int>(shared_memory_log_n));
       }));
-  return out;
 }

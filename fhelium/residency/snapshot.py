@@ -216,7 +216,11 @@ class ResidencyLocationSnapshot:
     ``budget_bytes`` and ``remaining_budget_bytes`` are both ``None`` when the
     manager applies no admission limit at this location. With a budget,
     ``remaining_budget_bytes`` equals the budget minus current materialization
-    and reservation charges. ``peak_used_bytes`` is the maximum materialization
+    and reservation charges and ``compiled_execution_bytes``, clamped at zero.
+    ``compiled_execution_bytes`` is the device memory that compiled functions
+    hold at a CUDA location: their shared arena and CUDA Graph pool. It is
+    charged during admission while those functions are alive and is zero for
+    host locations. ``peak_used_bytes`` is the maximum materialization
     charge observed by the manager and excludes reservations;
     ``peak_charged_bytes`` includes `MemoryReservation` and temporary charges. CUDA
     locations additionally report process-wide PyTorch allocator allocated and
@@ -239,6 +243,7 @@ class ResidencyLocationSnapshot:
     pending_event_count: int
     allocator_allocated_bytes: int | None
     allocator_reserved_bytes: int | None
+    compiled_execution_bytes: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.location, ResidencyLocation):
@@ -255,6 +260,7 @@ class ResidencyLocationSnapshot:
             "use_count",
             "hold_count",
             "pending_event_count",
+            "compiled_execution_bytes",
         ):
             _require_nonnegative_int(
                 getattr(self, field_name),
@@ -294,8 +300,12 @@ class ResidencyLocationSnapshot:
                     "ResidencyLocationSnapshot charges cannot exceed "
                     "budget_bytes"
                 )
-            expected_remaining = (
-                self.budget_bytes - self.used_bytes - self.reserved_bytes
+            expected_remaining = max(
+                0,
+                self.budget_bytes
+                - self.used_bytes
+                - self.reserved_bytes
+                - self.compiled_execution_bytes,
             )
             if self.remaining_budget_bytes != expected_remaining:
                 raise ValueError(

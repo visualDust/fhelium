@@ -9,7 +9,7 @@ In this guide, **honest execution** means that every application actor follows t
 
 Collective key generation (CKG) creates the collective public key. Two-round relinearization-key generation (RKG) creates public evaluation material for three-to-two-component relinearization.
 
-The repository example is `examples/26_experimental_multiparty.py`. It holds two in-process party records representing two cryptographic parties, exercises the complete public API, and never constructs the aggregate secret. The local process provides no trust-domain or process isolation between those records.
+The repository example is `examples/24_experimental_multiparty.py`. It holds two in-process party records representing two cryptographic parties, exercises the complete public API, and never constructs the aggregate secret. The local process provides no trust-domain or process isolation between those records.
 
 ## Prerequisites
 
@@ -399,7 +399,7 @@ CKG, RKG, and Galois share functions sample internal errors on every invocation.
 Run the example from the repository root:
 
 ```bash
-python examples/26_experimental_multiparty.py --preset slots8192-scale40-depth7
+python examples/24_experimental_multiparty.py --preset slots8192-scale40-depth7
 ```
 
 The example holds two party-local `SecretKey` objects in one Python process so it can demonstrate the complete arithmetic dataflow. It never sums them, installs an aggregate secret, or uses an aggregate secret for verification. Its fixed/canceling Protocol-3/4 coefficient tensors are named and documented as correctness fixtures.

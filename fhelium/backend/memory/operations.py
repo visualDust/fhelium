@@ -11,6 +11,7 @@ from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.ir.dialects import memory
 
 from .resources import DEVICE_RESOURCE_KIND
+from fhelium.backend.lowering import ExecBuilder
 
 
 @dataclass(frozen=True)
@@ -26,16 +27,15 @@ class TorchMemoryTransferImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
+        builder: ExecBuilder,
         /,
-        *,
-        in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
-        if in_place:
+        if invocation.in_place:
             raise ValueError(
                 "Memory transfer does not support in-place execution"
             )
@@ -62,21 +62,19 @@ class TorchMemoryTransferImplementation:
             )
 
         source = inputs[0]
-        if memory_space == "pinned_host":
-            host = source if source.device.type == "cpu" else source.to("cpu")
-            result = host if host.is_pinned() else host.pin_memory()
-        elif memory_space == "pageable_host":
-            host = source if source.device.type == "cpu" else source.to("cpu")
-            result = (
-                torch.empty_like(host, device="cpu", pin_memory=False).copy_(
-                    host
-                )
-                if host.is_pinned()
-                else host
-            )
-        else:
-            result = source.to(target_device)
-        return (result,)
+        if memory_space == "default":
+            return (source.to(target_device),)
+        # Host memory spaces copy into new host storage of the requested
+        # kind, which the schedule records as an allocation and a copy.
+        host = torch.empty_strided(
+            source.shape,
+            source.stride(),
+            dtype=source.dtype,
+            device="cpu",
+            pin_memory=memory_space == "pinned_host",
+        )
+        host.copy_(source)
+        return (host,)
 
 
 __all__ = ["TorchMemoryTransferImplementation"]

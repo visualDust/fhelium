@@ -15,7 +15,7 @@ namespace {
 // pool to partition flattened batch/limb/coefficient work into contiguous
 // chunks;
 // each inner loop stops at an RNS-row end before selecting the next modulus.
-enum class StandardBinaryOperation : int { kAdd, kSubtract };
+enum class StandardBinaryOperation : int { kAdd, kSubtract, kNegate };
 
 template <typename scalar_t, StandardBinaryOperation operation>
 void standard_binary_loop(torch::Tensor out,
@@ -77,6 +77,9 @@ void standard_binary_loop(torch::Tensor out,
             if constexpr (operation == StandardBinaryOperation::kAdd) {
               value = a + b;
               if (value >= twice_modulus) value -= twice_modulus;
+            } else if constexpr (operation ==
+                                 StandardBinaryOperation::kNegate) {
+              value = a == 0 ? 0 : twice_modulus - a;
             } else {
               value = a - b;
               if (value < 0) {
@@ -142,35 +145,11 @@ void standard_binary_into(torch::Tensor out,
   });
 }
 
-torch::Tensor rns_add_standard_cpu_impl(const torch::Tensor lhs,
-                                        const torch::Tensor rhs,
-                                        const torch::Tensor rns_params) {
-  auto out = torch::empty_like(lhs);
-  standard_binary_into<StandardBinaryOperation::kAdd>(
-      out, lhs, rhs, rns_params, "rns_add_standard");
-  return out;
-}
-
-void rns_add_standard_inplace_cpu(torch::Tensor lhs,
-                                  const torch::Tensor rhs,
-                                  const torch::Tensor rns_params) {
-  standard_binary_into<StandardBinaryOperation::kAdd>(
-      lhs, lhs, rhs, rns_params, "rns_add_standard");
-}
-
-torch::Tensor rns_sub_standard_cpu(const torch::Tensor lhs,
-                                   const torch::Tensor rhs,
-                                   const torch::Tensor rns_params) {
-  auto out = torch::empty_like(lhs);
-  standard_binary_into<StandardBinaryOperation::kSubtract>(
-      out, lhs, rhs, rns_params, "rns_sub_standard");
-  return out;
-}
-
-torch::Tensor rns_montgomery_mul_row_scalars_standard_cpu(
+void rns_montgomery_mul_row_scalars_standard_out_cpu(
     const torch::Tensor residues,
     const torch::Tensor row_scalars,
-    const torch::Tensor rns_params) {
+    const torch::Tensor rns_params,
+    torch::Tensor out) {
   constexpr const char* operation = "rns_montgomery_mul_row_scalars_standard";
   TORCH_CHECK(residues.device().is_cpu(), operation, " requires CPU residues");
   TORCH_CHECK(row_scalars.device() == residues.device() &&
@@ -184,7 +163,6 @@ torch::Tensor rns_montgomery_mul_row_scalars_standard_cpu(
   const auto input = view_rns_batch_3d(residues, "residues");
   check_rns_parameter_rows(input, rns_params, operation);
   check_rns_row_vector(row_scalars, input.size(1), operation, "row_scalars");
-  auto out = torch::empty_like(residues);
   auto output = view_rns_batch_3d(out, "out");
   AT_DISPATCH_INTEGRAL_TYPES(residues.scalar_type(), operation, [&] {
     const scalar_t* values = input.data_ptr<scalar_t>();
@@ -238,21 +216,38 @@ torch::Tensor rns_montgomery_mul_row_scalars_standard_cpu(
           }
         });
   });
-  return out;
 }
 
-void rns_sub_standard_inplace_cpu(torch::Tensor lhs,
-                                  const torch::Tensor rhs,
-                                  const torch::Tensor rns_params) {
-  standard_binary_into<StandardBinaryOperation::kSubtract>(
-      lhs, lhs, rhs, rns_params, "rns_sub_standard");
+void standard_negate_into(torch::Tensor out,
+                          const torch::Tensor source,
+                          const torch::Tensor params) {
+  constexpr const char* operation_name = "rns_negate_standard";
+  auto out_rows = view_rns_batch_3d(out, "out");
+  const auto source_rows = view_rns_batch_3d(source, "source");
+  TORCH_CHECK(source.device().is_cpu(), operation_name, " requires CPU source");
+  TORCH_CHECK(params.device() == source.device() &&
+                  params.scalar_type() == source.scalar_type(),
+              operation_name,
+              " requires RNS parameters on the source device and dtype");
+  TORCH_CHECK(out_rows.sizes() == source_rows.sizes(),
+              operation_name,
+              " output shape must match source");
+  check_rns_parameter_rows(source_rows, params, operation_name);
+  at::assert_no_internal_overlap(out_rows);
+  at::assert_no_partial_overlap(out_rows, source_rows);
+  at::assert_no_overlap(out_rows, params);
+  AT_DISPATCH_INTEGRAL_TYPES(source.scalar_type(), operation_name, [&] {
+    standard_binary_loop<scalar_t, StandardBinaryOperation::kNegate>(
+        out_rows, source_rows, source_rows, params);
+  });
 }
 
 }  // namespace
 
-torch::Tensor rns_sum_standard_batch_cpu(const torch::Tensor source,
-                                         const int64_t dim,
-                                         const torch::Tensor rns_params) {
+void rns_sum_standard_batch_cpu(const torch::Tensor source,
+                                const int64_t dim,
+                                const torch::Tensor rns_params,
+                                torch::Tensor out) {
   constexpr const char* operation = "rns_sum_standard_batch";
   TORCH_CHECK(source.device().is_cpu(), operation, " requires a CPU source");
   TORCH_CHECK(rns_params.device() == source.device(),
@@ -268,9 +263,6 @@ torch::Tensor rns_sum_standard_batch_cpu(const torch::Tensor source,
       source.size(dim) > 0, operation, " cannot reduce an empty batch axis");
   const auto input = view_rns_batch_3d(source, "source");
   check_rns_parameter_rows(input, rns_params, operation);
-  auto sizes = source.sizes().vec();
-  sizes.erase(sizes.begin() + dim);
-  auto out = torch::empty(sizes, source.options());
   const auto output = view_rns_batch_3d(out, "out");
   const int64_t count = source.size(dim);
   int64_t inner = 1;
@@ -347,52 +339,54 @@ torch::Tensor rns_sum_standard_batch_cpu(const torch::Tensor source,
           }
         });
   });
-  return out;
 }
 
 torch::Tensor rns_add_standard_cpu(const torch::Tensor lhs,
                                    const torch::Tensor rhs,
                                    const torch::Tensor rns_params) {
-  return rns_add_standard_cpu_impl(lhs, rhs, rns_params);
+  auto out = torch::empty_like(lhs);
+  standard_binary_into<StandardBinaryOperation::kAdd>(
+      out, lhs, rhs, rns_params, "rns_add_standard");
+  return out;
 }
 
 namespace fhelium::rns::cpu {
 
-at::Tensor add_standard(const at::Tensor& lhs,
-                        const at::Tensor& rhs,
-                        const at::Tensor& rns_params) {
-  return ::rns_add_standard_cpu(lhs, rhs, rns_params);
+void add_standard_out(const at::Tensor& lhs,
+                      const at::Tensor& rhs,
+                      const at::Tensor& rns_params,
+                      at::Tensor& out) {
+  ::standard_binary_into<::StandardBinaryOperation::kAdd>(
+      out, lhs, rhs, rns_params, "rns_add_standard");
 }
 
-void add_standard_(at::Tensor& lhs,
-                   const at::Tensor& rhs,
-                   const at::Tensor& rns_params) {
-  ::rns_add_standard_inplace_cpu(lhs, rhs, rns_params);
+void sub_standard_out(const at::Tensor& lhs,
+                      const at::Tensor& rhs,
+                      const at::Tensor& rns_params,
+                      at::Tensor& out) {
+  ::standard_binary_into<::StandardBinaryOperation::kSubtract>(
+      out, lhs, rhs, rns_params, "rns_sub_standard");
 }
 
-at::Tensor sub_standard(const at::Tensor& lhs,
-                        const at::Tensor& rhs,
-                        const at::Tensor& rns_params) {
-  return ::rns_sub_standard_cpu(lhs, rhs, rns_params);
+void negate_standard_out(const at::Tensor& source,
+                         const at::Tensor& rns_params,
+                         at::Tensor& out) {
+  ::standard_negate_into(out, source, rns_params);
 }
 
-void sub_standard_(at::Tensor& lhs,
-                   const at::Tensor& rhs,
-                   const at::Tensor& rns_params) {
-  ::rns_sub_standard_inplace_cpu(lhs, rhs, rns_params);
+void montgomery_mul_row_scalars_standard_out(const at::Tensor& residues,
+                                             const at::Tensor& row_scalars,
+                                             const at::Tensor& rns_params,
+                                             at::Tensor& out) {
+  ::rns_montgomery_mul_row_scalars_standard_out_cpu(
+      residues, row_scalars, rns_params, out);
 }
 
-at::Tensor montgomery_mul_row_scalars_standard(const at::Tensor& residues,
-                                               const at::Tensor& row_scalars,
-                                               const at::Tensor& rns_params) {
-  return ::rns_montgomery_mul_row_scalars_standard_cpu(
-      residues, row_scalars, rns_params);
-}
-
-at::Tensor sum_standard_batch(const at::Tensor& source,
-                              int64_t dim,
-                              const at::Tensor& rns_params) {
-  return ::rns_sum_standard_batch_cpu(source, dim, rns_params);
+void sum_standard_batch_out(const at::Tensor& source,
+                            int64_t dim,
+                            const at::Tensor& rns_params,
+                            at::Tensor& out) {
+  ::rns_sum_standard_batch_cpu(source, dim, rns_params, out);
 }
 
 }  // namespace fhelium::rns::cpu

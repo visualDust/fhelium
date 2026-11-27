@@ -1,16 +1,18 @@
 """Argument conversion from Backend invocations to whole libfhelium operations.
 
-Whole operations receive their numerical operands as the parallel
-``table_names`` and ``tables`` lists of a named table, and key-switching
-operations receive the flattened fields of the C++ ``KeySwitchOptions``.
+Whole operations receive each table family as one positional ``Tensor?[]``
+list (``fhelium.native.tables``), and key-switching operations receive the
+flattened fields of the C++ ``KeySwitchOptions``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from typing import TypedDict
+from typing import TypedDict, cast
 
 import torch
+
+from fhelium.native.tables import galois_slots, table_slots
 
 from .implementation import InvocationAttributes
 
@@ -28,24 +30,53 @@ class KeySwitchOptions(TypedDict):
     moddown_rounding: str
     input_domain: str
     output_domain: str
-    galois_generator: int
     key_seeds: list[torch.Tensor]
     key_rounds: int
 
 
 def named_tables(
-    names: Sequence[str], values: Sequence[torch.Tensor]
-) -> tuple[list[str], list[torch.Tensor]]:
-    """Return the trailing ``len(names)`` values paired with their names."""
+    family: str,
+    names: Sequence[str],
+    values: Sequence[torch.Tensor],
+    **options: object,
+) -> list[torch.Tensor | None]:
+    """Order the trailing ``len(names)`` values into the slots of ``family``."""
     names = list(names)
-    return names, list(values[len(values) - len(names) :])
+    return table_slots(
+        family,
+        dict(zip(names, values[len(values) - len(names) :], strict=True)),
+        **options,  # type: ignore[arg-type]
+    )
 
 
 def mapping_tables(
-    tensors: Mapping[str, torch.Tensor], prefix: str = ""
-) -> tuple[list[str], list[torch.Tensor]]:
-    """Return the named-table lists of a mapping, with names under ``prefix``."""
-    return [prefix + name for name in tensors], list(tensors.values())
+    family: str, tensors: Mapping[str, torch.Tensor], prefix: str = ""
+) -> list[torch.Tensor | None]:
+    """Order a name-to-Tensor mapping into the slots of ``family``."""
+    return table_slots(
+        family, {prefix + name: value for name, value in tensors.items()}
+    )
+
+
+def rotation_galois(
+    attributes: InvocationAttributes,
+    steps: Iterable[int],
+    reference: torch.Tensor,
+) -> list[torch.Tensor | None]:
+    """Return the Galois tables of rotation ``steps`` for ``reference``.
+
+    The ring dimension and device follow ``reference``; the generator is the
+    ``galois_generator`` attribute.
+    """
+    from fhelium.backend.ckks.rotation._galois import rotation_galois_element
+
+    n = reference.size(-1)
+    generator = int(cast(int, attributes.get("galois_generator", 5)))
+    return galois_slots(
+        n,
+        (rotation_galois_element(n, int(step), generator) for step in steps),
+        reference.device,
+    )
 
 
 def flat_digits(digits: Iterable[Iterable[int]]) -> list[int]:
@@ -85,7 +116,6 @@ def key_switch_options(
         ),
         "input_domain": str(get("input_domain", "coefficient")),
         "output_domain": str(get("output_domain", "coefficient")),
-        "galois_generator": int(get("galois_generator", 5)),
         "key_seeds": [],
         "key_rounds": int(attributes.get(prefix + "key_rounds", 0)),
     }
@@ -118,4 +148,5 @@ __all__ = [
     "seeded_key_operands",
     "mapping_tables",
     "named_tables",
+    "rotation_galois",
 ]

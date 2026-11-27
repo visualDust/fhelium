@@ -4,6 +4,7 @@ A ``Compilation`` carries a Program, Tensor material bindings, a shared ``Compil
 """
 
 from ._callable import CompiledCallable
+from ._export import ExportError, LoadedFunction, export, load
 from ._compilation import Compilation
 from ._driver import compile
 from ._errors import (
@@ -121,6 +122,7 @@ __all__ = [
     'CompileInputError',
     'CompileWorkspace',
     'CompiledCallable',
+    'ExportError',
     'DEFAULT_CKKS_LOWERINGS',
     'DecisionRecord',
     'EagerPythonSource',
@@ -142,7 +144,10 @@ __all__ = [
     'LowerLogicalToCkksPass',
     'LowerMessagePlaintextPreparationPass',
     'LowerSemanticToLogicalPass',
+    'LoadedFunction',
     'LoweredCkksOperation',
+    'export',
+    'load',
     'MaterializeResourcesPass',
     'Pass',
     'PassReport',

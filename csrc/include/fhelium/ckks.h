@@ -40,6 +40,15 @@ FHELIUM_API at::Tensor multiply_two_component_ntt_montgomery(
     const at::Tensor& rhs_components,
     const at::Tensor& rns_params);
 
+/// Out form of `multiply_two_component_ntt_montgomery`. `out` has shape
+/// `[3, *batch, limb, N]` with the operand dtype and device and is disjoint
+/// from both operands.
+FHELIUM_API void multiply_two_component_ntt_montgomery_out(
+    const at::Tensor& lhs_components,
+    const at::Tensor& rhs_components,
+    const at::Tensor& rns_params,
+    at::Tensor& out);
+
 /// Adds a prepared plaintext to one ciphertext component.
 ///
 /// `ciphertext_component` holds coefficient-domain standard residues $c$, and
@@ -58,6 +67,17 @@ FHELIUM_API void add_prepared_plaintext_component_(
     const at::Tensor& prepared_plaintext,
     const at::Tensor& rns_params);
 
+/// Out form of `add_prepared_plaintext_component`. `out` has the shape, dtype
+/// and device of `ciphertext_component`, is that component or disjoint from
+/// it, and is disjoint from the plaintext operands; the in-place form passes
+/// the component as `out`. The other plaintext additions follow the same
+/// output requirements.
+FHELIUM_API void add_prepared_plaintext_component_out(
+    const at::Tensor& ciphertext_component,
+    const at::Tensor& prepared_plaintext,
+    const at::Tensor& rns_params,
+    at::Tensor& out);
+
 /// Adds a plaintext whose coefficients repeat cyclically.
 ///
 /// `compressed_plaintext` has final extent $U$, a power of two smaller than
@@ -75,6 +95,13 @@ FHELIUM_API void add_cyclic_compressed_plaintext_component_(
     const at::Tensor& compressed_plaintext,
     const at::Tensor& rns_params);
 
+/// Out form of `add_cyclic_compressed_plaintext_component`.
+FHELIUM_API void add_cyclic_compressed_plaintext_component_out(
+    const at::Tensor& ciphertext_component,
+    const at::Tensor& compressed_plaintext,
+    const at::Tensor& rns_params,
+    at::Tensor& out);
+
 /// Adds a plaintext whose coefficients repeat in contiguous runs.
 ///
 /// `compressed_plaintext` has final extent $U$, a power of two smaller than
@@ -91,6 +118,13 @@ FHELIUM_API void add_contiguous_compressed_plaintext_component_(
     at::Tensor& ciphertext_component,
     const at::Tensor& compressed_plaintext,
     const at::Tensor& rns_params);
+
+/// Out form of `add_contiguous_compressed_plaintext_component`.
+FHELIUM_API void add_contiguous_compressed_plaintext_component_out(
+    const at::Tensor& ciphertext_component,
+    const at::Tensor& compressed_plaintext,
+    const at::Tensor& rns_params,
+    at::Tensor& out);
 
 /// Adds a plaintext given on a coefficient stride, with one value per limb at
 /// the remaining coefficients.
@@ -115,6 +149,14 @@ FHELIUM_API void add_strided_plaintext_component_(
     const at::Tensor& implicit_plaintext,
     const at::Tensor& rns_params);
 
+/// Out form of `add_strided_plaintext_component`.
+FHELIUM_API void add_strided_plaintext_component_out(
+    const at::Tensor& ciphertext_component,
+    const at::Tensor& strided_plaintext,
+    const at::Tensor& implicit_plaintext,
+    const at::Tensor& rns_params,
+    at::Tensor& out);
+
 /// Applies a Galois automorphism $\sigma_g: X \mapsto X^g$ to
 /// coefficient-domain residues.
 ///
@@ -130,6 +172,15 @@ FHELIUM_API at::Tensor apply_coefficient_galois_automorphism(
     const at::Tensor& source_sign,
     const at::Tensor& twice_modulus);
 
+/// Output form of `apply_coefficient_galois_automorphism`; `out` has the
+/// shape, dtype and device of `residues` and does not overlap it.
+FHELIUM_API void apply_coefficient_galois_automorphism_out(
+    const at::Tensor& residues,
+    const at::Tensor& source_indices,
+    const at::Tensor& source_sign,
+    const at::Tensor& twice_modulus,
+    at::Tensor& out);
+
 /// Applies a Galois automorphism to NTT-domain residues by a permutation.
 ///
 /// Output evaluation $k$ is input evaluation `source_indices[k]` for the int32
@@ -137,6 +188,13 @@ FHELIUM_API at::Tensor apply_coefficient_galois_automorphism(
 /// are preserved.
 FHELIUM_API at::Tensor apply_ntt_galois_automorphism(
     const at::Tensor& residues_ntt, const at::Tensor& source_indices);
+
+/// Output form of `apply_ntt_galois_automorphism`; `out` has the shape, dtype
+/// and device of `residues_ntt` and does not overlap it.
+FHELIUM_API void apply_ntt_galois_automorphism_out(
+    const at::Tensor& residues_ntt,
+    const at::Tensor& source_indices,
+    at::Tensor& out);
 
 /// Adds a Galois automorphism of NTT-domain residues to `target`, in place.
 ///
@@ -170,6 +228,21 @@ FHELIUM_API at::Tensor keyswitch_moddown_qp_to_q(
     const at::Tensor& rns_params,
     const std::optional<at::Tensor>& moddown_half = std::nullopt,
     c10::string_view rounding = "nearest");
+
+/// Output form of `keyswitch_moddown_qp_to_q`; `out` has the shape, dtype and
+/// device of `q_residues` and overlaps neither residue input. GPU backends
+/// write the mixed-radix digits of the P rows to `p_scratch`, which has the
+/// shape, dtype and device of `p_residues` and may be `p_residues` itself;
+/// without it they allocate the digits per call.
+FHELIUM_API void keyswitch_moddown_qp_to_q_out(
+    const at::Tensor& q_residues,
+    const at::Tensor& p_residues,
+    const at::Tensor& moddown_p_drop_inverses_montgomery,
+    const at::Tensor& rns_params,
+    const std::optional<at::Tensor>& moddown_half,
+    c10::string_view rounding,
+    at::Tensor& out,
+    const std::optional<at::Tensor>& p_scratch = std::nullopt);
 
 /// Accumulates the product of one extended digit with one key-switching-key
 /// digit.

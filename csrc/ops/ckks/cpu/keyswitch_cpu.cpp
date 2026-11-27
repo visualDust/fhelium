@@ -18,12 +18,12 @@ namespace {
 using fhelium::ckks::cpu::check_cpu_peer;
 
 template <bool Nearest>
-torch::Tensor keyswitch_moddown_cpu_impl(
-    const torch::Tensor q_residues,
-    const torch::Tensor p_residues,
-    const torch::Tensor inverse,
-    const torch::Tensor rns_params,
-    const std::optional<torch::Tensor> half) {
+void keyswitch_moddown_cpu_impl(const torch::Tensor q_residues,
+                                const torch::Tensor p_residues,
+                                const torch::Tensor inverse,
+                                const torch::Tensor rns_params,
+                                const std::optional<torch::Tensor> half,
+                                torch::Tensor& out) {
   constexpr const char* operation = "keyswitch_moddown_qp_to_q";
   for (const auto& peer : {p_residues, inverse, rns_params}) {
     check_cpu_peer(q_residues, peer, operation, "peer tensor");
@@ -49,7 +49,6 @@ torch::Tensor keyswitch_moddown_cpu_impl(
                 operation,
                 " moddown_half must contain one value per QP row");
   }
-  auto out = torch::empty_like(q_residues);
   auto output = view_rns_batch_3d(out, "out");
   AT_DISPATCH_INTEGRAL_TYPES(q_residues.scalar_type(), operation, [&] {
     const scalar_t* half_values = nullptr;
@@ -190,21 +189,22 @@ torch::Tensor keyswitch_moddown_cpu_impl(
           }
         });
   });
-  return out;
 }
 
-torch::Tensor keyswitch_moddown_cpu(const torch::Tensor q,
-                                    const torch::Tensor p,
-                                    const torch::Tensor inverse,
-                                    const torch::Tensor parameters,
-                                    const std::optional<torch::Tensor> half,
-                                    const std::string& rounding) {
+void keyswitch_moddown_cpu(const torch::Tensor q,
+                           const torch::Tensor p,
+                           const torch::Tensor inverse,
+                           const torch::Tensor parameters,
+                           const std::optional<torch::Tensor> half,
+                           const std::string& rounding,
+                           torch::Tensor& out) {
   TORCH_CHECK(rounding == "nearest" || rounding == "floor",
               "ModDown rounding must be 'nearest' or 'floor'");
   if (rounding == "nearest") {
-    return keyswitch_moddown_cpu_impl<true>(q, p, inverse, parameters, half);
+    keyswitch_moddown_cpu_impl<true>(q, p, inverse, parameters, half, out);
+    return;
   }
-  return keyswitch_moddown_cpu_impl<false>(q, p, inverse, parameters, half);
+  keyswitch_moddown_cpu_impl<false>(q, p, inverse, parameters, half, out);
 }
 
 void keyswitch_accumulate_cpu_(
@@ -251,8 +251,11 @@ void keyswitch_accumulate_cpu_(
                   key_digit.size(2) == digit.size(2),
               operation,
               " key digit shape mismatch");
-  const auto key_rows = fhelium::detail::key_row_map(
-      digit.size(1), key_digit.size(1), key_row_start, key_p_row_start, operation);
+  const auto key_rows = fhelium::detail::key_row_map(digit.size(1),
+                                                     key_digit.size(1),
+                                                     key_row_start,
+                                                     key_p_row_start,
+                                                     operation);
   at::assert_no_internal_overlap(accumulator0);
   at::assert_no_internal_overlap(accumulator1);
   at::assert_no_overlap(accumulator0, accumulator1);
@@ -346,19 +349,22 @@ void keyswitch_accumulate_cpu_(
 
 namespace fhelium::ckks::cpu {
 
-at::Tensor keyswitch_moddown_qp_to_q(
+void keyswitch_moddown_qp_to_q_out(
     const at::Tensor& q_residues,
     const at::Tensor& p_residues,
     const at::Tensor& moddown_p_drop_inverses_montgomery,
     const at::Tensor& rns_params,
     const std::optional<at::Tensor>& moddown_half,
-    c10::string_view rounding) {
-  return ::keyswitch_moddown_cpu(q_residues,
-                                 p_residues,
-                                 moddown_p_drop_inverses_montgomery,
-                                 rns_params,
-                                 moddown_half,
-                                 std::string(rounding));
+    c10::string_view rounding,
+    at::Tensor& out,
+    const std::optional<at::Tensor>&) {
+  ::keyswitch_moddown_cpu(q_residues,
+                          p_residues,
+                          moddown_p_drop_inverses_montgomery,
+                          rns_params,
+                          moddown_half,
+                          std::string(rounding),
+                          out);
 }
 
 void keyswitch_accumulate_digit_products_(
@@ -377,12 +383,15 @@ void keyswitch_accumulate_digit_products_(
     // Materialize the uniform component of the key rows this product reads.
     namespace seeded = ::fhelium::random::detail;
     constexpr const char* operation = "keyswitch_accumulate_digit_products";
-    TORCH_CHECK(key_switch_key_digit.dim() == 3 && key_switch_key_digit.size(0) == 1 &&
-                    key_seed->scalar_type() == at::kLong && key_seed->is_contiguous() &&
-                    key_seed->numel() == seeded::kSeededKeyRowWords && key_seed->is_cpu(),
-                operation,
-                " requires a seeded key digit [1, key_rows, N] with one CPU seed row");
-    const auto digit = view_rns_batch_3d(extended_digit_ntt_qp, "extended_digit_ntt_qp");
+    TORCH_CHECK(
+        key_switch_key_digit.dim() == 3 && key_switch_key_digit.size(0) == 1 &&
+            key_seed->scalar_type() == at::kLong && key_seed->is_contiguous() &&
+            key_seed->numel() == seeded::kSeededKeyRowWords &&
+            key_seed->is_cpu(),
+        operation,
+        " requires a seeded key digit [1, key_rows, N] with one CPU seed row");
+    const auto digit =
+        view_rns_batch_3d(extended_digit_ntt_qp, "extended_digit_ntt_qp");
     const auto rows = fhelium::detail::key_row_map(digit.size(1),
                                                    key_switch_key_digit.size(1),
                                                    key_digit_row_start,
@@ -390,8 +399,10 @@ void keyswitch_accumulate_digit_products_(
                                                    operation);
     const int64_t n = key_switch_key_digit.size(2);
     TORCH_CHECK(n % seeded::kSeededKeyCoefficientsPerCall == 0,
-                operation, " requires a ring dimension divisible by 8");
-    key = at::zeros({2, key_switch_key_digit.size(1), n}, key_switch_key_digit.options());
+                operation,
+                " requires a ring dimension divisible by 8");
+    key = at::zeros({2, key_switch_key_digit.size(1), n},
+                    key_switch_key_digit.options());
     key.select(0, 0).copy_(key_switch_key_digit.select(0, 0));
     const auto twice_modulus = rns_params.select(0, 0).to(at::kLong);
     const auto* twice = twice_modulus.const_data_ptr<int64_t>();
@@ -403,13 +414,15 @@ void keyswitch_accumulate_digit_products_(
         at::parallel_for(0, digit.size(1), 1, [&](int64_t begin, int64_t end) {
           uint64_t values[seeded::kSeededKeyCoefficientsPerCall];
           for (int64_t row = begin; row < end; ++row) {
-            const int64_t key_row = row < rows.q_rows
-                                        ? key_digit_row_start + row
-                                        : rows.p_row_start + (row - rows.q_rows);
+            const int64_t key_row =
+                row < rows.q_rows ? key_digit_row_start + row
+                                  : rows.p_row_start + (row - rows.q_rows);
             const auto q = static_cast<uint64_t>(twice[row]) >> 1;
             scalar_t* target = uniform[key_row].data_ptr<scalar_t>();
-            for (int64_t c = 0; c < n; c += seeded::kSeededKeyCoefficientsPerCall) {
-              seeded::seeded_key_residues<kRounds>(seed_row, key_row, c, q, values);
+            for (int64_t c = 0; c < n;
+                 c += seeded::kSeededKeyCoefficientsPerCall) {
+              seeded::seeded_key_residues<kRounds>(
+                  seed_row, key_row, c, q, values);
               for (int j = 0; j < seeded::kSeededKeyCoefficientsPerCall; ++j)
                 target[c + j] = static_cast<scalar_t>(values[j]);
             }

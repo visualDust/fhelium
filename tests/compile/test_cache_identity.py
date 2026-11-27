@@ -277,10 +277,11 @@ def test_atomic_entry_keeps_program_and_manifest_together_and_corruption_misses(
     assert result is not None and result.program is not None
     assert result.manifest["ordinal"] == result.output_structure
     files = list(tmp_path.rglob("*.*"))
-    assert len(files) == 1 and files[0].suffix == ".json"
-    payload = json.loads(files[0].read_text())
-    payload["program"] = "invalid IR"
-    files[0].write_text(json.dumps(payload))
+    assert len(files) == 1 and files[0].suffix == ".fhelium"
+    data = files[0].read_bytes()
+    # Overwrite the stored Program encoding with JSON that is not IR.
+    start = data.index(b'{"', 8 + int.from_bytes(data[:8], "little"))
+    files[0].write_bytes(data[:start] + b"[]" + b" " * (len(data) - start - 2))
     assert cache.load("ab123") is None
-    files[0].write_text("{")
+    files[0].write_bytes(data[:16])
     assert cache.load("ab123") is None

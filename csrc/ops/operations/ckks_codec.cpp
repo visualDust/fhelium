@@ -9,6 +9,7 @@
 
 #include <vector>
 
+#include "../common/overlap.h"
 #include "composition.h"
 
 namespace fhelium::ckks {
@@ -18,10 +19,15 @@ namespace {
 // Advances the nonce words that follow the four key words of a seed.
 void advance(at::Tensor& seed) { seed.narrow(0, 4, seed.size(0) - 4).add_(1); }
 
+// Rounds `values` with the stream of `seed` and advances its nonce, so the
+// next call reads a fresh stream.
 at::Tensor stochastic_round(const at::Tensor& values,
-                            const at::Tensor& seed,
+                            at::Tensor& seed,
                             int64_t word_stride = 1) {
-  return random::stochastic_round(seed, values.to(at::kDouble), word_stride);
+  auto rounded =
+      random::stochastic_round(seed, values.to(at::kDouble), word_stride);
+  advance(seed);
+  return rounded;
 }
 
 std::vector<int64_t> modulus_view(int64_t leading) {
@@ -71,12 +77,11 @@ at::Tensor forward_small_to_montgomery(const at::Tensor& operand,
 at::Tensor encapsulated_modulus_raise(const at::Tensor& source,
                                       const at::Tensor& low_key,
                                       const at::Tensor& return_key,
-                                      const TensorTable& tables,
+                                      const EncapsulationTables& tables,
                                       const KeySwitchOptions& low_options,
                                       int64_t return_drop_count,
                                       int64_t target_row_start,
                                       int64_t q_count) {
-  const auto low_tables = tables.with_prefix("low_");
   auto low = low_options;
   low.output_domain = "coefficient";
   const bool seeded = !low_options.key_seeds.empty();
@@ -84,66 +89,123 @@ at::Tensor encapsulated_modulus_raise(const at::Tensor& source,
                     "Seeded encapsulated modulus raising requires the low and "
                     "return key seeds");
   if (seeded) low.key_seeds = {low_options.key_seeds[0]};
-  const auto switched = key_switch(source, low_key, low_tables, low, false);
-  const auto raised =
-      rns::centered_basis_extend(switched, tables.with_prefix("raise_"));
+  const auto switched =
+      key_switch(source, low_key, tables.low, low, std::nullopt);
+  const auto raised = rns::centered_basis_extend(switched, tables.raise);
   auto component = raised.select(0, 1);
   ntt::transform_(component,
-                  tables,
+                  tables.return_forward,
                   low_options.ntt_backend,
-                  "return",
                   "forward_to_montgomery");
   auto shape = component.sizes().vec();
   shape.insert(shape.begin(), 2);
   auto products = at::zeros(shape, component.options());
   auto products0 = products.select(0, 0);
   auto products1 = products.select(0, 1);
-  keyswitch_accumulate_digit_products_(products0,
-                                       products1,
-                                       component,
-                                       return_key.select(0, 0),
-                                       tables.at("return_parameters"),
-                                       0,
-                                       -1,
-                                       std::nullopt,
-                                       seeded ? std::optional<at::Tensor>(
-                                                    low_options.key_seeds[1].select(0, 0))
-                                              : std::nullopt,
-                                       low_options.key_rounds);
+  keyswitch_accumulate_digit_products_(
+      products0,
+      products1,
+      component,
+      return_key.select(0, 0),
+      tables.return_forward.parameters,
+      0,
+      -1,
+      std::nullopt,
+      seeded ? std::optional<at::Tensor>(low_options.key_seeds[1].select(0, 0))
+             : std::nullopt,
+      low_options.key_rounds);
   ntt::transform_(products,
-                  tables,
+                  tables.return_inverse,
                   low_options.ntt_backend,
-                  "return",
                   "inverse_to_standard");
-  const auto quotient =
-      detail_operations::divide_trailing_rows(products,
-                                              tables.at("quotient_inverses"),
-                                              tables.at("quotient_parameters"),
-                                              return_drop_count,
-                                              tables.get("quotient_half"),
-                                              tables.at("quotient_order"),
-                                              low_options.moddown_rounding);
+  const auto quotient = detail_operations::divide_trailing_rows(
+      products,
+      tables.quotient_inverses,
+      tables.quotient_parameters,
+      return_drop_count,
+      detail_operations::optional_table(tables.quotient_half),
+      tables.quotient_order,
+      low_options.moddown_rounding);
   auto output =
-      quotient
-          .narrow(-2, target_row_start, q_count - target_row_start)
+      quotient.narrow(-2, target_row_start, q_count - target_row_start)
           .contiguous();
   auto output0 = output.select(0, 0);
   rns::add_standard_(output0,
                      raised.select(0, 0).narrow(
                          -2, target_row_start + 1, q_count - target_row_start),
-                     tables.at("target_parameters"));
+                     tables.target_parameters);
   return output;
 }
 
 namespace {
 
-at::Tensor add_compressed(const at::Tensor& ciphertext,
-                          const at::Tensor& compressed,
-                          const std::optional<at::Tensor>& implicit,
-                          const at::Tensor& parameters,
-                          std::string_view layout,
-                          std::string_view polynomial_domain,
-                          bool in_place) {
+// `out` has the shape, dtype and device of `ciphertext` and is `ciphertext` or
+// disjoint from it.
+void check_ciphertext_out(const at::Tensor& out,
+                          const at::Tensor& ciphertext,
+                          const char* operation) {
+  TORCH_CHECK_VALUE(out.sizes() == ciphertext.sizes() &&
+                        out.scalar_type() == ciphertext.scalar_type() &&
+                        out.device() == ciphertext.device() &&
+                        (fhelium::detail::same_elements(out, ciphertext) ||
+                         fhelium::detail::storage_disjoint(out, ciphertext)),
+                    operation,
+                    " requires an output with the ciphertext shape, dtype and "
+                    "device that is the ciphertext or disjoint from it");
+}
+
+// Copies the components after component zero when `out` is a separate
+// Tensor.
+void copy_trailing_components(const at::Tensor& ciphertext, at::Tensor& out) {
+  if (!fhelium::detail::same_elements(out, ciphertext) &&
+      ciphertext.size(0) > 1) {
+    out.narrow(0, 1, ciphertext.size(0) - 1)
+        .copy_(ciphertext.narrow(0, 1, ciphertext.size(0) - 1));
+  }
+}
+
+void multiply_compressed_component(const at::Tensor& component,
+                                   const at::Tensor& compressed,
+                                   const std::optional<at::Tensor>& implicit,
+                                   const at::Tensor& parameters,
+                                   std::string_view layout,
+                                   at::Tensor target) {
+  if (layout == "cyclic") {
+    rns::montgomery_mul_cyclic_compressed_out(
+        component, compressed, parameters, target);
+    return;
+  }
+  if (layout == "contiguous") {
+    rns::montgomery_mul_contiguous_compressed_out(
+        component, compressed, parameters, target);
+    return;
+  }
+  TORCH_CHECK_VALUE(layout == "strided_sparse" && implicit.has_value(),
+                    "Compressed multiplication requires a supported layout "
+                    "and its implicit rows");
+  using at::indexing::Ellipsis;
+  using at::indexing::Slice;
+  const auto repeat = component.size(-1) / compressed.size(-1);
+  const auto support = Slice(at::indexing::None, at::indexing::None, repeat);
+  // The support product is formed before `target`, which may be `component`,
+  // is overwritten.
+  const auto supported = rns::montgomery_mul(
+      component.index({Ellipsis, support}), compressed, parameters);
+  rns::montgomery_mul_cyclic_compressed_out(
+      component, *implicit, parameters, target);
+  target.index({Ellipsis, support}).copy_(supported);
+}
+
+}  // namespace
+
+void add_compressed_plaintext_out(const at::Tensor& ciphertext,
+                                  const at::Tensor& compressed,
+                                  const std::optional<at::Tensor>& implicit,
+                                  const at::Tensor& parameters,
+                                  std::string_view layout,
+                                  std::string_view polynomial_domain,
+                                  at::Tensor& out) {
+  check_ciphertext_out(out, ciphertext, "add_compressed_plaintext_out");
   auto plaintext = compressed;
   auto implicit_rows = implicit;
   if (polynomial_domain == "ntt") {
@@ -154,79 +216,28 @@ at::Tensor add_compressed(const at::Tensor& ciphertext,
       rns::to_montgomery_(*implicit_rows, parameters);
     }
   }
-  auto output = in_place ? ciphertext : ciphertext.clone();
-  auto component = output.select(0, 0);
+  copy_trailing_components(ciphertext, out);
+  const auto component = ciphertext.select(0, 0);
+  auto target = out.select(0, 0);
   if (layout == "cyclic") {
-    add_cyclic_compressed_plaintext_component_(
-        component, plaintext, parameters);
+    add_cyclic_compressed_plaintext_component_out(
+        component, plaintext, parameters, target);
   } else if (layout == "contiguous") {
-    add_contiguous_compressed_plaintext_component_(
-        component, plaintext, parameters);
+    add_contiguous_compressed_plaintext_component_out(
+        component, plaintext, parameters, target);
   } else if (layout == "strided_sparse" && implicit_rows.has_value()) {
     auto rows = implicit_rows->squeeze(-1);
     if (rows.device().is_cpu()) {
       rows = rows.reshape({-1, rows.size(-1)}).contiguous();
     }
-    add_strided_plaintext_component_(component, plaintext, rows, parameters);
+    add_strided_plaintext_component_out(
+        component, plaintext, rows, parameters, target);
   } else {
     TORCH_CHECK_VALUE(false,
                       "Compressed addition requires a supported layout and "
                       "its implicit rows");
   }
-  return output;
 }
-
-at::Tensor multiply_compressed(const at::Tensor& ciphertext,
-                               const at::Tensor& compressed,
-                               const std::optional<at::Tensor>& implicit,
-                               const at::Tensor& parameters,
-                               std::string_view layout) {
-  const auto multiply = [&](const at::Tensor& component) {
-    if (layout == "cyclic") {
-      return rns::montgomery_mul_cyclic_compressed(
-          component, compressed, parameters);
-    }
-    if (layout == "contiguous") {
-      return rns::montgomery_mul_contiguous_compressed(
-          component, compressed, parameters);
-    }
-    TORCH_CHECK_VALUE(layout == "strided_sparse" && implicit.has_value(),
-                      "Compressed multiplication requires a supported layout "
-                      "and its implicit rows");
-    auto result =
-        rns::montgomery_mul_cyclic_compressed(component, *implicit, parameters);
-    const auto repeat = component.size(-1) / compressed.size(-1);
-    using at::indexing::Ellipsis;
-    using at::indexing::Slice;
-    result
-        .index(
-            {Ellipsis, Slice(at::indexing::None, at::indexing::None, repeat)})
-        .copy_(rns::montgomery_mul(
-            component.index(
-                {Ellipsis,
-                 Slice(at::indexing::None, at::indexing::None, repeat)}),
-            compressed,
-            parameters));
-    return result;
-  };
-  int64_t leading = 1;
-  for (int64_t i = 0; i + 2 < compressed.dim(); ++i) {
-    leading *= compressed.size(i);
-  }
-  at::Tensor product;
-  if (leading == 1) {
-    product = multiply(ciphertext);
-  } else {
-    std::vector<at::Tensor> components;
-    for (const auto& component : ciphertext.unbind(0)) {
-      components.push_back(multiply(component));
-    }
-    product = at::stack(components);
-  }
-  return product;
-}
-
-}  // namespace
 
 at::Tensor add_compressed_plaintext(const at::Tensor& ciphertext,
                                     const at::Tensor& compressed,
@@ -234,13 +245,15 @@ at::Tensor add_compressed_plaintext(const at::Tensor& ciphertext,
                                     const at::Tensor& parameters,
                                     std::string_view layout,
                                     std::string_view polynomial_domain) {
-  return add_compressed(ciphertext,
-                        compressed,
-                        implicit,
-                        parameters,
-                        layout,
-                        polynomial_domain,
-                        false);
+  auto out = at::empty_like(ciphertext);
+  add_compressed_plaintext_out(ciphertext,
+                               compressed,
+                               implicit,
+                               parameters,
+                               layout,
+                               polynomial_domain,
+                               out);
+  return out;
 }
 
 at::Tensor& add_compressed_plaintext_(at::Tensor& ciphertext,
@@ -249,14 +262,41 @@ at::Tensor& add_compressed_plaintext_(at::Tensor& ciphertext,
                                       const at::Tensor& parameters,
                                       std::string_view layout,
                                       std::string_view polynomial_domain) {
-  add_compressed(ciphertext,
-                 compressed,
-                 implicit,
-                 parameters,
-                 layout,
-                 polynomial_domain,
-                 true);
+  add_compressed_plaintext_out(ciphertext,
+                               compressed,
+                               implicit,
+                               parameters,
+                               layout,
+                               polynomial_domain,
+                               ciphertext);
   return ciphertext;
+}
+
+void multiply_compressed_plaintext_out(
+    const at::Tensor& ciphertext,
+    const at::Tensor& compressed,
+    const std::optional<at::Tensor>& implicit,
+    const at::Tensor& parameters,
+    std::string_view layout,
+    at::Tensor& out) {
+  check_ciphertext_out(out, ciphertext, "multiply_compressed_plaintext_out");
+  int64_t leading = 1;
+  for (int64_t i = 0; i + 2 < compressed.dim(); ++i) {
+    leading *= compressed.size(i);
+  }
+  if (leading == 1) {
+    multiply_compressed_component(
+        ciphertext, compressed, implicit, parameters, layout, out);
+    return;
+  }
+  for (int64_t component = 0; component < ciphertext.size(0); ++component) {
+    multiply_compressed_component(ciphertext.select(0, component),
+                                  compressed,
+                                  implicit,
+                                  parameters,
+                                  layout,
+                                  out.select(0, component));
+  }
 }
 
 at::Tensor multiply_compressed_plaintext(
@@ -265,8 +305,10 @@ at::Tensor multiply_compressed_plaintext(
     const std::optional<at::Tensor>& implicit,
     const at::Tensor& parameters,
     std::string_view layout) {
-  return multiply_compressed(
-      ciphertext, compressed, implicit, parameters, layout);
+  auto out = at::empty_like(ciphertext);
+  multiply_compressed_plaintext_out(
+      ciphertext, compressed, implicit, parameters, layout, out);
+  return out;
 }
 
 at::Tensor& multiply_compressed_plaintext_(
@@ -275,37 +317,53 @@ at::Tensor& multiply_compressed_plaintext_(
     const std::optional<at::Tensor>& implicit,
     const at::Tensor& parameters,
     std::string_view layout) {
-  ciphertext.copy_(multiply_compressed(
-      ciphertext, compressed, implicit, parameters, layout));
+  multiply_compressed_plaintext_out(
+      ciphertext, compressed, implicit, parameters, layout, ciphertext);
   return ciphertext;
 }
 
-at::Tensor scalar_arithmetic(const at::Tensor& ciphertext,
-                             const at::Tensor& parameters,
-                             const at::Tensor& seed,
-                             double scalar,
-                             double scalar_scale,
-                             bool add) {
+void scalar_arithmetic_out(const at::Tensor& ciphertext,
+                           const at::Tensor& parameters,
+                           at::Tensor& seed,
+                           double scalar,
+                           double scalar_scale,
+                           bool add,
+                           at::Tensor& out) {
+  check_ciphertext_out(out, ciphertext, "scalar_arithmetic_out");
   const auto scaled = scalar * scalar_scale;
   const auto coefficient = stochastic_round(
       at::full({1}, scaled, ciphertext.options().dtype(at::kDouble)), seed);
   auto residues =
       rns::lift_integer_coefficients(coefficient, parameters.select(0, 0));
   if (add) {
-    auto output = ciphertext.clone();
-    auto constant = output.select(0, 0).narrow(-1, 0, 1);
+    if (!fhelium::detail::same_elements(out, ciphertext)) {
+      out.copy_(ciphertext);
+    }
+    auto constant = out.select(0, 0).narrow(-1, 0, 1);
     rns::add_standard_(constant, residues, parameters);
-    return output;
+    return;
   }
   rns::to_montgomery_(residues, parameters);
-  return rns::montgomery_mul_row_scalars_standard(
-      ciphertext, residues.squeeze(-1), parameters);
+  rns::montgomery_mul_row_scalars_standard_out(
+      ciphertext, residues.squeeze(-1), parameters, out);
+}
+
+at::Tensor scalar_arithmetic(const at::Tensor& ciphertext,
+                             const at::Tensor& parameters,
+                             at::Tensor& seed,
+                             double scalar,
+                             double scalar_scale,
+                             bool add) {
+  auto out = at::empty_like(ciphertext);
+  scalar_arithmetic_out(
+      ciphertext, parameters, seed, scalar, scalar_scale, add, out);
+  return out;
 }
 
 at::Tensor encode(const at::Tensor& message,
                   const at::Tensor& pre,
                   const at::Tensor& twister,
-                  const at::Tensor& seed,
+                  at::Tensor& seed,
                   double scale) {
   const auto slots = pre.numel();
   const auto full =
@@ -350,7 +408,7 @@ std::vector<at::Tensor> prepare_periodic_plaintext(
     const at::Tensor& message,
     const at::Tensor& pre,
     const at::Tensor& twister,
-    const at::Tensor& seed,
+    at::Tensor& seed,
     const at::Tensor& parameters,
     const at::Tensor& twice_moduli,
     const at::Tensor& even,
@@ -382,15 +440,17 @@ std::vector<at::Tensor> prepare_periodic_plaintext(
 
 at::Tensor encrypt(const at::Tensor& coefficients,
                    const at::Tensor& public_key,
-                   const TensorTable& tables,
-                   const at::Tensor& seed,
+                   const RingTables& tables,
+                   at::Tensor& seed,
                    const at::Tensor& cdt_table,
                    std::string_view ntt_backend,
                    int64_t key_row_start,
                    std::string_view output_domain) {
-  const auto& parameters = tables.at("parameters");
+  const auto& parameters = tables.forward.parameters;
   const auto shape = coefficients.sizes().vec();
-  auto stream = seed.clone();
+  // Each sampler reads its own nonce: the plaintext error, the ternary mask,
+  // and the mask error. The seed advances by three.
+  auto& stream = seed;
   const auto sample = [&](const std::optional<at::Tensor>& rows) {
     auto out = random::sample_discrete_gaussian(stream, shape, cdt_table, rows);
     advance(stream);
@@ -401,33 +461,35 @@ at::Tensor encrypt(const at::Tensor& coefficients,
   const auto keys = public_key.narrow(1, key_row_start, parameters.size(1));
   auto v = random::sample_ternary(stream, shape, 0.5, parameters);
   advance(stream);
-  ntt::transform_(v, tables, ntt_backend, "", "forward_to_montgomery");
+  ntt::transform_(v, tables.forward, ntt_backend, "forward_to_montgomery");
   auto products =
       at::stack({rns::montgomery_mul(v, keys.select(0, 0), parameters),
                  rns::montgomery_mul(v, keys.select(0, 1), parameters)});
   if (output_domain == "ntt") {
     auto added = at::stack({plaintext, sample(parameters)});
-    ntt::transform_(added, tables, ntt_backend, "", "forward_to_montgomery");
+    ntt::transform_(
+        added, tables.forward, ntt_backend, "forward_to_montgomery");
     return rns::add_lazy(products, added, parameters);
   }
   TORCH_CHECK_VALUE(output_domain == "coefficient",
                     "Encryption output_domain is unsupported");
   ntt::transform_(
-      products, tables, ntt_backend, "", "inverse_to_standard_lazy");
+      products, tables.inverse, ntt_backend, "inverse_to_standard_lazy");
   auto component0 = products.select(0, 0);
   rns::add_standard_(component0, plaintext, parameters);
   auto component1 = products.select(0, 1);
   random::add_discrete_gaussian_(component1, stream, cdt_table, parameters);
+  advance(stream);
   return products;
 }
 
 at::Tensor decrypt_phase(const at::Tensor& ciphertext,
                          const at::Tensor& secret_key,
-                         const TensorTable& tables,
+                         const RingTables& tables,
                          std::string_view ntt_backend,
                          int64_t key_row_start,
                          std::string_view input_domain) {
-  const auto& parameters = tables.at("parameters");
+  const auto& parameters = tables.forward.parameters;
   const auto secret = secret_key.narrow(0, key_row_start, parameters.size(1));
   const auto components = ciphertext.size(0);
   TORCH_CHECK_VALUE(components == 2 || components == 3,
@@ -441,11 +503,12 @@ at::Tensor decrypt_phase(const at::Tensor& ciphertext,
     auto value = ciphertext.select(0, k);
     if (coefficient) {
       value = ntt::transform(
-          value, tables, ntt_backend, "", "forward_to_montgomery");
+          value, tables.forward, ntt_backend, "forward_to_montgomery");
     }
     auto product = rns::montgomery_mul(value, power, parameters);
     if (coefficient) {
-      ntt::transform_(product, tables, ntt_backend, "", "inverse_to_standard");
+      ntt::transform_(
+          product, tables.inverse, ntt_backend, "inverse_to_standard");
       phase = rns::add_standard(phase, product, parameters);
     } else {
       phase = rns::add_lazy(phase, product, parameters);
@@ -455,7 +518,7 @@ at::Tensor decrypt_phase(const at::Tensor& ciphertext,
     }
   }
   if (!coefficient) {
-    ntt::transform_(phase, tables, ntt_backend, "", "inverse_to_standard");
+    ntt::transform_(phase, tables.inverse, ntt_backend, "inverse_to_standard");
   }
   return phase;
 }
@@ -513,17 +576,21 @@ at::Tensor reconstruct_q_coefficients(const at::Tensor& residues,
 
 at::Tensor decrypt(const at::Tensor& ciphertext,
                    const at::Tensor& secret_key,
-                   const TensorTable& tables,
+                   const DecryptionTables& tables,
                    std::string_view ntt_backend,
                    int64_t key_row_start,
                    std::string_view input_domain) {
-  const auto phase = decrypt_phase(
-      ciphertext, secret_key, tables, ntt_backend, key_row_start, input_domain);
+  const auto phase = decrypt_phase(ciphertext,
+                                   secret_key,
+                                   tables.ring,
+                                   ntt_backend,
+                                   key_row_start,
+                                   input_domain);
   return reconstruct_q_coefficients(phase,
-                                    tables.at("reconstruction_parameters"),
-                                    tables.at("normalizers"),
-                                    tables.at("propagation"),
-                                    tables.at("half_digits"));
+                                    tables.reconstruction_parameters,
+                                    tables.normalizers,
+                                    tables.propagation,
+                                    tables.half_digits);
 }
 
 }  // namespace fhelium::ckks

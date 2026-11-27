@@ -155,12 +155,12 @@ class CudaGraphInputError(ExecutionInputError):
     """Replay input structure or value state differs from capture."""
 
 
-class ArtifactError(FHEliumError, RuntimeError):
-    """Base class for structured artifact identity and version failures."""
+class ValueStoreError(FHEliumError, RuntimeError):
+    """Base class for value-store identity and version failures."""
 
 
-class UnsupportedArtifactStoreVersionError(ArtifactError):
-    """A local artifact catalog uses an unsupported on-disk version."""
+class UnsupportedValueStoreVersionError(ValueStoreError):
+    """A local value-store catalog uses an unsupported on-disk version."""
 
     def __init__(
         self,
@@ -180,27 +180,29 @@ class UnsupportedArtifactStoreVersionError(ArtifactError):
             else "Automatic migration is not implemented."
         )
         super().__init__(
-            "Unsupported FHElium artifact-store format: "
+            "Unsupported FHElium value-store format: "
             f"found_version={self.found_version}, "
             f"supported_versions={self.supported_versions}. {migration}"
         )
 
 
-class StaleArtifactReferenceError(ArtifactError, ValueError):
-    """An artifact reference no longer names the store's active generation."""
+class StaleValueReferenceError(ValueStoreError, ValueError):
+    """A stored-value reference no longer names the store's active generation."""
 
     def __init__(
         self,
         *,
         name: str,
-        expected_artifact_id: str,
-        current_artifact_id: str | None,
+        expected_generation_id: str,
+        current_generation_id: str | None,
         differences: dict[str, tuple[object, object]] | None = None,
     ) -> None:
         self.name = str(name)
-        self.expected_artifact_id = str(expected_artifact_id)
-        self.current_artifact_id = (
-            None if current_artifact_id is None else str(current_artifact_id)
+        self.expected_generation_id = str(expected_generation_id)
+        self.current_generation_id = (
+            None
+            if current_generation_id is None
+            else str(current_generation_id)
         )
         self.differences = {} if differences is None else dict(differences)
         detail = (
@@ -209,10 +211,10 @@ class StaleArtifactReferenceError(ArtifactError, ValueError):
             else f" differences={self.differences!r}."
         )
         super().__init__(
-            f"ArtifactRef for {self.name!r} is stale or belongs to another "
+            f"StoredValueRef for {self.name!r} is stale or belongs to another "
             "store generation: "
-            f"expected_artifact_id={self.expected_artifact_id!r}, "
-            f"current_artifact_id={self.current_artifact_id!r}."
+            f"expected_generation_id={self.expected_generation_id!r}, "
+            f"current_generation_id={self.current_generation_id!r}."
             f"{detail}"
         )
 
@@ -232,17 +234,20 @@ class ResidencyBudgetError(ResidencyError):
         used_bytes: int,
         reserved_bytes: int,
         requested_bytes: int,
+        compiled_execution_bytes: int = 0,
     ) -> None:
         self.location = location
         self.budget_bytes = int(budget_bytes)
         self.used_bytes = int(used_bytes)
         self.reserved_bytes = int(reserved_bytes)
         self.requested_bytes = int(requested_bytes)
+        self.compiled_execution_bytes = int(compiled_execution_bytes)
         super().__init__(
             f"Residency location {location!r} exceeds its manager budget: "
             f"budget_bytes={self.budget_bytes}, "
             f"used_bytes={self.used_bytes}, "
             f"reserved_bytes={self.reserved_bytes}, "
+            f"compiled_execution_bytes={self.compiled_execution_bytes}, "
             f"requested_bytes={self.requested_bytes}."
         )
 
@@ -432,7 +437,7 @@ class MaximumDepthError(StateError):
 
 
 __all__ = [
-    "ArtifactError",
+    "ValueStoreError",
     "ConfigurationError",
     "CudaGraphCaptureError",
     "CudaGraphInputError",
@@ -461,7 +466,7 @@ __all__ = [
     "ScaleMismatchError",
     "SecretKeyModulusBasisError",
     "SecurityBudgetExceededError",
-    "StaleArtifactReferenceError",
+    "StaleValueReferenceError",
     "StateError",
-    "UnsupportedArtifactStoreVersionError",
+    "UnsupportedValueStoreVersionError",
 ]

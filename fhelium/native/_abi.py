@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -33,6 +34,36 @@ def manifest_native_backends(manifest: Mapping[str, Any]) -> tuple[str, ...]:
             + ", ".join(sorted(unknown))
         )
     return backends
+
+
+def torch_library_path(sdk_root: Path) -> Path:
+    """Return the libfhelium_torch file of an SDK root."""
+
+    if sys.platform == "win32":
+        name = "fhelium_torch.dll"
+    elif sys.platform == "darwin":
+        name = "libfhelium_torch.dylib"
+    else:
+        name = "libfhelium_torch.so"
+    return sdk_root / "lib" / name
+
+
+def operator_schema_digest(torch_module: Any) -> str:
+    """Return the SHA-256 of the registered FHElium operator schemas.
+
+    The digest covers every schema in the ``fhelium_*`` operator namespaces,
+    sorted and joined by newlines, so it changes with any operator name,
+    argument, alias annotation, or return type. It requires the operator
+    library to be loaded.
+    """
+
+    schemas = sorted(
+        str(schema)
+        for name in torch_module._C._dispatch_get_all_op_names()
+        if name.startswith("fhelium_")
+        for schema in torch_module._C._jit_get_schemas_for_operator(name)
+    )
+    return hashlib.sha256("\n".join(schemas).encode()).hexdigest()
 
 
 def manifest_path(torchops_dir: Path, soabi: str) -> Path:

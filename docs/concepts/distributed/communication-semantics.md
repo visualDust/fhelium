@@ -126,24 +126,24 @@ Removing RNS rows changes a value's active basis but does not necessarily compac
 
 Typed value collectives pack such views when contiguous communication storage is required. In-place results update the original view, preserving its storage aliases and leaving excluded rows untouched. Writable destinations must have non-overlapping elements. Contiguous values already on the transport device are used directly; callers need not compact every typed value before sending it. Raw PyTorch collective calls retain their own buffer requirements.
 
-## Rank-local CUDA Graph capture
+## Collectives in compiled execution
 
-CUDA Graph capture records the deterministic local evaluator on each rank. Process-group control remains in the surrounding SPMD program:
+A compiled rank-local function contains its collectives in its exec schedule. Each collective reads and writes Tensor buffers of the rank and runs on the process group bound to the schedule, and rank and group size are read from that group when the schedule runs. A reduction is an all-gather followed by the combine arithmetic, folded in group rank order, so every rank computes the same result. `all_reduce_ciphertext` and `reduce_ciphertext` are captured this way; `broadcast_ciphertext` is not captured. The schedule depends on the rank only when the captured function reads the process rank. Collectives on CUDA buffers belong to the schedule's CUDA Graph segments, and a segment whose process group cannot be captured runs directly:
 
 ```mermaid
 graph TB
     subgraph R0[rank 0]
-      G0[local graph replay] --> P0[partial 0]
+      A0[local segment] --> C0[all-gather] --> F0[fold in rank order]
     end
     subgraph R1[rank 1]
-      G1[local graph replay] --> P1[partial 1]
+      A1[local segment] --> C1[all-gather] --> F1[fold in rank order]
     end
-    P0 --> RED[eager typed reduction]
-    P1 --> RED
-    RED --> OUT[complete output]
+    C0 <--> C1
+    F0 --> OUT0[complete output on rank 0]
+    F1 --> OUT1[complete output on rank 1]
 ```
 
-This keeps collective ordering, ownership, and variable communication outside a fixed local capture.
+Every rank executes the same sequence of collectives in each call. Decisions that select different collectives per rank, variable communication, and data provisioning stay in the surrounding SPMD program.
 
 ## Choosing a partition
 

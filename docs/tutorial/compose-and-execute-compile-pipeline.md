@@ -1,8 +1,8 @@
-# Compose and execute a pipeline from built-in Compile passes
+# Program pipelines and textual IR
 
 **Example source:** [`examples/13_compile_pipeline.py`](https://github.com/VisualDust/fhelium/blob/main/examples/13_compile_pipeline.py)
 
-Example 13 exposes the individual stages of the Compile workflow. It captures a supported PyTorch computation, composes existing FHElium passes, lowers the Program to operations covered by the Backend, links live keys and arithmetic resources, executes encrypted inputs, and reports error against the clear result.
+Example 13 exposes the individual stages of the Compile workflow. Its first part captures a supported PyTorch computation, composes existing FHElium passes, lowers the Program to operations covered by the Backend, links keys and arithmetic resources, executes encrypted inputs, and reports error against the clear result. Its second part starts from textual mixed-level IR, prints it back, and runs the front of the pipeline with a caller-defined analysis pass.
 
 ## Run the example
 
@@ -12,9 +12,9 @@ From the repository root:
 python examples/13_compile_pipeline.py
 ```
 
-The example runs on CPU and prints compact captured/backend-ready Program inventories, evaluation-key requirements, result state, numerical error, and pass reports with host durations.
+The example runs on CPU. The first part prints captured and backend-ready Program inventories, evaluation-key requirements, result state, numerical error, and pass reports with host durations; the second prints the textual round-trip result, the recorded dialect counts, the pass reports, and the printed Program.
 
-For a managed function interface over the same compiler, use [callable compilation](compile-jit.md). Manual `Compilation`, `Pipeline` and Backend linking remain available when the application owns transformation order and material binding. Passing a Program or Compilation to `fc.compile` also uses synchronous preparation.
+For a managed function interface over the same compiler, use [callable compilation](compile-layer.md). Manual `Compilation`, `Pipeline` and Backend linking remain available when the application owns transformation order and material binding. Passing a Program or Compilation to `fc.compile` also uses synchronous preparation.
 
 ## Source computation
 
@@ -107,9 +107,40 @@ expected = captured_callable.reference(clear_x)
 
 Registered Backend implementations remain Tensor-oriented internally. `ProgramExecutable` performs the public value adaptation at the outer execution interface.
 
-## Why this differs from Example 15
+## Textual Program input
 
-Example 13 uses only operations and passes already supplied by FHElium. [Example 15](customize-compile-pass-and-pipeline.md) defines a new pass that rewrites captured `torch.matmul` into a baby-step/giant-step schedule before composing, linking, and executing its pipeline. [Example 14](ir-textual-program.md) instead focuses on textual Program IR and analysis-pass composition and returns the analyzed Program for inspection.
+`textual_pipeline` parses a module that contains one function with an encrypted semantic value, a public message gain, a cyclic roll, encrypted addition, and encrypted-by-public multiplication. The module carries FHElium schema and dialect versions; `fhelium.ir.parse(...)` loads the registered FHElium and upstream xDSL operations and keeps the mixed abstraction levels of the text.
+
+```python
+imported = ir.parse(text, source_name="inline-compile-example.mlir")
+serialized = imported.to_text()
+round_tripped = ir.parse(serialized)
+```
+
+Printing the second Program reproduces the first serialized form, which is the structural round trip the example reports. A parsed Program enters the same pipeline as a captured one through `fh_compile.Compilation(program, workspace)`.
+
+## Caller-defined analysis pass
+
+`RecordDialectInventoryPass` implements the pass protocol: it reads the current Program, counts operation namespaces, publishes the counts in the request's `CompileWorkspace`, and returns an unchanged `PassResult`.
+
+```python
+@dataclass(frozen=True)
+class RecordDialectInventoryPass:
+    name: str = "record-dialect-inventory"
+
+    def run(self, compilation):
+        counts = Counter(op.name.split(".", maxsplit=1)[0] for op in compilation.program.walk())
+        compilation.workspace["textual-ir/dialect-counts"] = dict(sorted(counts.items()))
+        return fh_compile.PassResult.unchanged(compilation.program, matched=sum(counts.values()))
+```
+
+The example places this pass first and follows it with dead-value elimination, semantic-to-logical lowering, plaintext preparation, NTT transition insertion, logical-to-CKKS lowering, relinearization, and rescale insertion. Every pass in the pipeline receives the same workspace. The pipeline stops at CKKS operations, so the second part needs no keys or device; evaluation-key requirements are derived from the transformed IR.
+
+Textual IR serves to inspect a transformation independently of source capture, to write a minimal reproduction for a pass, and to exchange a source-independent Program. The parser accepts permissive mixed-level Programs; CKKS state assignment and Backend linking perform the checks that make a Program executable.
+
+## Relation to Example 14
+
+Example 13 uses only operations and passes supplied by FHElium. [Example 14](customize-compile-pass-and-pipeline.md) defines a pass that rewrites captured `torch.matmul` into a baby-step/giant-step schedule before composing, linking, and executing its pipeline.
 
 ::: details Source
 

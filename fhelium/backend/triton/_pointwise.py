@@ -8,26 +8,24 @@ from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from math import prod
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any
 
 import torch
 from xdsl.ir import Operation
 
 from fhelium.backend.implementation import FusionMatcher, OperationInvocation
+from fhelium.backend.lowering import ExecBuilder
 from fhelium.backend.resources import BoundResource, ResourceRequirement
-from fhelium.ir._operation_structure import StructureDescription
 from fhelium.ir._structure import structural_key
-from fhelium.ir.dialects import ckks, fusion, rns
+from fhelium.ir.dialects import fusion
 
 from ._expressions import (
     BoundGraph,
     Emitter,
-    Expr,
     ExpressionGraph,
     InputLayout,
     KernelArguments,
     ValueExpr,
-    structured_value,
     component_axis,
     material_view_owners,
 )
@@ -256,29 +254,6 @@ class PointwisePlan:
             sum(part.kernel_count for part in self.parts)
             if self.parts
             else int(bool(self.length))
-        )
-
-    def warm(self, parameter_strides: tuple[int, int], radix: int) -> int:
-        """Compile and load complete-output partitions; return new compilations."""
-        # A plan has either one kernel or partitions.
-        if self.kernel is None:
-            return sum(
-                part.warm(parameter_strides, radix) for part in self.parts
-            )
-        if not self.length:
-            return 0
-        return int(
-            self.kernel.warm(
-                *(
-                    torch.int64 if i in self.seed_inputs else self.dtype
-                    for i in self.inputs
-                ),
-                *([self.dtype] * (len(self.materialized) + 1)),
-                *parameter_strides,
-                radix,
-                256,
-                *self.scalars,
-            )
         )
 
     def execute(
@@ -530,17 +505,6 @@ class _PointwiseRun:
         )
 
 
-@dataclass(frozen=True)
-class _PointwiseWarm:
-    plan: PointwisePlan
-    strides: tuple[int, int]
-    radix: int
-
-    def __call__(self):
-        compiled = self.plan.warm(self.strides, self.radix)
-        return compiled, self.plan.kernel_count - compiled
-
-
 def _restore_fusion(state):
     prepared = object.__new__(PreparedFusion)
     prepared.__dict__.update(state, graph=None, _region=None)
@@ -564,8 +528,6 @@ class PreparedFusion:
     _plans: dict[tuple[object, ...], Any] = field(
         default_factory=dict, repr=False
     )
-    _last_warm: Any = field(default=None, repr=False)
-    _fixed: bool = False
 
     def resource_requirements(
         self, invocation: OperationInvocation
@@ -573,9 +535,11 @@ class PreparedFusion:
         return ()
 
     def __reduce__(self):
+        # Lowered schedules bind the prepared kernels; plans are rebuilt on demand.
         state = dict(self.__dict__)
         state.pop("graph")
         state.pop("_region", None)
+        state["_plans"] = {}
         return (_restore_fusion, (state,))
 
     def attach_region(self, linked: Callable[[], PreparedFusion]) -> None:
@@ -583,21 +547,11 @@ class PreparedFusion:
         if self.graph is None:
             self._region = linked
 
-    def warm(self) -> tuple[int, int] | None:
-        """Compile and load this fusion's kernels for the prepared layout.
-
-        Returns ``(compiled, reused)`` counts, or ``None`` when the layout is
-        determined only by runtime Tensors and no plan has been prepared.
-        """
-        if self._last_warm is None:
-            return None
-        return self._last_warm()
-
     def _prepare(self, all_inputs: tuple[torch.Tensor, ...]):
         signature = _layout_signature(all_inputs)
         run = self._plans.get(signature)
         if run is None:
-            run, self._last_warm = self._build(all_inputs)
+            run = self._build(all_inputs)
             self._plans[signature] = run
         return run
 
@@ -658,7 +612,7 @@ class PreparedFusion:
                 max_endpoints=limit,
                 kernel_budget=self.kernel_budget,
             )
-            return _NttRun(payloads, plan), plan.warm
+            return _NttRun(payloads, plan)
         parameters = tables[self.graph.parameter_index]
         # Reuse the selected implementation's native Tensor ABI check.
         parameters, radix = execution_parameters(
@@ -669,51 +623,49 @@ class PreparedFusion:
             dtype=inputs[0].dtype,
             kernel_budget=self.pointwise_kernel_budget,
         )
-        run = _PointwiseRun(
+        return _PointwiseRun(
             payloads,
             pointwise,
             table_indices[self.graph.parameter_index],
             radix,
-        )
-        return run, _PointwiseWarm(
-            pointwise, (parameters.stride(0), parameters.stride(1)), radix
         )
 
     def prepare_layout(self, operation: fusion.FusedOp) -> None:
         """Prepare kernels from declared Program layouts without numerical storage.
 
         Polynomial extents follow either the declared shape or the component,
-        batch, prime-row and ring-dimension state. When every shape and stride
-        is declared, the prepared layout is fixed. Otherwise contiguous strides
-        are assumed for preparation and execution re-binds if the runtime
-        layout differs.
+        batch, prime-row and ring-dimension state; missing strides are assumed
+        contiguous. Lowering prepares any other operand layout it meets.
         """
         from torch._subclasses.fake_tensor import FakeTensorMode
 
         declared = declared_layouts(operation)
         if declared is None:
             return
-        descriptions, fixed = declared
+        descriptions, _ = declared
         with FakeTensorMode():
             values = tuple(
                 torch.empty_strided(shape, strides, dtype=dtype, device=device)
                 for shape, strides, dtype, device in descriptions
             )
             self._prepare(values)
-        self._fixed = fixed
 
-    def execute(self, invocation, inputs, resources, *, in_place):
-        if in_place:
+    def lower(
+        self,
+        invocation: OperationInvocation,
+        inputs: tuple[torch.Tensor, ...],
+        resources: tuple[BoundResource, ...],
+        builder: ExecBuilder,
+        /,
+    ) -> tuple[torch.Tensor, ...]:
+        if invocation.in_place:
             raise ValueError("Triton fusion uses out-of-place execution")
         run = self._plans.get(_layout_signature(inputs))
         if run is None:
-            if self._fixed:
-                raise ValueError(
-                    "Fusion operands differ from the prepared layout/dtype/device"
-                )
-            if self.graph is None:
-                self.graph = self._region().graph
-            run = self._prepare(inputs)
+            with builder.suspended():
+                if self.graph is None:
+                    self.graph = self._region().graph
+                run = self._prepare(inputs)
         return run(inputs)
 
 
@@ -733,6 +685,14 @@ class TritonFusionImplementation:
     preserving their stage order. ``None`` selects eight endpoints on HIP to
     limit compiler IR growth and leaves CUDA endpoint merging unbounded.
 
+    ``max_ntt_anchors`` bounds the NTT transforms of one fusion region. An
+    output that combines the results of many transforms, such as a weighted sum
+    over rotated ciphertexts, is computed in the epilogue of its last transform
+    and reads every earlier transform result there; above about eight results
+    that epilogue's time per result grows with their number. Larger
+    combinations continue in the next region from a stored partial result.
+    ``None`` leaves regions unbounded.
+
     ``kernel_budget`` bounds static Montgomery calls, pointer arguments and
     Python source lines for NTT endpoint kernels. ``pointwise_kernel_budget``
     applies the same metrics to ordinary expression kernels. Complete output
@@ -744,14 +704,17 @@ class TritonFusionImplementation:
     name: str = "triton-rns-fused"
     include_ntt: bool = False
     max_ntt_endpoints: int | None = None
+    max_ntt_anchors: int | None = 8
     kernel_budget: KernelBudget = DEFAULT_KERNEL_BUDGET
     pointwise_kernel_budget: KernelBudget = DEFAULT_POINTWISE_BUDGET
     operation_types: tuple[type[Operation], ...] = (fusion.FusedOp,)
     supports_in_place: bool = False
 
     def __post_init__(self):
-        if self.max_ntt_endpoints is not None and self.max_ntt_endpoints <= 0:
-            raise ValueError("max_ntt_endpoints must be positive")
+        for name in ("max_ntt_endpoints", "max_ntt_anchors"):
+            value = getattr(self, name)
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} must be positive")
         for name in ("kernel_budget", "pointwise_kernel_budget"):
             budget = getattr(self, name)
             if budget is not None and (
@@ -796,13 +759,19 @@ class TritonFusionImplementation:
         """Create candidate analysis scoped to a read-only scheduling window."""
         from ._matching import RegionMatcher
 
-        return RegionMatcher(include_ntt=self.include_ntt)
+        return RegionMatcher(
+            include_ntt=self.include_ntt, max_anchors=self.max_ntt_anchors
+        )
 
     def match_fusion(self, operations: Sequence[Operation]) -> int | None:
         """Match Program facts against this implementation's RNS/NTT support."""
         from ._matching import match_region
 
-        count = match_region(operations, include_ntt=self.include_ntt)
+        count = match_region(
+            operations,
+            include_ntt=self.include_ntt,
+            max_anchors=self.max_ntt_anchors,
+        )
         if count and self.include_ntt:
             from ._ntt import _fusion_qualified
 
@@ -844,6 +813,7 @@ class TritonFusionImplementation:
                     if not isinstance(op, fusion.YieldOp)
                 ),
                 include_ntt=self.include_ntt,
+                max_anchors=self.max_ntt_anchors,
             )
             is None
         ):
@@ -860,115 +830,12 @@ class TritonFusionImplementation:
         prepared.prepare_layout(operation)
         return prepared
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
+        builder: ExecBuilder,
         /,
-        *,
-        in_place: bool,
     ) -> tuple[torch.Tensor, ...]:
-        raise RuntimeError("Resolve the fusion operation before execution")
-
-
-class _StructuredOperationType(Protocol):
-    """Operation class that declares its residue structure."""
-
-    structure: StructureDescription
-
-
-ARITHMETIC_OPS = (
-    ckks.AddCompressedPlaintextOp,
-    ckks.MultiplyCompressedPlaintextOp,
-    rns.AddStandardOp,
-    rns.SubtractStandardOp,
-    rns.NegateStandardOp,
-    rns.MontgomeryMultiplyOp,
-    rns.TensorProductOp,
-    rns.AddMontgomeryLazyOp,
-    rns.MultiplyPlaintextOp,
-    rns.AddPlaintextOp,
-    rns.StandardToMontgomeryOp,
-    rns.MontgomeryToStandardOp,
-)
-"""Operations the pointwise implementation executes individually."""
-
-
-@dataclass
-class TritonRnsImplementation:
-    """Execute individual modular arithmetic operations using the expression generator.
-
-    Inputs use the native lazy interval [0,2q); Montgomery products preserve the
-    native R32 canonical and R62 lazy representatives. Selection requires CUDA.
-    """
-
-    name: str = "triton-rns-pointwise"
-    operation_types: tuple[type[Operation], ...] = ARITHMETIC_OPS
-    supports_in_place: bool = False
-    plans: dict[tuple[object, ...], PointwisePlan] = field(default_factory=dict)
-
-    def resource_requirements(
-        self, invocation: OperationInvocation
-    ) -> tuple[ResourceRequirement, ...]:
-        return ()
-
-    def execute(
-        self,
-        invocation: OperationInvocation,
-        inputs: tuple[torch.Tensor, ...],
-        resources: tuple[BoundResource, ...],
-        /,
-        *,
-        in_place: bool,
-    ) -> tuple[torch.Tensor, ...]:
-        inputs, parameters = inputs[:-1], inputs[-1]
-        parameters, radix = execution_parameters(
-            invocation, inputs, parameters, in_place=in_place
-        )
-        plaintext = invocation.operation_type in (
-            rns.MultiplyPlaintextOp,
-            rns.AddPlaintextOp,
-            ckks.AddCompressedPlaintextOp,
-            ckks.MultiplyCompressedPlaintextOp,
-        )
-        layouts = tuple(
-            InputLayout(tuple(v.shape), tuple(v.stride()), plaintext and i == 0)
-            for i, v in enumerate(inputs)
-        )
-        ntt_plaintext = invocation.attributes.get("polynomial_domain") == "ntt"
-        compression = invocation.attributes.get("compression_layout")
-        key = (invocation.operation_type, layouts, ntt_plaintext, compression)
-        plan = self.plans.get(key)
-        if plan is None:
-            values = [
-                ValueExpr(
-                    tuple(
-                        Expr("input", data=(i, c))
-                        for c in range(layout.components)
-                    ),
-                    layout.shape,
-                    layout.component_axis,
-                    -i - 1,
-                )
-                for i, layout in enumerate(layouts)
-            ]
-            # Every operation in ARITHMETIC_OPS declares a structure.
-            structure = cast(
-                _StructuredOperationType, invocation.operation_type
-            ).structure(invocation.operand_count, invocation.attributes)
-            output = structured_value(
-                structure,
-                {
-                    index: values[index]
-                    for index in structure.operands("data", "compact")
-                },
-                0,
-                invocation.operation_type,
-            )
-            roots = {v.root: v for v in (*values, output)}
-            plan = PointwisePlan.build(
-                BoundGraph(layouts, (output,), roots), dtype=inputs[0].dtype
-            )
-            self.plans[key] = plan
-        return plan.execute(inputs, parameters, radix)
+        raise RuntimeError("Resolve the fusion operation before lowering")

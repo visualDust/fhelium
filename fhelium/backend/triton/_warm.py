@@ -18,39 +18,31 @@ def _executor() -> ThreadPoolExecutor:
 
 
 def warm_executable(
-    executable: Any, device: torch.device | None = None
+    executable: Any,
+    device: torch.device | None = None,
+    *,
+    runner: bool = True,
 ) -> dict:
-    """Compile every Triton kernel of ``executable`` without launching it.
+    """Compile every Triton kernel of ``executable``'s lowered schedules and build their Runners.
 
-    Triton dispatch preparation reads physical layouts or reconstructs polynomial
-    extents from component, batch, prime-row and ring-dimension state. This
-    function drives the resulting kernel objects through Triton's compile path
-    with dtype placeholders for pointer operands and the planned scalar and
-    constexpr values. Dispatches with unresolved shape, dtype or device are
-    skipped; assumed contiguous layouts are checked and re-bound at execution.
+    Lowering records each kernel launch with its signature: dtype placeholders for pointer operands and the planned scalar and constexpr values. This function drives those kernels through Triton's compile path, including the schedules of called functions. An executable whose inputs have no declared layouts is lowered at its first call per layout; until then it has no recorded launches.
 
-    Returns ``compiled`` (new Triton compilations, including disk-cache
-    loads), ``reused`` (kernels already present in the process cache),
-    ``skipped`` (dispatches without a prepared layout), ``dispatches`` (Triton
-    dispatches visited) and ``seconds``. The kernels of one executable compile
-    concurrently in a shared thread pool, and the call returns when all of
-    them have finished; when the caller has already activated Triton's
-    asynchronous compile mode, the compilations join that mode instead. Each
-    kernel is loaded into the current CUDA context at its first launch.
+    Returns ``compiled`` (new Triton compilations, including disk-cache loads), ``reused`` (kernels already present in the process cache), ``launches`` (recorded launches visited) and ``seconds``. The kernels compile concurrently in a shared thread pool, and the call returns when all of them have finished; when the caller has already activated Triton's asynchronous compile mode, the compilations join that mode instead. Without an enclosing asynchronous mode, the schedules' Runners are then built from the compiled kernel images, which they load at construction. A schedule's Runner builds the Runners of the functions it calls; ``runner=False`` builds none, for a caller that executes ``executable`` through other Runners such as Graph Runners. An executable restored from an artifact compiles nothing; its Runners load the stored kernel images.
     """
-    from ._pointwise import PreparedFusion
-    from ._tensor import _PreparedTensorFusion
-
     from triton.runtime import _async_compile
 
-    counts: dict[str, float] = {
-        "compiled": 0,
-        "reused": 0,
-        "skipped": 0,
-        "dispatches": 0,
-    }
+    from fhelium.backend._artifact import RestoredProgramExecutable
+
+    counts: dict[str, float] = {"compiled": 0, "reused": 0, "launches": 0}
     start = time.perf_counter()
-    seen: set[int] = set()
+    if isinstance(executable, RestoredProgramExecutable):
+        # An artifact's Runners load its stored kernel images.
+        if runner:
+            for lowered in executable._lowered.values():
+                lowered.function.runner()
+        counts["seconds"] = time.perf_counter() - start
+        return counts
+    seen: set[object] = set()
     pending = [executable]
     concurrent = (
         _async_compile.AsyncCompileMode(_executor())
@@ -62,28 +54,28 @@ def warm_executable(
         concurrent,
     ):
         while pending:
-            for dispatch in pending.pop().dispatch_table.operations.values():
-                implementation = dispatch.implementation
-                called = getattr(implementation, "executable", None)
+            current = pending.pop()
+            for dispatch in current.dispatch_table.operations.values():
+                called = getattr(dispatch.implementation, "executable", None)
                 if called is not None and id(called) not in seen:
                     # Shared function bodies are linked once for all their calls.
                     seen.add(id(called))
                     pending.append(called)
-                    continue
-                if not isinstance(
-                    implementation, (PreparedFusion, _PreparedTensorFusion)
-                ):
-                    continue
-                counts["dispatches"] += 1
-                if id(implementation) in seen:
-                    continue
-                seen.add(id(implementation))
-                result = implementation.warm()
-                if result is None:
-                    counts["skipped"] += 1
-                    continue
-                compiled, reused = result
-                counts["compiled"] += compiled
-                counts["reused"] += reused
+            for lowered in current._lowered.values():
+                for kernel, signature in lowered.launches:
+                    counts["launches"] += 1
+                    key = (id(kernel), signature)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    if kernel.warm(*signature):
+                        counts["compiled"] += 1
+                    else:
+                        counts["reused"] += 1
+    if isinstance(concurrent, _async_compile.AsyncCompileMode):
+        if runner:
+            # Building a schedule's Runner builds the Runners it calls.
+            for lowered in executable._lowered.values():
+                lowered.function.runner()
     counts["seconds"] = time.perf_counter() - start
     return counts

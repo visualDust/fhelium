@@ -12,6 +12,7 @@ from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.ir.dialects import rns
 from fhelium.backend._native_operands import named_tables
 from fhelium.native.wrapper import rns_ops
+from fhelium.backend.lowering import ExecBuilder
 
 
 @dataclass(frozen=True)
@@ -34,20 +35,22 @@ class NativeRescaleImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources, in_place
+        del resources
         attributes = invocation.attributes
         return (
             rns_ops.rational_rescale(
                 values[0],
-                *named_tables(attributes["parameter_names"], values[1:]),
+                named_tables(
+                    "rescale", attributes["parameter_names"], values[1:]
+                ),
                 str(attributes.get("input_domain", "coefficient")),
                 str(attributes.get("ntt_backend", "")),
             ),

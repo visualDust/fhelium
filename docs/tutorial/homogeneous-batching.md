@@ -1,15 +1,15 @@
 # Homogeneous batching
 
-**Example source:** [`examples/07_eager_batching.py`](https://github.com/VisualDust/fhelium/blob/main/examples/07_eager_batching.py)
+**Example source:** [`examples/06_eager_batching.py`](https://github.com/VisualDust/fhelium/blob/main/examples/06_eager_batching.py)
 
-This example compares one homogeneous CKKS batch with a per-message loop over the same packed matrix-vector workload. The tutorial explains leading batch dimensions and keeps the latency-memory execution choice in application code.
+This example compares one homogeneous CKKS batch with a per-message loop over the same packed matrix-vector product, evaluated with `fhelium.algorithms.linear`. The tutorial explains leading batch dimensions and keeps the latency-memory execution choice in application code.
 
 ## Run the example
 
 Start with the 8,192-slot, 40-bit-scale baseline:
 
 ```bash
-python examples/07_eager_batching.py \
+python examples/06_eager_batching.py \
   --preset slots8192-scale40-depth7 \
   --depth 0 \
   --batch-sizes 1,4,8 \
@@ -20,10 +20,10 @@ python examples/07_eager_batching.py \
 Then compare the two ends of the 32,768-slot, 40-bit-scale chain:
 
 ```bash
-python examples/07_eager_batching.py \
+python examples/06_eager_batching.py \
   --preset slots32768-scale40-depth34 --depth 0 --batch-sizes 1,4,8
 
-python examples/07_eager_batching.py \
+python examples/06_eager_batching.py \
   --preset slots32768-scale40-depth34 --depth 30 --batch-sizes 1,4,8
 ```
 
@@ -56,36 +56,31 @@ The leading dimensions index independent messages in the batch. All members of o
 
 They must also have the same CKKS parameter provenance and effective encryption-key lineage. Runtime values encode neither relation, so the engine cannot infer that independently produced ciphertexts are safe to stack. This example encrypts the complete message batch with one engine/key. When assembling existing ciphertexts, key-switch them when necessary before calling `Ciphertext.stack_batch`.
 
-The matrix diagonals are stacked along a new term axis inside the evaluator. Any pre-existing ciphertext batch axes remain inner dimensions, so one public matrix is applied to every encrypted vector.
-
 ## 2. The evaluator is batch-polymorphic
 
-`matrix_vector` contains no batch-specific branch:
+The example converts the `size`-by-`size` matrix into cyclic diagonals of a periodically packed vector. With rotation $\operatorname{Rot}_k$ following `torch.roll(..., shifts=k)`, slot $i$ of $\operatorname{Rot}_k(x)$ holds $x_{(i-k) \bmod n}$, so the diagonals $d_k[i]=A_{i \bmod n,\,(i-k) \bmod n}$ give
+
+$$
+y=\sum_{k=0}^{n-1} d_k\odot\operatorname{Rot}_k(x)=Ax
+$$
+
+in every period of $n$ slots. `fhelium.algorithms.linear` evaluates this sum with a baby-step giant-step schedule, and the example creates the rotation keys that the schedule reports:
 
 ```python
-def matrix_vector(source, *, engine, diagonals, rotation_keys):
-    rotated_values = []
-    for step in range(len(diagonals)):
-        rotated = (
-            source
-            if step == 0
-            else engine.rotate_with_key(source, rotation_keys[step])
-        )
-        rotated_values.append(rotated)
-    rotated_ntt = engine.coefficient_domain_to_ntt_domain(
-        Ciphertext.stack_batch(rotated_values)
-    )
-    weighted = engine.multiply_plaintext(
-        rotated_ntt, Plaintext.stack_batch(diagonals)
-    )
-    return engine.rescale_to_next_depth(
-        engine.ntt_domain_to_coefficient_domain(
-            engine.sum_ciphertext_batch(weighted)
-        )
-    )
+transform = dense_transform(matrix, engine.num_slots)
+keys = EvaluationKeySet(
+    engine.create_rotation_key(step, secret_key)
+    for step in linear.plan(transform).required_rotation_offsets(transform)
+)
 ```
 
-The same function accepts either an unbatched ciphertext or one with a non-empty batch prefix. `batch=1` therefore uses the same public program rather than a separate compatibility path. The outer term axis batches the forward NTT, plaintext products, and binary-tree reduction, avoiding one under-filled native launch per matrix diagonal.
+`linear.prepare` encodes the diagonals and selects keys once. Diagonal encoding draws stochastic-rounding samples, so the example prepares from one unbatched member and uses the same preparation for both paths:
+
+```python
+prepared = linear.prepare(engine, individual_sources[0], transform, keys=keys)
+```
+
+`linear.apply(engine, value, prepared=prepared)` contains no batch-specific branch. Rotations, plaintext products, accumulation, and the final rescale broadcast over the leading batch dimensions, so one public matrix is applied to every encrypted vector, and `batch=1` uses the same evaluator.
 
 ## Local batch and limb views
 
@@ -128,7 +123,7 @@ The example evaluates equivalent logical work in two ways.
 Batched submission:
 
 ```python
-batched_result = matrix_vector(source, ...)
+batched_result = linear.apply(engine, source, prepared=prepared)
 ```
 
 Per-message loop:
@@ -137,39 +132,25 @@ Per-message loop:
 individual_sources = tuple(
     value.clone() for value in source.unbind_batch()
 )
-looped_result = [matrix_vector(value, ...) for value in individual_sources]
+looped_result = [
+    linear.apply(engine, value, prepared=prepared)
+    for value in individual_sources
+]
 ```
 
-`unbind_batch` makes the logical members visible. The example clones the views so the loop represents independently owned request values. It then uses `Ciphertext.stack_batch(looped_result)` only to verify bit-for-bit equivalence:
-
-```python
-torch.testing.assert_close(
-    batched_result.data,
-    Ciphertext.stack_batch(looped_result).data,
-    rtol=0,
-    atol=0,
-)
-```
-
-`stack_batch` allocates and copies the loop results into one batched value.
+`unbind_batch` makes the logical members visible. The example clones the views so the loop represents independently owned request values. It stacks the loop results with `Ciphertext.stack_batch` and compares them with the batched result by `torch.equal`; the `batch == loop` column reports whether the two ciphertexts are bit-for-bit identical. Two separate preparations would encode the diagonals with different rounding samples, and the results would then agree only after decryption. `stack_batch` allocates and copies the loop results into one batched value.
 
 Batch-versus-loop selection is a programmer or workload-scheduler decision based on deployment measurements, latency requirements, and memory budget.
 
 ## 4. Compare the complete workload
 
-The example uses the cyclic-diagonal formulation of an 8-by-8 matrix-vector product:
+The matrix-vector product composes:
 
-$$
-y=\sum_s p_s\odot\operatorname{Rot}(x,s).
-$$
-
-This workload composes:
-
-- shared plaintext broadcasting;
-- rotations and direct key switching;
+- shared plaintext diagonals;
+- baby-step and giant-step rotations with key switching;
 - plaintext multiplication;
-- rescale;
-- ciphertext accumulation.
+- ciphertext accumulation;
+- rescale.
 
 It is more informative than timing only one elementwise operator. Before timing, the example also decrypts the batched result and compares it with `vectors @ matrix.T`.
 
@@ -182,6 +163,7 @@ For every requested `B`, the example reports:
 - `loop / batch` speedup;
 - the faster path at that measured point;
 - incremental peak allocated CUDA memory when running on CUDA (`n/a` on CPU);
+- bit-for-bit agreement between the batched and loop ciphertexts;
 - maximum absolute decryption error.
 
 A ratio above one means the batch won. It does not imply that a larger batch will continue to scale. A batch can reduce launches and expose parallelism while simultaneously enlarging active NTT, automorphism, accumulator, and output tensors beyond the effective cache working set.
@@ -202,13 +184,14 @@ Use these rules as a measurement plan, not as hard-coded library behavior:
 The worked RTX PRO 6000 measurements and the working-set explanation are in [Choose a homogeneous batch size](../how-to/choose-homogeneous-batch-size.md). The stable mechanism is summarized in the [CKKS workload cost model](../concepts/performance/cost-model.md#homogeneous-batching-has-a-working-set-crossover).
 
 ::: details Source
-<<< @/../examples/07_eager_batching.py
+<<< @/../examples/06_eager_batching.py
 :::
 
 ## Related concepts and guides
 
 - [Values and state](../api/fhelium/values/ciphertext.md)
+- [Linear layer and polynomial activation](linear-layer-and-polynomial.md)
 - [CKKS workload cost model](../concepts/performance/cost-model.md)
 - [Choose a homogeneous batch size](../how-to/choose-homogeneous-batch-size.md)
 - [Benchmark methodology](/benchmarks/methodology)
-- [CUDA Graph matrix-vector](cuda-graph-matvec.md)
+- [CUDA Graph matrix-vector](compiled-cuda-graphs.md)

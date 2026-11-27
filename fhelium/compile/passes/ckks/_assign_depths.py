@@ -181,8 +181,7 @@ class AssignCkksDepthsPass:
         function = program.function("main")
         block = program.single_block("main")
         if any(
-            operation.regions
-            or operation.successors
+            operation.regions or operation.successors
             for operation in block.walk()
         ):
             raise ValueError(

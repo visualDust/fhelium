@@ -2,10 +2,13 @@ r"""Fuse represented plaintext products and modular sums without temporary produ
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import torch
 
+from fhelium.backend.implementation import OperationInvocation
+from fhelium.backend.lowering import ExecBuilder
+from fhelium.backend.resources import BoundResource
 from fhelium.backend.rns.operations import weighted_sum_operands
 from fhelium.ir._operation_structure import (
     compressed,
@@ -44,14 +47,13 @@ class TritonWeightedSumImplementation:
     )
     supports_in_place: bool = False
     requires_request: bool = True
-    _plans: dict[object, PointwisePlan] = field(
-        default_factory=dict, init=False, repr=False
-    )
 
     def resource_requirements(self, invocation):
         return ()
 
-    def _row(self, ciphertexts, represented, parameters, radix, out=None):
+    def _row(
+        self, builder, ciphertexts, represented, parameters, radix, out=None
+    ):
         inputs = list(ciphertexts)
         inputs.extend(plaintext for plaintext, _, _ in represented)
         inputs.extend(
@@ -74,8 +76,8 @@ class TritonWeightedSumImplementation:
             parameters.stride(0),
             radix,
         )
-        plan = self._plans.get(key)
-        if plan is None:
+
+        def build() -> PointwisePlan:
             values = tuple(
                 ValueExpr(
                     tuple(
@@ -121,11 +123,12 @@ class TritonWeightedSumImplementation:
                     )
                 )
             assert total is not None
-            plan = PointwisePlan.build(
+            return PointwisePlan.build(
                 BoundGraph(layouts, (total,), {0: total}),
                 dtype=inputs[0].dtype,
             )
-            self._plans[key] = plan
+
+        plan = builder.memo((type(self), key), build)
         return plan.execute(
             tuple(inputs),
             parameters,
@@ -133,7 +136,14 @@ class TritonWeightedSumImplementation:
             None if out is None else {plan.graph.outputs[0].root: out},
         )[0]
 
-    def execute(self, invocation, values, resources, *, in_place):
+    def lower(
+        self,
+        invocation: OperationInvocation,
+        values: tuple[torch.Tensor, ...],
+        resources: tuple[BoundResource, ...],
+        builder: ExecBuilder,
+        /,
+    ) -> tuple[torch.Tensor, ...]:
         del resources
         if torch.version.hip is not None:
             raise ValueError(
@@ -155,7 +165,7 @@ class TritonWeightedSumImplementation:
             *(i.unsqueeze(-1) for _, _, i in represented if i is not None),
         )
         parameters, radix = execution_parameters(
-            invocation, payloads, parameters, in_place=in_place
+            invocation, payloads, parameters, in_place=invocation.in_place
         )
         if parameters.stride(1) != 1:
             raise ValueError(
@@ -184,6 +194,7 @@ class TritonWeightedSumImplementation:
             total = None
             for offset in range(0, count, chunk):
                 partial = self._row(
+                    builder,
                     ciphertexts[offset : offset + chunk],
                     row[offset : offset + chunk],
                     parameters,

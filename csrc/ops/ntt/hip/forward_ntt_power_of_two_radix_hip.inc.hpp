@@ -17,12 +17,12 @@ void launch_forward_ntt_montgomery_power_of_two_radix_compact_hip(
   hipSetDevice(device_id);
   auto stream = c10::hip::getCurrentHIPStream(device_id);
   launch_forward_ntt_power_of_two_radix_hip<scalar_t>(a,
-                                                       outer_twiddles,
-                                                       radix_root_powers,
-                                                       rns_params,
-                                                       radix,
-                                                       shared_memory_log_n,
-                                                       stream);
+                                                      outer_twiddles,
+                                                      radix_root_powers,
+                                                      rns_params,
+                                                      radix,
+                                                      shared_memory_log_n,
+                                                      stream);
 }
 
 void forward_ntt_montgomery_power_of_two_radix_compact_inplace_hip(
@@ -68,12 +68,12 @@ void launch_forward_ntt_to_montgomery_power_of_two_radix_compact_inplace_hip(
       <<<grid, kHipBlockSize, 0, stream>>>(a_acc, params_acc);
 
   launch_forward_ntt_power_of_two_radix_hip<scalar_t>(a,
-                                                       outer_twiddles,
-                                                       radix_root_powers,
-                                                       rns_params,
-                                                       radix,
-                                                       shared_memory_log_n,
-                                                       stream);
+                                                      outer_twiddles,
+                                                      radix_root_powers,
+                                                      rns_params,
+                                                      radix,
+                                                      shared_memory_log_n,
+                                                      stream);
 }
 
 template <typename scalar_t>
@@ -99,12 +99,12 @@ void launch_forward_ntt_to_montgomery_power_of_two_radix_compact_out_hip(
       <<<grid, kHipBlockSize, 0, stream>>>(out_acc, a_acc, params_acc);
 
   launch_forward_ntt_power_of_two_radix_hip<scalar_t>(out,
-                                                       outer_twiddles,
-                                                       radix_root_powers,
-                                                       rns_params,
-                                                       radix,
-                                                       shared_memory_log_n,
-                                                       stream);
+                                                      outer_twiddles,
+                                                      radix_root_powers,
+                                                      rns_params,
+                                                      radix,
+                                                      shared_memory_log_n,
+                                                      stream);
 }
 
 void forward_ntt_to_montgomery_power_of_two_radix_compact_inplace_hip(
@@ -129,14 +129,14 @@ void forward_ntt_to_montgomery_power_of_two_radix_compact_inplace_hip(
       }));
 }
 
-torch::Tensor forward_ntt_to_montgomery_power_of_two_radix_compact_hip(
+void forward_ntt_to_montgomery_power_of_two_radix_compact_out_hip(
     const torch::Tensor a,
     const torch::Tensor outer_twiddles,
     const torch::Tensor radix_root_powers,
     const torch::Tensor rns_params,
     const int64_t radix,
-    const int64_t shared_memory_log_n) {
-  torch::Tensor out = torch::empty_like(a);
+    const int64_t shared_memory_log_n,
+    torch::Tensor out) {
   const auto batch_rows = view_rns_batch_3d(a, "standard_residues");
   auto out_batch_rows = view_rns_batch_3d(out, "out");
   AT_DISPATCH_INTEGRAL_TYPES(
@@ -152,5 +152,4 @@ torch::Tensor forward_ntt_to_montgomery_power_of_two_radix_compact_hip(
                       static_cast<int>(radix),
                       static_cast<int>(shared_memory_log_n));
       }));
-  return out;
 }

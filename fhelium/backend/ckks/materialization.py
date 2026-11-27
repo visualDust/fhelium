@@ -175,23 +175,19 @@ class CkksDeviceResources:
         """Return the inverse-embedding permutation, twister, and live rounding state."""
         from .codec import _embedding
 
-        pre, _ = _embedding._permutations(
-            self.config.N, str(self.device), self.config.galois_generator
+        tables = _embedding.embedding_tables(
+            self.config.N, self.config.galois_generator, str(self.device)
         )
-        return (
-            pre,
-            _embedding._twister(self.config.N, str(self.device)),
-            self.rng.seed,
-        )
+        return tables["pre"], tables["twister"], self.rng.seed
 
     def decode_operands(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Return the coefficient-embedding permutation and skewer."""
         from .codec import _embedding
 
-        _, post = _embedding._permutations(
-            self.config.N, str(self.device), self.config.galois_generator
+        tables = _embedding.embedding_tables(
+            self.config.N, self.config.galois_generator, str(self.device)
         )
-        return post, _embedding._skewer(self.config.N, str(self.device))
+        return tables["post"], tables["skewer"]
 
     def key_switch_operands(
         self,
@@ -211,7 +207,6 @@ class CkksDeviceResources:
             tables = KeySwitchTables(
                 self.rns_context,
                 self.ntt_context,
-                (),
                 self.config.galois_generator,
             )
             self._key_switch = tables

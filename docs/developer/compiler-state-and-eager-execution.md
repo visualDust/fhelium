@@ -51,7 +51,7 @@ Factories follow PyTorch defaults unless a device is supplied. An Engine has no 
 
 `compile/frontend/_eager_capture.py` substitutes symbolic adapters for supported Engine calls. `compile/frontend/_eager_values.py` constructs typed SSA values from the same metadata transitions while preserving each input's independent state. Numerical kernels are not run for those symbolic CKKS calls. The result is a Compilation that can be inspected or transformed manually, or prepared through a compiled callable.
 
-This shared mathematical code keeps immediate execution and capture aligned. Graph scheduling remains a Compile responsibility: Eager executes the rescale, relinearization, and representation transitions requested by the caller. See [IR and capture](compiler-stack-internals.md) for capture scope and [Compilation and passes](compilation-and-passes.md) for graph transformations.
+This shared mathematical code keeps immediate execution and capture aligned. Graph scheduling remains a Compile responsibility: Eager executes the rescale, relinearization, and representation transitions requested by the caller. See [IR and capture](ir-capture-and-passes.md) for capture scope and [IR, capture, and passes](ir-capture-and-passes.md) for graph transformations.
 
 ## Extending a public operation
 

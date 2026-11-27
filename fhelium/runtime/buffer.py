@@ -6,7 +6,8 @@ identity, movement timing, caching, and prefetch policy.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections import deque
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Generic, TypeVar, cast
 
@@ -484,6 +485,33 @@ class ReusableValueBuffer(Generic[_ValueT]):
         self._inflight_copies.append(handle)
         return handle
 
+    def load(
+        self,
+        source: _ValueT,
+        *,
+        stream: torch.cuda.Stream | None = None,
+        non_blocking: bool = True,
+    ) -> CopyHandle:
+        """Copy ``source`` into the buffer after the work already issued on the current stream.
+
+        The current stream of the target device records an event, and the copy on ``stream`` waits for it, so readers of the previous payload that were issued on the current stream before this call finish before it is overwritten. Readers on other streams still need :meth:`copy_from` with ``wait_for``.
+
+        Args:
+            source: Matching tensor/value tree.
+            stream: CUDA stream that performs the copy; defaults to the current stream.
+            non_blocking: Forwarded to ``Tensor.copy_``.
+
+        Returns:
+            The :class:`CopyHandle` of the copy.
+        """
+        readers = None
+        if self._device.type == "cuda":
+            readers = torch.cuda.Event()
+            readers.record(torch.cuda.current_stream(self._device))
+        return self.copy_from(
+            source, stream=stream, non_blocking=non_blocking, wait_for=readers
+        )
+
     def wait_for(
         self,
         handle: CopyHandle,
@@ -542,6 +570,121 @@ class ReusableValueBuffer(Generic[_ValueT]):
         if self._closed or self._node is None:
             raise ExecutionError("ReusableValueBuffer is closed")
         return self._node
+
+
+class BufferedValue(Generic[_ValueT]):
+    """A value being copied into one buffer of a :class:`DoubleBuffer`."""
+
+    def __init__(
+        self, buffer: ReusableValueBuffer[_ValueT], handle: CopyHandle
+    ) -> None:
+        self._buffer = buffer
+        self._handle = handle
+
+    def done(self) -> bool:
+        """Return whether the copy has completed, without blocking."""
+        return self._handle.done()
+
+    def result(self) -> _ValueT:
+        """Make the current stream wait for the copy and return the value around the buffer storage.
+
+        The CPU does not block. The value stays valid until the buffer is filled again, ``count`` calls of :meth:`DoubleBuffer.put` later.
+        """
+        self._handle.wait_on()
+        return self._buffer.value
+
+
+class DoubleBuffer(Generic[_ValueT]):
+    """Fill ``count`` reusable value buffers in turn on a transfer stream while the current stream reads the others.
+
+    :meth:`put` copies a value into the next buffer with :meth:`ReusableValueBuffer.load`: the copy runs on the transfer stream after the work issued on the current stream so far, which includes every reader of that buffer's previous value when the value was consumed before the next ``count - 1`` calls of :meth:`put`. :meth:`feed` keeps ``count - 1`` values in flight ahead of the one being consumed. A compiled function called with the loaded values replays one CUDA Graph for all of them; each replay copies its arguments into the Graph's input storage on the device.
+
+    Examples:
+        Overlap host-to-device weight copies with evaluation::
+
+            buffers = DoubleBuffer(host_tiles[0], device="cuda:0")
+            for tile, weights in buffers.feed(host_tiles):
+                outputs.append(layer(x, weights))
+    """
+
+    def __init__(
+        self,
+        example: _ValueT,
+        *,
+        count: int = 2,
+        device: torch.device | str | None = None,
+        stream: torch.cuda.Stream | None = None,
+    ) -> None:
+        if count < 1:
+            raise ValueError("DoubleBuffer count must be at least 1")
+        self._buffers = [
+            ReusableValueBuffer.like(example, device=device)
+            for _ in range(count)
+        ]
+        target = self._buffers[0].device
+        self._stream = (
+            stream
+            if stream is not None or target.type != "cuda"
+            else torch.cuda.Stream(device=target)
+        )
+        self._next = 0
+
+    @property
+    def count(self) -> int:
+        """Number of buffers."""
+        return len(self._buffers)
+
+    @property
+    def buffers(self) -> tuple[ReusableValueBuffer[_ValueT], ...]:
+        """The buffers in fill order."""
+        return tuple(self._buffers)
+
+    @property
+    def stream(self) -> torch.cuda.Stream | None:
+        """Transfer stream, or ``None`` for CPU buffers."""
+        return self._stream
+
+    def put(self, value: _ValueT) -> BufferedValue[_ValueT]:
+        """Copy ``value`` into the next buffer and return its pending value."""
+        buffer = self._buffers[self._next]
+        self._next = (self._next + 1) % len(self._buffers)
+        return BufferedValue(buffer, buffer.load(value, stream=self._stream))
+
+    def feed(
+        self,
+        items: Iterable[Any],
+        value: Callable[[Any], _ValueT] | None = None,
+    ) -> Iterator[tuple[Any, _ValueT]]:
+        """Yield ``(item, loaded value)`` for each item while the following items are being copied.
+
+        ``value`` selects the tree to load from an item and defaults to the item itself. A queue such as :class:`queue.Queue` is read with ``get`` until it returns ``None``.
+        """
+        source = (
+            iter(cast(Any, items).get, None)
+            if not hasattr(items, "__iter__") and hasattr(items, "get")
+            else iter(items)
+        )
+        select = value if value is not None else (lambda item: item)
+        pending: deque[tuple[Any, BufferedValue[_ValueT]]] = deque()
+        for item in source:
+            pending.append((item, self.put(select(item))))
+            if len(pending) == len(self._buffers):
+                ready, loaded = pending.popleft()
+                yield ready, loaded.result()
+        while pending:
+            ready, loaded = pending.popleft()
+            yield ready, loaded.result()
+
+    def close(self) -> None:
+        """Wait for outstanding copies and release the buffers."""
+        for buffer in self._buffers:
+            buffer.close()
+
+    def __enter__(self) -> DoubleBuffer[_ValueT]:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
 
 
 def pin_value_tree(value: _ValueT) -> _ValueT:
@@ -723,7 +866,9 @@ def _reject_aliased_storages(tensors: Sequence[torch.Tensor]) -> None:
 
 
 __all__ = [
+    "BufferedValue",
     "CopyHandle",
+    "DoubleBuffer",
     "ReusableValueBuffer",
     "pin_value_tree",
     "value_tree_nbytes",

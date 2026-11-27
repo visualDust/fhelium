@@ -12,8 +12,8 @@ decltype(::fhelium::ntt::forward_ntt_montgomery_indexed_)
     forward_ntt_montgomery_indexed_;
 decltype(::fhelium::ntt::forward_ntt_to_montgomery_indexed_)
     forward_ntt_to_montgomery_indexed_;
-decltype(::fhelium::ntt::forward_ntt_to_montgomery_indexed)
-    forward_ntt_to_montgomery_indexed;
+decltype(::fhelium::ntt::forward_ntt_to_montgomery_indexed_out)
+    forward_ntt_to_montgomery_indexed_out;
 decltype(::fhelium::ntt::inverse_ntt_montgomery_indexed_)
     inverse_ntt_montgomery_indexed_;
 decltype(::fhelium::ntt::inverse_ntt_to_standard_lazy_indexed_)
@@ -29,14 +29,14 @@ decltype(::fhelium::ntt::forward_ntt_montgomery_indexed_)
     forward_ntt_montgomery_indexed_;
 decltype(::fhelium::ntt::forward_ntt_to_montgomery_indexed_)
     forward_ntt_to_montgomery_indexed_;
-decltype(::fhelium::ntt::forward_ntt_to_montgomery_indexed)
-    forward_ntt_to_montgomery_indexed;
+decltype(::fhelium::ntt::forward_ntt_to_montgomery_indexed_out)
+    forward_ntt_to_montgomery_indexed_out;
 decltype(::fhelium::ntt::forward_ntt_montgomery_compact_)
     forward_ntt_montgomery_compact_;
 decltype(::fhelium::ntt::forward_ntt_to_montgomery_compact_)
     forward_ntt_to_montgomery_compact_;
-decltype(::fhelium::ntt::forward_ntt_to_montgomery_compact)
-    forward_ntt_to_montgomery_compact;
+decltype(::fhelium::ntt::forward_ntt_to_montgomery_compact_out)
+    forward_ntt_to_montgomery_compact_out;
 decltype(::fhelium::ntt::forward_ntt_to_montgomery_compact_add_scaled_)
     forward_ntt_to_montgomery_compact_add_scaled_;
 decltype(::fhelium::ntt::forward_ntt_montgomery_compact_keyswitch_accumulate_)
@@ -45,8 +45,9 @@ decltype(::fhelium::ntt::forward_ntt_montgomery_power_of_two_radix_compact_)
     forward_ntt_montgomery_power_of_two_radix_compact_;
 decltype(::fhelium::ntt::forward_ntt_to_montgomery_power_of_two_radix_compact_)
     forward_ntt_to_montgomery_power_of_two_radix_compact_;
-decltype(::fhelium::ntt::forward_ntt_to_montgomery_power_of_two_radix_compact)
-    forward_ntt_to_montgomery_power_of_two_radix_compact;
+decltype(::fhelium::ntt::
+             forward_ntt_to_montgomery_power_of_two_radix_compact_out)
+    forward_ntt_to_montgomery_power_of_two_radix_compact_out;
 decltype(::fhelium::ntt::inverse_ntt_montgomery_indexed_)
     inverse_ntt_montgomery_indexed_;
 decltype(::fhelium::ntt::inverse_ntt_to_standard_lazy_indexed_)

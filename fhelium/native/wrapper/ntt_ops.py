@@ -282,6 +282,33 @@ def forward_ntt_to_montgomery_compact_add_scaled_(
     )
 
 
+def forward_ntt_to_montgomery_compact_out(
+    standard_residues: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::forward_ntt_to_montgomery_compact_out``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::forward_ntt_to_montgomery_compact_out(Tensor standard_residues, Tensor forward_twiddles, Tensor rns_params, Tensor(a!) out) -> ()
+
+    Args:
+        standard_residues: torch.Tensor.
+        forward_twiddles: torch.Tensor.
+        rns_params: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_compact_out(
+        standard_residues, forward_twiddles, rns_params, out
+    )
+
+
 def forward_ntt_to_montgomery_indexed(
     standard_residues: torch.Tensor,
     even_indices: torch.Tensor,
@@ -348,6 +375,42 @@ def forward_ntt_to_montgomery_indexed_(
     )
 
 
+def forward_ntt_to_montgomery_indexed_out(
+    standard_residues: torch.Tensor,
+    even_indices: torch.Tensor,
+    odd_indices: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::forward_ntt_to_montgomery_indexed_out``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::forward_ntt_to_montgomery_indexed_out(Tensor standard_residues, Tensor even_indices, Tensor odd_indices, Tensor forward_twiddles, Tensor rns_params, Tensor(a!) out) -> ()
+
+    Args:
+        standard_residues: torch.Tensor.
+        even_indices: torch.Tensor.
+        odd_indices: torch.Tensor.
+        forward_twiddles: torch.Tensor.
+        rns_params: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_indexed_out(
+        standard_residues,
+        even_indices,
+        odd_indices,
+        forward_twiddles,
+        rns_params,
+        out,
+    )
+
+
 def forward_ntt_to_montgomery_power_of_two_radix_compact(
     standard_residues: torch.Tensor,
     outer_twiddles: torch.Tensor,
@@ -399,6 +462,35 @@ def forward_ntt_to_montgomery_power_of_two_radix_compact_(
     _require_native()
     torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_power_of_two_radix_compact_(
         standard_residues, outer_twiddles, radix_root_powers, rns_params
+    )
+
+
+def forward_ntt_to_montgomery_power_of_two_radix_compact_out(
+    standard_residues: torch.Tensor,
+    outer_twiddles: torch.Tensor,
+    radix_root_powers: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::forward_ntt_to_montgomery_power_of_two_radix_compact_out``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::forward_ntt_to_montgomery_power_of_two_radix_compact_out(Tensor standard_residues, Tensor outer_twiddles, Tensor radix_root_powers, Tensor rns_params, Tensor(a!) out) -> ()
+
+    Args:
+        standard_residues: torch.Tensor.
+        outer_twiddles: torch.Tensor.
+        radix_root_powers: torch.Tensor.
+        rns_params: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_ntt_ops.forward_ntt_to_montgomery_power_of_two_radix_compact_out(
+        standard_residues, outer_twiddles, radix_root_powers, rns_params, out
     )
 
 
@@ -823,6 +915,30 @@ def power_of_two_radix_twiddles(
     )
 
 
+def prepare_tables(
+    parameters: torch.Tensor, moduli: list[int], log_n: int, ntt_backend: str
+) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    """
+    Typed wrapper for ``fhelium_ntt_ops::prepare_tables``.
+
+    Torch schema::
+
+        fhelium_ntt_ops::prepare_tables(Tensor parameters, int[] moduli, int log_n, str ntt_backend) -> (Tensor[], Tensor[])
+
+    Args:
+        parameters: torch.Tensor.
+        moduli: list[int].
+        log_n: int.
+        ntt_backend: str.
+
+    Returns: tuple[list[torch.Tensor], list[torch.Tensor]].
+    """
+    _require_native()
+    return torch.ops.fhelium_ntt_ops.prepare_tables(
+        parameters, moduli, log_n, ntt_backend
+    )
+
+
 def subring_indexed_radix2_plan(
     moduli: list[int], log_n: int, log_extent: int, dtype: torch.dtype
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -849,10 +965,8 @@ def subring_indexed_radix2_plan(
 
 def transform(
     residues: torch.Tensor,
-    table_names: list[str],
-    tables: list[torch.Tensor],
+    tables: list[torch.Tensor | None],
     ntt_backend: str,
-    basis: str,
     transition: str,
 ) -> torch.Tensor:
     """
@@ -860,30 +974,26 @@ def transform(
 
     Torch schema::
 
-        fhelium_ntt_ops::transform(Tensor residues, str[] table_names, Tensor[] tables, str ntt_backend, str basis, str transition) -> Tensor
+        fhelium_ntt_ops::transform(Tensor residues, Tensor?[] tables, str ntt_backend, str transition) -> Tensor
 
     Args:
         residues: torch.Tensor.
-        table_names: list[str].
-        tables: list[torch.Tensor].
+        tables: list[torch.Tensor | None].
         ntt_backend: str.
-        basis: str.
         transition: str.
 
     Returns: torch.Tensor.
     """
     _require_native()
     return torch.ops.fhelium_ntt_ops.transform(
-        residues, table_names, tables, ntt_backend, basis, transition
+        residues, tables, ntt_backend, transition
     )
 
 
 def transform_(
     residues: torch.Tensor,
-    table_names: list[str],
-    tables: list[torch.Tensor],
+    tables: list[torch.Tensor | None],
     ntt_backend: str,
-    basis: str,
     transition: str,
 ) -> None:
     """
@@ -891,21 +1001,19 @@ def transform_(
 
     Torch schema::
 
-        fhelium_ntt_ops::transform_(Tensor(a!) residues, str[] table_names, Tensor[] tables, str ntt_backend, str basis, str transition) -> ()
+        fhelium_ntt_ops::transform_(Tensor(a!) residues, Tensor?[] tables, str ntt_backend, str transition) -> ()
 
     Args:
         residues: torch.Tensor (modified in-place).
-        table_names: list[str].
-        tables: list[torch.Tensor].
+        tables: list[torch.Tensor | None].
         ntt_backend: str.
-        basis: str.
         transition: str.
 
     Returns: None.
     """
     _require_native()
     torch.ops.fhelium_ntt_ops.transform_(
-        residues, table_names, tables, ntt_backend, basis, transition
+        residues, tables, ntt_backend, transition
     )
 
 

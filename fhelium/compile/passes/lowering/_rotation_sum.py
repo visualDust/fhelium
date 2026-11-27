@@ -140,12 +140,7 @@ def lower_rotation_sum(operation, config, compilation):
     for source, step in zip(operation.values, steps, strict=True):
         if step:
             key = next(keys)
-            rotation_names = (
-                (*names, 'rotation_indices') if input_ntt else names
-            )
             rotation_parameters = tuple(tensors[k] for k in names)
-            if input_ntt:
-                rotation_parameters += (tensors[f'sum_galois_{step}'],)
             rotate = ckks.RotateOp(
                 source,
                 key,
@@ -155,9 +150,7 @@ def lower_rotation_sum(operation, config, compilation):
                 key_seeds=(next(seeds),) if operation.key_seeds else (),
                 attributes={
                     **key_fields,
-                    'parameter_names': ArrayAttr(
-                        StringAttr(k) for k in rotation_names
-                    ),
+                    'parameter_names': ArrayAttr(StringAttr(k) for k in names),
                 },
             )
             ops, c0, extended, desc = _lower_rotation_products(

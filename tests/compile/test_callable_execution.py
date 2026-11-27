@@ -501,7 +501,9 @@ def test_rotation_hoisting_shares_interleaved_inputs_and_keeps_live_keys(
             )
         x = engine.negate(x)
         for step, key in zip((1, 2, 3), keys, strict=True):
-            replacement = engine.create_rotation_key(step, secret, device=device)
+            replacement = engine.create_rotation_key(
+                step, secret, device=device
+            )
             key.data.copy_(replacement.data)
             key.seed.copy_(replacement.seed)
     operations = tuple(compiled.specializations[0].compilation.program.walk())
@@ -553,9 +555,7 @@ def test_callable_batch_reduction_uses_one_reduction(device):
     assert names["fhelium_rns.add_standard"] == 0
 
 
-@pytest.mark.parametrize(
-    "policy", ["radix2_compact", "radix4_compact"]
-)
+@pytest.mark.parametrize("policy", ["radix2_compact", "radix4_compact"])
 def test_callable_ntt_chain_preserves_fanout_and_live_inputs(policy):
     if not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
@@ -688,6 +688,63 @@ def test_callable_ntt_join_preserves_branch_outputs(policy):
             reference.prime_ids,
             reference.polynomial_domain,
         )
+
+
+@pytest.mark.parametrize("inverse", [False, True])
+@pytest.mark.parametrize("terms", [2, 4, 7])
+def test_callable_sums_separately_transformed_plaintext_products(
+    terms, inverse
+):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    from fhelium import Ciphertext
+
+    engine = Engine(Preset.slots8192_scale40_depth7)
+    generator = torch.Generator(device="cuda:0").manual_seed(terms)
+    x, y = (
+        Ciphertext(
+            torch.stack(
+                [
+                    torch.randint(
+                        0,
+                        modulus,
+                        (2, engine.config.N),
+                        device="cuda:0",
+                        dtype=engine.dtype,
+                        generator=generator,
+                    )
+                    for modulus in engine.config.q_moduli
+                ],
+                dim=-2,
+            ),
+            depth=0,
+            scale=engine.config.scale_at(0),
+            prime_ids=tuple(range(engine.config.num_q_primes)),
+        )
+        for _ in range(2)
+    )
+    weights = [
+        engine.prepare_plaintext_for_multiplication(
+            engine.encode(0.1 * (j + 1), device="cuda:0")
+        )
+        for j in range(terms)
+    ]
+
+    def source(x, y):
+        # Each term is a distinct value with its own forward transform.
+        values = [x]
+        for _ in range(terms - 1):
+            values.append(engine.add(values[-1], y))
+        total = engine.sum_plaintext_products(
+            [engine.coefficient_domain_to_ntt_domain(v) for v in values],
+            weights,
+        )
+        return (
+            engine.ntt_domain_to_coefficient_domain(total) if inverse else total
+        )
+
+    actual, expected = fc.compile(source, cache=False)(x, y), source(x, y)
+    torch.testing.assert_close(actual.data, expected.data, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda:0"])

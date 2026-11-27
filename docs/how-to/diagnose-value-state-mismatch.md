@@ -67,7 +67,8 @@ Typical diagnoses:
 | Symptom | Likely mismatch |
 | --- | --- |
 | Fresh ciphertext rejected by `multiply` | Still coefficient domain or not rescaled/prepared |
-| Same-depth addition has incompatible semantics | Caller did not match prime IDs, scale, polynomial domain, or modulus basis before dispatch |
+| `ScaleMismatchError` from `add`, `subtract`, `add_plaintext`, `sum_ciphertexts`, or `sum_plaintext_products` | Operands reached the operation with different actual scales |
+| `StateError: add operands disagree on <field>` | Operands differ in depth, prime IDs, modulus basis, polynomial domain, or component count |
 | Q value rejected by key-switch path | Key/value basis or active rows incompatible |
 | Three-component value rejected | Operation requires two components or relinearization |
 | `MaximumDepthError` | No remaining public depth transition is available |
@@ -148,11 +149,11 @@ Do not treat an asynchronous error reported at a later call as proof that the la
 
 ## Verify the outcome
 
-The reduced operation should produce the expected decoded message with the intended state transition. Use [Compile preparation diagnosis](diagnose-compile-preparation.md) when the issue is a missing fact or binding before execution rather than a materialized operand mismatch.
+The reduced operation should produce the expected decoded message with the intended state transition. Use [Compile preparation diagnosis](diagnose-compile-failures.md) when the issue is a missing fact or binding before execution rather than a materialized operand mismatch.
 
 ## Related documentation
 
-- [Scale and depth lifecycle](../concepts/ckks/scale-and-depth-lifecycle.md)
+- [Value-state transitions](../concepts/ckks/value-state-transitions.md)
 - [Value model and identity](../concepts/ckks/value-model-and-identity.md)
 - [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)
 - [Basic CKKS tutorial](../tutorial/basic-ckks-workflow.md)

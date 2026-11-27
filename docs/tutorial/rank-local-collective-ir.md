@@ -1,13 +1,13 @@
 # Transform rank-local collective IR
 
-**Example source:** [`examples/25_distributed_collective_ir.py`](https://github.com/VisualDust/fhelium/blob/main/examples/25_distributed_collective_ir.py)
+**Example source:** [`examples/23_distributed_collective_ir.py`](https://github.com/VisualDust/fhelium/blob/main/examples/23_distributed_collective_ir.py)
 
-Example 25 constructs a rank-local Program containing collective operations and applies a caller-selected Compile pass to expose a generic reduction region. It compares two valid representations of ciphertext-add all-reduce without launching distributed execution.
+Example 23 constructs a rank-local Program containing collective operations and applies a caller-selected Compile pass to expose a generic reduction region. It compares two valid representations of ciphertext-add all-reduce without launching distributed execution. The default pipeline of `fhelium.compile` applies the same pass. When such a Program is compiled and linked, each collective becomes a process-group collective of the rank's exec schedule, which CUDA Graph segments and exported artifacts include; [Choose a multi-GPU partition](../how-to/choose-multi-gpu-partition.md) describes compiled rank-local evaluators.
 
 ## Run the example
 
 ```bash
-python examples/25_distributed_collective_ir.py
+python examples/23_distributed_collective_ir.py
 ```
 
 The script requires neither a process group nor multiple devices because it only builds and transforms IR.
@@ -79,7 +79,7 @@ Neither choice becomes a permanent framework-wide lowering policy.
 
 ::: details Source
 
-<<< @/../examples/25_distributed_collective_ir.py
+<<< @/../examples/23_distributed_collective_ir.py
 
 :::
 

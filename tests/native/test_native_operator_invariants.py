@@ -11,6 +11,7 @@ import fhelium.native  # noqa: F401 - loads native torch operator libraries
 from fhelium import Preset
 from fhelium.backend.rns.tables import moddown_inverse_tables
 from fhelium.eager import Engine
+from fhelium.native.tables import table_slots
 from fhelium.native.wrapper import ckks_ops, rns_ops
 
 
@@ -567,7 +568,7 @@ def test_mixed_radix_output_buffers_and_table_extents(
             device=device,
         )[..., ::2]
         storage = digits.untyped_storage().data_ptr()
-        rns_ops.mixed_radix_decompose_out_(*arguments, digits)
+        rns_ops.mixed_radix_decompose_out(*arguments, digits)
         expected = (
             torch.tensor(
                 [
@@ -603,7 +604,7 @@ def test_mixed_radix_output_buffers_and_table_extents(
             len(target_ids),
         )
         storage = extended.untyped_storage().data_ptr()
-        rns_ops.mixed_radix_basis_extend_to_montgomery_out_(
+        rns_ops.mixed_radix_basis_extend_to_montgomery_out(
             *extension_arguments,
             extended,
         )
@@ -631,8 +632,7 @@ def test_mixed_radix_output_buffers_and_table_extents(
         torch.testing.assert_close(
             rns_ops.hybrid_modup_digit(
                 source,
-                list(bindings),
-                list(bindings.values()),
+                table_slots("key_switch", bindings),
                 0,
                 [0, width, 0],
             ),
@@ -642,14 +642,14 @@ def test_mixed_radix_output_buffers_and_table_extents(
         )
         if source.is_cuda and not torch.version.hip:
             decomposition = list(arguments[1:]) if width > 1 else []
-            rns_ops.mixed_radix_modup_tiled_out_(
+            rns_ops.mixed_radix_modup_tiled_out(
                 source, decomposition, tables["extension"], parameters, extended
             )
             torch.testing.assert_close(extended, reference, rtol=0, atol=0)
             assert extended.untyped_storage().data_ptr() == storage
             if width == 4:
                 with pytest.raises(RuntimeError, match="disjoint"):
-                    rns_ops.mixed_radix_modup_tiled_out_(
+                    rns_ops.mixed_radix_modup_tiled_out(
                         source,
                         decomposition,
                         tables["extension"],
@@ -680,20 +680,20 @@ def test_mixed_radix_output_buffers_and_table_extents(
                 with pytest.raises(RuntimeError):
                     rns_ops.mixed_radix_decompose(*invalid)
                 with pytest.raises(RuntimeError):
-                    rns_ops.mixed_radix_decompose_out_(*invalid, digits)
+                    rns_ops.mixed_radix_decompose_out(*invalid, out=digits)
             with pytest.raises(RuntimeError):
-                rns_ops.mixed_radix_decompose_out_(*arguments, source)
+                rns_ops.mixed_radix_decompose_out(*arguments, source)
             overlapping = torch.empty(
                 (1, width, 32),
                 dtype=dtype,
                 device=device,
             ).expand(2, width, 32)
             with pytest.raises(RuntimeError):
-                rns_ops.mixed_radix_decompose_out_(*arguments, overlapping)
+                rns_ops.mixed_radix_decompose_out(*arguments, overlapping)
             for operation, extra in (
                 (rns_ops.mixed_radix_basis_extend_to_montgomery, ()),
                 (
-                    rns_ops.mixed_radix_basis_extend_to_montgomery_out_,
+                    rns_ops.mixed_radix_basis_extend_to_montgomery_out,
                     (extended,),
                 ),
             ):

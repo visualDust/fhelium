@@ -3,11 +3,6 @@
 from __future__ import annotations
 
 from fhelium.config import CkksConfig
-from fhelium.backend.rns.tables import (
-    centered_basis_extension_tables,
-    trailing_quotient_inverses,
-    moddown_inverse_tables,
-)
 from dataclasses import dataclass, field
 from collections.abc import Mapping
 from math import prod
@@ -15,11 +10,9 @@ from typing import TYPE_CHECKING, cast
 import torch
 from fhelium.backend.rns.context import RnsContext
 from fhelium.backend.rns.decomposition import key_decomposition_facts
-from fhelium.backend.rns.crt import (
-    centered_quotient_tables,
-    crt_basis_extension_tables,
-)
-from fhelium.native.wrapper import rns_ops
+from fhelium.backend.rns.layout import RnsLayout
+from fhelium.backend.rns.tables import shared_parameter_views
+from fhelium.native.wrapper import ckks_ops
 from ._key_switch_preparation import key_switch_runtime_attributes
 
 if TYPE_CHECKING:
@@ -76,8 +69,6 @@ def prepare_encapsulated_raise_operands(
     preparation context is retained by the returned numerical operands.
     """
 
-    from fhelium.backend.ntt.context import NttContext
-
     low_config, return_config = encapsulation_configs(
         rns_context.config,
         source_depth,
@@ -85,74 +76,53 @@ def prepare_encapsulated_raise_operands(
         return_prime,
         return_p_moduli,
     )
+    config = rns_context.config
     policy = ntt_context.ntt_backend_name
-    low_rns = RnsContext(
-        low_config, device=rns_context.device, dtype=rns_context.dtype
+    target_ids = rns_context.rns_layout.prime_ids(target_depth)
+    names, values = ckks_ops.encapsulation_table_set(
+        rns_context.rns_parameter_tensor,
+        list(config.moduli),
+        config.logN,
+        policy,
+        config.scales[0],
+        list(config.active_q_moduli(source_depth)),
+        list(low_p_moduli),
+        return_prime,
+        list(return_p_moduli),
+        list(config.q_moduli),
+        list(target_ids),
+        rounding,
     )
-    high_rns = RnsContext(
-        return_config, device=rns_context.device, dtype=rns_context.dtype
+    tensors = shared_parameter_views(
+        rns_context, dict(zip(names, values, strict=True))
     )
-    low_ntt = NttContext(low_rns, ntt_backend=policy)
-    high_ntt = NttContext(high_rns, ntt_backend=policy)
-    low_tensors, low_facts = KeySwitchTables(
-        low_rns,
-        low_ntt,
-        moddown_inverse_tables(low_rns),
-        low_config.galois_generator,
-    ).tensor_operands(0, moddown_rounding=rounding, basis_conversion="exact")
-    tensors = {"low_" + name: value for name, value in low_tensors.items()}
+    tensors["return_parameters"] = tensors["return_forward_0"]
+    low_facts = key_decomposition_facts(
+        low_config,
+        0,
+        tuple(range(low_config.total_num_primes)),
+        tuple(
+            spec.prime_ids
+            for spec in RnsLayout.from_config(low_config).digit_specs(0)
+        ),
+    )
+    low_facts.update(
+        moddown_rounding=rounding,
+        basis_conversion="exact",
+        galois_generator=low_config.galois_generator,
+        ntt_backend=policy,
+    )
     facts = {
         "low_" + name: value
         for name, value in key_switch_runtime_attributes(low_facts).items()
     }
-    low_ids = low_rns.rns_layout.prime_ids(0)
-    high_ids = high_rns.rns_layout.prime_ids(0, include_p=True)
-    extension = centered_basis_extension_tables(
-        low_rns, high_rns, low_ids, high_ids
-    )
-    tensors.update(
-        {"raise_" + name: value for name, value in extension.items()}
-    )
-    tensors["return_parameters"] = high_rns.rns_parameter_tensor
-    for inverse, direction in ((False, "forward"), (True, "inverse")):
-        for index, value in enumerate(
-            high_ntt.tensor_operands(high_ids, inverse=inverse)
-        ):
-            tensors[f"return_{direction}_{index}"] = value
-    q_count = rns_context.config.num_q_primes
-    order = (
-        *range(1, q_count + 1),
-        0,
-        *range(q_count + 1, return_config.total_num_primes),
-    )
-    tensors["quotient_order"] = torch.tensor(
-        order, dtype=torch.int64, device=rns_context.device
-    )
-    tensors["quotient_parameters"] = tensors["return_parameters"].index_select(
-        1, tensors["quotient_order"]
-    )
-    moduli = (*rns_context.config.q_moduli, return_prime, *return_p_moduli)
-    drop_count = len(return_p_moduli) + 1
-    tensors["quotient_inverses"] = trailing_quotient_inverses(
-        moduli,
-        drop_count,
-        dtype=rns_context.dtype,
-        device=rns_context.device,
-    )
-    if rounding == "nearest":
-        tensors["quotient_half"] = rns_ops.half_product_residues(
-            [return_prime, *return_p_moduli], list(moduli), rns_context.dtype
-        ).to(rns_context.device)
-    target_ids = rns_context.rns_layout.prime_ids(target_depth)
-    tensors["target_parameters"] = rns_context.rns_parameters_for_prime_ids(
-        target_ids
-    )
+    q_count = config.num_q_primes
     facts.update(
         ntt_backend=policy,
         q_count=q_count,
         target_row_start=target_ids[0],
         target_row_count=len(target_ids),
-        return_drop_count=drop_count,
+        return_drop_count=len(return_p_moduli) + 1,
         moddown_rounding=rounding,
     )
     return tensors, facts
@@ -164,11 +134,7 @@ class KeySwitchTables:
 
     rns_context: RnsContext
     ntt_context: NttContext | None
-    moddown_p_drop_inverses_montgomery_by_depth: tuple[torch.Tensor, ...] = ()
     galois_generator: int = 3
-    _p_inverse_montgomery: torch.Tensor | None = field(
-        default=None, init=False, repr=False, compare=False
-    )
     _tensor_views: dict[
         tuple[object, ...], tuple[dict[str, torch.Tensor], dict[str, object]]
     ] = field(default_factory=dict, init=False, repr=False, compare=False)
@@ -187,38 +153,40 @@ class KeySwitchTables:
             )
 
     @property
-    def p_inverse_montgomery(self) -> torch.Tensor:
-        """Prepare the P-only inverse vector when that quotient is selected."""
-        if self._p_inverse_montgomery is None:
-            config = self.rns_context.config
-            object.__setattr__(
-                self,
-                "_p_inverse_montgomery",
-                rns_ops.product_residues(
-                    list(config.p_moduli),
-                    list(config.q_moduli),
-                    -1,
-                    True,
-                    self.rns_context.dtype,
-                ).to(self.rns_context.device),
-            )
-        return cast(torch.Tensor, self._p_inverse_montgomery)
-
-    @property
     def device(self) -> torch.device:
         return self.rns_context.device
 
-    @property
-    def moddown_tables(self) -> tuple[torch.Tensor, ...]:
-        """Return the depth-indexed P-drop inverse tables read by ModDown."""
-
-        if not self.moddown_p_drop_inverses_montgomery_by_depth:
-            object.__setattr__(
-                self,
-                "moddown_p_drop_inverses_montgomery_by_depth",
-                moddown_inverse_tables(self.rns_context),
-            )
-        return self.moddown_p_drop_inverses_montgomery_by_depth
+    def _native_tables(
+        self,
+        q_ids: tuple[int, ...],
+        p_ids: tuple[int, ...],
+        digits: tuple[tuple[int, int, int], ...],
+        *,
+        basis_conversion: str,
+        moddown_rounding: str,
+        rescale: bool = False,
+        drop_ids: tuple[int, ...] = (),
+        target_ids: tuple[int, ...] = (),
+        rescale_rounding: str = "nearest",
+    ) -> dict[str, torch.Tensor]:
+        rns = self.rns_context
+        names, values = ckks_ops.key_switch_table_set(
+            rns.rns_parameter_tensor,
+            list(rns.config.moduli),
+            rns.config.logN,
+            list(q_ids),
+            list(p_ids),
+            [value for digit in digits for value in digit],
+            basis_conversion,
+            moddown_rounding,
+            rescale,
+            list(drop_ids),
+            list(target_ids),
+            rescale_rounding,
+        )
+        return shared_parameter_views(
+            rns, dict(zip(names, values, strict=True))
+        )
 
     def moddown_tensor_operands(
         self,
@@ -238,48 +206,13 @@ class KeySwitchTables:
         token = ("moddown", q_ids, p_ids, rounding, normalized)
         if token in self._tensor_views:
             return self._tensor_views[token][0]
-        rns = self.rns_context
-        qp_ids = (*q_ids, *p_ids)
-        moduli = tuple(rns.config.moduli[i] for i in qp_ids)
-        p_moduli = [rns.config.moduli[i] for i in p_ids]
-        default_p = (
-            depth is not None
-            and p_ids == rns.rns_chain.p_prime_ids
-            and q_ids == rns.rns_layout.prime_ids(depth)
+        tensors = self._native_tables(
+            q_ids,
+            p_ids,
+            (),
+            basis_conversion=basis_conversion,
+            moddown_rounding=rounding,
         )
-        tensors = {
-            "q_parameters": rns.rns_parameters_for_prime_ids(q_ids),
-            "qp_parameters": rns.rns_parameters_for_prime_ids(qp_ids),
-            "moddown_inverses": (
-                self.moddown_tables[cast(int, depth)]
-                if default_p
-                else trailing_quotient_inverses(
-                    moduli,
-                    len(p_ids),
-                    dtype=rns.dtype,
-                    device=rns.device,
-                )
-            ),
-            "p_inverse": (
-                self.p_inverse_montgomery[list(q_ids)]
-                if default_p
-                else rns_ops.product_residues(
-                    p_moduli,
-                    [rns.config.moduli[i] for i in q_ids],
-                    -1,
-                    True,
-                    rns.dtype,
-                ).to(rns.device)
-            ),
-        }
-        if rounding == "nearest":
-            tensors["moddown_half"] = rns_ops.half_product_residues(
-                p_moduli, list(moduli), rns.dtype
-            ).to(rns.device)
-        if normalized:
-            tensors.update(
-                centered_quotient_tables(rns, p_ids, q_ids, "moddown_crt_")
-            )
         self._tensor_views[token] = (tensors, {})
         return tensors
 
@@ -334,45 +267,31 @@ class KeySwitchTables:
         q_ids = cast(tuple[int, ...], facts["q_prime_ids"])
         p_ids = cast(tuple[int, ...], facts["p_prime_ids"])
         qp_ids = cast(tuple[int, ...], facts["qp_prime_ids"])
+        digits = cast(tuple[tuple[int, int, int], ...], facts["digits"])
+        drop_ids: tuple[int, ...] = ()
+        target_ids: tuple[int, ...] = ()
         if rescale:
-            from fhelium.backend.rns.tables import moddown_rescale_tables
-
             from fhelium.backend.rns._preparation import joint_rescale_facts
 
             joint = joint_rescale_facts(rns.config, depth, q_ids)
             drop_ids = cast(tuple[int, ...], joint["joint_drop_prime_ids"])
             target_ids = cast(tuple[int, ...], joint["joint_target_prime_ids"])
-            tensors = {
-                "q_parameters": rns.rns_parameters_for_prime_ids(q_ids),
-                "qp_parameters": rns.rns_parameters_for_prime_ids(qp_ids),
-            }
-            tensors.update(
-                moddown_rescale_tables(
-                    rns,
-                    q_ids,
-                    p_ids,
-                    drop_ids,
-                    target_prime_ids=target_ids,
-                    moddown_rounding=moddown_rounding,
-                    rescale_rounding=rescale_rounding,
-                    basis_conversion=basis_conversion,
-                )
-            )
             facts.update(
                 joint,
                 rescale_rounding=rescale_rounding,
                 output_domain=output_domain,
             )
-        else:
-            tensors = dict(
-                self.moddown_tensor_operands(
-                    q_ids,
-                    p_ids,
-                    rounding=moddown_rounding,
-                    depth=depth,
-                    basis_conversion=basis_conversion,
-                )
-            )
+        tensors = self._native_tables(
+            q_ids,
+            p_ids,
+            digits,
+            basis_conversion=basis_conversion,
+            moddown_rounding=moddown_rounding,
+            rescale=rescale,
+            drop_ids=drop_ids,
+            target_ids=target_ids,
+            rescale_rounding=rescale_rounding,
+        )
         if self.ntt_context is not None:
             transforms = [
                 (basis, ids, inverse)
@@ -396,54 +315,6 @@ class KeySwitchTables:
                     self.ntt_context.tensor_operands(ids, inverse=inverse)
                 ):
                     tensors[f"{basis}_{direction}_{index}"] = tensor
-        digits = cast(tuple[tuple[int, int, int], ...], facts["digits"])
-        for index, (start, stop, _) in enumerate(digits):
-            rows = q_ids[start:stop]
-            if basis_conversion != "exact":
-                crt = crt_basis_extension_tables(
-                    rns,
-                    rows,
-                    qp_ids,
-                    method="raw" if basis_conversion == "crt" else "normalized",
-                )
-                tensors.update(
-                    (f"digit{index}_crt_{name}", value)
-                    for name, value in crt.items()
-                )
-                continue
-            parameters = rns.row_parameters(rows)
-            tensors[f"digit{index}_parameters"] = parameters.native_parameters
-            if stop - start > 1:
-                assert parameters.mixed_radix_normalizers is not None
-                assert (
-                    parameters.mixed_radix_propagation_coefficients is not None
-                )
-                tensors[f"digit{index}_normalizers"] = (
-                    parameters.mixed_radix_normalizers.contiguous()
-                )
-                tensors[f"digit{index}_propagation"] = (
-                    parameters.mixed_radix_propagation_coefficients.contiguous()
-                )
-                for part, tensor in enumerate(
-                    parameters.montgomery_reduction_parameters
-                ):
-                    tensors[f"digit{index}_reduction{part}"] = (
-                        tensor.contiguous()
-                    )
-            coefficients = parameters.basis_extension_coefficients
-            if coefficients is None:
-                coefficients = torch.empty(
-                    0, 0, dtype=rns.dtype, device=rns.device
-                )
-            if not coefficients.numel():
-                extension = coefficients
-            elif qp_ids == tuple(range(qp_ids[0], qp_ids[-1] + 1)):
-                extension = coefficients[:, qp_ids[0] : qp_ids[-1] + 1]
-            else:
-                extension = coefficients.index_select(
-                    1, torch.tensor(qp_ids, dtype=torch.long, device=rns.device)
-                )
-            tensors[f"digit{index}_extension"] = extension
         facts.update(
             basis_conversion=basis_conversion,
             galois_generator=self.galois_generator,
@@ -547,56 +418,34 @@ def prepare_rotation_sum_tables(
             "Rotation-sum quotient rounding must be floor or nearest"
         )
     p_moduli = [config.moduli[i] for i in p_ids]
-    m_moduli = [config.moduli[i] for i in dropped]
-    m_product = prod(m_moduli)
-    divisor = prod(p_moduli) * m_product
-    p_montgomery = rns_ops.product_residues(
-        p_moduli, [config.moduli[i] for i in q_ids], 1, True, rns.dtype
-    ).to(rns.device)
-    quotient_ids = (*next_ids, *dropped, *p_ids)
-    moduli = tuple(config.moduli[i] for i in quotient_ids)
-    aux_count = len(p_ids) + drop
-    rows = trailing_quotient_inverses(
-        moduli,
-        aux_count,
-        dtype=rns.dtype,
-        device=rns.device,
+    m_product = prod(config.moduli[i] for i in dropped)
+    names, values = ckks_ops.rotation_sum_table_set(
+        rns.rns_parameter_tensor,
+        list(config.moduli),
+        config.logN,
+        list(q_ids),
+        list(p_ids),
+        list(next_ids) if rescale else [],
+        rounding,
     )
-    half = (
-        rns_ops.half_product_residues(
-            p_moduli + m_moduli, list(moduli), rns.dtype
-        ).to(rns.device)
-        if rounding == "nearest"
-        else None
-    )
-    order = None
-    if drop:
-        q_count = len(q_ids)
-        order = torch.tensor(
-            [
-                *(q_ids.index(i) for i in (*next_ids, *dropped)),
-                *range(q_count, q_count + len(p_ids)),
-            ],
-            dtype=torch.int64,
-            device=rns.device,
-        )
+    sums = dict(zip(names, values, strict=True))
     return RotationSumTables(
         tensors=dict(tensors),
         attributes={
             **key_switch_runtime_attributes(facts),
             "moddown_rounding": rounding,
         },
-        p_montgomery=p_montgomery,
-        quotient_row_order=order,
+        p_montgomery=sums["sum_p_montgomery"],
+        quotient_row_order=sums.get("sum_quotient_order"),
         quotient_parameters=(
             tensors["qp_parameters"]
-            if order is None
-            else tensors["qp_parameters"].index_select(1, order)
+            if "sum_quotient_order" not in sums
+            else sums["sum_quotient_parameters"]
         ),
-        quotient_inverses=rows,
-        quotient_half=half,
+        quotient_inverses=sums["sum_quotient_inverses"],
+        quotient_half=sums.get("sum_quotient_half"),
         remaining_q_count=len(next_ids),
         dropped_q_count=drop,
-        divisor=divisor,
+        divisor=prod(p_moduli) * m_product,
         rescale_divisor=m_product,
     )

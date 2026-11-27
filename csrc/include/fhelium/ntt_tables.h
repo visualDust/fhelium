@@ -18,6 +18,8 @@
 #include <tuple>
 
 #include <fhelium/export.h>
+#include <string_view>
+#include <vector>
 
 namespace fhelium::ntt {
 
@@ -92,5 +94,17 @@ subring_indexed_radix2_plan(at::IntArrayRef moduli,
 /// automorphism $X \mapsto X^g$ to bit-reversed NTT evaluations: position
 /// $j$ of the result reads stored position `indices[j]`.
 FHELIUM_API at::Tensor galois_indices(int64_t log_n, int64_t galois_element);
+
+/// Forward and inverse NTT schedule operands of the rows of `parameters`.
+///
+/// `parameters` is the RNS parameter table of the rows, `moduli` their
+/// primes, and `log_n` is $\log_2 N$. The result lists the defined schedule
+/// Tensors of `ntt_backend` in slot order (`NttTables::schedule`) for the
+/// forward and the inverse transform, on the device of `parameters`.
+FHELIUM_API std::tuple<std::vector<at::Tensor>, std::vector<at::Tensor>>
+prepare_tables(const at::Tensor& parameters,
+               c10::IntArrayRef moduli,
+               int64_t log_n,
+               std::string_view ntt_backend);
 
 }  // namespace fhelium::ntt

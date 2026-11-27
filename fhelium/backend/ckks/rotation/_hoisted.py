@@ -6,7 +6,12 @@ from collections.abc import Iterator, Mapping, Sequence
 
 import torch
 
-from fhelium.backend._native_operands import key_switch_options, mapping_tables
+from fhelium.backend._native_operands import (
+    key_switch_options,
+    mapping_tables,
+    rotation_galois,
+)
+from fhelium.native.tables import table_slots
 from fhelium.backend.implementation import InvocationAttributes
 from fhelium.native.wrapper import ckks_ops, ntt_ops
 
@@ -29,18 +34,19 @@ def iter_rotations(
     iterator completes or is closed. Seeded keys have entries in ``seeds``
     and the round count ``attributes["key_rounds"]``.
     """
-    names, tables = mapping_tables(tensors)
+    tables = mapping_tables("key_switch", tensors)
+    q_forward = table_slots("ntt", tensors, prefix="q_forward_")
     options = key_switch_options(attributes)
     options["output_domain"] = "ntt" if output_ntt else "coefficient"
     backend = options["ntt_backend"]
     digits = (
-        ckks_ops.rotation_digits(source[1], names, tables, **options)
+        ckks_ops.rotation_digits(source[1], tables, **options)
         if any(key is not None for key in keys)
         else None
     )
     c0 = (
         ntt_ops.transform(
-            source[0], names, tables, backend, "q", "forward_to_montgomery"
+            source[0], q_forward, backend, "forward_to_montgomery"
         )
         if output_ntt
         else source[0]
@@ -50,7 +56,7 @@ def iter_rotations(
         if key is None:
             yield (
                 ntt_ops.transform(
-                    source, names, tables, backend, "q", "forward_to_montgomery"
+                    source, q_forward, backend, "forward_to_montgomery"
                 )
                 if output_ntt
                 else source.clone()
@@ -61,8 +67,7 @@ def iter_rotations(
                 c0,
                 digits,
                 key,
-                int(step),
-                names,
+                rotation_galois(attributes, (int(step),), source),
                 tables,
                 **{**options, "key_seeds": [] if seed is None else [seed]},
             )

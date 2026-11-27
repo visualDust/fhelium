@@ -702,6 +702,7 @@ class ResidencyManager:
                     for item_location, item in record.materializations.items()
                     if item_location == location
                 ]
+                compiled = _compiled_execution_bytes(location)
                 location_snapshots.append(
                     ResidencyLocationSnapshot(
                         location=location,
@@ -711,10 +712,15 @@ class ResidencyManager:
                         remaining_budget_bytes=(
                             None
                             if state.budget_bytes is None
-                            else state.budget_bytes
-                            - state.used_bytes
-                            - state.reserved_bytes
+                            else max(
+                                0,
+                                state.budget_bytes
+                                - state.used_bytes
+                                - state.reserved_bytes
+                                - compiled,
+                            )
                         ),
+                        compiled_execution_bytes=compiled,
                         peak_used_bytes=state.peak_used_bytes,
                         peak_charged_bytes=state.peak_charged_bytes,
                         value_count=len(items),
@@ -1628,8 +1634,12 @@ class ResidencyManager:
         state = self._locations.get(location)
         if state is None or state.budget_bytes is None:
             return
+        compiled = _compiled_execution_bytes(location)
         if incoming_bytes > (
-            state.budget_bytes - state.used_bytes - state.reserved_bytes
+            state.budget_bytes
+            - state.used_bytes
+            - state.reserved_bytes
+            - compiled
         ):
             raise ResidencyBudgetError(
                 location=location.name,
@@ -1637,6 +1647,7 @@ class ResidencyManager:
                 used_bytes=state.used_bytes,
                 reserved_bytes=state.reserved_bytes,
                 requested_bytes=incoming_bytes,
+                compiled_execution_bytes=compiled,
             )
 
     def _reserve_locked(
@@ -2448,6 +2459,15 @@ def _abandon_scope_lifetime(
         ResourceWarning,
         stacklevel=2,
     )
+
+
+def _compiled_execution_bytes(location: ResidencyLocation) -> int:
+    """Device memory that compiled schedules hold at a CUDA location."""
+    if location.kind != "cuda":
+        return 0
+    from fhelium.backend.runner import compiled_execution_bytes
+
+    return compiled_execution_bytes(location.device.index)
 
 
 def _nonnegative_count(value: int, *, what: str) -> int:

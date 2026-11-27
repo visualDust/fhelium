@@ -1,6 +1,6 @@
 # Multiparty CKKS
 
-**Example source:** [`examples/26_experimental_multiparty.py`](https://github.com/VisualDust/fhelium/blob/main/examples/26_experimental_multiparty.py)
+**Example source:** [`examples/24_experimental_multiparty.py`](https://github.com/VisualDust/fhelium/blob/main/examples/24_experimental_multiparty.py)
 
 This example holds two in-process party records representing two cryptographic parties, constructs collective public and evaluation keys, runs CKKS evaluation, and executes secret-dependent output operations. The tutorial follows its application-owned protocol state in execution order.
 
@@ -29,7 +29,7 @@ Here, `N` is the ring dimension and `D` is the stable hybrid key-digit count. Th
 Run the example from the repository root:
 
 ```bash
-python examples/26_experimental_multiparty.py --preset slots8192-scale40-depth7
+python examples/24_experimental_multiparty.py --preset slots8192-scale40-depth7
 ```
 
 ## Follow the application-owned states
@@ -240,7 +240,7 @@ The fixed ternary ephemerals and opposite component errors are correctness fixtu
 The example reports maximum and root-mean-square (RMS) error for the collective transform and the public-key-switched `message**2` result, then moves its application label to `CLOSED`. Closing rejects later requests in the application workflow; it does not erase key tensors, and best-effort Python deletion does not guarantee device-memory zeroization.
 
 ::: details Source
-<<< @/../examples/26_experimental_multiparty.py
+<<< @/../examples/24_experimental_multiparty.py
 :::
 
 ## Continue with the complete operational guide

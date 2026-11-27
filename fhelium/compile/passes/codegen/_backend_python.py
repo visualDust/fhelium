@@ -1,4 +1,7 @@
-"""Emit direct Backend implementation calls from a flat Program."""
+"""Emit Backend implementation calls from a flat Program.
+
+Each operation call lowers its implementation for the payload layouts it receives and runs the cached fragment.
+"""
 
 from __future__ import annotations
 
@@ -104,6 +107,7 @@ def emit_backend_python(
         "from collections.abc import Mapping",
         "from fhelium.backend.implementation import OperationInvocation as __fhelium_codegen_OperationInvocation",
         "from fhelium.backend.resources import BoundResource as __fhelium_codegen_BoundResource",
+        "from fhelium.backend.lowering import LoweredCall as __fhelium_codegen_LoweredCall",
         "from fhelium.backend.execution import _index_value as __fhelium_codegen_index, _tensor_region_results as __fhelium_codegen_tensor_results",
         "from fhelium.ir import Program as __fhelium_codegen_Program",
     ]
@@ -133,6 +137,10 @@ def emit_backend_python(
 
     def call(operation, regions):
         nonlocal call_count
+        if regions:
+            raise PythonCodegenError(
+                f"Backend Python emission cannot pass the regions of {operation.name} to its implementation"
+            )
         implementation = implementation_for(operation)
         invocation = operation_invocation(operation)
         requirements = implementation.resource_requirements(invocation)
@@ -179,6 +187,9 @@ def emit_backend_python(
             f"operand_bases={_python_literal(invocation.operand_bases)}, operand_components={_python_literal(invocation.operand_components)}, "
             f"result_prime_ids={_python_literal(invocation.result_prime_ids)})"
         )
+        declarations.append(
+            f"{variable} = __fhelium_codegen_LoweredCall({variable}, {invocation_name})"
+        )
         payloads = tuple(
             names.operand(value)
             for value in operation.operands
@@ -193,12 +204,8 @@ def emit_backend_python(
             f"__fhelium_codegen_BoundResource({r.symbol!r}, {r.kind!r}, resources[{r.symbol!r}])"
             for r in requirements
         )
-        method = "execute_regions" if regions else "execute"
-        arguments = f"{invocation_name}, {tuple_source(payloads)}, {tuple_source(bound)}"
-        if regions:
-            arguments += f", {tuple_source(regions)}"
         call_count += 1
-        return f"{variable}.{method}({arguments}, in_place=False)"
+        return f"{variable}({tuple_source(payloads)}, {tuple_source(bound)})"
 
     def prepared_regions(operation):
         if not operation.regions or operation.name.startswith("scf."):

@@ -23,7 +23,7 @@ csrc/
 
 The directories separate code by role:
 
-- `ops` contains operations: functions that transform Tensor data and that a Backend implementation executes for an IR operation. Primitives (`ops/<family>`) run on a device; whole operations (`ops/operations`) compose primitives and read their numerical operands from a `TensorTable`.
+- `ops` contains operations: functions that transform Tensor data and that a Backend implementation executes for an IR operation. Primitives (`ops/<family>`) run on a device; whole operations (`ops/operations`) compose primitives and read their numerical operands from the table structs of `fhelium/operation_tables.h`.
 - `parameters` and `tables` run on the host before execution. Parameter functions return host values such as moduli and digit sizes; table functions return CPU Tensors that callers move to the execution device.
 - `keys` composes primitives into key generation. Keys are prepared data for execution, so key generation has no IR operation; its functions are ordinary C++ functions with Torch bindings for Python.
 - `torchops` is the Python binding of every public function. Registration in `torchops` does not make a function an operation.
@@ -46,7 +46,7 @@ A primitive family `ops/<family>` has the same structure in every family:
 
 ## Compositions
 
-Whole operations (`ops/operations`) and key generation (`keys`) call public functions only and run on any device that their primitives support. They take numerical operands as a `TensorTable` whose names are documented with each function, and options as typed structs (`KeySwitchOptions`, `KeySwitchKeyLayout`). Their Torch schemas flatten the table into parallel `str[] table_names, Tensor[] tables` arguments and the structs into scalar fields, and are registered as `CompositeImplicitAutograd` kernels in `torchops/operation_ops.cpp` and `torchops/key_ops.cpp`.
+Whole operations (`ops/operations`) and key generation (`keys`) call public functions only and run on any device that their primitives support. They take numerical operands as table structs (`fhelium/operation_tables.h`) whose fields are documented with each function, and options as typed structs (`KeySwitchOptions`, `KeySwitchKeyLayout`). Their Torch schemas pass each table struct as one positional `Tensor?[] tables` argument in the field order of its `visit_tables` definition, Galois automorphisms as `Tensor?[] galois` with three slots per step, and the option structs as scalar fields. The whole operations are registered as `CompositeExplicitAutograd` kernels in `torchops/operation_ops.cpp`, so tracing records each as one operator with its fake implementation; key generation is registered as `CompositeImplicitAutograd` kernels in `torchops/key_ops.cpp`. The table builders and the `table_slot_names` layout operator are registered in `torchops/operation_table_ops.cpp`.
 
 Randomized compositions read the stream `seed` at its current nonce and use consecutive nonces internally without modifying `seed`; each function documents how many nonces it uses, and the caller advances the stream by that count.
 

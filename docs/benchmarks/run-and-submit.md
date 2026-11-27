@@ -154,7 +154,6 @@ fhelium benchmark workload NAME --profile PROFILE --output investigation.json
 ```
 
 Use profiles shown by the current checkout. See
-[Screen NTT backends](/how-to/screen-ntt-backends) and
-[Analyze and choose an NTT backend](/how-to/choose-ntt-backend) for focused NTT
+[Choose an NTT implementation](/how-to/choose-ntt-implementation) for focused NTT
 investigations. Custom workload registration is documented in the
 [benchmark framework API](/api/fhelium/benchmarks/model).

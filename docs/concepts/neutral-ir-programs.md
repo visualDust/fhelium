@@ -175,7 +175,7 @@ External state is divided according to ownership and serialization behavior:
 
 `Compilation.material_bindings` supplies the actual Tensors. `prepare_material_bindings` can fill absent entries from supplied numerical providers and keys, preserving current assignments. Linking resolves the resulting references to live Tensor objects. Compatible in-place content updates remain visible; replacing an entry requires relinking to bind the new object.
 
-`Program.save` writes textual IR, including descriptions. `serialization.save_compilation` additionally supports no, all, or selected Tensor bindings. It excludes workspaces, Python callables, pass reports, and executables. ArtifactStore persists that same Compilation representation under a logical name.
+`Program.save` writes textual IR, including descriptions. `serialization.save_compilation` additionally supports no, all, or selected Tensor bindings. It excludes workspaces, Python callables, pass reports, and executables. A value store persists that same Compilation representation under a logical name.
 
 ## Extension trust
 
@@ -190,6 +190,6 @@ Operation implementations are trusted executable extensions. Registration does n
 ## Related concepts
 
 - [Open compiler stack](open-compiler-stack.md) explains capture, transformation, material preparation, linking, and callable specialization.
-- [State transitions and orthogonality](ckks/state-transitions-and-orthogonality.md) relates represented mathematical state to execution choices.
+- [Value-state transitions](ckks/value-state-transitions.md) relates represented mathematical state to execution choices.
 - [Rank-local SPMD](distributed/spmd-model.md) explains how a Program participates in a distributed computation.
-- [Serialization and artifacts](execution/serialization-and-artifacts.md) explains durable representations and live rebinding.
+- [Persistence and artifacts](execution/serialization-and-artifacts.md) explains durable representations and live rebinding.

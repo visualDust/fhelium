@@ -2,14 +2,86 @@
 import { computed, ref } from 'vue'
 import { useRouter, withBase } from 'vitepress'
 import NavArrow from './NavArrow.vue'
+import { useAutoAdvance } from '../composables/useAutoAdvance'
 
-type ControlLevel = 'stack' | 'eager' | 'compile' | 'execution'
+type ControlLevel = 'eager' | 'compile' | 'deploy' | 'serve' | 'distributed'
 
-const activeLevel = ref<ControlLevel>('stack')
+interface LevelEntry {
+  id: ControlLevel
+  label: string
+  summary: string
+  phases: readonly string[]
+  title: string
+  detail: string
+  link: string
+  href: string
+}
+
+const levels: readonly LevelEntry[] = [
+  {
+    id: 'eager',
+    label: 'Eager',
+    summary: 'per-operation calls',
+    phases: ['Call', 'Transition', 'Dispatch', 'Return'],
+    title: 'Run operations immediately.',
+    detail: 'Each Engine call updates CKKS state and dispatches its kernels.',
+    link: 'Example 01',
+    href: '/tutorial/basic-ckks-workflow',
+  },
+  {
+    id: 'compile',
+    label: 'Compile',
+    summary: 'cached schedules',
+    phases: ['Look up', 'Capture', 'Lower', 'Store', 'Run'],
+    title: 'Compile once per signature.',
+    detail: 'A miss builds and stores the schedule; a hit runs it directly.',
+    link: 'Example 12',
+    href: '/tutorial/compile-layer',
+  },
+  {
+    id: 'deploy',
+    label: 'Deploy',
+    summary: 'exported artifacts',
+    phases: ['Export', 'Load', 'Bind keys', 'Run'],
+    title: 'Run compiled code elsewhere.',
+    detail: 'Python or C++ loads the artifact, binds keys, and runs it.',
+    link: 'Example 15',
+    href: '/tutorial/export-and-load',
+  },
+  {
+    id: 'serve',
+    label: 'Serve',
+    summary: 'request streams',
+    phases: ['Queue', 'Prefetch', 'Call', 'Respond'],
+    title: 'Serve every user with one model.',
+    detail: 'Keys arrive with each request; the next one copies in during the call.',
+    link: 'Serving guide',
+    href: '/how-to/serve-compiled-requests',
+  },
+  {
+    id: 'distributed',
+    label: 'Distributed',
+    summary: 'rank-local programs',
+    phases: ['Launch', 'Evaluate', 'Combine', 'Continue'],
+    title: 'Run one program per rank.',
+    detail: 'Compiled collectives combine ciphertexts across ranks.',
+    link: 'Multi-GPU guide',
+    href: '/how-to/choose-multi-gpu-partition',
+  },
+]
+
+const activeLevel = ref<ControlLevel>('eager')
 const animationRun = ref(0)
 const router = useRouter()
 
+const { stop: stopRotation } = useAutoAdvance(
+  levels.map((level) => level.id),
+  activeLevel,
+  4500,
+)
+
 function selectLevel(level: ControlLevel): void {
+  stopRotation()
   activeLevel.value = level
   animationRun.value += 1
 }
@@ -28,399 +100,291 @@ function openExample(event: MouseEvent, href: string): void {
 }
 
 const activeKey = computed(() => `${activeLevel.value}-${animationRun.value}`)
-const caption = computed(() => {
-  if (activeLevel.value === 'stack') {
-    return {
-      title: 'Trace the shared stack.',
-      detail: 'Eager and Program meet Backend resources and native CPU/CUDA dispatch.',
-      example: 'Example 12',
-      href: '/tutorial/compose-and-execute-compile-pipeline',
-    }
-  }
-  if (activeLevel.value === 'compile') {
-    return {
-      title: 'Transform before execution.',
-      detail: 'Preserve or lower CKKS operations, then link implementations and resources.',
-      example: 'Example 14',
-      href: '/tutorial/customize-compile-pass-and-pipeline',
-    }
-  }
-  if (activeLevel.value === 'execution') {
-    return {
-      title: 'Capture once and replay.',
-      detail: 'Each Input refreshes the same stable Buffer before CUDA Graph replay.',
-      example: 'Example 18',
-      href: '/tutorial/cuda-graph-matvec',
-    }
-  }
-  return {
-    title: 'Control each operation.',
-    detail: 'Engine applies its CKKS transition and dispatches through Backend immediately.',
-    example: 'Example 01',
-    href: '/tutorial/basic-ckks-workflow',
-  }
-})
+const active = computed(
+  () => levels.find((level) => level.id === activeLevel.value) ?? levels[0],
+)
 </script>
 
 <template>
-  <section class="control-explorer" aria-label="Choose a FHElium level of control">
-    <div class="level-picker" role="tablist" aria-label="FHElium control levels">
+  <section class="control-explorer" aria-label="FHElium execution routes">
+    <div class="level-picker" role="tablist" aria-label="FHElium execution routes">
       <button
+        v-for="(level, index) in levels"
+        :key="level.id"
         type="button"
         role="tab"
-        :aria-selected="activeLevel === 'stack'"
-        :class="{ 'is-active': activeLevel === 'stack' }"
-        @click="selectLevel('stack')"
+        :aria-selected="activeLevel === level.id"
+        :class="{ 'is-active': activeLevel === level.id }"
+        @click="selectLevel(level.id)"
       >
-        <span>01</span>
-        <strong>Stack</strong>
-        <small>owners, Backend, resources</small>
-      </button>
-      <button
-        type="button"
-        role="tab"
-        :aria-selected="activeLevel === 'eager'"
-        :class="{ 'is-active': activeLevel === 'eager' }"
-        @click="selectLevel('eager')"
-      >
-        <span>02</span>
-        <strong>Eager</strong>
-        <small>operation-level control</small>
-      </button>
-      <button
-        type="button"
-        role="tab"
-        :aria-selected="activeLevel === 'compile'"
-        :class="{ 'is-active': activeLevel === 'compile' }"
-        @click="selectLevel('compile')"
-      >
-        <span>03</span>
-        <strong>Compile</strong>
-        <small>graph and scheduling control</small>
-      </button>
-      <button
-        type="button"
-        role="tab"
-        :aria-selected="activeLevel === 'execution'"
-        :class="{ 'is-active': activeLevel === 'execution' }"
-        @click="selectLevel('execution')"
-      >
-        <span>04</span>
-        <strong>Execution</strong>
-        <small>captured repeated execution</small>
+        <span>{{ String(index + 1).padStart(2, '0') }}</span>
+        <strong>{{ level.label }}</strong>
+        <small>{{ level.summary }}</small>
       </button>
     </div>
 
     <div class="graph-shell">
-      <div class="graph-viewport" tabindex="0" aria-label="Selected FHElium control graph; scroll horizontally when needed">
+      <div class="graph-viewport" tabindex="0" aria-label="Selected FHElium execution route; scroll horizontally when needed">
         <svg
           v-if="activeLevel === 'eager'"
           :key="activeKey"
-          class="control-graph animated-graph eager-graph"
+          class="control-graph eager-graph"
           viewBox="0 0 1040 330"
           role="img"
-          aria-label="Eager operation execution route"
+          aria-label="Eager operation route from an Engine call to a result value"
         >
           <defs>
             <marker id="eager-control-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
               <path d="M 1.5 1.5 L 8.5 5 L 1.5 8.5" />
             </marker>
           </defs>
-          <path class="edge eager-edge" style="--delay: 80ms" d="M 176 165 H 220" />
-          <path class="edge eager-edge" style="--delay: 260ms" d="M 376 165 H 420" />
-          <path class="edge eager-edge" style="--delay: 440ms" d="M 576 165 H 620" />
-          <path class="edge eager-edge" style="--delay: 620ms" d="M 776 165 H 820" />
+          <path class="edge eager-edge" style="--delay: 120ms" d="M 220 165 H 280" />
+          <path class="edge eager-edge" style="--delay: 320ms" d="M 480 165 H 540" />
+          <path class="edge eager-edge" style="--delay: 520ms" d="M 760 165 H 820" />
 
           <g class="node eager-node" style="--delay: 0ms" transform="translate(20 125)">
-            <rect width="156" height="80" rx="8" />
-            <text x="78" y="34" text-anchor="middle">Engine call</text>
-            <text class="detail" x="78" y="57" text-anchor="middle">typed values + key</text>
+            <rect width="200" height="80" rx="8" />
+            <text x="100" y="34" text-anchor="middle">Engine call</text>
+            <text class="detail" x="100" y="57" text-anchor="middle">values · keys · options</text>
           </g>
-          <g class="node eager-node" style="--delay: 180ms" transform="translate(220 125)">
-            <rect width="156" height="80" rx="8" />
-            <text x="78" y="34" text-anchor="middle">Value transition</text>
-            <text class="detail" x="78" y="57" text-anchor="middle">depth · scale · domain</text>
+          <g class="node eager-node" style="--delay: 200ms" transform="translate(280 125)">
+            <rect width="200" height="80" rx="8" />
+            <text x="100" y="34" text-anchor="middle">State transition</text>
+            <text class="detail" x="100" y="57" text-anchor="middle">depth · scale · domain</text>
           </g>
-          <g class="node eager-node" style="--delay: 360ms" transform="translate(420 125)">
-            <rect width="156" height="80" rx="8" />
-            <text x="78" y="34" text-anchor="middle">Eager dispatcher</text>
-            <text class="detail" x="78" y="57" text-anchor="middle">graph-free call</text>
+          <g class="node backend-node" style="--delay: 400ms" transform="translate(540 125)">
+            <rect width="220" height="80" rx="8" />
+            <text x="110" y="34" text-anchor="middle">Implementation</text>
+            <text class="detail" x="110" y="57" text-anchor="middle">native CPU · CUDA · Triton</text>
           </g>
-          <g class="node backend-node" style="--delay: 540ms" transform="translate(620 125)">
-            <rect width="156" height="80" rx="8" />
-            <text x="78" y="34" text-anchor="middle">Implementation</text>
-            <text class="detail" x="78" y="57" text-anchor="middle">registered operation</text>
-          </g>
-          <g class="node native-node" style="--delay: 720ms" transform="translate(820 125)">
-            <rect width="190" height="80" rx="8" />
-            <text x="95" y="32" text-anchor="middle">RNS / NTT</text>
-            <text class="detail" x="95" y="56" text-anchor="middle">native CPU · CUDA</text>
+          <g class="node native-node" style="--delay: 600ms" transform="translate(820 125)">
+            <rect width="200" height="80" rx="8" />
+            <text x="100" y="34" text-anchor="middle">Result value</text>
+            <text class="detail" x="100" y="57" text-anchor="middle">Tensor storage + CKKS state</text>
           </g>
         </svg>
 
         <svg
           v-else-if="activeLevel === 'compile'"
           :key="activeKey"
-          class="control-graph animated-graph compile-graph"
+          class="control-graph compile-graph"
           viewBox="0 0 1040 330"
           role="img"
-          aria-label="Compile graph transforming from captured operations into a linked executable"
+          aria-label="Compile route: a specialization cache hit runs the stored schedule; a miss captures, transforms, lowers, and stores it"
         >
           <defs>
             <marker id="compile-control-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
               <path d="M 1.5 1.5 L 8.5 5 L 1.5 8.5" />
             </marker>
+            <marker id="compile-hit-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+              <path d="M 1.5 1.5 L 8.5 5 L 1.5 8.5" />
+            </marker>
           </defs>
+          <path class="edge compile-edge" style="--delay: 120ms" d="M 170 70 H 220" />
+          <path class="edge hit-edge" style="--delay: 320ms" d="M 430 70 H 810" />
+          <path class="edge miss-edge" style="--delay: 520ms" d="M 290 105 V 205" />
+          <path class="edge compile-edge" style="--delay: 720ms" d="M 360 240 H 385" />
+          <path class="edge compile-edge" style="--delay: 920ms" d="M 525 240 H 550" />
+          <path class="edge compile-edge" style="--delay: 1120ms" d="M 690 240 H 715" />
+          <path class="edge compile-edge" style="--delay: 1320ms" d="M 855 240 C 900 240 920 190 920 120" />
+          <path class="edge store-edge" style="--delay: 1520ms" d="M 785 205 C 760 150 480 160 410 105" />
+          <text class="edge-label" x="620" y="58" text-anchor="middle">hit</text>
+          <text class="edge-label" x="302" y="160">miss</text>
+          <text class="edge-label" x="600" y="138" text-anchor="middle">store</text>
 
-          <path class="edge compile-edge" style="--delay: 100ms" d="M 150 165 H 190" />
-          <path class="edge compile-edge" style="--delay: 430ms" d="M 330 165 C 370 165 368 92 410 92" />
-          <path class="edge compile-edge" style="--delay: 430ms" d="M 330 165 C 370 165 368 238 410 238" />
-          <path class="edge compile-edge" style="--delay: 1500ms" d="M 550 238 H 590" />
-          <path class="edge compile-edge" style="--delay: 1950ms" d="M 730 238 C 750 238 748 165 770 165" />
-          <path class="edge compile-edge" style="--delay: 1950ms" d="M 550 92 C 655 92 650 165 770 165" />
-          <path class="edge compile-edge" style="--delay: 2450ms" d="M 900 165 H 930" />
-
-          <text class="edge-label" x="365" y="116" text-anchor="middle">Preserve</text>
-          <text class="edge-label" x="365" y="220" text-anchor="middle">Lower</text>
-
-          <g class="node compile-node" style="--delay: 0ms" transform="translate(20 125)">
-            <rect width="130" height="80" rx="8" />
-            <text x="65" y="34" text-anchor="middle">Capture / import</text>
-            <text class="detail" x="65" y="57" text-anchor="middle">PyTorch · text · xDSL</text>
+          <g class="node eager-node" style="--delay: 0ms" transform="translate(20 35)">
+            <rect width="150" height="70" rx="8" />
+            <text x="75" y="30" text-anchor="middle">Call</text>
+            <text class="detail" x="75" y="51" text-anchor="middle">argument signature</text>
           </g>
-          <g class="node compile-node" style="--delay: 260ms" transform="translate(190 125)">
-            <rect width="140" height="80" rx="8" />
-            <text x="70" y="34" text-anchor="middle">Program</text>
-            <text class="detail" x="70" y="57" text-anchor="middle">mixed-level IR</text>
+          <g class="node resource-node" style="--delay: 200ms" transform="translate(220 35)">
+            <rect width="210" height="70" rx="8" />
+            <text x="105" y="30" text-anchor="middle">Specialization cache</text>
+            <text class="detail" x="105" y="51" text-anchor="middle">resident · on-disk artifact files</text>
           </g>
-
-          <g class="node compile-node transform-node" style="--delay: 620ms" transform="translate(410 52)">
-            <rect width="140" height="80" rx="8" />
-            <text class="semantic-label" x="70" y="34" text-anchor="middle">torch.roll</text>
-            <text class="ckks-label" x="70" y="34" text-anchor="middle">CKKS RotateOp</text>
-            <text class="detail" x="70" y="57" text-anchor="middle">preserved</text>
+          <g class="node native-node" style="--delay: 400ms" transform="translate(810 20)">
+            <rect width="210" height="100" rx="8" />
+            <text x="105" y="36" text-anchor="middle">libfhelium Runner</text>
+            <text class="detail" x="105" y="60" text-anchor="middle">arena · CUDA Graph segments</text>
+            <text class="detail" x="105" y="78" text-anchor="middle">transfer overlap</text>
           </g>
-          <g class="node compile-node transform-node" style="--delay: 620ms" transform="translate(410 198)">
-            <rect width="140" height="80" rx="8" />
-            <text class="semantic-label" x="70" y="34" text-anchor="middle">torch.multiply</text>
-            <text class="ckks-label" x="70" y="34" text-anchor="middle">CKKS MultiplyOp</text>
-            <text class="detail" x="70" y="57" text-anchor="middle">three components</text>
+          <g class="node compile-node" style="--delay: 600ms" transform="translate(220 205)">
+            <rect width="140" height="70" rx="8" />
+            <text x="70" y="30" text-anchor="middle">Capture</text>
+            <text class="detail" x="70" y="51" text-anchor="middle">Python → Program</text>
           </g>
-
-          <g class="node transition-node" style="--delay: 1450ms" transform="translate(590 198)">
-            <rect width="140" height="80" rx="8" />
-            <text x="70" y="31" text-anchor="middle">RelinearizeOp</text>
-            <text x="70" y="52" text-anchor="middle">RescaleOp</text>
-            <text class="detail" x="70" y="69" text-anchor="middle">placed policy</text>
+          <g class="node compile-node" style="--delay: 800ms" transform="translate(385 205)">
+            <rect width="140" height="70" rx="8" />
+            <text x="70" y="30" text-anchor="middle">Passes</text>
+            <text class="detail" x="70" y="51" text-anchor="middle">depth · scale · reuse</text>
           </g>
-
-          <g class="node backend-node" style="--delay: 2050ms" transform="translate(770 125)">
-            <rect width="130" height="80" rx="8" />
-            <text x="65" y="32" text-anchor="middle">Lowered graph</text>
-            <text class="detail" x="65" y="55" text-anchor="middle">RNS · NTT · key switch</text>
+          <g class="node compile-node" style="--delay: 1000ms" transform="translate(550 205)">
+            <rect width="140" height="70" rx="8" />
+            <text x="70" y="30" text-anchor="middle">Lowering</text>
+            <text class="detail" x="70" y="51" text-anchor="middle">RNS · NTT · fusion</text>
           </g>
-          <g class="node executable-node" style="--delay: 2550ms" transform="translate(930 125)">
-            <rect width="90" height="80" rx="8" />
-            <text x="45" y="32" text-anchor="middle">Link</text>
-            <text class="detail" x="45" y="55" text-anchor="middle">Executable</text>
+          <g class="node executable-node" style="--delay: 1200ms" transform="translate(715 205)">
+            <rect width="140" height="70" rx="8" />
+            <text x="70" y="30" text-anchor="middle">Exec schedule</text>
+            <text class="detail" x="70" y="51" text-anchor="middle">kernels · buffers · streams</text>
           </g>
         </svg>
 
         <svg
-          v-else-if="activeLevel === 'stack'"
+          v-else-if="activeLevel === 'deploy'"
           :key="activeKey"
-          class="control-graph animated-graph stack-graph"
+          class="control-graph deploy-graph"
           viewBox="0 0 1040 330"
           role="img"
-          aria-label="FHElium execution components and Backend relationships"
+          aria-label="Deployment route from an exported artifact to Python and C++ loaders"
         >
           <defs>
-            <marker id="stack-control-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+            <marker id="deploy-control-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
               <path d="M 1.5 1.5 L 8.5 5 L 1.5 8.5" />
             </marker>
           </defs>
+          <path class="edge deploy-edge" style="--delay: 120ms" d="M 200 165 H 270" />
+          <path class="edge deploy-edge" style="--delay: 420ms" d="M 480 165 C 520 165 510 85 560 85" />
+          <path class="edge deploy-edge" style="--delay: 420ms" d="M 480 165 C 520 165 510 245 560 245" />
+          <path class="edge deploy-edge" style="--delay: 820ms" d="M 760 85 C 800 85 790 165 830 165" />
+          <path class="edge deploy-edge" style="--delay: 820ms" d="M 760 245 C 800 245 790 165 830 165" />
+          <text class="edge-label" x="235" y="150" text-anchor="middle">fc.export</text>
 
-          <g class="stack-route stack-eager-route">
-            <path class="edge stack-edge" style="--delay: 120ms" d="M 155 82 H 205" />
-            <path class="edge stack-edge" style="--delay: 520ms" d="M 375 82 C 430 82 420 165 475 165" />
-            <path class="edge stack-edge" style="--delay: 1150ms" d="M 550 125 C 565 95 610 80 650 80" />
-            <path class="edge stack-edge" style="--delay: 1550ms" d="M 810 80 C 855 80 855 148 900 148" />
-
-            <g class="node owner-node" style="--delay: 0ms" transform="translate(15 47)">
-              <rect width="140" height="70" rx="8" />
-              <text x="70" y="29" text-anchor="middle">Eager Engine</text>
-              <text class="detail" x="70" y="51" text-anchor="middle">public operations</text>
-            </g>
-            <g class="node dispatcher-node" style="--delay: 300ms" transform="translate(205 47)">
-              <rect width="170" height="70" rx="8" />
-              <text x="85" y="29" text-anchor="middle">Eager dispatcher</text>
-              <text class="detail" x="85" y="51" text-anchor="middle">operation call cache</text>
-            </g>
-            <g class="node resource-node" style="--delay: 1050ms" transform="translate(650 45)">
-              <rect width="160" height="70" rx="8" />
-              <text x="80" y="28" text-anchor="middle">Runtime Resource</text>
-              <text class="detail" x="80" y="50" text-anchor="middle">keys · materials · bindings</text>
-            </g>
+          <g class="node compile-node" style="--delay: 0ms" transform="translate(20 125)">
+            <rect width="180" height="80" rx="8" />
+            <text x="90" y="34" text-anchor="middle">Compiled callable</text>
+            <text class="detail" x="90" y="57" text-anchor="middle">signatures to serve</text>
           </g>
-
-          <g class="stack-route stack-program-route">
-            <path class="edge stack-edge" style="--delay: 120ms" d="M 155 248 H 205" />
-            <path class="edge stack-edge" style="--delay: 520ms" d="M 375 248 C 430 248 420 165 475 165" />
-            <path class="edge stack-edge" style="--delay: 1150ms" d="M 550 205 C 565 235 610 250 650 250" />
-            <path class="edge stack-edge" style="--delay: 1550ms" d="M 810 250 C 855 250 855 182 900 182" />
-
-            <g class="node owner-node" style="--delay: 0ms" transform="translate(15 213)">
-              <rect width="140" height="70" rx="8" />
-              <text x="70" y="29" text-anchor="middle">Program</text>
-              <text class="detail" x="70" y="51" text-anchor="middle">linked Program</text>
-            </g>
-            <g class="node dispatcher-node" style="--delay: 300ms" transform="translate(205 213)">
-              <rect width="170" height="70" rx="8" />
-              <text x="85" y="29" text-anchor="middle">Dispatch table</text>
-              <text class="detail" x="85" y="51" text-anchor="middle">operation → implementation</text>
-            </g>
-            <g class="node resource-node" style="--delay: 1050ms" transform="translate(650 215)">
-              <rect width="160" height="70" rx="8" />
-              <text x="80" y="28" text-anchor="middle">Arithmetic contexts</text>
-              <text class="detail" x="80" y="50" text-anchor="middle">RnsContext · NttContext</text>
-            </g>
+          <g class="node executable-node" style="--delay: 250ms" transform="translate(270 125)">
+            <rect width="210" height="80" rx="8" />
+            <text x="105" y="34" text-anchor="middle">Artifact file</text>
+            <text class="detail" x="105" y="57" text-anchor="middle">schedules · kernels · constants</text>
           </g>
-
-          <g class="node backend-node" style="--delay: 700ms" transform="translate(475 125)">
-            <rect width="150" height="80" rx="8" />
-            <text x="75" y="32" text-anchor="middle">Backend</text>
-            <text class="detail" x="75" y="55" text-anchor="middle">registry + workspace</text>
+          <g class="node owner-node" style="--delay: 600ms" transform="translate(560 45)">
+            <rect width="200" height="80" rx="8" />
+            <text x="100" y="34" text-anchor="middle">fc.load</text>
+            <text class="detail" x="100" y="57" text-anchor="middle">Python process</text>
           </g>
+          <g class="node owner-node" style="--delay: 600ms" transform="translate(560 205)">
+            <rect width="200" height="80" rx="8" />
+            <text x="100" y="34" text-anchor="middle">fhelium::Artifact</text>
+            <text class="detail" x="100" y="57" text-anchor="middle">C++ process</text>
+          </g>
+          <g class="node native-node" style="--delay: 1000ms" transform="translate(830 125)">
+            <rect width="190" height="80" rx="8" />
+            <text x="95" y="34" text-anchor="middle">Runner</text>
+            <text class="detail" x="95" y="57" text-anchor="middle">keys supplied at load</text>
+          </g>
+        </svg>
 
-          <g class="node native-node" style="--delay: 1500ms" transform="translate(900 125)">
-            <rect width="130" height="80" rx="8" />
-            <text x="65" y="31" text-anchor="middle">Tensor execution</text>
-            <text class="detail" x="65" y="54" text-anchor="middle">native CPU · CUDA</text>
+        <svg
+          v-else-if="activeLevel === 'serve'"
+          :key="activeKey"
+          class="control-graph serve-graph"
+          viewBox="0 0 1040 330"
+          role="img"
+          aria-label="Serving route: queued requests with their keys pass through DoubleBuffer to one compiled model while the next request is copied"
+        >
+          <defs>
+            <marker id="serve-control-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+              <path d="M 1.5 1.5 L 8.5 5 L 1.5 8.5" />
+            </marker>
+          </defs>
+          <path class="edge serve-edge" style="--delay: 120ms" d="M 200 165 H 260" />
+          <path class="edge serve-edge dashed-edge" style="--delay: 320ms" d="M 110 205 C 110 270 360 270 360 205" />
+          <path class="edge serve-edge" style="--delay: 520ms" d="M 460 165 H 520" />
+          <path class="edge serve-edge" style="--delay: 720ms" d="M 740 165 H 800" />
+          <text class="edge-label" x="235" y="285" text-anchor="middle">next request</text>
+
+          <circle class="flow-pulse" r="5">
+            <animate attributeName="opacity" begin="0.9s" dur="0.15s" from="0" to="0.9" fill="freeze" />
+            <animateMotion begin="0.9s" dur="2.4s" path="M 110 205 C 110 270 360 270 360 205" repeatCount="indefinite" />
+          </circle>
+
+          <g class="node input-node" style="--delay: 0ms" transform="translate(20 125)">
+            <rect width="180" height="80" rx="8" />
+            <text x="90" y="34" text-anchor="middle">Request queue</text>
+            <text class="detail" x="90" y="57" text-anchor="middle">ciphertext · user keys</text>
+          </g>
+          <g class="node buffer-node" style="--delay: 200ms" transform="translate(260 125)">
+            <rect width="200" height="80" rx="8" />
+            <text x="100" y="34" text-anchor="middle">DoubleBuffer</text>
+            <text class="detail" x="100" y="57" text-anchor="middle">copies on a transfer stream</text>
+          </g>
+          <g class="node compile-node" style="--delay: 450ms" transform="translate(520 125)">
+            <rect width="220" height="80" rx="8" />
+            <text x="110" y="34" text-anchor="middle">Compiled model</text>
+            <text class="detail" x="110" y="57" text-anchor="middle">keys as call arguments</text>
+          </g>
+          <g class="node native-node" style="--delay: 700ms" transform="translate(800 125)">
+            <rect width="220" height="80" rx="8" />
+            <text x="110" y="34" text-anchor="middle">Response</text>
+            <text class="detail" x="110" y="57" text-anchor="middle">consumed before the next call</text>
           </g>
         </svg>
 
         <svg
           v-else
           :key="activeKey"
-          class="control-graph animated-graph replay-graph"
+          class="control-graph distributed-graph"
           viewBox="0 0 1040 330"
           role="img"
-          aria-label="Program CUDA Graph capture and repeated buffered input execution"
+          aria-label="Rank-local programs joined by a compiled collective"
         >
           <defs>
-            <marker id="replay-control-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+            <marker id="distributed-control-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
               <path d="M 1.5 1.5 L 8.5 5 L 1.5 8.5" />
             </marker>
           </defs>
+          <path class="edge distributed-edge" style="--delay: 220ms" d="M 240 85 C 330 85 330 150 410 150" />
+          <path class="edge distributed-edge" style="--delay: 220ms" d="M 240 245 C 330 245 330 180 410 180" />
+          <path class="edge distributed-edge" style="--delay: 620ms" d="M 630 150 C 710 150 710 85 800 85" />
+          <path class="edge distributed-edge" style="--delay: 620ms" d="M 630 180 C 710 180 710 245 800 245" />
 
-          <path class="edge replay-edge" style="--delay: 320ms" d="M 335 78 H 435" />
-          <path class="edge replay-edge" style="--delay: 320ms" d="M 225 205 C 265 205 270 225 315 225" />
-          <path class="edge replay-edge" style="--delay: 620ms" d="M 415 195 C 415 145 520 155 520 115" />
-          <path class="edge replay-edge" style="--delay: 1050ms" d="M 225 285 C 265 285 270 245 315 245" />
-          <path class="edge replay-edge" style="--delay: 1300ms" d="M 515 235 H 625" />
-          <path class="edge replay-edge" style="--delay: 1300ms" d="M 560 115 C 560 155 705 155 705 195" />
-          <path class="edge replay-edge" style="--delay: 1650ms" d="M 785 235 H 835" />
-
-          <text class="edge-label" x="385" y="68" text-anchor="middle">capture once</text>
-          <text class="loop-label" x="585" y="315" text-anchor="middle">refresh buffer → replay graph → consume output</text>
-
-          <circle class="flow-pulse input-flow-pulse" r="5">
-            <animate attributeName="opacity" begin="1.15s" dur="0.15s" from="0" to="0.9" fill="freeze" />
-            <animateMotion
-              begin="1.15s"
-              dur="1.25s"
-              path="M 225 285 C 265 285 270 245 315 245"
-              repeatCount="indefinite"
-            />
-          </circle>
-          <circle class="flow-pulse is-one" r="5">
-            <animate attributeName="opacity" begin="2.2s" dur="0.15s" from="0" to="0.9" fill="freeze" />
-            <animateMotion begin="2.2s" dur="2.8s" path="M 515 235 H 835" repeatCount="indefinite" />
-          </circle>
-          <circle class="flow-pulse is-two" r="5">
-            <animate attributeName="opacity" begin="3.1s" dur="0.15s" from="0" to="0.9" fill="freeze" />
-            <animateMotion begin="3.1s" dur="2.8s" path="M 515 235 H 835" repeatCount="indefinite" />
-          </circle>
-          <circle class="flow-pulse is-three" r="5">
-            <animate attributeName="opacity" begin="4s" dur="0.15s" from="0" to="0.9" fill="freeze" />
-            <animateMotion begin="4s" dur="2.8s" path="M 515 235 H 835" repeatCount="indefinite" />
-          </circle>
-
-          <g class="node owner-node" style="--delay: 0ms" transform="translate(145 40)">
-            <rect width="190" height="75" rx="8" />
-            <text x="95" y="31" text-anchor="middle">Program</text>
-            <text class="detail" x="95" y="54" text-anchor="middle">linked Program callable</text>
+          <g class="node owner-node" style="--delay: 0ms" transform="translate(20 45)">
+            <rect width="220" height="80" rx="8" />
+            <text x="110" y="34" text-anchor="middle">Rank 0 program</text>
+            <text class="detail" x="110" y="57" text-anchor="middle">local values on cuda:0</text>
           </g>
-          <g class="node graph-node" style="--delay: 620ms" transform="translate(435 40)">
-            <rect width="210" height="75" rx="8" />
-            <text x="105" y="31" text-anchor="middle">Captured CUDA Graph</text>
-            <text class="detail" x="105" y="54" text-anchor="middle">Program work at stable addresses</text>
+          <g class="node owner-node" style="--delay: 0ms" transform="translate(20 205)">
+            <rect width="220" height="80" rx="8" />
+            <text x="110" y="34" text-anchor="middle">Rank 1 program</text>
+            <text class="detail" x="110" y="57" text-anchor="middle">local values on cuda:1</text>
           </g>
-
-          <g class="node input-node" style="--delay: 0ms" transform="translate(75 175)">
-            <rect width="150" height="60" rx="8" />
-            <text x="75" y="25" text-anchor="middle">Input</text>
-            <text class="detail" x="75" y="45" text-anchor="middle">initial Tensor payload</text>
+          <g class="node backend-node" style="--delay: 400ms" transform="translate(410 120)">
+            <rect width="220" height="90" rx="8" />
+            <text x="110" y="36" text-anchor="middle">Compiled collective</text>
+            <text class="detail" x="110" y="58" text-anchor="middle">ciphertext all-reduce</text>
+            <text class="detail" x="110" y="75" text-anchor="middle">in each rank's exec schedule</text>
           </g>
-          <g class="node input-node" style="--delay: 950ms" transform="translate(75 255)">
-            <rect width="150" height="60" rx="8" />
-            <text x="75" y="25" text-anchor="middle">Next input</text>
-            <text class="detail" x="75" y="45" text-anchor="middle">new Tensor payload</text>
+          <g class="node native-node" style="--delay: 800ms" transform="translate(800 45)">
+            <rect width="220" height="80" rx="8" />
+            <text x="110" y="34" text-anchor="middle">Rank 0 result</text>
+            <text class="detail" x="110" y="57" text-anchor="middle">combined ciphertext</text>
           </g>
-          <g class="node buffer-node" style="--delay: 260ms" transform="translate(315 195)">
-            <rect width="200" height="80" rx="8" />
-            <text x="100" y="32" text-anchor="middle">Buffer</text>
-            <text class="detail" x="100" y="55" text-anchor="middle">one stable value view</text>
-          </g>
-          <g class="node replay-node" style="--delay: 1250ms" transform="translate(625 195)">
-            <rect width="160" height="80" rx="8" />
-            <text x="80" y="32" text-anchor="middle">Graph replay</text>
-            <text class="detail" x="80" y="55" text-anchor="middle">fixed addresses</text>
-          </g>
-          <g class="node native-node" style="--delay: 1600ms" transform="translate(835 195)">
-            <rect width="130" height="80" rx="8" />
-            <text x="65" y="32" text-anchor="middle">Output view</text>
-            <text class="detail" x="65" y="55" text-anchor="middle">consume result</text>
+          <g class="node native-node" style="--delay: 800ms" transform="translate(800 205)">
+            <rect width="220" height="80" rx="8" />
+            <text x="110" y="34" text-anchor="middle">Rank 1 result</text>
+            <text class="detail" x="110" y="57" text-anchor="middle">combined ciphertext</text>
           </g>
         </svg>
       </div>
 
       <div :key="`phases-${activeKey}`" class="route-phases" aria-hidden="true">
-        <template v-if="activeLevel === 'eager'">
-          <span style="--delay: 0ms">Call</span><i />
-          <span style="--delay: 180ms">Transition</span><i />
-          <span style="--delay: 360ms">Dispatch</span><i />
-          <span style="--delay: 720ms">Execute</span>
-        </template>
-        <template v-else-if="activeLevel === 'compile'">
-          <span style="--delay: 0ms">Capture</span><i />
-          <span style="--delay: 620ms">Recognize</span><i />
-          <span style="--delay: 1450ms">Schedule</span><i />
-          <span style="--delay: 2050ms">Lower</span><i />
-          <span style="--delay: 2550ms">Link</span>
-        </template>
-        <template v-else-if="activeLevel === 'stack'">
-          <span style="--delay: 0ms">Owner</span><i />
-          <span style="--delay: 300ms">Dispatch</span><i />
-          <span style="--delay: 700ms">Backend</span><i />
-          <span style="--delay: 1500ms">Native</span>
-        </template>
-        <template v-else>
-          <span style="--delay: 0ms">Prepare</span><i />
-          <span style="--delay: 300ms">Capture</span><i />
-          <span style="--delay: 1150ms">Refresh</span><i />
-          <span style="--delay: 1450ms">Replay</span>
+        <template v-for="(phase, index) in active.phases" :key="phase">
+          <i v-if="index > 0" />
+          <span :style="{ '--delay': `${index * 200}ms` }">{{ phase }}</span>
         </template>
       </div>
     </div>
 
     <div class="graph-caption" role="status" aria-live="polite">
       <div class="graph-caption-copy">
-        <strong>{{ caption.title }}</strong>
-        <span>{{ caption.detail }}</span>
+        <strong>{{ active.title }}</strong>
+        <span>{{ active.detail }}</span>
       </div>
-      <a :href="withBase(caption.href)" @click="openExample($event, caption.href)">
-        {{ caption.example }}
+      <a :href="withBase(active.href)" @click="openExample($event, active.href)">
+        {{ active.link }}
         <NavArrow />
       </a>
     </div>
@@ -439,7 +403,7 @@ const caption = computed(() => {
 
 .level-picker {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 7px;
   padding: 8px;
   border-bottom: 1px solid var(--fhe-c-divider);
@@ -559,23 +523,41 @@ const caption = computed(() => {
   marker-end: url(#compile-control-arrow);
 }
 
-.stack-edge {
+.hit-edge {
+  stroke: var(--fhe-c-brand);
+  stroke-width: 2.6;
+  marker-end: url(#compile-hit-arrow);
+}
+
+.miss-edge {
+  stroke: var(--fhe-c-helium);
+  stroke-dasharray: 7 5;
+  marker-end: url(#compile-control-arrow);
+}
+
+.store-edge {
+  stroke: var(--fhe-c-helium);
+  stroke-dasharray: 2 5;
+  marker-end: url(#compile-control-arrow);
+}
+
+.deploy-edge {
   stroke: color-mix(in srgb, var(--fhe-c-brand) 50%, var(--fhe-c-helium));
-  marker-end: url(#stack-control-arrow);
+  marker-end: url(#deploy-control-arrow);
 }
 
-.stack-route {
-  animation: alternate-stack-route 6s ease-in-out infinite;
-  will-change: opacity;
-}
-
-.stack-program-route {
-  animation-delay: -3s;
-}
-
-.replay-edge {
+.serve-edge {
   stroke: color-mix(in srgb, var(--fhe-c-brand) 68%, var(--fhe-c-helium));
-  marker-end: url(#replay-control-arrow);
+  marker-end: url(#serve-control-arrow);
+}
+
+.dashed-edge {
+  stroke-dasharray: 5 5;
+}
+
+.distributed-edge {
+  stroke: color-mix(in srgb, var(--fhe-c-brand) 35%, var(--fhe-c-helium));
+  marker-end: url(#distributed-control-arrow);
 }
 
 .control-graph marker path {
@@ -593,12 +575,20 @@ const caption = computed(() => {
   stroke: var(--fhe-c-helium);
 }
 
-.stack-graph marker path {
+.compile-graph #compile-hit-arrow path {
+  stroke: var(--fhe-c-brand);
+}
+
+.deploy-graph marker path {
   stroke: color-mix(in srgb, var(--fhe-c-brand) 50%, var(--fhe-c-helium));
 }
 
-.replay-graph marker path {
+.serve-graph marker path {
   stroke: color-mix(in srgb, var(--fhe-c-brand) 68%, var(--fhe-c-helium));
+}
+
+.distributed-graph marker path {
+  stroke: color-mix(in srgb, var(--fhe-c-brand) 35%, var(--fhe-c-helium));
 }
 
 .node {
@@ -623,7 +613,6 @@ const caption = computed(() => {
 }
 
 .compile-node rect,
-.transition-node rect,
 .executable-node rect {
   fill: color-mix(in srgb, var(--fhe-c-helium) 5%, var(--fhe-c-surface));
   stroke: var(--fhe-c-helium);
@@ -634,7 +623,6 @@ const caption = computed(() => {
   stroke: color-mix(in srgb, var(--fhe-c-brand) 58%, var(--fhe-c-helium));
 }
 
-.dispatcher-node rect,
 .resource-node rect {
   fill: var(--fhe-c-surface-tint);
   stroke: var(--fhe-c-border);
@@ -645,10 +633,7 @@ const caption = computed(() => {
   stroke: var(--fhe-c-helium);
 }
 
-.capture-node rect,
-.graph-node rect,
-.buffer-node rect,
-.replay-node rect {
+.buffer-node rect {
   fill: color-mix(in srgb, var(--fhe-c-brand) 4%, var(--fhe-c-surface));
   stroke: color-mix(in srgb, var(--fhe-c-brand) 58%, var(--fhe-c-helium));
 }
@@ -671,15 +656,6 @@ const caption = computed(() => {
   font-weight: 560;
 }
 
-.semantic-label {
-  animation: cycle-semantic-label 4s ease-in-out infinite;
-}
-
-.ckks-label {
-  opacity: 0;
-  animation: cycle-ckks-label 4s ease-in-out infinite;
-}
-
 .flow-pulse {
   fill: var(--fhe-c-brand);
   opacity: 0;
@@ -692,13 +668,6 @@ const caption = computed(() => {
 
 .flow-pulse.is-three {
   fill: var(--fhe-c-helium);
-}
-
-.loop-label {
-  fill: var(--fhe-c-text-3);
-  font-family: var(--vp-font-family-base);
-  font-size: 12px;
-  font-weight: 700;
 }
 
 .edge-label {
@@ -747,9 +716,6 @@ const caption = computed(() => {
 .graph-caption-copy {
   min-width: 0;
   flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .graph-caption-copy strong {
@@ -805,24 +771,9 @@ const caption = computed(() => {
   to { opacity: 1; }
 }
 
-@keyframes cycle-semantic-label {
-  0%, 24%, 100% { opacity: 1; }
-  38%, 84% { opacity: 0; }
-}
-
-@keyframes cycle-ckks-label {
-  0%, 24%, 100% { opacity: 0; }
-  38%, 84% { opacity: 1; }
-}
-
 @keyframes phase-in {
   from { opacity: 0; transform: translateX(-5px); }
   to { opacity: 1; transform: translateX(0); }
-}
-
-@keyframes alternate-stack-route {
-  0%, 42%, 100% { opacity: 1; }
-  50%, 92% { opacity: 0.28; }
 }
 
 @media (max-width: 760px) {
@@ -842,7 +793,6 @@ const caption = computed(() => {
 
   .graph-caption-copy {
     flex-basis: 100%;
-    white-space: normal;
   }
 
 }
@@ -850,26 +800,9 @@ const caption = computed(() => {
 @media (prefers-reduced-motion: reduce) {
   .edge,
   .node,
-  .semantic-label,
-  .ckks-label,
   .route-phases span {
     animation-delay: 0ms;
     animation-duration: 1ms;
-  }
-
-  .stack-route {
-    animation: none;
-    opacity: 1;
-  }
-
-  .semantic-label {
-    animation: none;
-    opacity: 1;
-  }
-
-  .ckks-label {
-    animation: none;
-    opacity: 0;
   }
 
   .flow-pulse {

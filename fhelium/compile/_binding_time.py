@@ -259,7 +259,7 @@ class PreparationRecipe:
 class PreparationPlan:
     """Own a preparation recipe, its leaf bindings, and its current generation.
 
-    Inputs identify callable arguments or external material leaves. Outputs bind ordinary MaterialRef symbols in the ciphertext Program. Tensor identity and version counters govern resident reuse; inference tensors are refreshed on each invocation.
+    Inputs identify callable arguments or external material leaves. Outputs bind ordinary MaterialRef symbols in the ciphertext Program. Tensor identity and version counters govern resident reuse; inference tensors are refreshed on each invocation. Once a refresh has produced the bindings, later refreshes copy their results into those Tensors, so that executables keep their material addresses; bindings shared with a fork or with the captured Compilation are replaced instead.
     """
 
     source: PreparationRecipe
@@ -284,6 +284,8 @@ class PreparationPlan:
     last_material_bytes: int = 0
     resident_material_bytes: int = 0
     link_seconds: float = 0.0
+    _exclusive: bool = False
+    """Whether this plan alone references the export Tensors in ``bindings``."""
 
     @cached_property
     def program(self) -> Program:
@@ -347,6 +349,31 @@ class PreparationPlan:
         self._executable = self.source.executable(self.engines)
         self.link_seconds += time.perf_counter() - started
 
+    def schedule(self, arguments):
+        """Lower the recorded calls into one schedule of registered operations.
+
+        Engine methods record their Backend lowerings, so the schedule maps the current preparation inputs to the export Tensors, followed by the views in :attr:`views`, without Python callbacks; the rounding stream is bound as live state.
+        """
+        from fhelium.backend.lowering import compile_fragment
+
+        self.link()
+
+        def lower(builder, values):
+            exports = list(self._executable.run(*values))
+            for view in self.views.values():
+                owner = exports[self.exports.index(view["owner"])]
+                with builder.fake_mode:
+                    layout = owner.as_strided(
+                        view["shape"],
+                        view["strides"],
+                        owner.storage_offset() + view["offset"],
+                    )
+                exports.append(builder.view_of(owner, layout))
+            return exports
+
+        function = compile_fragment(lower, self.values(arguments)).function
+        return function.schedule
+
     def refresh(self, arguments, *, force=False):
         values = self.values(arguments)
         versions = tuple(tensor_version(value) for value in values)
@@ -363,9 +390,19 @@ class PreparationPlan:
         started = time.perf_counter()
         self.link()
         outputs = self._executable.run(*values)
-        bindings = self.materialize_views(
-            dict(zip(self.exports, outputs, strict=True))
+        exports = dict(zip(self.exports, outputs, strict=True))
+        reused = self._exclusive and all(
+            isinstance(prior := self.bindings.get(symbol), torch.Tensor)
+            and tensor_layout(prior) == tensor_layout(value)
+            for symbol, value in exports.items()
         )
+        if reused:
+            for symbol, value in exports.items():
+                exports[symbol] = self.bindings[symbol].copy_(value)
+            del outputs
+            bindings = {**exports, **{s: self.bindings[s] for s in self.views}}
+        else:
+            bindings = self.materialize_views(exports)
         # A recipe may expose different views of one allocation. Layout is checked
         # against the linked material interface before publishing the generation.
         for symbol, value in bindings.items():
@@ -389,6 +426,7 @@ class PreparationPlan:
         self.versions = versions
         self.generation += 1
         self._initial = False
+        self._exclusive = True
         self.bindings = bindings
         self.last_material_bytes = payload_bytes(bindings.values())
         self.resident_material_bytes = self.last_material_bytes
@@ -403,6 +441,7 @@ class PreparationPlan:
         self.resident_material_bytes = 0
 
     def fork(self):
+        self._exclusive = False
         return dataclasses.replace(
             self,
             leaves=dict(self.leaves),

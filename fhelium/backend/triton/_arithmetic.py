@@ -1,24 +1,33 @@
 """Integer modular arithmetic shared by generated Triton kernels."""
 
+# Triton's annotations type kernel values as host objects: pyright cannot
+# assign integers to ``constexpr`` parameters or evaluate Tensor results.
+# pyright: reportArgumentType=false, reportOperatorIssue=false, reportGeneralTypeIssues=false
+
 import linecache
 
 import triton
 import triton.language as tl
+from triton.language.extra import libdevice
+
+# 32-bit high words use libdevice.mulhi: it stays one mul.hi intrinsic, whereas
+# tl.umulhi becomes a widened multiply that LLVM may regroup or vectorize.
 
 
 @triton.jit
 def montgomery_mul(a, b, q, k, radix_bits: tl.constexpr):
     """Return native-compatible REDC: canonical for R32, lazy for R62."""
     if radix_bits == 32:
-        # With k = -q^{-1} mod 2^32, the low word of a*b + m*q vanishes and
-        # carries exactly when the low word of a*b is nonzero.
+        # With k = -q^{-1} mod 2^32, m = -k*a*b mod 2^32 gives m*q the low
+        # word of a*b, so (a*b - m*q) / 2^32 = hi(a*b) - hi(m*q) needs no
+        # carry. It lies in (-q, q); the unsigned minimum adds q when the
+        # difference wrapped.
         a = a.to(tl.uint32)
         b = b.to(tl.uint32)
         q = q.to(tl.uint32)
-        low = a * b
-        m = low * k.to(tl.uint32)
-        u = tl.umulhi(a, b) + tl.umulhi(m, q) + (low != 0).to(tl.uint32)
-        return tl.where(u >= q, u - q, u).to(tl.int64)
+        m = a * b * (0 - k.to(tl.uint32))
+        u = libdevice.mulhi(a, b) - libdevice.mulhi(m, q)
+        return tl.minimum(u, u + q).to(tl.int64)
     else:
         a = a.to(tl.uint64)
         b = b.to(tl.uint64)
@@ -70,7 +79,7 @@ def shoup32_mul(value, root, quotient, q):
     root = root.to(tl.uint32)
     quotient = quotient.to(tl.uint32)
     q = q.to(tl.uint32)
-    return (value * root - tl.umulhi(value, quotient) * q).to(tl.int64)
+    return (value * root - libdevice.mulhi(value, quotient) * q).to(tl.int64)
 
 
 @triton.jit
@@ -165,8 +174,21 @@ def _seeded_block(seed, row, segment, attempt, rounds: tl.constexpr):
         x2, x7, x8, x13 = _quarter(x2, x7, x8, x13)
         x3, x4, x9, x14 = _quarter(x3, x4, x9, x14)
     return (
-        x0 + s0, x1 + s1, x2 + s2, x3 + s3, x4 + s4, x5 + s5, x6 + s6, x7 + s7,
-        x8 + s8, x9 + s9, x10 + s10, x11 + s11, x12 + s12, x13 + s13, x14 + s14,
+        x0 + s0,
+        x1 + s1,
+        x2 + s2,
+        x3 + s3,
+        x4 + s4,
+        x5 + s5,
+        x6 + s6,
+        x7 + s7,
+        x8 + s8,
+        x9 + s9,
+        x10 + s10,
+        x11 + s11,
+        x12 + s12,
+        x13 + s13,
+        x14 + s14,
         x15 + s15,
     )
 
@@ -225,7 +247,9 @@ def _segment_source(name: str, count: int, wide: bool) -> str:
     for i in range(candidates):
         lines += ["    " + line for line in candidate(i, "block", "")]
         for j in range(max(0, i - spare), min(i, count - 1) + 1):
-            lines.append(f"    o{j} = tl.where(a{i} & (filled == {j}), v{i}, o{j})")
+            lines.append(
+                f"    o{j} = tl.where(a{i} & (filled == {j}), v{i}, o{j})"
+            )
         lines.append(f"    filled += a{i}.to(tl.int32)")
     lines += [
         f"    if tl.min(filled) < {count}:",
@@ -248,7 +272,12 @@ def _segment_source(name: str, count: int, wide: bool) -> str:
 def _compile_segment(name: str, count: int, wide: bool):
     source = _segment_source(name, count, wide)
     filename = f"<fhelium-seeded-{name}>"
-    linecache.cache[filename] = (len(source), None, source.splitlines(True), filename)
+    linecache.cache[filename] = (
+        len(source),
+        None,
+        source.splitlines(True),
+        filename,
+    )
     namespace = {"tl": tl, "_seeded_block": _seeded_block, "__name__": __name__}
     exec(compile(source, filename, "exec", dont_inherit=True), namespace)
     return triton.jit(namespace[name])
@@ -264,18 +293,26 @@ _segments4 = _compile_segment("_segments4", 4, wide=True)
 def _select8(o, j):
     return tl.where(
         j < 4,
-        tl.where(j < 2, tl.where(j == 0, o[0], o[1]), tl.where(j == 2, o[2], o[3])),
-        tl.where(j < 6, tl.where(j == 4, o[4], o[5]), tl.where(j == 6, o[6], o[7])),
+        tl.where(
+            j < 2, tl.where(j == 0, o[0], o[1]), tl.where(j == 2, o[2], o[3])
+        ),
+        tl.where(
+            j < 6, tl.where(j == 4, o[4], o[5]), tl.where(j == 6, o[6], o[7])
+        ),
     )
 
 
 @triton.jit
 def _select4(o, j):
-    return tl.where(j < 2, tl.where(j == 0, o[0], o[1]), tl.where(j == 2, o[2], o[3]))
+    return tl.where(
+        j < 2, tl.where(j == 0, o[0], o[1]), tl.where(j == 2, o[2], o[3])
+    )
 
 
 @triton.jit
-def seeded_key_residue(seed, row, coefficient, q, rounds: tl.constexpr, RADIX: tl.constexpr):
+def seeded_key_residue(
+    seed, row, coefficient, q, rounds: tl.constexpr, RADIX: tl.constexpr
+):
     r"""Return the seeded-key residue at stored ``row`` and ``coefficient``.
 
     ``seed`` points to the digit's int64 seed row $(w_0,\ldots,w_3,\mathrm{id},d)$.
@@ -296,7 +333,9 @@ def seeded_key_residue(seed, row, coefficient, q, rounds: tl.constexpr, RADIX: t
     value = _select8(_segments8(seed, rows, c // 8, narrow, rounds), c % 8)
     if RADIX == 64:
         if tl.max(moduli) >= (1 << 32):
-            wide = _select4(_segments4(seed, rows, c // 4, moduli, rounds), c % 4)
+            wide = _select4(
+                _segments4(seed, rows, c // 4, moduli, rounds), c % 4
+            )
             value = tl.where(moduli >= (1 << 32), wide, value)
     return value.to(tl.int64)
 
@@ -308,7 +347,9 @@ def _group_first(value, count: tl.constexpr):
 
 
 @triton.jit
-def seeded_key_residue8(seed, row, coefficient, q, rounds: tl.constexpr, RADIX: tl.constexpr):
+def seeded_key_residue8(
+    seed, row, coefficient, q, rounds: tl.constexpr, RADIX: tl.constexpr
+):
     """Return ``seeded_key_residue`` for a 1-D ``coefficient`` vector whose
     elements $8k$ to $8k+7$ hold coefficients $8m$ to $8m+7$ of one row.
 
@@ -319,13 +360,23 @@ def seeded_key_residue8(seed, row, coefficient, q, rounds: tl.constexpr, RADIX: 
     moduli = q.to(tl.int64) + c * 0
     narrow = tl.where(moduli < (1 << 32), moduli, 3)
     o = _segments8(
-        seed, _group_first(rows, 8), _group_first(c, 8) // 8, _group_first(narrow, 8), rounds
+        seed,
+        _group_first(rows, 8),
+        _group_first(c, 8) // 8,
+        _group_first(narrow, 8),
+        rounds,
     )
-    value = tl.reshape(_stack8(o[0], o[1], o[2], o[3], o[4], o[5], o[6], o[7]), (c.numel,))
+    value = tl.reshape(
+        _stack8(o[0], o[1], o[2], o[3], o[4], o[5], o[6], o[7]), (c.numel,)
+    )
     if RADIX == 64:
         if tl.max(moduli) >= (1 << 32):
             o4 = _segments4(
-                seed, _group_first(rows, 4), _group_first(c, 4) // 4, _group_first(moduli, 4), rounds
+                seed,
+                _group_first(rows, 4),
+                _group_first(c, 4) // 4,
+                _group_first(moduli, 4),
+                rounds,
             )
             wide = tl.reshape(_stack4(o4[0], o4[1], o4[2], o4[3]), (c.numel,))
             value = tl.where(moduli >= (1 << 32), wide, value)

@@ -5,41 +5,39 @@
 
 namespace fhelium::rns::gpu {
 
-at::Tensor add_standard(const at::Tensor& lhs,
-                        const at::Tensor& rhs,
-                        const at::Tensor& rns_params) {
-  return rns_add_standard_hip(lhs, rhs, rns_params);
+void add_standard_out(const at::Tensor& lhs,
+                      const at::Tensor& rhs,
+                      const at::Tensor& rns_params,
+                      at::Tensor& out) {
+  rns_add_standard_out_hip(lhs, rhs, rns_params, out);
 }
 
-void add_standard_(at::Tensor& lhs,
-                   const at::Tensor& rhs,
-                   const at::Tensor& rns_params) {
-  rns_add_standard_inplace_hip(lhs, rhs, rns_params);
+void sub_standard_out(const at::Tensor& lhs,
+                      const at::Tensor& rhs,
+                      const at::Tensor& rns_params,
+                      at::Tensor& out) {
+  rns_sub_standard_out_hip(lhs, rhs, rns_params, out);
 }
 
-at::Tensor sub_standard(const at::Tensor& lhs,
-                        const at::Tensor& rhs,
-                        const at::Tensor& rns_params) {
-  return rns_sub_standard_hip(lhs, rhs, rns_params);
+void negate_standard_out(const at::Tensor& source,
+                         const at::Tensor& rns_params,
+                         at::Tensor& out) {
+  rns_negate_standard_out_hip(source, rns_params, out);
 }
 
-void sub_standard_(at::Tensor& lhs,
-                   const at::Tensor& rhs,
-                   const at::Tensor& rns_params) {
-  rns_sub_standard_inplace_hip(lhs, rhs, rns_params);
+void montgomery_mul_row_scalars_standard_out(const at::Tensor& residues,
+                                             const at::Tensor& row_scalars,
+                                             const at::Tensor& rns_params,
+                                             at::Tensor& out) {
+  rns_montgomery_mul_row_scalars_standard_out_hip(
+      residues, row_scalars, rns_params, out);
 }
 
-at::Tensor montgomery_mul_row_scalars_standard(const at::Tensor& residues,
-                                               const at::Tensor& row_scalars,
-                                               const at::Tensor& rns_params) {
-  return rns_montgomery_mul_row_scalars_standard_hip(
-      residues, row_scalars, rns_params);
-}
-
-at::Tensor sum_standard_batch(const at::Tensor& source,
-                              int64_t dim,
-                              const at::Tensor& rns_params) {
-  return rns_sum_standard_batch_hip(source, dim, rns_params);
+void sum_standard_batch_out(const at::Tensor& source,
+                            int64_t dim,
+                            const at::Tensor& rns_params,
+                            at::Tensor& out) {
+  rns_sum_standard_batch_out_hip(source, dim, rns_params, out);
 }
 
 }  // namespace fhelium::rns::gpu

@@ -6,31 +6,31 @@ layout: home
 
 <InstallCommand />
 
-## Choose your level of control
+## Use FHElium with agents
 
-Build through the full FHE stack while choosing the level of control that fits each workload. Eager execution and Compile Programs use the same Backend, arithmetic resources, and native CPU/CUDA implementations.
+The `fhelium` agent skill gives coding agents the FHElium workflow for writing, compiling, measuring, and deploying CKKS programs. Install it into a project for Claude Code, Codex, Cursor, and other agents that read Agent Skills:
+
+```bash
+npx skills add visualDust/fhelium --skill fhelium
+```
+
+## Execution routes
+
+Eager runs each operation immediately; the other routes run one compiled schedule.
 
 <HomeControlExplorer />
 
 ## Usage models
 
-Choose a Program workflow, immediate execution with runtime mechanisms, or a rank-local distributed program.
+The Compile, Deploy, and Serve snippets reuse the Engine, keys, and ciphertext from the Eager snippet.
 
 <HomeUsageTabs />
 
 ## Just-in-time optimization
 
-The compiler captures a call, fuses connected operations into generated kernels, and prepares the program so repeated evaluations run with a fraction of the launch overhead. One BSGS matrix-vector call then finishes in about half the time.
+`fhelium.compile` captures the compute flow and optimizes it at runtime: one encrypted matrix-vector product takes 3.49 ms instead of 5.20 ms in eager execution.
 
 <HomeCompileTimeline />
-
-See [JIT compilation](/tutorial/compile-jit) for how the compiler does this.
-
-## Measured performance
-
-The same conventional cyclic-diagonal BSGS formulation measures both packed plaintext-matrix × ciphertext-vector (**PT×CT**) and ciphertext-matrix × ciphertext-vector (**CT×CT**) evaluation. <a href="/assets/fhelium-workload.py" download="fhelium-workload.py">View source</a>
-
-<BsgsMatvecPerformance />
 
 ## Continue by task
 

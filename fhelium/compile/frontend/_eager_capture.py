@@ -49,7 +49,8 @@ from fhelium.ir.ckks_state import (
     reinterpreted_scale,
     transform_state,
 )
-from fhelium.ir.dialects import ckks, core, rns
+from fhelium.backend.resources import BoundResource
+from fhelium.ir.dialects import ckks, core, distributed, rns
 from fhelium.ir.dialects._common import OpenStateType
 from fhelium.values import (
     Ciphertext,
@@ -244,6 +245,12 @@ class _Value:
         self.capture.block.add_op(operation)
         output = _Value(result, self.capture)
         output._implicit_value = cast(_Value | None, implicit)
+        # A moved key keeps its rotation step and generation seed.
+        capture = self.capture
+        if self.value in capture.key_steps:
+            capture.key_steps[result] = capture.key_steps[self.value]
+        if self.value in capture.seeds:
+            capture.seeds[result] = capture.seeds[self.value]
         return output
 
     def reshape(self, *shape):
@@ -278,6 +285,7 @@ class _Value:
                 ckks.CiphertextType,
                 ckks.PlaintextType,
                 ckks.CompressedPlaintextType,
+                ckks.EvaluationKeyType,
             ),
         ):
             return self._move_value(*args, **kwargs)
@@ -285,12 +293,41 @@ class _Value:
 
     def _move_value(self, device, *, non_blocking=False, copy=False):
         target = torch.device(device)
-        return self._with_resident_tensors(
+        moved = self._with_resident_tensors(
             tuple(
                 tensor.to(target, non_blocking=non_blocking, copy=copy)
                 for tensor in self._resident_tensors
             )
         )
+        # The seed rows of a compact or seeded key move with its data.
+        seed = self.capture.seeds.get(self.value)
+        if seed is not None:
+            self.capture.seeds[moved.value] = cast(
+                _Value,
+                _Value(seed, self.capture).to(
+                    target, non_blocking=non_blocking, copy=copy
+                ),
+            ).value
+        return moved
+
+    def cpu(self, *, copy=False):
+        return self.to("cpu", copy=copy)
+
+    def pin_memory(self, *, copy=False):
+        if isinstance(
+            self.value.type,
+            (
+                ckks.CiphertextType,
+                ckks.PlaintextType,
+                ckks.CompressedPlaintextType,
+            ),
+        ):
+            return self._with_resident_tensors(
+                tuple(tensor.pin_memory() for tensor in self._resident_tensors)
+            )
+        from fhelium.backend.torch import pinned_copy
+
+        return self.capture.numeric_call(pinned_copy, (self,), {})
 
     def select(self, dim: int, index: int):
         return self.capture.numeric_call(torch.select, (self, dim, index), {})
@@ -659,6 +696,7 @@ class _EngineCalls:
             return validate
         if name in {
             "config",
+            "dtype",
             "ring_dimension",
             "num_slots",
             "max_depth",
@@ -667,6 +705,23 @@ class _EngineCalls:
             "depth_remaining",
         }:
             return getattr(self.engine, name)
+        if name.endswith("_") and name[:-1] in _METHODS:
+            functional = name[:-1]
+
+            def in_place(
+                target: object, *args: object, **kwargs: object
+            ) -> object:
+                # The captured value of ``target`` names the result afterwards,
+                # as the Eager method updates ``target``.
+                if type(target) is not _Value:
+                    raise CaptureError(
+                        f"Engine.{name} inside a captured computation requires a captured first operand"
+                    )
+                result = getattr(self, functional)(target, *args, **kwargs)
+                cast(_Value, target).value = cast(_Value, result).value
+                return target
+
+            return in_place
         if name in _COMPOSITES:
             # Compositions of captured Engine methods run with this proxy as self.
             return types.MethodType(getattr(Engine, name), self)
@@ -725,6 +780,7 @@ class _EngineCalls:
             before = self.capture.block.last_op
             prior_config = self.capture.active_config
             self.capture.active_config = self.engine.config
+            self.capture.configs[id(self.engine.config)] = self.engine.config
             try:
                 with (
                     recorder.pause() if recorder is not None else nullcontext()
@@ -1564,26 +1620,6 @@ class _EngineCalls:
                     for name, tensor in tables.tensor_operands().items()
                     if name.startswith('sum_')
                 }
-                if source.polynomial_domain == 'ntt':
-                    from fhelium.backend.ntt.automorphism import (
-                        ntt_galois_indices,
-                    )
-                    from fhelium.backend.ckks.rotation._galois import (
-                        rotation_galois_element,
-                    )
-
-                    for _, key in terms:
-                        step = 0 if key is None else int(key.rotation_step)
-                        if step:
-                            extras[f'sum_galois_{step}'] = ntt_galois_indices(
-                                self.engine.config.N,
-                                rotation_galois_element(
-                                    self.engine.config.N,
-                                    step,
-                                    self.engine.config.galois_generator,
-                                ),
-                                source.device,
-                            )
                 parameters += tuple(
                     c.generated_material(
                         tensor,
@@ -2314,11 +2350,26 @@ class _EngineCalls:
             if config.is_subbasis(int(source.depth), depth)
             else config.scale_at(depth),
         )
-        operation = ckks.ModSwitchOp(
-            source.value,
-            typ,
-            attributes={"target_depth": IntegerAttr(depth, 64)},
-        )
+        attributes: dict[str, Attribute] = {
+            "target_depth": IntegerAttr(depth, 64)
+        }
+        if not config.is_subbasis(int(source.depth), depth):
+            # Lowering rescales to the target basis; linking builds its tables
+            # from these resources with the Engine's NTT policy.
+            resources = self.engine._dispatcher_for(
+                torch.device(source.device)
+            ).device_resources
+            self.capture.resources[id(resources)] = resources
+            _, facts = resources.rescale_operands(
+                tuple(source.prime_ids),
+                rows,
+                input_domain=source.polynomial_domain,
+            )
+            if "ntt_backend" in facts:
+                attributes["ntt_backend"] = StringAttr(
+                    cast(str, facts["ntt_backend"])
+                )
+        operation = ckks.ModSwitchOp(source.value, typ, attributes=attributes)
         return self.capture.emit(operation)
 
     def _key_layout(self, keys: Sequence[object]) -> _KeyLayout | None:
@@ -2343,6 +2394,16 @@ class _EngineCalls:
         if any(layout != layouts[0] for layout in layouts[1:]):
             raise CaptureError(
                 "A shared key-switch execution group requires matching key rows and digit supports"
+            )
+        forms = {
+            key.value in self.capture.seeds
+            if isinstance(key, _Value)
+            else cast(KeySwitchKey, key).generated_seed is not None
+            for key in keys
+        }
+        if len(forms) > 1:
+            raise CaptureError(
+                "A shared key-switch execution group requires keys of one storage form; expand the compact keys or compact the expanded keys"
             )
         return {
             "key_prime_ids": layouts[0][0],
@@ -2492,6 +2553,8 @@ class _Capture:
     ) -> None:
         self.workspace = workspace
         self.active_config: CkksConfig | None = None
+        # Configurations of the Engines whose operations were captured.
+        self.configs: dict[int, CkksConfig] = {}
         self.preparation: PreparationRecorder | None = None
         self.runtime_inputs = {}
         self.block = block
@@ -2515,6 +2578,38 @@ class _Capture:
         self.resources: dict[int, CkksDeviceResources] = {}
         self.type_keys: dict[int, tuple[Attribute, int]] = {}
         self.type_values: dict[Attribute, int] = {}
+        # Process-group resources of captured collectives by group identity.
+        self.groups: dict[int, tuple[SSAValue, BoundResource]] = {}
+
+    def group(self, group: object) -> SSAValue:
+        """Return the resource reference of a process group, recording its size."""
+        found = self.groups.get(id(group))
+        if found is not None:
+            return found[0]
+        from fhelium.backend.distributed import ProcessGroupExecutionResource
+        from fhelium.backend.distributed.resources import (
+            PROCESS_GROUP_RESOURCE_KIND,
+        )
+
+        resource = ProcessGroupExecutionResource(cast(Any, group))
+        symbol = "world" if group is None else f"group{len(self.groups)}"
+        reference = core.ResourceRefOp(
+            distributed.GroupType().with_state(
+                {"size": IntegerAttr(resource.size, 64)}
+            ),
+            symbol=symbol,
+            kind=PROCESS_GROUP_RESOURCE_KIND,
+        )
+        first = self.block.first_op
+        if first is None:
+            self.block.add_op(reference)
+        else:
+            self.block.insert_op_before(reference, first)
+        self.groups[id(group)] = (
+            reference.results[0],
+            BoundResource(symbol, PROCESS_GROUP_RESOURCE_KIND, resource),
+        )
+        return reference.results[0]
 
     def type_key(self, typ: Attribute) -> int:
         """Number equal types alike; each type object is hashed by value once."""
@@ -3158,6 +3253,12 @@ def capture_eager(
         program.set_material_descriptions(capture.descriptions)
     if capture.resources:
         work[CAPTURED_RESOURCES] = tuple(capture.resources.values())
+    if capture.configs:
+        work[CAPTURED_CONFIGS] = tuple(capture.configs.values())
+    if capture.groups:
+        work[CAPTURED_GROUPS] = tuple(
+            bound for _, bound in capture.groups.values()
+        )
     compilation = Compilation(
         program, work, material_bindings=capture.materials
     )
@@ -3177,4 +3278,62 @@ CAPTURED_RESOURCES: WorkspaceKey[tuple[CkksDeviceResources, ...]] = (
 )
 
 
-__all__ = ["CAPTURED_RESOURCES", "capture_eager"]
+# CKKS configurations of the Engines a capture recorded operations of.
+CAPTURED_CONFIGS: WorkspaceKey[tuple[CkksConfig, ...]] = WorkspaceKey(
+    "captured_configs"
+)
+
+
+# Process groups of the collectives a capture recorded.
+CAPTURED_GROUPS: WorkspaceKey[tuple[BoundResource, ...]] = WorkspaceKey(
+    "captured_groups"
+)
+
+
+def capture_all_reduce(
+    value: object,
+    group: object,
+    engine: Engine | _EngineCalls,
+    dst: int | None = None,
+) -> bool:
+    """Record a ciphertext sum across ``group`` when ``value`` is a captured value.
+
+    The captured value is updated in place to name the reduced result, as the Eager collective updates its ciphertext. With ``dst``, a global rank, only that rank's result is the sum and the operation records its group rank as ``root``. The operation carries the Engine's configuration, which gives the moduli of the summed residue rows. Returns False for an Eager value.
+    """
+    if type(value) is not _Value:
+        return False
+    captured = cast(_Value, value)
+    capture = captured.capture
+    if isinstance(engine, _EngineCalls):
+        engine = engine.engine
+    config = engine.config
+    capture.configs[id(config)] = config
+    resources = engine._dispatcher_for(
+        torch.device(cast(Any, captured).device)
+    ).device_resources
+    capture.resources[id(resources)] = resources
+    operation = distributed.AllReduceAddCiphertextOp(
+        captured.value, capture.group(group)
+    )
+    operation.attributes["ckks_config"] = StringAttr(
+        json.dumps(config.dumps(), sort_keys=True)
+    )
+    if dst is not None:
+        operation.attributes["root"] = IntegerAttr(
+            torch.distributed.get_group_rank(
+                cast(Any, group or torch.distributed.group.WORLD), dst
+            ),
+            64,
+        )
+    capture.block.add_op(operation)
+    captured.value = operation.result
+    return True
+
+
+__all__ = [
+    "CAPTURED_CONFIGS",
+    "CAPTURED_GROUPS",
+    "CAPTURED_RESOURCES",
+    "capture_all_reduce",
+    "capture_eager",
+]

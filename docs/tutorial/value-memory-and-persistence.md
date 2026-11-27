@@ -2,7 +2,7 @@
 
 **Example source:** [`examples/10_value_files.py`](https://github.com/VisualDust/fhelium/blob/main/examples/10_value_files.py)
 
-Example 10 follows a live value through device movement, a caller-owned file, and restored numerical evaluation. [Example 11](artifact-store.md) separately covers named storage and generation-specific references.
+Example 10 follows a live value through device movement, a caller-owned file, and restored numerical evaluation. [Example 11](value-store.md) separately covers named storage and generation-specific references.
 
 ## Run the example
 
@@ -25,7 +25,7 @@ python examples/10_value_files.py \
 
 ## 1. Inspect typed payloads
 
-The example prints each value's device and logical byte count. A ciphertext owns component and prime-row axes; an operation-ready plaintext carries RNS data, while an encoded plaintext may retain a smaller coefficient payload. The [modulus-chain example](modulus-chain-depth.md) covers how depth changes row counts.
+The example prints each value's device and logical byte count. A ciphertext owns component and prime-row axes; an operation-ready plaintext carries RNS data, while an encoded plaintext may retain a smaller coefficient payload. The [modulus-chain example](depth-and-scale.md) covers how depth changes row counts.
 
 ## 2. Move a live value functionally
 
@@ -99,6 +99,6 @@ None of these operations implicitly destroys another live value. Residency, dura
 ## Related concepts and guides
 
 - [Value model and identity](../concepts/ckks/value-model-and-identity.md)
-- [Serialization and artifacts](../concepts/execution/serialization-and-artifacts.md)
-- [Manage artifacts by logical name](../how-to/manage-artifacts.md)
+- [Persistence and artifacts](../concepts/execution/serialization-and-artifacts.md)
+- [Store named values](../how-to/manage-value-store.md)
 - [Residency lifetimes](../concepts/execution/residency-lifetimes.md)

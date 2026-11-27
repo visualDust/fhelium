@@ -1,13 +1,13 @@
 # Automatic residency admission
 
-**Example source:** [`examples/21_residency_automatic.py`](https://github.com/VisualDust/fhelium/blob/main/examples/21_residency_automatic.py)
+**Example source:** [`examples/19_residency_automatic.py`](https://github.com/VisualDust/fhelium/blob/main/examples/19_residency_automatic.py)
 
 This example admits a CKKS working set under a strict managed CUDA budget. A cold replicable plaintext already occupies CUDA capacity, so deterministic decision-making must reclaim that cache before placing an encrypted input, rotation key, and operation-ready plaintext. The application reviews the resulting decision, enters its state-versioned scope, and executes rotation, plaintext multiplication, and rescaling through a strict CUDA lease.
 
 ## Run the example
 
 ```bash
-python examples/21_residency_automatic.py \
+python examples/19_residency_automatic.py \
   --device cuda:0 \
   --preset slots8192-scale40-depth7
 ```
@@ -151,11 +151,11 @@ The decision's plan has a reclaim prefix and placement entry actions but no exit
 Keeping successful endpoints cached is intentional. A later request may reuse them or deterministically reclaim eligible replicas under new pressure. Automation never ends a managed logical identity. The example therefore calls `discard` for every handle and then closes the manager after verifying CKKS correctness and accounting.
 
 ::: details Source
-<<< @/../examples/21_residency_automatic.py
+<<< @/../examples/19_residency_automatic.py
 :::
 
 ## Continue
 
-- [Explicit residency plans and CUDA leases](./explicit-residency.md)
+- [Explicit residency plans and CUDA leases](./manual-residency.md)
 - [Residency lifetimes](../concepts/execution/residency-lifetimes.md)
 - [Residency plans and execution internals](../developer/residency-plans-and-execution.md)

@@ -1,6 +1,6 @@
 # Limb-parallel ciphertext pipeline
 
-**Example source:** [`examples/24_distributed_rns_shards.py`](https://github.com/VisualDust/fhelium/blob/main/examples/24_distributed_rns_shards.py)
+**Example source:** [`examples/22_distributed_rns_shards.py`](https://github.com/VisualDust/fhelium/blob/main/examples/22_distributed_rns_shards.py)
 
 This example partitions one logical ciphertext along its active RNS-limb axis, runs limb-local addition and multiplication, and reconstructs the complete basis before relinearization and rescale. The application chooses each rank's interval; the scatter interface slices the source and transfers those views.
 
@@ -10,7 +10,7 @@ This example partitions one logical ciphertext along its active RNS-limb axis, r
 
 ```bash
 torchrun --standalone --nproc-per-node=2 \
-  examples/24_distributed_rns_shards.py
+  examples/22_distributed_rns_shards.py
 ```
 
 The example evaluates $(a+b)^2$.
@@ -108,7 +108,7 @@ Limb partitioning is useful when:
 It is less attractive when every operation immediately needs reconstruction; communication then dominates the local modular arithmetic.
 
 ::: details Source
-<<< @/../examples/24_distributed_rns_shards.py
+<<< @/../examples/22_distributed_rns_shards.py
 :::
 
 ## Related concepts and guides

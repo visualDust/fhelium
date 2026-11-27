@@ -1,6 +1,6 @@
 # Prepare and evaluate compressed plaintexts
 
-**Example source:** [`examples/08_eager_compressed_plaintext.py`](https://github.com/VisualDust/fhelium/blob/main/examples/08_eager_compressed_plaintext.py)
+**Example source:** [`examples/07_eager_compressed_plaintext.py`](https://github.com/VisualDust/fhelium/blob/main/examples/07_eager_compressed_plaintext.py)
 
 This example prepares compressed plaintexts directly from one slot period in coefficient and NTT domains. It verifies dense-equivalent addition, multiplication, and in-place storage behavior, and compares storage and warmed evaluator latency. A separate `from_plaintext` example demonstrates bit-for-bit compression of an existing encoded Tensor.
 
@@ -11,7 +11,7 @@ Use this representation when a repeatedly used plaintext has bitwise repetition 
 Start with the default period on the 8,192-slot, 40-bit-scale baseline:
 
 ```bash
-python examples/08_eager_compressed_plaintext.py \
+python examples/07_eager_compressed_plaintext.py \
   --device cpu \
   --preset slots8192-scale40-depth7 \
   --period 256 \
@@ -31,8 +31,8 @@ Use `--device cuda:0` to run the same example through CUDA. The command reports:
 Try several powers of two that divide the slot count:
 
 ```bash
-python examples/08_eager_compressed_plaintext.py --preset slots8192-scale40-depth7 --period 64
-python examples/08_eager_compressed_plaintext.py --preset slots8192-scale40-depth7 --period 512
+python examples/07_eager_compressed_plaintext.py --preset slots8192-scale40-depth7 --period 64
+python examples/07_eager_compressed_plaintext.py --preset slots8192-scale40-depth7 --period 512
 ```
 
 A smaller `period` usually stores fewer unique encoded values, but storage reduction alone does not predict evaluator latency. Measure the operation, depth, batch shape, device, and period used by the deployed workload.
@@ -290,7 +290,7 @@ FHElium cannot reject mismatched CKKS parameter provenance because neither runti
 A source vector can be semantically short, constant over blocks, or generated from a low-dimensional formula and still fail encoded-axis reconstruction validation. That failure preserves the representation rule: use the dense `Plaintext`, or change the application's packing and validate the resulting operation-ready value again. Do not weaken the equality check or choose a larger `unique_count` unless the new representation is still smaller than `N` and passes reconstruction validation.
 
 ::: details Source
-<<< @/../examples/08_eager_compressed_plaintext.py
+<<< @/../examples/07_eager_compressed_plaintext.py
 :::
 
 ## Related API and implementation detail

@@ -8,7 +8,7 @@ Correct CKKS arithmetic is only one part of a reliable system. The application m
 flowchart LR
     PROCESS["one process / rank"]
     ENGINE["Eager Engine"]
-    COMPILE["Compilation and linked executable"]
+    COMPILE["compiled callable or Compilation<br/>exec schedule"]
     BINDINGS["Tensor bindings and named handles"]
     DEVICES["lazy per-device resources"]
     VALUES["placed local values and keys"]
@@ -36,8 +36,11 @@ Each rank owns its local execution services and values. Immediate execution can 
 | Process group | `torch.distributed` launcher/init | Application | Never embedded in a value or engine |
 | CUDA stream/event | Application or PyTorch | Application | Passed by the application to execution helpers |
 | Serialized path | Application | Storage policy | Not remembered by the value |
-| `ArtifactRef` | `ArtifactStore` | Application | Tensor-free; `store.get(ref)` reconstructs the checked generation |
-| CUDA Graph program | Application/program cache | Application | Captures a supported rank-local CUDA callable |
+| `StoredValueRef` | `ValueStore` | Application | Tensor-free; `store.get(ref)` reconstructs the checked generation |
+| Graph segments, output regions | Runner of a compiled specialization | Compiled callable | Captured at the second execution; released by `clear()` |
+| Shared arena and Graph pool | First compiled function on a device | All compiled functions on that device | Grows to the largest requirement; counted as compiled execution memory |
+| Compiled artifact | `fhelium.compile.export` | Application | Loaded with caller keys into a callable |
+| Manual CUDA Graph program | Application | Application | Captures a supported rank-local CUDA callable |
 
 ## Why values are dense and local
 
@@ -129,4 +132,4 @@ CKKS meaning is expressed by value state and operation semantics; an Eager metho
 - [Open compiler stack](../open-compiler-stack.md)
 - [Rank-local SPMD model](../distributed/spmd-model.md)
 - [Residency lifetimes](../execution/residency-lifetimes.md)
-- [Serialization and artifacts](../execution/serialization-and-artifacts.md)
+- [Persistence and artifacts](../execution/serialization-and-artifacts.md)

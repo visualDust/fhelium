@@ -73,9 +73,10 @@ wide[1, :, ::2] = y
 strided = wide[0, :, ::2], wide[1, :, ::2]
 plan = _plan(2, tuple(strided[0].stride()))
 out = torch.empty((2, N), dtype=torch.int64)
-plan.kernel(
+plan.kernel.function[plan.kernel.grid](
     *(strided[i] for i in plan.inputs), out, parameters,
-    parameters.stride(0), parameters.stride(1), 62, 256, *plan.scalars, stream=None,
+    parameters.stride(0), parameters.stride(1), 62, 256, *plan.scalars,
+    num_warps=plan.kernel.num_warps, **plan.kernel.compile_options,
 )
 for i, q in enumerate(moduli):
     expected = torch.tensor(

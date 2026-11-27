@@ -55,7 +55,7 @@
     },
     "configurations": {
       "type": "array",
-      "minItems": 5,
+      "minItems": 4,
       "items": {
         "$ref": "#/$defs/configuration"
       }
@@ -124,18 +124,18 @@
           "additionalProperties": false,
           "required": [
             "cpu",
-            "cuda-12.9",
-            "cuda-13.0"
+            "cuda-13.0",
+            "cuda-13.2"
           ],
           "properties": {
             "cpu": {
               "const": "packaging/manylinux_2_28.Dockerfile"
             },
-            "cuda-12.9": {
-              "const": "packaging/manylinux_2_28_cuda12_9.Dockerfile"
-            },
             "cuda-13.0": {
-              "const": "packaging/manylinux_2_28_cuda13.Dockerfile"
+              "const": "packaging/manylinux_2_28_cuda13_0.Dockerfile"
+            },
+            "cuda-13.2": {
+              "const": "packaging/manylinux_2_28_cuda13_2.Dockerfile"
             }
           },
           "patternProperties": {
@@ -282,8 +282,7 @@
         "role": {
           "enum": [
             "current-cuda",
-            "previous-cuda-linux",
-            "previous-cuda-windows",
+            "previous-cuda",
             "current-cpu",
             "previous-cpu",
             "current-hip",

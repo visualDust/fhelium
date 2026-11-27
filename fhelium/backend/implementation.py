@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Protocol, TypeAlias, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, runtime_checkable
 
 import torch
 from xdsl.dialects.builtin import ArrayAttr, FloatAttr, IntegerAttr, StringAttr
@@ -23,6 +23,9 @@ from fhelium.ir import (
 from fhelium.ir.dialects import core
 
 from .resources import BoundResource, ResourceRequirement
+
+if TYPE_CHECKING:
+    from .lowering import ExecBuilder
 
 
 InvocationAttributes: TypeAlias = Mapping[str, Any]
@@ -55,6 +58,7 @@ class OperationInvocation:
     operand_bases: tuple[str | None, ...] = ()
     operand_components: tuple[int | None, ...] = ()
     result_prime_ids: tuple[tuple[int, ...] | None, ...] = ()
+    in_place: bool = False
 
     @classmethod
     def _from_eager(
@@ -64,6 +68,7 @@ class OperationInvocation:
         result_count: int,
         attributes: InvocationAttributes,
         operand_bases: tuple[str | None, ...] = (),
+        in_place: bool = False,
     ) -> OperationInvocation:
         """Construct a descriptor from Engine-owned typed call metadata."""
 
@@ -80,6 +85,7 @@ class OperationInvocation:
         )
         object.__setattr__(invocation, "operand_components", ())
         object.__setattr__(invocation, "result_prime_ids", ())
+        object.__setattr__(invocation, "in_place", in_place)
         return invocation
 
     def __post_init__(self) -> None:
@@ -140,7 +146,9 @@ def _prime_ids(values: object | None) -> tuple[int, ...] | None:
     return _PRIME_IDS.setdefault(key, key)
 
 
-def operation_invocation(operation: Operation) -> OperationInvocation:
+def operation_invocation(
+    operation: Operation, *, in_place: bool = False
+) -> OperationInvocation:
     """Convert one linked IR operation to its runtime invocation descriptor."""
 
     def optional_field(value_type: object, name: str) -> object | None:
@@ -193,12 +201,15 @@ def operation_invocation(operation: Operation) -> OperationInvocation:
         operand_bases=tuple(bases),
         operand_components=tuple(components),
         result_prime_ids=tuple(result_prime_ids),
+        in_place=in_place,
     )
 
 
 @runtime_checkable
 class OperationImplementation(Protocol):
-    """Execute one or more registered operations on Tensor payloads.
+    """Lower one or more registered operations to an exec schedule.
+
+    ``lower`` runs once per operation and operand layout. It receives the Tensor operands as placeholders with static layouts and expresses the operation with PyTorch and native operator calls on them; ``builder`` records those calls and supplies kernel launches, Python calls and mutable resource state. Placeholder data is unavailable while lowering, so each decision depends only on the invocation, the layouts and the bound resources. With ``invocation.in_place``, the first operand is the result's storage.
 
     An implementation may define ``requires_request = True``. Such an implementation is selected only when an operation names it or a fusion region requests it; default resolution of an unannotated operation skips it.
     """
@@ -216,14 +227,13 @@ class OperationImplementation(Protocol):
         self, invocation: OperationInvocation
     ) -> tuple[ResourceRequirement, ...]: ...
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
+        builder: ExecBuilder,
         /,
-        *,
-        in_place: bool,
     ) -> tuple[torch.Tensor, ...]: ...
 
 
@@ -269,29 +279,13 @@ class PreparingOperationImplementation(OperationImplementation, Protocol):
     """Prepare one represented operation for direct Tensor execution.
 
     Code-generating implementations consume the operation and its regions once
-    during Backend resolution. The returned implementation executes the complete
-    operation without interpreting its nested operations at runtime.
+    during Backend resolution. The returned implementation lowers the complete
+    operation without interpreting its nested operations.
     """
 
     def prepare_operation(
         self, operation: Operation
     ) -> OperationImplementation: ...
-
-
-@runtime_checkable
-class RegionOperationImplementation(OperationImplementation, Protocol):
-    """Execute an operation whose regions contain callable Tensor programs."""
-
-    def execute_regions(
-        self,
-        invocation: OperationInvocation,
-        inputs: tuple[torch.Tensor, ...],
-        resources: tuple[BoundResource, ...],
-        regions: tuple[RegionCallable, ...],
-        /,
-        *,
-        in_place: bool,
-    ) -> tuple[torch.Tensor, ...]: ...
 
 
 def requested_implementation(
@@ -544,7 +538,6 @@ __all__ = [
     "OperationInvocation",
     "PreparingOperationImplementation",
     "RegionCallable",
-    "RegionOperationImplementation",
     "operation_invocation",
     "requested_implementation",
 ]

@@ -40,11 +40,36 @@ TORCH_LIBRARY_FRAGMENT(fhelium_ckks_ops, m) {
       "Tensor strided_plaintext, Tensor implicit_plaintext, Tensor "
       "rns_params) -> ()");
   m.def(
+      "multiply_two_component_ntt_montgomery_out(Tensor lhs_components, "
+      "Tensor rhs_components, Tensor rns_params, Tensor(a!) out) -> ()");
+  m.def(
+      "add_prepared_plaintext_component_out(Tensor ciphertext_component, "
+      "Tensor prepared_plaintext, Tensor rns_params, Tensor(a!) out) -> ()");
+  m.def(
+      "add_cyclic_compressed_plaintext_component_out(Tensor "
+      "ciphertext_component, Tensor compressed_plaintext, Tensor rns_params, "
+      "Tensor(a!) out) -> ()");
+  m.def(
+      "add_contiguous_compressed_plaintext_component_out(Tensor "
+      "ciphertext_component, Tensor compressed_plaintext, Tensor rns_params, "
+      "Tensor(a!) out) -> ()");
+  m.def(
+      "add_strided_plaintext_component_out(Tensor ciphertext_component, "
+      "Tensor strided_plaintext, Tensor implicit_plaintext, Tensor "
+      "rns_params, Tensor(a!) out) -> ()");
+  m.def(
       "apply_coefficient_galois_automorphism(Tensor residues, Tensor "
       "source_indices, Tensor source_sign, Tensor twice_modulus) -> Tensor");
   m.def(
       "apply_ntt_galois_automorphism(Tensor residues_ntt, Tensor "
       "source_indices) -> Tensor");
+  m.def(
+      "apply_coefficient_galois_automorphism_out(Tensor residues, Tensor "
+      "source_indices, Tensor source_sign, Tensor twice_modulus, Tensor(a!) "
+      "out) -> ()");
+  m.def(
+      "apply_ntt_galois_automorphism_out(Tensor residues_ntt, Tensor "
+      "source_indices, Tensor(a!) out) -> ()");
   m.def(
       "add_ntt_galois_automorphism_(Tensor(a!) target, Tensor residues_ntt, "
       "Tensor source_indices, Tensor rns_params) -> ()");
@@ -52,6 +77,11 @@ TORCH_LIBRARY_FRAGMENT(fhelium_ckks_ops, m) {
       "keyswitch_moddown_qp_to_q(Tensor q_residues, Tensor p_residues, Tensor "
       "moddown_p_drop_inverses_montgomery, Tensor rns_params, "
       "Tensor? moddown_half=None, str rounding=\"nearest\") -> Tensor");
+  m.def(
+      "keyswitch_moddown_qp_to_q_out(Tensor q_residues, Tensor p_residues, "
+      "Tensor moddown_p_drop_inverses_montgomery, Tensor rns_params, Tensor? "
+      "moddown_half, str rounding, Tensor(a!) out, Tensor(b!)? p_scratch=None) "
+      "-> ()");
   m.def(
       "keyswitch_accumulate_digit_products_(Tensor(a!) accumulator0_qp, "
       "Tensor(b!) accumulator1_qp, Tensor extended_digit_ntt_qp, Tensor "
@@ -86,14 +116,30 @@ TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CPU, m) {
          &fhelium::ckks::add_strided_plaintext_component);
   m.impl("add_strided_plaintext_component_",
          &fhelium::ckks::add_strided_plaintext_component_);
+  m.impl("multiply_two_component_ntt_montgomery_out",
+         &fhelium::ckks::multiply_two_component_ntt_montgomery_out);
+  m.impl("add_prepared_plaintext_component_out",
+         &fhelium::ckks::add_prepared_plaintext_component_out);
+  m.impl("add_cyclic_compressed_plaintext_component_out",
+         &fhelium::ckks::add_cyclic_compressed_plaintext_component_out);
+  m.impl("add_contiguous_compressed_plaintext_component_out",
+         &fhelium::ckks::add_contiguous_compressed_plaintext_component_out);
+  m.impl("add_strided_plaintext_component_out",
+         &fhelium::ckks::add_strided_plaintext_component_out);
   m.impl("apply_coefficient_galois_automorphism",
          &fhelium::ckks::apply_coefficient_galois_automorphism);
   m.impl("apply_ntt_galois_automorphism",
          &fhelium::ckks::apply_ntt_galois_automorphism);
+  m.impl("apply_coefficient_galois_automorphism_out",
+         &fhelium::ckks::apply_coefficient_galois_automorphism_out);
+  m.impl("apply_ntt_galois_automorphism_out",
+         &fhelium::ckks::apply_ntt_galois_automorphism_out);
   m.impl("add_ntt_galois_automorphism_",
          &fhelium::ckks::add_ntt_galois_automorphism_);
   m.impl("keyswitch_moddown_qp_to_q",
          &fhelium::ckks::keyswitch_moddown_qp_to_q);
+  m.impl("keyswitch_moddown_qp_to_q_out",
+         &fhelium::ckks::keyswitch_moddown_qp_to_q_out);
   m.impl("keyswitch_accumulate_digit_products_",
          &fhelium::ckks::keyswitch_accumulate_digit_products_);
 }
@@ -119,14 +165,30 @@ TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CUDA, m) {
          &fhelium::ckks::add_strided_plaintext_component);
   m.impl("add_strided_plaintext_component_",
          &fhelium::ckks::add_strided_plaintext_component_);
+  m.impl("multiply_two_component_ntt_montgomery_out",
+         &fhelium::ckks::multiply_two_component_ntt_montgomery_out);
+  m.impl("add_prepared_plaintext_component_out",
+         &fhelium::ckks::add_prepared_plaintext_component_out);
+  m.impl("add_cyclic_compressed_plaintext_component_out",
+         &fhelium::ckks::add_cyclic_compressed_plaintext_component_out);
+  m.impl("add_contiguous_compressed_plaintext_component_out",
+         &fhelium::ckks::add_contiguous_compressed_plaintext_component_out);
+  m.impl("add_strided_plaintext_component_out",
+         &fhelium::ckks::add_strided_plaintext_component_out);
   m.impl("apply_coefficient_galois_automorphism",
          &fhelium::ckks::apply_coefficient_galois_automorphism);
   m.impl("apply_ntt_galois_automorphism",
          &fhelium::ckks::apply_ntt_galois_automorphism);
+  m.impl("apply_coefficient_galois_automorphism_out",
+         &fhelium::ckks::apply_coefficient_galois_automorphism_out);
+  m.impl("apply_ntt_galois_automorphism_out",
+         &fhelium::ckks::apply_ntt_galois_automorphism_out);
   m.impl("add_ntt_galois_automorphism_",
          &fhelium::ckks::add_ntt_galois_automorphism_);
   m.impl("keyswitch_moddown_qp_to_q",
          &fhelium::ckks::keyswitch_moddown_qp_to_q);
+  m.impl("keyswitch_moddown_qp_to_q_out",
+         &fhelium::ckks::keyswitch_moddown_qp_to_q_out);
   m.impl("keyswitch_accumulate_digit_products_",
          &fhelium::ckks::keyswitch_accumulate_digit_products_);
   m.impl("keyswitch_accumulate_products_",

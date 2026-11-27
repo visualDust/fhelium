@@ -24,6 +24,7 @@ from .passes.ckks import (
     LowerMessagePlaintextPreparationPass,
     ResolveRotationKeyOperandsPass,
 )
+from .passes.distributed import LowerSpecializedCollectivesPass
 from .passes.frontend import LowerSemanticToLogicalPass
 from .passes.fusion import FuseOperationsPass
 from .passes.lowering._select_execution import SelectExecutionLoweringsPass
@@ -35,7 +36,7 @@ def default_lower_and_fuse_pipeline(
 ) -> Pipeline:
     """Build an editable lowering-and-fusion pipeline for a mixed-level Program.
 
-    The recipe lowers high-level encrypted arithmetic, propagates represented entry state, removes dead values, hoists compatible rotations, reuses internal pure computations, and selects supported fusion regions. Supplied CKKS transitions are preserved. Rescale and relinearization scheduling require caller-added passes before depth and scale assignment.
+    The recipe exposes the CKKS addition of ciphertext all-reduce as its combine region, lowers high-level encrypted arithmetic, propagates represented entry state, removes dead values, hoists compatible rotations, reuses internal pure computations, and selects supported fusion regions. Supplied CKKS transitions are preserved. Rescale and relinearization scheduling require caller-added passes before depth and scale assignment.
 
     The selected registry is shared through CompileWorkspace. Lowering and implementation selection complete their operation material declarations using that registry and the workspace's optional ``key_layouts`` mapping. Passes read available Tensor facts from the Compilation's material bindings.
 
@@ -51,6 +52,7 @@ def default_lower_and_fuse_pipeline(
     )
     passes: list[Pass] = [
         ResolveTensorPlaceholdersPass(),
+        LowerSpecializedCollectivesPass(max_group_size=2),
         EliminateDeadValuesPass(),
         ReuseIntermediatesPass(),
         LowerSemanticToLogicalPass(),

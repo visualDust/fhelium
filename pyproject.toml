@@ -12,7 +12,11 @@ maintainers = [
 requires-python = ">=3.12,<3.14"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
-license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
+license-files = [
+  "LICENSE-MIT",
+  "LICENSE-APACHE",
+  "third_party/nlohmann_json/LICENSE.MIT",
+]
 keywords = [
     "ckks",
     "cryptography",
@@ -134,12 +138,12 @@ dev = [
 fhelium = [
     "cmake==4.4.2",
     "ninja==1.13.0",
-    "torch==2.13.0",
+    "torch==2.15.0",
 ]
 
 [tool.uv]
 # Keep the default developer Torch line aligned with the current configurations
 # in packaging/release_matrix.json. The public dependency range remains wider.
-constraint-dependencies = ["torch==2.13.0"]
+constraint-dependencies = ["torch==2.15.0"]
 default-groups = ["build", "dev"]
 required-version = ">=0.9.17"

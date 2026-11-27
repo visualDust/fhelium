@@ -1,6 +1,6 @@
 # Execution buffers and CUDA Graphs
 
-`fhelium.runtime` provides device-independent value signatures, reusable fixed-address storage, CUDA-event copy handles, and CUDA Graph capture for a rank-local Python callable. Buffers supply ordinary Tensor and FHElium values to Eager, manually linked Programs, or compiled callables. CUDA Graph capture records the prepared GPU launch sequence over stable storage.
+This page describes the storage and CUDA Graph mechanisms of execution. The native Runner of a compiled specialization plans an arena, Graph segments, and an output region for its exec schedule (`backend/_planning.py`, `backend/runner.py`, `csrc/runner/`). `fhelium.runtime` provides device-independent value signatures, reusable fixed-address storage, `DoubleBuffer`, CUDA-event copy handles, and `CudaGraphProgram`, the manual CUDA Graph capture of a rank-local Python callable.
 
 ## Execution stack
 
@@ -100,7 +100,23 @@ sequenceDiagram
 
 When overwriting a buffer, the application must provide ordering against prior readers. A copy-completion event proves that the new payload is ready; it does not prove that an earlier evaluator has stopped reading the old payload.
 
-## CUDA Graph capture
+## Runner storage and Graph segments
+
+`plan_schedule` in `backend/_planning.py` rewrites a translated schedule before the Runner is built:
+
+- **Storage classes.** An `alloc` buffer that is neither returned, carried through structured control flow, nor returned by an operation that may alias its arguments becomes an `arena` buffer at a fixed byte offset; its `alloc` and `release` instructions are dropped. Other allocations stay per-call; those that reach the results become `output` buffers. With segments, an `output` buffer with one allocation and a static CUDA layout is placed in the Runner's output region with `place_output`.
+- **Arena offsets.** Each arena buffer is live from its first to its last instruction, extended to the end of a loop in which it is used. Buffers are placed largest first at the lowest 256-byte aligned offset that does not overlap a buffer with an intersecting lifetime.
+- **Segments** (`graphs=True`). Maximal runs of capture-safe nodes of the top-level block, where a loop or branch is one node, are enclosed in `begin_segment`/`end_segment`. Segments stay out of loop bodies, because a segment reading a changing induction variable would be captured again on every iteration.
+
+Capture safety is a static property of an instruction: launches, copies, views, zeroing, calls of safe callees, and operator calls on Tensors of one CUDA device are safe unless the operator carries `torch.Tag.cudagraph_unsafe` or reads device values on the host; collectives on CUDA buffers are safe, and a segment runs directly when its process group cannot be captured; Python calls and CPU operations are unsafe. A collective that transfer planning places on a communication stream runs outside Graph segments, which end at it.
+
+A shared Runner uses the device's `shared_arena`, which grows to the largest requirement among the Runners using it. A growth makes each of them derive its arena views and capture its segments again at its next execution. A Runner whose execution starts while another execution on the shared arena has not returned uses a private arena for that execution. `compiled_execution_bytes(device)` reports the shared arena and Graph pool, and Residency budgets subtract it.
+
+At run time a segment executes directly on its first run. Live-in Tensors that lie in another Runner's storage are read in place; the segment keys its captured variants by their addresses, captures a variant on the second run with the same key, and keeps up to four variants, replacing the least recently replayed. Other live-in Tensors are staged into storage the Runner owns. With automatic selection, a segment records the device time of its first direct run and of the three replays after its capture, reads the events at a later run after they complete, and keeps the Graph only when the median replay is shorter; the choice persists across later captures. A variant whose recorded inputs are no longer replayable drops all variants of the Runner, which share one pool, and the segment captures again.
+
+Before a top-level run writes the output region, `Program::detach` moves every result of the previous run that is still referenced outside the Runner to fresh storage and redirects its `StorageImpl`, so views follow; each move increments `detached_outputs`. `graph_stats` and `segment_stats` of `ProgramExecutable` expose these counters, the variants, and the segment decisions.
+
+## Manual CUDA Graph capture
 
 `CudaGraphProgram.capture(function, example_inputs=...)` specializes one Python callable to a fixed input structure and CUDA device. Parameters captured through a closure, `functools.partial`, or a callable object are static program state. `example_inputs` define dynamic positional values backed by one retained `ReusableValueBuffer`.
 
@@ -120,7 +136,7 @@ flowchart LR
     EX --> WBUF --> WARM --> CBUF --> CAP --> OUT --> REPLAY --> READY
 ```
 
-Warmup uses fresh storage so lazy backend initialization does not mutate the addresses retained for capture. The captured callable invokes its prepared native or generated kernels; CUDA Graph records those launches and their fixed storage addresses. For manually owned capture, construct a compiled callable with `graph=False`, prepare the desired specialization, and warm any lazy device-code compilation as described in [prepared host execution](prepared-host-execution.md).
+Warmup uses fresh storage so lazy backend initialization does not mutate the addresses retained for capture. The captured callable invokes its prepared native or generated kernels; CUDA Graph records those launches and their fixed storage addresses. For manually owned capture, construct a compiled callable with `graph=False`, prepare the desired specialization, and warm any lazy device-code compilation as described in [Linking, exec schedules, and the Runner](linking-and-runner.md).
 
 Dynamic keyword arguments and arbitrary Python control objects are not captured. Adapt a dynamic keyword-only tensor into a positional input and keep dynamic control flow outside the graph.
 
@@ -172,7 +188,11 @@ The application retains responsibility for:
 | CPU and process-visible CUDA topology observation | `fhelium/runtime/topology.py` |
 | Host/CUDA capacity and availability snapshots | `fhelium/runtime/memory.py` |
 | Fixed storage, payload copying, and `CopyHandle` | `fhelium/runtime/buffer.py` |
-| Capture, replay, output lifetime, and statistics | `fhelium/runtime/cuda_graph.py` |
+| Manual capture, replay, output lifetime, and statistics | `fhelium/runtime/cuda_graph.py` |
+| `DoubleBuffer` | `fhelium/runtime/buffer.py` |
+| Schedule planning: storage classes, arena, segments | `fhelium/backend/_planning.py` |
+| Schedule translation, Runner construction, shared arena | `fhelium/backend/runner.py` |
+| Native Runner, segment variants, detach | `csrc/runner/runner.cpp`, `csrc/runner/graph_capture.h` |
 | Public package surface | `fhelium/runtime/__init__.py` |
 
 ## Validation
@@ -190,11 +210,12 @@ Execution changes should cover:
 - borrowed-output overwrite and owned-output copying;
 - close behavior with pending copies or replay work.
 
-The focused suites are `tests/runtime/test_execution_buffer.py` and `tests/runtime/test_cuda_graph_execution.py`.
+The focused suites are `tests/runtime/test_execution_buffer.py`, `tests/runtime/test_cuda_graph_execution.py`, and, for Runner segments, `tests/compile/test_graph_executor.py`.
 
 ## Continue
 
 - [Value signatures and buffers](../concepts/execution/signatures-and-buffers.md)
-- [CUDA Graph model](../concepts/execution/cuda-graph-model.md)
+- [Compiled execution](../concepts/execution/compiled-execution.md)
+- [Linking, exec schedules, and the Runner](linking-and-runner.md)
 - [Distributed internals](distributed-internals.md)
 - [Residency plans and execution](residency-plans-and-execution.md)

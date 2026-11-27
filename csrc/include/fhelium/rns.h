@@ -45,6 +45,13 @@ FHELIUM_API at::Tensor montgomery_mul(const at::Tensor& lhs,
                                       const at::Tensor& rhs,
                                       const at::Tensor& rns_params);
 
+/// Out form of `montgomery_mul`; writes the product into `out`, which has the
+/// shape of `lhs`.
+FHELIUM_API void montgomery_mul_out(const at::Tensor& lhs,
+                                    const at::Tensor& rhs,
+                                    const at::Tensor& rns_params,
+                                    at::Tensor& out);
+
 /// Evaluates the weighted sum $\sum_t c_t p_t$ of ciphertext and plaintext
 /// terms.
 ///
@@ -57,6 +64,13 @@ FHELIUM_API at::Tensor montgomery_mul(const at::Tensor& lhs,
 FHELIUM_API at::Tensor montgomery_weighted_sum(at::TensorList ciphertexts,
                                                at::TensorList plaintexts,
                                                const at::Tensor& rns_params);
+
+/// Out form of `montgomery_weighted_sum`; `out` has the shape, dtype and
+/// device of `ciphertexts[0]` and is disjoint from every term.
+FHELIUM_API void montgomery_weighted_sum_out(at::TensorList ciphertexts,
+                                             at::TensorList plaintexts,
+                                             const at::Tensor& rns_params,
+                                             at::Tensor& out);
 
 /// Evaluates `group_count` weighted sums that share one list of ciphertext
 /// terms.
@@ -71,6 +85,15 @@ FHELIUM_API at::Tensor montgomery_weighted_sums(at::TensorList ciphertexts,
                                                 at::TensorList plaintexts,
                                                 int64_t group_count,
                                                 const at::Tensor& rns_params);
+
+/// Output form of `montgomery_weighted_sums`; `out` is contiguous with shape
+/// `[component, group, *rest]` of the ciphertext terms and their dtype and
+/// device.
+FHELIUM_API void montgomery_weighted_sums_out(at::TensorList ciphertexts,
+                                              at::TensorList plaintexts,
+                                              int64_t group_count,
+                                              const at::Tensor& rns_params,
+                                              at::Tensor& out);
 
 /// Multiplies by a compressed right operand whose values repeat cyclically
 /// along the final axis.
@@ -97,6 +120,23 @@ FHELIUM_API at::Tensor montgomery_mul_contiguous_compressed(
     const at::Tensor& lhs,
     const at::Tensor& compressed_rhs,
     const at::Tensor& rns_params);
+
+/// Out form of `montgomery_mul_cyclic_compressed`. `out` has the shape, dtype
+/// and device of `lhs`, is `lhs` itself or disjoint from it, and is disjoint
+/// from `compressed_rhs`.
+FHELIUM_API void montgomery_mul_cyclic_compressed_out(
+    const at::Tensor& lhs,
+    const at::Tensor& compressed_rhs,
+    const at::Tensor& rns_params,
+    at::Tensor& out);
+
+/// Out form of `montgomery_mul_contiguous_compressed`, with the output
+/// requirements of `montgomery_mul_cyclic_compressed_out`.
+FHELIUM_API void montgomery_mul_contiguous_compressed_out(
+    const at::Tensor& lhs,
+    const at::Tensor& compressed_rhs,
+    const at::Tensor& rns_params,
+    at::Tensor& out);
 
 /// Multiplies every limb row by one Montgomery scalar in place.
 ///
@@ -129,6 +169,13 @@ FHELIUM_API at::Tensor add_lazy(const at::Tensor& lhs,
                                 const at::Tensor& rhs,
                                 const at::Tensor& rns_params);
 
+/// Out form of `add_lazy`; writes the sum into `out`, which has the shape of
+/// `lhs`.
+FHELIUM_API void add_lazy_out(const at::Tensor& lhs,
+                              const at::Tensor& rhs,
+                              const at::Tensor& rns_params,
+                              at::Tensor& out);
+
 /// Adds two residue Tensors modulo $2q_j$, taking the moduli from a vector.
 ///
 /// Equivalent to `add_lazy` with `twice_modulus[j]` $= 2q_j$ supplied as a
@@ -138,6 +185,14 @@ FHELIUM_API at::Tensor add_lazy_with_twice_modulus(
     const at::Tensor& rhs,
     const at::Tensor& twice_modulus);
 
+/// Out form of `add_lazy_with_twice_modulus`; `out` has the shape of `lhs`
+/// and is `lhs` itself or disjoint from it.
+FHELIUM_API void add_lazy_with_twice_modulus_out(
+    const at::Tensor& lhs,
+    const at::Tensor& rhs,
+    const at::Tensor& twice_modulus,
+    at::Tensor& out);
+
 /// Subtracts two residue Tensors modulo $2q_j$.
 ///
 /// Computes $a - b$ reduced to the lazy range for lazy inputs. `rhs` has the
@@ -145,6 +200,13 @@ FHELIUM_API at::Tensor add_lazy_with_twice_modulus(
 FHELIUM_API at::Tensor sub_lazy(const at::Tensor& lhs,
                                 const at::Tensor& rhs,
                                 const at::Tensor& rns_params);
+
+/// Out form of `sub_lazy`; `out` has the shape of `lhs` and is `lhs` itself
+/// or disjoint from it.
+FHELIUM_API void sub_lazy_out(const at::Tensor& lhs,
+                              const at::Tensor& rhs,
+                              const at::Tensor& rns_params,
+                              at::Tensor& out);
 
 /// Adds two standard residue Tensors and returns reduced residues.
 ///
@@ -160,6 +222,13 @@ FHELIUM_API void add_standard_(at::Tensor& lhs,
                                const at::Tensor& rhs,
                                const at::Tensor& rns_params);
 
+/// Out form of `add_standard`; `out` has the shape of `lhs` and is `lhs`
+/// itself or disjoint from it.
+FHELIUM_API void add_standard_out(const at::Tensor& lhs,
+                                  const at::Tensor& rhs,
+                                  const at::Tensor& rns_params,
+                                  at::Tensor& out);
+
 /// Sums standard residues over one batch axis.
 ///
 /// `dim` selects a batch axis of `source`, and the result keeps the remaining
@@ -168,6 +237,13 @@ FHELIUM_API void add_standard_(at::Tensor& lhs,
 FHELIUM_API at::Tensor sum_standard_batch(const at::Tensor& source,
                                           int64_t dim,
                                           const at::Tensor& rns_params);
+
+/// Out form of `sum_standard_batch`; `out` has the shape of `source` without
+/// axis `dim` and is disjoint from `source`.
+FHELIUM_API void sum_standard_batch_out(const at::Tensor& source,
+                                        int64_t dim,
+                                        const at::Tensor& rns_params,
+                                        at::Tensor& out);
 
 /// Subtracts two standard residue Tensors and returns reduced residues.
 ///
@@ -182,6 +258,28 @@ FHELIUM_API void sub_standard_(at::Tensor& lhs,
                                const at::Tensor& rhs,
                                const at::Tensor& rns_params);
 
+/// Out form of `sub_standard`; `out` has the shape of `lhs` and is `lhs`
+/// itself or disjoint from it.
+FHELIUM_API void sub_standard_out(const at::Tensor& lhs,
+                                  const at::Tensor& rhs,
+                                  const at::Tensor& rns_params,
+                                  at::Tensor& out);
+
+/// Negates standard residues: returns $(-x) \bmod q_j$ in $[0, q_j)$ for
+/// inputs in $[0, q_j)$.
+FHELIUM_API at::Tensor negate_standard(const at::Tensor& source,
+                                       const at::Tensor& rns_params);
+
+/// In-place form of `negate_standard`.
+FHELIUM_API void negate_standard_(at::Tensor& source,
+                                  const at::Tensor& rns_params);
+
+/// Out form of `negate_standard`; `out` has the shape of `source` and is
+/// `source` itself or disjoint from it.
+FHELIUM_API void negate_standard_out(const at::Tensor& source,
+                                     const at::Tensor& rns_params,
+                                     at::Tensor& out);
+
 /// Multiplies every limb row by one Montgomery scalar and returns reduced
 /// residues.
 ///
@@ -192,6 +290,15 @@ FHELIUM_API at::Tensor montgomery_mul_row_scalars_standard(
     const at::Tensor& residues,
     const at::Tensor& row_scalars,
     const at::Tensor& rns_params);
+
+/// Out form of `montgomery_mul_row_scalars_standard`: writes the product to
+/// `out`, a Tensor with the shape, dtype and device of `residues` that is
+/// `residues` itself or disjoint from it.
+FHELIUM_API void montgomery_mul_row_scalars_standard_out(
+    const at::Tensor& residues,
+    const at::Tensor& row_scalars,
+    const at::Tensor& rns_params,
+    at::Tensor& out);
 
 /// Reduces lazy residues to the reduced range in place.
 ///
@@ -227,7 +334,7 @@ FHELIUM_API at::Tensor lift_integer_coefficients(
     const at::Tensor& coefficients, const at::Tensor& twice_modulus);
 
 /// Output form of `crt_basis_extend`; the result is written to `output`.
-FHELIUM_API void crt_basis_extend_out_(
+FHELIUM_API void crt_basis_extend_out(
     const at::Tensor& source_residues,
     const at::Tensor& source_parameters,
     const at::Tensor& target_parameters,
@@ -249,9 +356,10 @@ FHELIUM_API void crt_basis_extend_out_(
 /// source row becomes the centered residue $c_i = [a_i u_i]_{q_i}$ in
 /// $[-(q_i-1)/2, (q_i-1)/2]$, `matrix[i][t]` $= D_i R \bmod p_t$,
 /// `target_offsets[t]` $= -\sum_i \frac{q_i-1}{2} D_i R \bmod p_t$, and the
-/// result is $\sum_i c_i D_i R \bmod p_t$. The output has shape `[*batch, target_limb, coefficient]` with reduced
-/// Montgomery residues for the target primes described by `target_parameters`.
-/// Neither lift selects the least nonnegative representative modulo $D$.
+/// result is $\sum_i c_i D_i R \bmod p_t$. The output has shape `[*batch,
+/// target_limb, coefficient]` with reduced Montgomery residues for the target
+/// primes described by `target_parameters`. Neither lift selects the least
+/// nonnegative representative modulo $D$.
 ///
 /// `target_reciprocals` and `source_reciprocals` are int64 vectors of $\lfloor
 /// 2^{64}/q \rfloor$ for their primes. CUDA int32 inputs whose source rows and
@@ -285,7 +393,7 @@ FHELIUM_API at::Tensor mixed_radix_modup_tiled(
     const at::Tensor& parameters);
 
 /// Output form of `mixed_radix_modup_tiled`; the result is written to `out`.
-FHELIUM_API void mixed_radix_modup_tiled_out_(
+FHELIUM_API void mixed_radix_modup_tiled_out(
     const at::Tensor& source_residues,
     at::TensorList decomposition_tables,
     const at::Tensor& extension,
@@ -327,7 +435,7 @@ FHELIUM_API at::Tensor mixed_radix_basis_extend_to_montgomery(
     int64_t destination_row_count);
 
 /// Output form of `mixed_radix_decompose`; the digits are written to `out`.
-FHELIUM_API void mixed_radix_decompose_out_(
+FHELIUM_API void mixed_radix_decompose_out(
     const at::Tensor& source_residues,
     const at::Tensor& mixed_radix_normalizers,
     const at::Tensor& mixed_radix_propagation_coefficients,
@@ -339,7 +447,7 @@ FHELIUM_API void mixed_radix_decompose_out_(
 
 /// Output form of `mixed_radix_basis_extend_to_montgomery`; the result is
 /// written to `out`.
-FHELIUM_API void mixed_radix_basis_extend_to_montgomery_out_(
+FHELIUM_API void mixed_radix_basis_extend_to_montgomery_out(
     const at::Tensor& mixed_radix_components,
     const at::Tensor& basis_extension_coefficients,
     const at::Tensor& rns_params,

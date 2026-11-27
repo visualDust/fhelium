@@ -11,10 +11,9 @@ macro(fhelium_prepare_native_install)
   endif()
   install(
     CODE "
+        # Earlier builds installed the operators as a Python-named module.
         file(GLOB _FHELIUM_STALE_OPS LIST_DIRECTORIES FALSE
-          \"${FHELIUM_INSTALL_PACKAGE_ROOT}/native/torchops/_ops*${FHELIUM_PYTHON_EXTENSION_SUFFIX}\")
-        file(GLOB _FHELIUM_STALE_LEGACY_OPS LIST_DIRECTORIES FALSE
-          \"${FHELIUM_INSTALL_PACKAGE_ROOT}/native/torchops/_ops*.${FHELIUM_PYTHON_SOABI}${CMAKE_SHARED_MODULE_SUFFIX}\")
+          \"${FHELIUM_INSTALL_PACKAGE_ROOT}/native/torchops/_ops*\")
         file(GLOB _FHELIUM_STALE_CUDA_INFO LIST_DIRECTORIES FALSE
           \"${FHELIUM_INSTALL_PACKAGE_ROOT}/native/cuda/cuda_info*${FHELIUM_PYTHON_EXTENSION_SUFFIX}\")
         if(WIN32)
@@ -25,7 +24,6 @@ macro(fhelium_prepare_native_install)
         file(GLOB _FHELIUM_STALE_MANIFESTS LIST_DIRECTORIES FALSE
           \"${FHELIUM_INSTALL_PACKAGE_ROOT}/native/torchops/_build_manifest*${FHELIUM_PYTHON_SOABI}*.json\")
         foreach(_FHELIUM_STALE_ARTIFACT IN LISTS _FHELIUM_STALE_OPS
-                                                _FHELIUM_STALE_LEGACY_OPS
                                                 _FHELIUM_STALE_CUDA_INFO
                                                 _FHELIUM_STALE_LEGACY_CUDA_INFO
                                                 _FHELIUM_STALE_MANIFESTS)
@@ -41,22 +39,20 @@ macro(fhelium_finalize_native_install)
   add_custom_target(
     native_wrappers_check
     COMMAND
-      ${Python3_EXECUTABLE} ${WrapperGenScript} --path "$<TARGET_FILE_DIR:_ops>"
-      --library-dir "$<TARGET_FILE_DIR:fhelium>" --output
+      ${Python3_EXECUTABLE} ${WrapperGenScript} --library-dir
+      "$<TARGET_FILE_DIR:fhelium_torch>" --output
       "${CMAKE_CURRENT_SOURCE_DIR}/fhelium/native/wrapper" --check
-    DEPENDS _ops "${WrapperGenScript}"
+    DEPENDS fhelium_torch "${WrapperGenScript}"
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Checking generated wrappers against the freshly built _ops target"
+    COMMENT
+      "Checking generated wrappers against the freshly built fhelium_torch target"
     VERBATIM)
 
   if(SKBUILD_STATE STREQUAL "editable")
-    set(FHELIUM_WRAPPER_LIBRARY_DIR
-        "${CMAKE_CURRENT_SOURCE_DIR}/fhelium/native/torchops")
     set(FHELIUM_WRAPPER_OUTPUT_DIR
         "${CMAKE_CURRENT_SOURCE_DIR}/fhelium/native/wrapper")
     set(FHELIUM_INSTALLED_SDK_ROOT "${FHELIUM_SDK_ROOT}")
   else()
-    set(FHELIUM_WRAPPER_LIBRARY_DIR "\${CMAKE_INSTALL_PREFIX}/native/torchops")
     set(FHELIUM_WRAPPER_OUTPUT_DIR "\${CMAKE_INSTALL_PREFIX}/native/wrapper")
     set(FHELIUM_INSTALLED_SDK_ROOT "\${CMAKE_INSTALL_PREFIX}/native")
   endif()
@@ -64,7 +60,6 @@ macro(fhelium_finalize_native_install)
     CODE "
     execute_process(
         COMMAND \"${Python3_EXECUTABLE}\" \"${WrapperGenScript}\"
-                --path \"${FHELIUM_WRAPPER_LIBRARY_DIR}\"
                 --library-dir \"${FHELIUM_INSTALLED_SDK_ROOT}/lib\"
                 --output \"${FHELIUM_WRAPPER_OUTPUT_DIR}\"
                 --no-format

@@ -42,6 +42,7 @@ from .implementation import (
     operation_invocation,
     requested_implementation,
 )
+from .lowering import Layout, layout_key
 from .resources import (
     BoundResource,
     ResourceBindings,
@@ -52,6 +53,7 @@ from .workspace import BackendWorkspace
 
 if TYPE_CHECKING:
     from fhelium.compile import Compilation
+    from fhelium.compile.passes.backend._prepare_host import LoweredProgram
     from fhelium.compile._pipeline import Pipeline
 
 
@@ -213,12 +215,9 @@ class OperationBackend:
 
 @dataclass(frozen=True)
 class ProgramExecutable:
-    """Execute host control flow prepared from one linked Program.
+    """Execute the exec schedule lowered from one linked Program.
 
-    Calls and external bindings are resolved once. Generated local variables
-    preserve dataflow, and flat-block temporaries are released at last use.
-    ``host_source`` exposes the prepared control flow without serializing its
-    bound objects. Tensor storage and aliases retain ordinary PyTorch ownership.
+    Every dispatched operation is lowered once to exec operations for the Program's input layouts; when the argument types leave a layout unknown, the Program is lowered once per runtime input layout. Each schedule is built into a libfhelium Runner, which executes it and releases its temporaries when the call returns. ``lowered`` exposes each schedule's exec Program and Runner function. Tensor storage and aliases retain ordinary PyTorch ownership.
     """
 
     program: Program
@@ -237,47 +236,248 @@ class ProgramExecutable:
     _call: Callable[..., tuple[object, ...]] = field(
         init=False, repr=False, compare=False
     )
-    host_source: str = field(init=False, repr=False, compare=False)
-    _material_globals: Mapping[str, str] = field(
+    _lowered: dict[tuple[object, ...], LoweredProgram] = field(
         init=False, repr=False, compare=False
     )
-    _bound: Mapping[str, object] = field(init=False, repr=False, compare=False)
+    _static: tuple[object, ...] | None = field(
+        init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         from fhelium.compile.passes.backend._prepare_host import (
-            prepare_host_call,
+            static_input_layout,
         )
 
-        call, source = prepare_host_call(self)
-        object.__setattr__(self, "_call", call)
-        object.__setattr__(self, "host_source", source)
+        layouts = tuple(
+            static_input_layout(value_type) for value_type in self.input_types
+        )
+        object.__setattr__(self, "_lowered", {})
+        object.__setattr__(self, "_static", None)
+        if all(layout is not None for layout in layouts):
+            lowered = self._lower(layouts)
+            object.__setattr__(self, "_static", layouts)
+            object.__setattr__(self, "_call", lowered.function)
+        else:
+            object.__setattr__(self, "_call", self._call_by_layout)
+
+    def _lower(self, layouts: tuple[object, ...]) -> LoweredProgram:
+        from fhelium.compile.passes.backend._prepare_host import lower_program
+
+        lowered = lower_program(self, layouts)  # type: ignore[arg-type]
+        self._lowered[layouts] = lowered
+        return lowered
+
+    def _call_by_layout(self, *payloads: object) -> tuple[object, ...]:
+        """Lower once per runtime input layout when Program types leave layouts unknown."""
+        from fhelium.compile.passes.backend._prepare_host import (
+            runtime_input_layout,
+        )
+
+        layouts = tuple(runtime_input_layout(value) for value in payloads)
+        lowered = self._lowered.get(layouts)
+        if lowered is None:
+            lowered = self._lower(layouts)
+        return lowered.function(*payloads)
+
+    def _graph_invoke(
+        self, key: object, *, adaptive: bool = False
+    ) -> Callable[..., object]:
+        """Return ``_invoke`` executing through Runners that capture Graph segments.
+
+        ``key`` selects separate Runners and captures for different execution conditions; ``adaptive`` lets each segment keep its graph only when its replays are faster than its direct execution (see :meth:`~fhelium.backend.runner.ScheduleFunction.graphed`).
+        """
+
+        def call(*payloads: object) -> tuple[object, ...]:
+            if self._static is not None:
+                lowered = self._lowered[self._static]
+            else:
+                from fhelium.compile.passes.backend._prepare_host import (
+                    runtime_input_layout,
+                )
+
+                layouts = tuple(runtime_input_layout(v) for v in payloads)
+                lowered = self._lowered.get(layouts) or self._lower(layouts)
+            return lowered.function.graphed(key, adaptive=adaptive)(*payloads)
+
+        def invoke(*payloads: object) -> object:
+            outputs = call(*payloads)
+            public_outputs = tuple(
+                adapt(output)
+                for adapt, output in zip(
+                    self._output_adapters, outputs, strict=True
+                )
+            )
+            return (
+                public_outputs[0]
+                if len(public_outputs) == 1
+                else public_outputs
+            )
+
+        return invoke
+
+    def graph_stats(self, key: object) -> dict[str, int]:
+        """Return Graph and storage counts of the Graph Runners for ``key``.
+
+        ``staged_copies`` counts live-in Tensors copied into Runner storage before replays; ``detached_outputs`` counts results that the caller still referenced when a later execution was about to overwrite them and that moved to fresh storage. ``variants`` counts the captured Graphs the Runners hold; a segment keeps up to four, one for each set of addresses of inputs it reads in place from other Runners' storage, ``private_pool_bytes`` the caching-allocator memory still reserved by the Graph pool, which all Runners sharing an arena on one device use, ``live_out_copies`` the copies of segment results that a Graph allocated in its pool and that are read after the segment, moved into Runner-owned storage after each replay, ``arena_bytes`` their arena requirement and ``output_bytes`` their output regions.
+        """
+        names = (
+            "segments",
+            "captures",
+            "replays",
+            "staged_copies",
+            "detached_outputs",
+            "variants",
+            "private_pool_bytes",
+            "live_out_copies",
+        )
+        totals: dict[str, int] = dict.fromkeys(
+            (*names, "arena_bytes", "output_bytes"), 0
+        )
+        for lowered in self._lowered.values():
+            function = lowered.function._graphed.get(key)
+            if function is None or function._runner is None:
+                continue
+            for name, count in zip(
+                names, function._runner.graph_stats(), strict=True
+            ):
+                if name == "private_pool_bytes":
+                    # Runners on one Arena share one pool and report its size.
+                    totals[name] = max(totals[name], count)
+                else:
+                    totals[name] += count
+            totals["arena_bytes"] += function._runner.arena_bytes()
+            totals["output_bytes"] += function._runner.output_bytes()
+        return totals
+
+    def overlap_stats(self) -> dict[str, float]:
+        """Return overlap planning and CPU worker lane counts of the Runners built so far.
+
+        ``moved_transfers`` counts transfers issued before their original position, ``h2d_transfers`` and ``d2h_transfers`` the asynchronous transfers, ``stream_collectives`` the collectives on communication streams and ``planned_tasks`` the CPU tasks of the schedules. ``tasks_run``, ``task_seconds`` (worker wall time), ``join_wait_seconds`` (host time blocked in joins) and ``event_waits`` accumulate over executions.
+        """
+        totals: dict[str, float] = dict.fromkeys(
+            (
+                "moved_transfers",
+                "h2d_transfers",
+                "d2h_transfers",
+                "stream_collectives",
+                "planned_tasks",
+                "tasks_run",
+                "task_seconds",
+                "join_wait_seconds",
+                "event_waits",
+            ),
+            0,
+        )
+        for lowered in self._lowered.values():
+            # Functions restored from an artifact run its planned schedule
+            # and record no plan.
+            functions = (
+                lowered.function,
+                *getattr(lowered.function, "_graphed", {}).values(),
+            )
+            for function in functions:
+                report = getattr(
+                    getattr(function, "plan", None), "overlap", None
+                )
+                if report is None:
+                    continue
+                totals["moved_transfers"] += len(report.moved)
+                for direction, count in report.transfers:
+                    name = (
+                        "stream_collectives"
+                        if direction == "comm"
+                        else f"{direction}_transfers"
+                    )
+                    totals[name] += count
+                totals["planned_tasks"] += report.tasks
+                for runner in (function._runner, function._private):
+                    if runner is None:
+                        continue
+                    tasks, seconds, joins, waits, *_ = runner.lane_stats()
+                    totals["tasks_run"] += tasks
+                    totals["task_seconds"] += seconds
+                    totals["join_wait_seconds"] += joins
+                    totals["event_waits"] += waits
+        return totals
+
+    def segment_stats(self, key: object) -> list[dict[str, float | str]]:
+        """Return one record per Graph segment of the Graph Runners for ``key``.
+
+        ``nodes``, ``capture_seconds`` and ``instantiate_seconds`` describe the latest capture (host wall time); ``direct_seconds`` and ``replay_seconds`` are device times of the latest direct execution and replay, recorded only by Runners built with segment profiling and NaN otherwise. ``choice`` is ``"graph"`` or ``"direct"`` once a segment has decided how it executes and ``"measuring"`` before; segments that always capture report ``"graph"``. ``decision_direct_seconds`` and ``decision_replay_seconds`` are the device times the decision compared: the first direct execution and the median of three replays, NaN until the decision.
+        """
+        names = (
+            "nodes",
+            "capture_seconds",
+            "instantiate_seconds",
+            "direct_seconds",
+            "replay_seconds",
+            "variants",
+            "choice",
+            "decision_direct_seconds",
+            "decision_replay_seconds",
+        )
+        choices = ("measuring", "graph", "direct")
+        records: list[dict[str, float | str]] = []
+        for lowered in self._lowered.values():
+            function = lowered.function._graphed.get(key)
+            if function is None or function._runner is None:
+                continue
+            for row in function._runner.segment_stats():
+                record: dict[str, float | str] = dict(
+                    zip(names, row, strict=True)
+                )
+                record["choice"] = choices[int(row[6])]
+                records.append(record)
+        return records
+
+    def release_graphs(self, key: object) -> None:
+        """Drop the Graph Runners, captures and arenas selected by ``key``."""
+        for lowered in self._lowered.values():
+            lowered.function._graphed.pop(key, None)
+
+    @property
+    def lowered(self) -> tuple[LoweredProgram, ...]:
+        """Return the exec schedules lowered so far, one per input layout."""
+        return tuple(self._lowered.values())
+
+    @property
+    def schedule_text(self) -> str:
+        """Return the exec IR text of the first lowered schedule."""
+        lowered = self.lowered
+        program = lowered[0].program if lowered else None
+        return "" if program is None else str(program)
 
     def rebind_materials(
         self, bindings: Mapping[str, object]
     ) -> ProgramExecutable:
-        """Reuse prepared dispatch, resources and host bytecode with new materials.
+        """Reuse lowered schedules and resources with new materials.
 
-        The owner supplies layout-compatible bindings and manages outstanding execution lifetimes. Only MaterialRef globals change; implementation and kernel preparation are retained.
+        The owner supplies bindings with the layouts of the replaced materials and manages outstanding execution lifetimes. Only material buffer bindings change; lowering and kernel compilation are retained.
         """
-        from types import FunctionType
+        from dataclasses import replace
 
         materials = {}
         for operation, value in self.bound_materials.items():
             # Linking binds only material references that name a symbol.
             assert operation.symbol is not None
             materials[operation] = bindings.get(operation.symbol.data, value)
-        namespace = dict(self._call.__globals__)
-        namespace.pop("__fhelium_codegen_execute", None)
-        for name, symbol in self._material_globals.items():
-            if symbol in bindings:
-                namespace[name] = bindings[symbol]
+        rebound = {}
+        for key, lowered in self._lowered.items():
+            rebound[key] = replace(
+                lowered, function=lowered.function.with_materials(bindings)
+            )
         result = object.__new__(type(self))
         result.__dict__.update(self.__dict__)
         object.__setattr__(
             result, "bound_materials", MappingProxyType(materials)
         )
+        object.__setattr__(result, "_lowered", rebound)
         object.__setattr__(
-            result, "_call", FunctionType(self._call.__code__, namespace)
+            result,
+            "_call",
+            result._call_by_layout
+            if self._static is None
+            else rebound[self._static].function,
         )
         return result
 
@@ -323,10 +523,15 @@ class ProgramExecutable:
 
     @cached_property
     def _input_adapters(self) -> tuple[Callable[[object], object], ...]:
-        return tuple(
-            _prepare_boundary_input(value_type, label=f"Program input {index}")
-            for index, value_type in enumerate(self.input_types)
-        )
+        adapters = []
+        for index, value_type in enumerate(self.input_types):
+            label = f"Program input {index}"
+            adapt = _prepare_boundary_input(value_type, label=label)
+            layout = None if self._static is None else self._static[index]
+            if isinstance(layout, Layout):
+                adapt = _check_layout(adapt, layout, label=label)
+            adapters.append(adapt)
+        return tuple(adapters)
 
     @cached_property
     def _output_adapters(self) -> tuple[Callable[[object], object], ...]:
@@ -361,6 +566,32 @@ class ProgramExecutable:
             )
         )
         return public_outputs[0] if len(public_outputs) == 1 else public_outputs
+
+
+def _check_layout(
+    adapt: Callable[[object], object], layout: Layout, *, label: str
+) -> Callable[[object], object]:
+    """Require the Tensor layout for which the schedule was lowered."""
+    expected = (
+        torch.Size(layout.sizes),
+        layout.strides,
+        layout.dtype,
+        layout.device,
+    )
+
+    def checked(value: object) -> object:
+        payload = adapt(value)
+        if (
+            isinstance(payload, torch.Tensor)
+            and layout_key(payload) != expected
+        ):
+            raise ValueError(
+                f"{label} has layout {layout_key(payload)!r}, but the "
+                f"executable was lowered for {expected!r}"
+            )
+        return payload
+
+    return checked
 
 
 def _boundary_kind(value_type: Attribute) -> str | None:

@@ -11,14 +11,14 @@ Q prime IDs: 0 ... num_q - 1
 P prime IDs: num_q ... num_q + num_p - 1
 ```
 
-At depth $d$, the active Q basis is the interval `config.depth_bases[d] = (s_d, e_d)` of the Q order:
+At depth $d$, the active Q basis is the increasing prime-ID tuple `config.q_bases[d]`, and a QP basis appends the auxiliary prime IDs of the key layout:
 
 ```text
-Q_d  = Q[s_d:e_d]
-QP_d = Q[s_d:e_d] + P
+Q_d  = [Q[i] for i in q_bases[d]]
+QP_d = Q_d + auxiliary primes
 ```
 
-A rescale may drop rows at either end of the interval and introduce rows at the other end; a suffix chain has $e_d=$ `num_q` at every depth. RNS parameter tables for an interval are views of the dense parameter tensor; QP bases and other non-interval prime sets are gathered.
+A rescale drops $D_d=B_d\setminus B_{d+1}$ and introduces $R_d=B_{d+1}\setminus B_d$; a suffix chain introduces no prime. RNS parameter tables for a contiguous run of prime IDs are views of the dense parameter tensor; QP bases and other prime sets are gathered.
 
 ```mermaid
 graph TB

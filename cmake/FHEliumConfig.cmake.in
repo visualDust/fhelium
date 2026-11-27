@@ -1,6 +1,8 @@
 # CMake package for libfhelium, the FHElium native C++ library.
 #
-# Defines the imported target FHElium::fhelium. The library exchanges at::Tensor
+# Defines the imported targets FHElium::fhelium and FHElium::torch. libfhelium
+# provides the C++ functions; libfhelium_torch registers the fhelium Torch
+# operators with c10::Dispatcher when it is loaded. The library exchanges at::Tensor
 # objects with its caller, so the package requires the Torch build that
 # libfhelium was compiled against; locate it through CMAKE_PREFIX_PATH or
 # Torch_DIR, for example with torch.utils.cmake_prefix_path.
@@ -59,5 +61,20 @@ if(NOT TARGET FHElium::fhelium)
       FHElium::fhelium
       PROPERTIES IMPORTED_IMPLIB
                  "${_FHELIUM_PREFIX}/lib/@FHELIUM_IMPORT_LIBRARY_FILE@")
+  endif()
+endif()
+
+if(NOT TARGET FHElium::torch)
+  add_library(FHElium::torch SHARED IMPORTED)
+  set(_FHELIUM_TORCH_LIBRARY
+      "${_FHELIUM_PREFIX}/lib/@FHELIUM_TORCH_LIBRARY_FILE@")
+  set_target_properties(
+    FHElium::torch PROPERTIES IMPORTED_LOCATION "${_FHELIUM_TORCH_LIBRARY}"
+                              INTERFACE_LINK_LIBRARIES FHElium::fhelium)
+  if(WIN32)
+    set_target_properties(
+      FHElium::torch
+      PROPERTIES IMPORTED_IMPLIB
+                 "${_FHELIUM_PREFIX}/lib/@FHELIUM_TORCH_IMPORT_LIBRARY_FILE@")
   endif()
 endif()

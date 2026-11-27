@@ -281,7 +281,8 @@ def _native_key_switch_requirements(
     )
     if facts.get("key_q_rows"):
         attributes["key_q_rows"] = cast(
-            Attribute, state_attribute(tuple(cast(tuple[int, ...], facts["key_q_rows"])))
+            Attribute,
+            state_attribute(tuple(cast(tuple[int, ...], facts["key_q_rows"]))),
         )
     return attributes, {
         name: table_description(config, int(depth.value.data), name, facts)
@@ -355,19 +356,6 @@ def rotation_sum_requirements(
             for name in names
         }
     )
-    if operation.input_domain.data == 'ntt':
-        for step_attr in operation.rotation_steps:
-            step = int(step_attr.value.data)
-            if step:
-                name = f'sum_galois_{step}'
-                descriptions[name] = {
-                    'kind': 'rotation_sum_table',
-                    'basis_conversion': operation.basis_conversion.data,
-                    'depth': depth,
-                    'name': name,
-                    'rescale': rescale,
-                    'rounding': rounding,
-                }
     return attributes, descriptions
 
 

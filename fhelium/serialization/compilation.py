@@ -10,7 +10,8 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 import torch
-from safetensors import safe_open
+
+from fhelium.native.artifact import load_container, read_container_header
 
 from .safetensors import (
     ValueFileMetadata,
@@ -90,8 +91,7 @@ def save_compilation(
 def inspect_compilation(path: str | os.PathLike[str]) -> ValueFileMetadata:
     """Inspect Program and binding metadata without loading numerical payloads."""
     source = _require_value_file(path)
-    with safe_open(str(source), framework="pt", device="cpu") as handle:
-        return _metadata(handle)
+    return _metadata(*read_container_header(source))
 
 
 def load_compilation(
@@ -109,12 +109,10 @@ def load_compilation(
     from fhelium.ir import Program
 
     source = _require_value_file(path)
-    with safe_open(str(source), framework="pt", device="cpu") as handle:
-        metadata = _metadata(handle)
-        storages = {
-            name: handle.get_tensor(name).to(device=device, copy=True)
-            for name in metadata.value_metadata["storages"]
-        }
+    metadata = _metadata(*read_container_header(source))
+    # Loaded tensors are views of one buffer; each storage gets its own.
+    loaded, _ = load_container(source, device)
+    storages = {name: tensor.clone() for name, tensor in loaded.items()}
     tensors: dict[str, torch.Tensor] = {}
     for name, item in metadata.tensor_metadata.items():
         value = torch.empty(0, dtype=_dtype(item["dtype"]), device=device).set_(
@@ -264,8 +262,9 @@ def _dtype(name: str) -> torch.dtype:
     return dtype
 
 
-def _metadata(handle) -> ValueFileMetadata:
-    header = handle.metadata() or {}
+def _metadata(
+    header: dict[str, str], tensors: dict[str, Any]
+) -> ValueFileMetadata:
     if header.get("fhelium.format") != COMPILATION_FILE_FORMAT or header.get(
         "fhelium.schema_version"
     ) != str(COMPILATION_SCHEMA_VERSION):
@@ -282,17 +281,16 @@ def _metadata(handle) -> ValueFileMetadata:
             "Compilation manifest version differs from the file header"
         )
     storages = metadata.value_metadata["storages"]
-    if set(storages) != set(handle.keys()):
+    if set(storages) != set(tensors):
         raise ValueError(
             "Compilation byte storage names differ from the manifest"
         )
     for name, size in storages.items():
-        view = handle.get_slice(name)
         if (
             type(size) is not int
             or size < 0
-            or view.get_shape() != [size]
-            or view.get_dtype() != "U8"
+            or tensors[name]["shape"] != [size]
+            or tensors[name]["dtype"] != "U8"
         ):
             raise ValueError(
                 "Compilation byte storage extent differs from its payload"

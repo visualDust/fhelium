@@ -380,18 +380,6 @@ void forward_ntt_to_montgomery_indexed_cpu_(
       residues, even_indices, odd_indices, forward_twiddles, rns_params);
 }
 
-torch::Tensor forward_ntt_to_montgomery_indexed_cpu(
-    const torch::Tensor residues,
-    const torch::Tensor even_indices,
-    const torch::Tensor odd_indices,
-    const torch::Tensor forward_twiddles,
-    const torch::Tensor rns_params) {
-  auto out = residues.clone();
-  forward_ntt_to_montgomery_indexed_cpu_(
-      out, even_indices, odd_indices, forward_twiddles, rns_params);
-  return out;
-}
-
 void inverse_ntt_montgomery_indexed_cpu_(torch::Tensor residues,
                                          const torch::Tensor even_indices,
                                          const torch::Tensor odd_indices,
@@ -457,17 +445,15 @@ void forward_ntt_to_montgomery_indexed_(at::Tensor& standard_residues,
                                            rns_params);
 }
 
-at::Tensor forward_ntt_to_montgomery_indexed(
-    const at::Tensor& standard_residues,
-    const at::Tensor& even_indices,
-    const at::Tensor& odd_indices,
-    const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params) {
-  return ::forward_ntt_to_montgomery_indexed_cpu(standard_residues,
-                                                 even_indices,
-                                                 odd_indices,
-                                                 forward_twiddles,
-                                                 rns_params);
+void forward_ntt_to_montgomery_indexed_out(const at::Tensor& standard_residues,
+                                           const at::Tensor& even_indices,
+                                           const at::Tensor& odd_indices,
+                                           const at::Tensor& forward_twiddles,
+                                           const at::Tensor& rns_params,
+                                           at::Tensor& out) {
+  out.copy_(standard_residues);
+  ::forward_ntt_to_montgomery_indexed_cpu_(
+      out, even_indices, odd_indices, forward_twiddles, rns_params);
 }
 
 void inverse_ntt_montgomery_indexed_(at::Tensor& montgomery_residues,

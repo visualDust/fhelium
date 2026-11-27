@@ -2,11 +2,10 @@
 
 from .operations import (
     TorchBroadcastImplementation,
-    TorchCiphertextAddAllReduceImplementation,
+    TorchCiphertextAllReduceImplementation,
     TorchGenericAllReduceImplementation,
     TorchProcessGroupQueryImplementation,
     distributed_operation_contributions,
-    prepare_ciphertext_add_combine,
 )
 from .resources import (
     PROCESS_GROUP_RESOURCE_KIND,
@@ -16,10 +15,9 @@ from .resources import (
 __all__ = [
     "PROCESS_GROUP_RESOURCE_KIND",
     "TorchBroadcastImplementation",
-    "TorchCiphertextAddAllReduceImplementation",
+    "TorchCiphertextAllReduceImplementation",
     "TorchGenericAllReduceImplementation",
     "ProcessGroupExecutionResource",
     "TorchProcessGroupQueryImplementation",
     "distributed_operation_contributions",
-    "prepare_ciphertext_add_combine",
 ]

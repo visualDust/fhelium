@@ -48,3 +48,42 @@ def test_rotations_with_distinct_steps_call_one_body():
     assert len(program.functions) == 2
     assert len(calls) >= 2
     assert len({call.callee for call in calls}) == 1
+
+
+def test_graph_called_bodies_write_results_into_caller_storage():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    device = "cuda:0"
+    engine = Engine(Preset.slots8192_scale40_depth7, rng_seed=212)
+    secret = engine.create_secret_key(device=device)
+    public = engine.create_public_key(secret, device=device)
+    keys = [
+        engine.create_rotation_key(step, secret, device=device)
+        for step in (1, -3, 7)
+    ]
+    message = torch.linspace(
+        -0.02, 0.03, engine.config.num_slots, device=device, dtype=torch.float64
+    )
+    x = engine.encrypt_message(message, public, device=device)
+
+    def source(x):
+        # The result is the last call's result.
+        for key in keys:
+            x = engine.rotate_with_key(x, key)
+        return x
+
+    compiled = fc.compile(source, cache=False, graph=True)
+    moduli = torch.tensor(
+        engine.config.q_moduli, dtype=torch.int64, device=device
+    ).view(-1, 1)
+    try:
+        expected = source(x).data % moduli
+        for _ in range(4):
+            assert torch.equal(compiled(x).data % moduli, expected)
+        (graph,) = compiled.stats()["graphs"]
+        assert graph["capture_stats"]["replays"] >= 2
+        # Called bodies write their results into Runner-owned storage, so no
+        # result leaves the Graph pool through a copy.
+        assert graph["capture_stats"]["live_out_copies"] == 0
+    finally:
+        compiled.clear()

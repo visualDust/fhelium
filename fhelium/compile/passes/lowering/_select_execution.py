@@ -140,7 +140,10 @@ class SelectExecutionLoweringsPass:
         if not accepted:
             return (
                 DecisionRecord(
-                    operation.name, "preserve", candidates, (reason, *cost_details)
+                    operation.name,
+                    "preserve",
+                    candidates,
+                    (reason, *cost_details),
                 ),
                 1,
                 0,
@@ -243,8 +246,15 @@ class SelectExecutionLoweringsPass:
                     cache.hits += 1
                     accepted, reason, cost_details = entry
                     decision = self._apply(
-                        operation, config, compilation, candidates,
-                        accepted, reason, cost_details, share, deferred,
+                        operation,
+                        config,
+                        compilation,
+                        candidates,
+                        accepted,
+                        reason,
+                        cost_details,
+                        share,
+                        deferred,
                     )
                     decisions.append(decision[0])
                     skipped += decision[1]
@@ -291,11 +301,7 @@ class SelectExecutionLoweringsPass:
                 attached = True
                 if whole:
                     accepted = any(
-                        (
-                            count := candidate.match_fusion(
-                                expression.operations
-                            )
-                        )
+                        (count := candidate.match_fusion(expression.operations))
                         is not None
                         and count > 0
                         for candidate in self.fusion_implementations
@@ -317,9 +323,7 @@ class SelectExecutionLoweringsPass:
                             is not None
                             and count >= 2
                         ]
-                        covered = {
-                            op for ops, _, _ in regions for op in ops
-                        }
+                        covered = {op for ops, _, _ in regions for op in ops}
                         remaining = [
                             nested
                             for op in expression.operations
@@ -330,8 +334,7 @@ class SelectExecutionLoweringsPass:
                             )
                         ]
                         accepted = bool(regions) and all(
-                            self._independent_support(op)
-                            for op in remaining
+                            self._independent_support(op) for op in remaining
                         )
                         if accepted:
                             reason = (
@@ -387,8 +390,15 @@ class SelectExecutionLoweringsPass:
                 cache.probe_seconds += time.perf_counter() - probe_started
                 cache.entries[key] = (accepted, reason, cost_details)
             decision = self._apply(
-                operation, config, compilation, candidates,
-                accepted, reason, cost_details, share, deferred,
+                operation,
+                config,
+                compilation,
+                candidates,
+                accepted,
+                reason,
+                cost_details,
+                share,
+                deferred,
             )
             decisions.append(decision[0])
             skipped += decision[1]

@@ -8,7 +8,6 @@ if TYPE_CHECKING:
     from fhelium.compile._compilation import Compilation
 
 
-
 from ..._materials import key_placeholder, material_symbol
 
 from ..._pipeline import (

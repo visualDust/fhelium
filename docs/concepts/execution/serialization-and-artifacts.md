@@ -1,6 +1,13 @@
-# Serialization and artifacts
+# Persistence and artifacts
 
-Persistence records a value or computation so it can be reconstructed in another execution. FHElium stores typed values as metadata and Tensor payloads, and Compilations as a Program with optional numerical materials. Artifact repositories add logical names and generation identities to those stored objects.
+Persistence records a value or computation so it can be reconstructed in another execution. FHElium has four stored forms: a *value file* holds one typed value as metadata and Tensor payloads; a *Program file* holds a Compilation's Program with optional numerical materials; a *compiled artifact* holds the linked execution of a compiled callable; and a *value store* catalogs value files and Program files under logical names with generation identities. All four use one container layout, a safetensors file whose metadata names its format.
+
+| Form | Contents | Reconstructed as | Keys |
+| --- | --- | --- | --- |
+| Value file | Type, value metadata, Tensor payloads | A live value on a chosen device | A key file holds one key |
+| Program file | Program text, material descriptions, selected Tensor bindings | A Compilation to transform and link | Stored only when selected |
+| Compiled artifact | Runner schedules, kernel images, constants, table recipes, stored weights, call signatures | A callable that runs without capture or linking | Recorded by role and layout, bound by the loading process |
+| Value store entry | One value file or Program file under a logical name | The stored object, checked against its generation | As in the stored object |
 
 ## Direct value files
 
@@ -77,23 +84,36 @@ The Compilation storage format preserves sharing between saved Tensor views, inc
 
 A loaded material dictionary can combine saved data with new bindings. Each symbol remains an independent assignment, even when two descriptions are identical. Linked calls retain the supplied Tensor objects: in-place data updates become visible to those calls, while replacing a dictionary entry takes effect after linking again. [Program representation](../neutral-ir-programs.md) and the [Compile lifecycle](../open-compiler-stack.md) explain these stages.
 
+## Compiled artifacts
+
+A compiled artifact stores, for each exported call signature, the specialization's exec schedule planned without and with CUDA Graph segments, the kernel images it launches for one or more GPU architectures, its link-time constants, and the value type and metadata of its results. It records the identity of the producing native library and Triton version, and a loader with a different identity rejects it. Each material of the schedules has a binding:
+
+| Binding | Supplied by |
+| --- | --- |
+| `caller` | The loading process: evaluation keys, matched by role and layout, and the seed of the rounding stream. |
+| `built` | Builder calls stored in the artifact, run once at load: NTT, RNS, and key-switching tables. |
+| `prepare` | Prepare entries run at load, or before a call whose argument weights changed: plaintexts encoded from stored raw weights. |
+| `embedded` | Tensors stored in the file: encoded plaintexts, tables produced outside builders. |
+
+An artifact therefore depends neither on the source of the compiled function nor on a Program; it contains no key data and may contain application weights. The persistent compile cache stores each specialization in the same format, with the captured Program added and every material, including keys and tables, recorded as `caller` with the path by which the current source provides it, so a cache hit binds the current materials of the source.
+
 ## Deployment-managed persistence policy
 
 Direct serialization defines one value file. Deployment infrastructure supplies tenant or model namespaces, directory policy, remote object storage, encryption and KMS integration, cache admission/prefetch/eviction, and engine or process-group placement. These policies remain independent of the value format.
 
-## `ArtifactStore` as a local repository
+## `ValueStore` as a local repository
 
-`ArtifactStore` is a local repository for named typed values and Compilations. A SQLite catalog owns each logical name's current generation and transactional metadata, while store-controlled immutable safetensors files hold the tensor payloads produced by the serialization layer.
+`ValueStore` is a local repository for named typed values and Compilations. A SQLite catalog owns each logical name's current generation and transactional metadata, while store-controlled immutable safetensors files hold the tensor payloads produced by the serialization layer.
 
-A put operation publishes one stored object under a logical name and returns an `ArtifactRef`. A get operation resolves that name or reference and reconstructs the object. The returned object owns live data; the reference is a Tensor-free identity for the published generation.
+A put operation publishes one stored object under a logical name and returns a `StoredValueRef`. A get operation resolves that name or reference and reconstructs the object. The returned object owns live data; the reference is a Tensor-free identity for the published generation.
 
 ```mermaid
 graph LR
     VALUE[typed value or Compilation]
-    PUT[ArtifactStore.put logical name]
+    PUT[ValueStore.put logical name]
     OBJECT[immutable UUID object<br/>payload.safetensors]
     CATALOG[SQLite catalog<br/>name → current generation]
-    REF[tensor-free ArtifactRef<br/>store + name + generation]
+    REF[tensor-free StoredValueRef<br/>store + name + generation]
     VALUE --> PUT
     PUT --> OBJECT
     PUT --> CATALOG
@@ -101,11 +121,11 @@ graph LR
     CATALOG --> REF
 ```
 
-The artifact repository adds local policy features such as:
+The value store adds local policy features such as:
 
 - normalized logical names and collections;
-- one current artifact generation per logical name;
-- immutable artifact IDs and store identity;
+- one current generation per logical name;
+- immutable generation IDs and store identity;
 - stale-reference rejection;
 - catalog and payload-header cross-validation;
 - payload checksums;
@@ -113,31 +133,31 @@ The artifact repository adds local policy features such as:
 - put, get, list, inspect, and delete operations;
 - sensitivity metadata.
 
-An `ArtifactRef` identifies the checked current generation without materializing large tensors. Overwriting the same name publishes a new generation and makes every older reference for that name stale. The store does not retain those references as loadable version history.
+A `StoredValueRef` identifies the checked current generation without materializing large tensors. Overwriting the same name publishes a new generation and makes every older reference for that name stale. The store does not retain those references as loadable version history.
 
 Publication writes the complete payload before committing the catalog entry. An interrupted write can leave an unreferenced object for recovery to remove; a published generation refers to a completed payload. Replacing a name commits its new generation before reclaiming the old object.
 
 ## Value identity versus logical identity
 
-The model distinguishes value identity from logical artifact identity:
+The model distinguishes value identity from the logical identity of a stored generation:
 
 ```mermaid
 flowchart LR
     VALUE_ID["value identity"]
     VALUE_FIELDS["type, stored state, tensor payload"]
-    LOGICAL["logical artifact identity"]
+    LOGICAL["logical identity"]
     LOGICAL_FIELDS["store ID, name, current generation, checksum, policy metadata"]
     VALUE_ID --> VALUE_FIELDS
     LOGICAL --> LOGICAL_FIELDS
 ```
 
-The same typed value format can therefore be used directly by a research script or through a namespaced artifact policy without changing `Ciphertext` or key types.
+The same typed value format can therefore be used directly by a research script or through a namespaced store without changing `Ciphertext` or key types.
 
 ## Sensitive stored data
 
-Value files store unencrypted data. Typed secret-key serialization requires `allow_secret=True`. A Compilation can include arbitrary Tensor materials, so the selected bindings must be checked for secret keys, plaintexts, and random-generator state. Restoring a saved stream state can repeat randomness. Storage encryption remains a deployment responsibility.
+Value files, Program files, and compiled artifacts store unencrypted data. Typed secret-key serialization requires `allow_secret=True`. A Compilation can include arbitrary Tensor materials, so the selected bindings must be checked for secret keys, plaintexts, and random-generator state. Restoring a saved stream state can repeat randomness. Storage encryption remains a deployment responsibility.
 
-An artifact `sensitivity="secret"` label provides descriptive classification metadata. The payload SHA-256 detects accidental corruption. Production deployments supply authenticated integrity and:
+A stored value's `sensitivity="secret"` label provides descriptive classification metadata. The payload SHA-256 detects accidental corruption. Production deployments supply authenticated integrity and:
 
 - encrypted storage and transport;
 - KMS/credential lifecycle;
@@ -167,7 +187,8 @@ File operations return application-owned values. Managed residency transitions o
 | Save/load one known path | `save_value` / `load_value` |
 | Inspect value metadata before loading | `inspect_value` |
 | Save/load a Program with selected Tensor bindings | `save_compilation` / `load_compilation` |
-| Local logical names, checked generations, collections, checksums | `ArtifactStore` |
+| Run a compiled callable in another process | `fhelium.compile.export` / `fhelium.compile.load` |
+| Local logical names, checked generations, collections, checksums | `ValueStore` |
 | Local pageable/pinned/CUDA materializations, lifetimes, and optional admission budgets | `ResidencyManager` |
 
 ## Related concepts

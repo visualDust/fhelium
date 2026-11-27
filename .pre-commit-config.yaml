@@ -5,7 +5,7 @@ minimum_pre_commit_version: "4.0.0"
 # immutable files.
 exclude: |
   (?x)^(
-    third_party/|
+    third_party/.*|
     docs/public/benchmarks/v1/(catalog\.json|runs/sha256-[0-9a-f]{64}\.json)
   )$
 

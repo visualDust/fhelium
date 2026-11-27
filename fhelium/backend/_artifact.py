@@ -1,87 +1,44 @@
-"""Persist linked Program executables without IR, Tensor data or live resources.
+"""Store linked Program executables as artifact entries and restore them from loaded artifacts.
 
-An artifact records the prepared host source of a :class:`ProgramExecutable` together with its prepared implementations, invocations and resource requirements. Registered implementations are recorded by their registry position, materials by symbol and bound resources by requirement position, so restoring an artifact against the same registry composition, current materials and Backend workspace reproduces the executable that linking produces, without decoding or linking the Program. Prepared implementations persist through ordinary pickling; generated Python closures declare how they are rebuilt with :func:`rebuild_with`.
-
-Artifacts are pickles and execute code when loaded. Load them only from a cache directory trusted like the installed package.
+An executable is stored as two entries of an artifact (:mod:`fhelium.native.artifact`): its planned Runner schedule, ``<name>``, and the same schedule planned with CUDA Graph segments, ``<name>.graphs``; called schedules become entries of their own. Kernels are stored as device images, link-time constants as Tensors, material buffers by symbol and state buffers by the symbol ``state.<requirement>.<field>`` of the resource requirement whose live value owns them. The executable record returned with the entries holds what restoring needs without the Program: resource requirements, NTT schedule symbols, the dispatch manifest and the input and output types as text. Restoring binds current material Tensors and the state Tensors of the resources the Backend workspace resolves, so it reproduces the executable that linking produces without decoding, linking or lowering the Program. Executables lowered per runtime input layout and schedules with Python calls are not stored.
 """
 
 from __future__ import annotations
 
-import contextvars
-import io
-import pickle
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, is_dataclass
-from typing import TypedDict
-from functools import cached_property, partial
-from types import FunctionType, MappingProxyType
+from dataclasses import is_dataclass
+from functools import cached_property
+from types import MappingProxyType
+from typing import Any, cast
 
 import torch
-from xdsl.ir import Attribute, Block, Operation, Region, SSAValue
+from torch.overrides import TorchFunctionMode
+from torch.utils._pytree import tree_flatten, tree_map
+from xdsl.ir import Attribute
 
-from .resources import ResourceRequirement
-from .execution import (
-    OperationBackend,
-    OperationDispatch,
-    ProgramDispatchTable,
-    ProgramExecutable,
-    _index_value,
-    _tensor_region_results,
+from fhelium.compile.passes.backend._prepare_host import (
+    LoweredProgram,
+    static_input_layout,
 )
 
-ARTIFACT_VERSION = 1
+from .execution import (
+    OperationBackend,
+    ProgramDispatchTable,
+    ProgramExecutable,
+)
+from .resources import ResourceRequirement
+from .runner import (
+    CalledSchedule,
+    LoadedArtifact,
+    Material,
+    Resources,
+    ScheduleFunction,
+    State,
+)
 
 
 class ArtifactIneligible(Exception):
-    """The executable retains an object that an artifact cannot record."""
-
-
-def rebuild_with(function: Callable, factory: Callable, *args, **kwargs):
-    """Record that the generated ``function`` is reproduced by ``factory(*args, **kwargs)``."""
-    function.__fhelium_rebuild__ = (factory, args, kwargs)
-    return function
-
-
-def _call(factory, args, kwargs):
-    return factory(*args, **kwargs)
-
-
-def _mapping_proxy(mapping: dict) -> MappingProxyType:
-    return MappingProxyType(mapping)
-
-
-def _operator(namespace: str, name: str, overload: str | None):
-    packet = getattr(getattr(torch.ops, namespace), name)
-    return packet if overload is None else getattr(packet, overload)
-
-
-@dataclass(frozen=True)
-class Material:
-    """A host-source global bound to the material of ``symbol``."""
-
-    symbol: str
-
-
-@dataclass(frozen=True)
-class Resources:
-    """A host-source global bound to linked resources by requirement position."""
-
-    indices: tuple[int, ...]
-    single: bool = False
-
-
-@dataclass(frozen=True)
-class _Context:
-    implementations: tuple[object, ...]
-    externals: tuple[object, ...]
-    backend: OperationBackend
-    materials: Mapping[str, torch.Tensor]
-    relink: Callable[[], ProgramExecutable] | None
-
-
-_CONTEXT: contextvars.ContextVar[_Context] = contextvars.ContextVar(
-    "fhelium_artifact_context"
-)
+    """The executable cannot be stored as artifact entries."""
 
 
 def registry_identity(registry) -> tuple[object, ...] | None:
@@ -105,142 +62,120 @@ def registry_identity(registry) -> tuple[object, ...] | None:
     return tuple(described)
 
 
-class _Pickler(pickle.Pickler):
-    def __init__(self, stream, implementations, externals):
-        super().__init__(stream, protocol=pickle.HIGHEST_PROTOCOL)
-        self._implementations = {
-            id(item): index for index, item in enumerate(implementations)
-        }
-        self._externals = {
-            id(item): index for index, item in enumerate(externals)
-        }
-
-    def persistent_id(self, obj):
-        index = self._implementations.get(id(obj))
-        if index is not None:
-            return ("implementation", index)
-        index = self._externals.get(id(obj))
-        if index is not None:
-            return ("external", index)
-        # Tensor data and IR never enter artifacts.
-        if isinstance(
-            obj, (torch.Tensor, Operation, SSAValue, Block, Region, Attribute)
-        ):
-            raise ArtifactIneligible(
-                f"prepared execution retains {type(obj).__name__}"
-            )
-        return None
-
-    def reducer_override(self, obj):
-        if isinstance(obj, ProgramExecutable):
-            return (_restore_executable, (_executable_state(obj),))
-        if isinstance(obj, FunctionType):
-            rebuild = getattr(obj, "__fhelium_rebuild__", None)
-            return NotImplemented if rebuild is None else (_call, rebuild)
-        if isinstance(obj, MappingProxyType):
-            return (_mapping_proxy, (dict(obj),))
-        if isinstance(obj, torch._ops.OpOverloadPacket):
-            namespace, name = obj._qualified_op_name.split("::")
-            return (_operator, (namespace, name, None))
-        if isinstance(obj, torch._ops.OpOverload):
-            namespace, name = obj._schema.name.split("::")
-            return (_operator, (namespace, name, obj._overloadname))
-        return NotImplemented
-
-
-class _Unpickler(pickle.Unpickler):
-    def __init__(self, stream, context: _Context):
-        super().__init__(stream)
-        self._context = context
-
-    def persistent_load(self, pid):
-        kind, index = pid
-        if kind == "implementation":
-            return self._context.implementations[index]
-        return self._context.externals[index]
-
-
-def export_executable(
-    executable: ProgramExecutable,
-    registry,
-    *,
-    externals: tuple[object, ...] = (),
-) -> bytes:
-    """Serialize a linked executable; raise ArtifactIneligible when it cannot be recorded.
-
-    ``externals`` lists live objects, such as Engines, that prepared implementations reference and that the restoring caller supplies in the same order.
-    """
-    stream = io.BytesIO()
-    try:
-        _Pickler(stream, registry.implementations, externals).dump(
-            (ARTIFACT_VERSION, executable)
+def _state_symbol(
+    requirements: tuple[ResourceRequirement, ...], binding: State
+) -> str:
+    resource = binding.resource
+    if not isinstance(resource, Resources):
+        raise ArtifactIneligible(
+            f"a state buffer reads {type(resource).__name__}.{binding.field}, which no resource requirement names"
         )
-    except (pickle.PicklingError, TypeError, AttributeError) as error:
-        raise ArtifactIneligible(f"{type(error).__name__}: {error}") from None
-    return stream.getvalue()
+    return f"state.{requirements[resource.indices[0]].symbol}.{binding.field}"
 
 
-def restore_executable(
-    payload: bytes,
-    backend: OperationBackend,
-    materials: Mapping[str, torch.Tensor],
-    *,
-    externals: tuple[object, ...] = (),
-    relink: Callable[[], ProgramExecutable] | None = None,
-) -> ProgramExecutable:
-    """Restore an artifact exported with the same registry composition.
-
-    ``materials`` supplies current Tensors by symbol and ``backend`` resolves resource requirements. ``relink`` links the Program on request when the restored executable's ``program`` is inspected.
-    """
-    context = _Context(
-        tuple(backend.registry.implementations),
-        externals,
-        backend,
-        materials,
-        relink,
-    )
-    token = _CONTEXT.set(context)
-    try:
-        version, executable = _Unpickler(io.BytesIO(payload), context).load()
-    finally:
-        _CONTEXT.reset(token)
-    if version != ARTIFACT_VERSION:
-        raise ArtifactIneligible("artifact version differs")
-    return executable
+def _schedule_materials(
+    function: ScheduleFunction, found: dict[str, torch.Tensor]
+) -> None:
+    """Collect the material Tensors that ``function`` and its callees bind, by symbol."""
+    schedule = function.schedule
+    for _, binding in schedule.bindings:
+        if isinstance(binding, Material):
+            value = cast(torch.Tensor, function.materials[binding.symbol])
+            if found.setdefault(binding.symbol, value) is not value:
+                raise ArtifactIneligible(
+                    f"material {binding.symbol} names different Tensors in called schedules"
+                )
+    for item in schedule.objects:
+        if isinstance(item, CalledSchedule):
+            _schedule_materials(item.function, found)
 
 
-class _ExecutableState(TypedDict):
-    """Recorded state from which an artifact restores a ProgramExecutable."""
-
-    source: str
-    bound: Mapping[str, object]
-    requirements: tuple[ResourceRequirement, ...]
-    dispatches: tuple[OperationDispatch, ...]
-    manifest: dict[str, object]
-    schedules: tuple[tuple[str, str], ...]
-    inputs: tuple[str, ...]
-    outputs: tuple[str, ...]
-    callee: str | None
-
-
-def _executable_state(executable: ProgramExecutable) -> _ExecutableState:
-    from fhelium.ir._structure import _AttributeText
-
-    text = _AttributeText()
+def material_record(
+    symbol: str, tensor: torch.Tensor, binding: str = "caller"
+) -> dict[str, object]:
+    """Return the artifact material record of a Tensor the loader binds by symbol."""
     return {
-        "source": executable.host_source,
-        "bound": executable._bound,
-        "requirements": executable._requirements,
-        "dispatches": tuple(executable.dispatch_table.operations.values()),
-        "manifest": dict(executable.manifest),
-        "schedules": executable._schedule_symbols,
-        "inputs": tuple(text(t).decode() for t in executable.input_types),
-        "outputs": tuple(text(t).decode() for t in executable.output_types),
-        "callee": executable._callee,
+        "symbol": symbol,
+        "shape": list(tensor.shape),
+        "dtype": str(tensor.dtype),
+        "device": tensor.device.type,
+        "binding": binding,
     }
 
 
-def _parse_types(texts: tuple[str, ...]) -> tuple[Attribute, ...]:
+def export_executable(
+    writer: Any,
+    executable: ProgramExecutable,
+    name: str,
+    *,
+    symbols: Callable[[str, torch.Tensor], str] | None = None,
+) -> dict[str, Any]:
+    """Store ``executable`` as entries ``name`` and ``name.graphs`` of ``writer`` and return its executable record.
+
+    ``symbols`` names the artifact material of each material symbol and Tensor the executable binds; by default a material keeps its symbol. The record lists the bound material Tensors under ``materials`` (artifact symbol to Tensor), the executable's symbols under ``symbols`` (executable symbol to artifact symbol) and the state buffers under ``states`` (symbol to requirement position and field); the caller turns them into manifest material records.
+    """
+    from fhelium.ir._structure import _AttributeText
+    from fhelium.native.artifact import ExportError
+
+    if executable._static is None:
+        raise ArtifactIneligible("the executable is lowered per input layout")
+    function = executable._lowered[executable._static].function
+    requirements = executable._requirements
+    states: dict[str, tuple[int, str]] = {}
+    bound_materials: dict[str, torch.Tensor] = {}
+    _schedule_materials(function, bound_materials)
+    names = {
+        symbol: symbol if symbols is None else symbols(symbol, tensor)
+        for symbol, tensor in bound_materials.items()
+    }
+
+    def binding(bound: object) -> str | None:
+        if isinstance(bound, State):
+            symbol = _state_symbol(requirements, bound)
+            states[symbol] = (
+                cast(Resources, bound.resource).indices[0],
+                bound.field,
+            )
+            return symbol
+        if isinstance(bound, Material):
+            return names[bound.symbol]
+        return None
+
+    graphed = ScheduleFunction(
+        function.schedule,
+        function.materials,
+        function.resources,
+        graphs=True,
+        shared=True,
+    )
+    try:
+        writer.entry(name, function, binding=binding)
+        writer.entry(f"{name}.graphs", graphed, binding=binding)
+    except ExportError as error:
+        raise ArtifactIneligible(str(error)) from None
+    text = _AttributeText()
+    return {
+        "entry": name,
+        "requirements": [[r.symbol, r.kind] for r in requirements],
+        "schedules": [list(pair) for pair in executable._schedule_symbols],
+        "manifest": _plain(dict(executable.manifest)),
+        "inputs": [text(t).decode() for t in executable.input_types],
+        "outputs": [text(t).decode() for t in executable.output_types],
+        "materials": {names[s]: t for s, t in bound_materials.items()},
+        "symbols": names,
+        "states": {symbol: list(item) for symbol, item in states.items()},
+    }
+
+
+def _plain(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    return value
+
+
+def _parse_types(texts: list[str]) -> tuple[Attribute, ...]:
     if not texts:
         return ()
     from xdsl.dialects.builtin import ArrayAttr
@@ -268,81 +203,96 @@ def link_resources(
     return bindings.resolve_all(tuple(requirements))
 
 
-def _restore_executable(state: _ExecutableState) -> ProgramExecutable:
+def load_device(record: Mapping[str, Any]) -> torch.device:
+    """Return the device an executable record runs on: that of its first CUDA input, else CPU."""
+    for layout in map(static_input_layout, _parse_types(record["inputs"])):
+        device = getattr(layout, "device", None)
+        if device is not None and device.type == "cuda":
+            return device
+    return torch.device("cpu")
+
+
+def restore_executable(
+    loaded: LoadedArtifact,
+    record: Mapping[str, Any],
+    backend: OperationBackend,
+    materials: Mapping[str, torch.Tensor],
+    *,
+    relink: Callable[[], ProgramExecutable] | None = None,
+    graphs: bool | str = False,
+) -> ProgramExecutable:
+    """Restore the executable of ``record`` from ``loaded``, binding current materials and the Backend's resources.
+
+    ``materials`` supplies Tensors by the executable's material symbols; symbols it omits read the artifact's bound, built or embedded materials. ``relink`` links the Program on request when the restored executable's ``program`` or ``dispatch_table`` is inspected. ``graphs`` calls the entry planned with CUDA Graph segments: True replays every segment and ``"auto"`` measures each segment's replay against direct execution.
+    """
     from fhelium.native.wrapper import ntt_ops
 
-    context = _CONTEXT.get()
-    resources = link_resources(context.backend, state["requirements"])
-    materials = context.materials
-    for even, odd in state["schedules"]:
-        ntt_ops.validate_indexed_schedule(
-            materials[even], materials[odd], 2 * materials[even].size(1)
-        )
-    namespace: dict[str, object] = {
-        "__fhelium_codegen_index": _index_value,
-        "__fhelium_codegen_tensor_results": _tensor_region_results,
-    }
-    material_globals = {}
-    for name, value in state["bound"].items():
-        if isinstance(value, Material):
-            namespace[name] = materials[value.symbol]
-            material_globals[name] = value.symbol
-        elif isinstance(value, Resources):
-            selected = tuple(resources[i] for i in value.indices)
-            namespace[name] = selected[0] if value.single else selected
-        else:
-            namespace[name] = value
-    exec(
-        compile(state["source"], "<fhelium-prepared-program>", "exec"),
-        namespace,
+    requirements = tuple(
+        ResourceRequirement(symbol, kind)
+        for symbol, kind in record["requirements"]
     )
+    resources = link_resources(backend, requirements)
+    names = record.get("symbols", {})
+    materials = {names.get(s, s): t for s, t in materials.items()}
+
+    def material(symbol: str) -> torch.Tensor:
+        name = names.get(symbol, symbol)
+        return (
+            materials[name]
+            if name in materials
+            else loaded.artifact.material(name)
+        )
+
+    for even, odd in record["schedules"]:
+        ntt_ops.validate_indexed_schedule(
+            material(even), material(odd), 2 * material(even).size(1)
+        )
+    states = {}
+    for symbol, (index, field) in record["states"].items():
+        resource = resources[index]
+        states[symbol] = getattr(getattr(resource, "value", resource), field)
+    loaded.bind({**materials, **states})
+    function = loaded.function(record["entry"])
+    call = (
+        function.graphed(None, adaptive=graphs == "auto")
+        if graphs
+        else function
+    )
+    inputs = _parse_types(record["inputs"])
+    layouts = tuple(static_input_layout(t) for t in inputs)
     executable = object.__new__(RestoredProgramExecutable)
     executable.__dict__.update(
         {
-            "dispatch_table": ProgramDispatchTable(
-                dict(enumerate(state["dispatches"]))
-            ),
             "resources": resources,
-            "_requirements": state["requirements"],
+            "_requirements": requirements,
             "resource_indices": MappingProxyType({}),
             "bound_resources": MappingProxyType({}),
             "bound_materials": MappingProxyType({}),
-            "_call": namespace.pop("__fhelium_codegen_execute"),
-            "host_source": state["source"],
-            "_material_globals": material_globals,
-            "_bound": state["bound"],
-            "_schedule_symbols": state["schedules"],
-            "_callee": state["callee"],
-            "_manifest": MappingProxyType(state["manifest"]),
-            "_input_texts": state["inputs"],
-            "_output_texts": state["outputs"],
-            "_relink": context.relink,
+            "_call": call,
+            "_lowered": {layouts: LoweredProgram(None, function, ())},
+            "_static": layouts,
+            "_schedule_symbols": tuple(
+                tuple(pair) for pair in record["schedules"]
+            ),
+            "_callee": None,
+            "_manifest": MappingProxyType(record["manifest"]),
+            "input_types": inputs,
+            "_output_texts": record["outputs"],
+            "_relink": relink,
         }
     )
-    for index, dispatch in enumerate(state["dispatches"]):
-        attach = getattr(dispatch.implementation, "attach_region", None)
-        if attach is not None:
-            attach(partial(_linked_implementation, executable, index))
     return executable
-
-
-def _linked_implementation(executable: RestoredProgramExecutable, index: int):
-    linked = executable.linked()
-    return tuple(linked.dispatch_table.operations.values())[
-        index
-    ].implementation
 
 
 class RestoredProgramExecutable(ProgramExecutable):
     """A ProgramExecutable restored from an artifact.
 
-    Execution, material rebinding and dispatch inspection use the restored state. The linked Program is produced on first access to ``program`` by linking the cached Program again; a restored fusion that meets an operand layout without a prepared plan obtains its region the same way.
+    Execution and material rebinding use the artifact's entries. The linked Program and its dispatch table are produced on first access by linking the cached Program again.
     """
 
     _relink: Callable[[], ProgramExecutable] | None
     _manifest: Mapping[str, object]
-    _input_texts: tuple[str, ...]
-    _output_texts: tuple[str, ...]
+    _output_texts: list[str]
 
     __hash__ = object.__hash__
 
@@ -350,30 +300,18 @@ class RestoredProgramExecutable(ProgramExecutable):
         return True if self is other else NotImplemented
 
     def linked(self) -> ProgramExecutable:
-        """Return the executable that linking the cached Program produces for this function."""
+        """Return the executable that linking the cached Program produces."""
         if self._relink is None:
             raise RuntimeError("This restored executable has no Program source")
-        linked = self._relink()
-        if self._callee is None:
-            return linked
-        from fhelium.compile.passes.backend._link_calls import CalledProgram
-
-        for dispatch in linked.dispatch_table.operations.values():
-            implementation = dispatch.implementation
-            if (
-                isinstance(implementation, CalledProgram)
-                and implementation.symbol == self._callee
-            ):
-                return implementation.executable
-        raise RuntimeError(f"Called function {self._callee!r} is not linked")
+        return self._relink()
 
     @cached_property
     def program(self):
         return self.linked().program
 
     @cached_property
-    def input_types(self):
-        return _parse_types(self._input_texts)
+    def dispatch_table(self) -> ProgramDispatchTable:  # type: ignore[override]
+        return self.linked().dispatch_table
 
     @cached_property
     def output_types(self):
@@ -386,12 +324,195 @@ class RestoredProgramExecutable(ProgramExecutable):
 
 __all__ = [
     "ArtifactIneligible",
-    "Material",
-    "Resources",
     "RestoredProgramExecutable",
     "export_executable",
     "link_resources",
-    "rebuild_with",
+    "load_device",
+    "material_record",
     "registry_identity",
     "restore_executable",
 ]
+
+
+class _BuilderRecorder(TorchFunctionMode):
+    """Run table construction and record it into an ExecBuilder.
+
+    A registered ``fhelium_*`` operator call is recorded as a call of that operator with its computed results; any other PyTorch call that reads a recorded result is replayed on the placeholders under the builder's tracing, which records its ATen operations.
+    """
+
+    def __init__(self, builder: Any) -> None:
+        super().__init__()
+        self.builder = builder
+        self.placed: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
+
+    def _placeholder(self, value: object) -> object:
+        entry = (
+            self.placed.get(id(value))
+            if isinstance(value, torch.Tensor)
+            else None
+        )
+        return value if entry is None else entry[1]
+
+    def __torch_function__(self, func, types, args=(), kwargs=None):
+        from .lowering import isolated
+
+        kwargs = kwargs or {}
+        with isolated():
+            output = func(*args, **kwargs)
+        results = tree_flatten(output)[0]
+        if not any(isinstance(leaf, torch.Tensor) for leaf in results):
+            return output
+        placed_args, placed_kwargs = tree_map(self._placeholder, (args, kwargs))
+        operator = _builder_operator(func)
+        if operator is not None:
+            with isolated():
+                recorded = self.builder.record_call(
+                    operator, placed_args, placed_kwargs, output
+                )
+        elif any(
+            isinstance(leaf, torch.Tensor) and id(leaf) in self.placed
+            for leaf in tree_flatten((args, kwargs))[0]
+        ):
+            try:
+                recorded = func(*placed_args, **placed_kwargs)
+            except Exception:
+                # Data-dependent Python code: its results stay unrecorded.
+                return output
+        else:
+            return output
+        replayed = tree_flatten(recorded)[0]
+        if len(replayed) == len(results):
+            for real, fake in zip(results, replayed):
+                if isinstance(real, torch.Tensor) and isinstance(
+                    fake, torch.Tensor
+                ):
+                    self.placed[id(real)] = (real, fake)
+        return output
+
+    def result(self, tensor: torch.Tensor) -> torch.Tensor | None:
+        """Return the placeholder of a recorded result or of a view into one."""
+        entry = self.placed.get(id(tensor))
+        if entry is not None:
+            return entry[1]
+        storage = tensor.untyped_storage().data_ptr()
+        for real, fake in self.placed.values():
+            if real.untyped_storage().data_ptr() == storage:
+                return self.builder.view_of(fake, tensor)
+        return None
+
+
+def _builder_operator(func: object) -> Any:
+    if isinstance(func, torch._ops.OpOverloadPacket):
+        if func.overloads() != ["default"]:
+            return None
+        func = func.default
+    if isinstance(func, torch._ops.OpOverload) and func.namespace.startswith(
+        "fhelium_"
+    ):
+        return func
+    return None
+
+
+def export_tables(
+    writer: Any,
+    tables: Mapping[str, tuple[Mapping[str, object], torch.Tensor]],
+    builders: Callable[
+        [], Callable[[str, Mapping[str, object]], torch.Tensor | None]
+    ],
+    name: str = "tables",
+) -> tuple[dict[str, dict[str, object]], dict[str, torch.Tensor]]:
+    """Store the computation that reproduces ``tables`` as entry ``name`` of ``writer``.
+
+    ``tables`` maps material symbols to their provider selection and bound Tensor. ``builders()`` returns a function that recomputes one table from fresh providers, which hold no cached tables; registered ``fhelium_*`` operator calls and the PyTorch operations applied to their results are recorded while it runs. The recorded entry takes no inputs and runs once at load; it is executed here and keeps the tables it reproduces bitwise. Returns the material record of every table, ``built`` with its entry output position or ``embedded`` when its value is not reproduced by recorded operations, and the container Tensors of the embedded tables.
+    """
+    from .lowering import compile_fragment, isolated
+
+    excluded: set[str] = set()
+    while True:
+        outputs: list[str] = []
+
+        def lower(builder, values):
+            recorder = _BuilderRecorder(builder)
+            build = builders()
+            results = []
+            with recorder:
+                built = {
+                    symbol: build(symbol, selection)
+                    for symbol, (selection, _) in tables.items()
+                    if symbol not in excluded
+                }
+            for symbol, tensor in built.items():
+                with isolated():
+                    placed = None if tensor is None else recorder.result(tensor)
+                if placed is not None:
+                    outputs.append(symbol)
+                    results.append(placed)
+            return results
+
+        fragment = compile_fragment(lower, ())
+        if not outputs:
+            break
+        produced = fragment.function()
+        wrong = {
+            symbol
+            for symbol, value in zip(outputs, produced, strict=True)
+            if not (
+                isinstance(value, torch.Tensor)
+                and value.shape == tables[symbol][1].shape
+                and value.dtype == tables[symbol][1].dtype
+                and torch.equal(value.cpu(), tables[symbol][1].cpu())
+            )
+        }
+        del produced
+        if not wrong:
+            writer.entry(name, fragment.function, binding=lambda bound: None)
+            break
+        excluded |= wrong
+    records: dict[str, dict[str, object]] = {}
+    embedded: dict[str, torch.Tensor] = {}
+    for symbol, (selection, tensor) in tables.items():
+        if symbol in outputs:
+            records[symbol] = {
+                **material_record(symbol, tensor, "built"),
+                "entry": name,
+                "output": outputs.index(symbol),
+                "builder": selection.get("kind"),
+            }
+        else:
+            records[symbol] = {
+                **embedded_record(symbol, tensor, embedded),
+                "builder": selection.get("kind"),
+            }
+    return records, embedded
+
+
+def embedded_record(
+    symbol: str, tensor: torch.Tensor, tensors: dict[str, torch.Tensor]
+) -> dict[str, object]:
+    """Add ``tensor`` to the container ``tensors`` and return its ``embedded`` material record.
+
+    A view that covers part of its storage is recorded as ``view`` (sizes, strides, offset in elements) of one flat base holding the whole storage, so views of one storage are stored and loaded once.
+    """
+    storage = tensor.untyped_storage()
+    element = tensor.element_size()
+    covers = (
+        tensor.is_contiguous() and tensor.numel() * element == storage.nbytes()
+    )
+    if covers or storage.nbytes() % element:
+        name = f"material.{symbol}"
+        tensors[name] = tensor.contiguous()
+        return {**material_record(symbol, tensor, "embedded"), "tensor": name}
+    name = f"storage.{tensor.device}.{storage.data_ptr():x}.{str(tensor.dtype)[6:]}"
+    if name not in tensors:
+        tensors[name] = tensor.as_strided(
+            (storage.nbytes() // element,), (1,), 0
+        )
+    return {
+        **material_record(symbol, tensor, "embedded"),
+        "tensor": name,
+        "view": {
+            "sizes": list(tensor.shape),
+            "strides": list(tensor.stride()),
+            "offset": tensor.storage_offset(),
+        },
+    }

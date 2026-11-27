@@ -20,7 +20,7 @@ body:
         - CUDA native backend
         - Distributed execution
         - Residency
-        - Serialization or ArtifactStore
+        - Serialization or ValueStore
         - Build, installation, or packaging
         - Documentation website
         - Other

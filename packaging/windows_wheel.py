@@ -414,12 +414,6 @@ def check_wheel(
     expected_suffix = f".cp3{python_abi[3:5]}-win_amd64.pyd"
     with ZipFile(wheel) as archive:
         names = archive.namelist()
-        ops_binaries = [
-            name
-            for name in names
-            if name.startswith("fhelium/native/torchops/_ops")
-            and name.endswith(".pyd")
-        ]
         cuda_info_binaries = [
             name
             for name in names
@@ -435,18 +429,18 @@ def check_wheel(
         sdk_files = (
             "fhelium/native/lib/fhelium.dll",
             "fhelium/native/lib/fhelium.lib",
+            "fhelium/native/lib/fhelium_torch.dll",
+            "fhelium/native/lib/fhelium_torch.lib",
             "fhelium/native/include/fhelium/fhelium.h",
             "fhelium/native/share/cmake/FHElium/FHEliumConfig.cmake",
             "fhelium/native/share/cmake/FHElium/FHEliumConfigVersion.cmake",
         )
         if (
-            len(ops_binaries) != 1
-            or not all(name in names for name in sdk_files)
+            not all(name in names for name in sdk_files)
             or len(cuda_info_binaries) != int(configuration.has_cuda)
             or len(manifests) != 1
             or not all(
-                name.endswith(expected_suffix)
-                for name in (*ops_binaries, *cuda_info_binaries)
+                name.endswith(expected_suffix) for name in cuda_info_binaries
             )
         ):
             raise RuntimeError("wheel native-extension layout is invalid")
@@ -483,8 +477,10 @@ def check_wheel(
         with tempfile.TemporaryDirectory(
             prefix="fhelium-wheel-", dir=work_root
         ) as temporary:
-            ops_binary = Path(temporary) / Path(ops_binaries[0]).name
-            ops_binary.write_bytes(archive.read(ops_binaries[0]))
+            torch_binary = Path(temporary) / "fhelium_torch.dll"
+            torch_binary.write_bytes(
+                archive.read("fhelium/native/lib/fhelium_torch.dll")
+            )
             binary = Path(temporary) / "fhelium.dll"
             binary.write_bytes(archive.read("fhelium/native/lib/fhelium.dll"))
 
@@ -497,8 +493,8 @@ def check_wheel(
                     capture=True,
                 ).stdout.casefold()
 
-            if "fhelium.dll" not in dependents(ops_binary):
-                raise RuntimeError("_ops must link fhelium.dll")
+            if "fhelium.dll" not in dependents(torch_binary):
+                raise RuntimeError("fhelium_torch.dll must link fhelium.dll")
             text = dependents(binary)
             if "libiomp5md.dll" not in text or "vcomp" in text:
                 raise RuntimeError(
@@ -511,7 +507,7 @@ def check_wheel(
             )
             if toolkit is not None:
                 forbidden.extend((toolkit, cuda_compiler_root(toolkit)))
-            for native_binary in (ops_binary, binary):
+            for native_binary in (torch_binary, binary):
                 raw = native_binary.read_bytes().lower()
                 for path in forbidden:
                     for encoded in (

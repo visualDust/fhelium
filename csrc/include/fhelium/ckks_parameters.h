@@ -80,6 +80,27 @@ FHELIUM_API int64_t modulus_bits(c10::ArrayRef<int64_t> moduli);
 FHELIUM_API std::vector<int64_t> key_digit_sizes(
     c10::ArrayRef<int64_t> q_moduli, c10::ArrayRef<int64_t> p_moduli);
 
+/// Prime rows of a hybrid key-switch layout: active Q rows, auxiliary P
+/// rows, and the Q rows of each digit.
+struct KeyLayout {
+  std::vector<int64_t> q_prime_ids;
+  std::vector<int64_t> p_prime_ids;
+  std::vector<std::vector<int64_t>> digit_prime_ids;
+};
+
+/// Hybrid key-switch layout of the active Q rows `q_prime_ids` of a chain whose
+/// configured primes are `moduli` (Q and P, indexed by prime id).
+///
+/// The auxiliary primes P are the largest configured primes outside the
+/// active rows, ties to the lower id. With q active rows, p auxiliary primes,
+/// and k digits, one key switch lifts and multiplies k(q + p) rows and divides
+/// q + p rows by P; the layout minimizes the row work (k + 1)(q + p), then the
+/// key rows k(q + p), then p, where k is the number of greedy runs below P.
+/// The digits are k consecutive runs of the active rows that minimize the
+/// largest run product.
+FHELIUM_API KeyLayout plan_key_layout(c10::ArrayRef<int64_t> moduli,
+                                      c10::ArrayRef<int64_t> q_prime_ids);
+
 /// Returns the maximum bit width of the complete modulus in the built-in
 /// security table, or no value when no row matches.
 ///

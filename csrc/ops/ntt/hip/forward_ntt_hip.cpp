@@ -43,22 +43,23 @@ void forward_ntt_to_montgomery_indexed_(at::Tensor& standard_residues,
                                                 rns_params);
 }
 
-at::Tensor forward_ntt_to_montgomery_indexed(
-    const at::Tensor& standard_residues,
-    const at::Tensor& even_indices,
-    const at::Tensor& odd_indices,
-    const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params) {
+void forward_ntt_to_montgomery_indexed_out(const at::Tensor& standard_residues,
+                                           const at::Tensor& even_indices,
+                                           const at::Tensor& odd_indices,
+                                           const at::Tensor& forward_twiddles,
+                                           const at::Tensor& rns_params,
+                                           at::Tensor& out) {
   fhelium::ntt::validate_indexed_tables(standard_residues,
                                         even_indices,
                                         odd_indices,
                                         forward_twiddles,
                                         rns_params);
-  return forward_ntt_to_montgomery_indexed_hip(standard_residues,
-                                               even_indices,
-                                               odd_indices,
-                                               forward_twiddles,
-                                               rns_params);
+  forward_ntt_to_montgomery_indexed_out_hip(standard_residues,
+                                            even_indices,
+                                            odd_indices,
+                                            forward_twiddles,
+                                            rns_params,
+                                            out);
 }
 
 void forward_ntt_montgomery_power_of_two_radix_compact_(
@@ -93,20 +94,22 @@ void forward_ntt_to_montgomery_power_of_two_radix_compact_(
       fhelium::ntt::kNttDefaultSharedMemoryLogN);
 }
 
-at::Tensor forward_ntt_to_montgomery_power_of_two_radix_compact(
+void forward_ntt_to_montgomery_power_of_two_radix_compact_out(
     const at::Tensor& standard_residues,
     const at::Tensor& outer_twiddles,
     const at::Tensor& radix_root_powers,
-    const at::Tensor& rns_params) {
+    const at::Tensor& rns_params,
+    at::Tensor& out) {
   const auto plan = fhelium::ntt::validate_fixed_radix_tables(
       standard_residues, outer_twiddles, radix_root_powers, rns_params);
-  return forward_ntt_to_montgomery_power_of_two_radix_compact_hip(
+  forward_ntt_to_montgomery_power_of_two_radix_compact_out_hip(
       standard_residues,
       outer_twiddles,
       radix_root_powers,
       rns_params,
       plan.radix,
-      fhelium::ntt::kNttDefaultSharedMemoryLogN);
+      fhelium::ntt::kNttDefaultSharedMemoryLogN,
+      out);
 }
 
 void forward_ntt_montgomery_power_of_two_radix_compact_diagnostic_(

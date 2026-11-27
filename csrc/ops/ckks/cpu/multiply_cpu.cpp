@@ -71,29 +71,29 @@ void multiply_two_component_loop(
       });
 }
 
-torch::Tensor multiply_two_component_cpu(const torch::Tensor lhs,
-                                         const torch::Tensor rhs,
-                                         const torch::Tensor params) {
+void multiply_two_component_out_cpu(const torch::Tensor lhs,
+                                    const torch::Tensor rhs,
+                                    const torch::Tensor params,
+                                    torch::Tensor out) {
   TORCH_CHECK(lhs.device().is_cpu(), kOperation, " requires CPU operands");
   const auto inputs = fhelium::ckks::check_two_component_multiply_inputs(
       lhs, rhs, params, kOperation);
-  const auto output = fhelium::ckks::allocate_three_component_output(lhs);
+  const auto output = fhelium::ckks::three_component_output(out);
   AT_DISPATCH_INTEGRAL_TYPES(lhs.scalar_type(), kOperation, [&] {
     multiply_two_component_loop<scalar_t>(inputs, output, params);
   });
-  return output.packed;
 }
 
 }  // namespace
 
 namespace fhelium::ckks::cpu {
 
-at::Tensor multiply_two_component_ntt_montgomery(
-    const at::Tensor& lhs_components,
-    const at::Tensor& rhs_components,
-    const at::Tensor& rns_params) {
-  return ::multiply_two_component_cpu(
-      lhs_components, rhs_components, rns_params);
+void multiply_two_component_ntt_montgomery_out(const at::Tensor& lhs_components,
+                                               const at::Tensor& rhs_components,
+                                               const at::Tensor& rns_params,
+                                               at::Tensor& out) {
+  ::multiply_two_component_out_cpu(
+      lhs_components, rhs_components, rns_params, out);
 }
 
 }  // namespace fhelium::ckks::cpu

@@ -13,7 +13,11 @@
 
 #include <tuple>
 
+#include <c10/util/ArrayRef.h>
 #include <fhelium/export.h>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace fhelium::ckks {
 
@@ -29,8 +33,7 @@ FHELIUM_API int64_t rotation_galois_element(int64_t log_n,
 /// `indices[j]` and multiplies it by `signs[j]` $\in \{-1, 1\}$. The results
 /// are int32 and int8 Tensors of shape `[N]`.
 FHELIUM_API std::tuple<at::Tensor, at::Tensor> coefficient_galois_indices(
-    int64_t log_n,
-    int64_t galois_element);
+    int64_t log_n, int64_t galois_element);
 
 /// Returns the int64 slot permutations of the canonical embedding.
 ///
@@ -38,8 +41,7 @@ FHELIUM_API std::tuple<at::Tensor, at::Tensor> coefficient_galois_indices(
 /// decoding gathers FFT position `post[k]` into slot position $k$ of the
 /// conjugate-extended vector (shape `[N]`).
 FHELIUM_API std::tuple<at::Tensor, at::Tensor> slot_permutations(
-    int64_t log_n,
-    int64_t generator);
+    int64_t log_n, int64_t generator);
 
 /// Returns the encoded length $U$ of a message that repeats with period
 /// `period` slots: $U = \max(2\,\mathtt{period}, 4)$ for $\gamma = 3$ and
@@ -65,5 +67,98 @@ FHELIUM_API at::Tensor periodic_slot_positions(int64_t extent,
 FHELIUM_API at::Tensor slot_twist(int64_t length,
                                   bool inverse,
                                   c10::Device device);
+
+/// Named `KeySwitchTables` of one key-switch configuration, without NTT
+/// schedules.
+///
+/// `digits` lists flattened (start, stop, key_digit) triples over the Q rows.
+/// With `rescale`, the joint ModDown/rescale tables for the dropped rows and
+/// target rows are added. The result pairs the slot names of the defined
+/// fields with their Tensors.
+FHELIUM_API std::tuple<std::vector<std::string>, std::vector<at::Tensor>>
+key_switch_table_set(const at::Tensor& parameters,
+                     c10::IntArrayRef moduli,
+                     int64_t log_n,
+                     c10::IntArrayRef q_prime_ids,
+                     c10::IntArrayRef p_prime_ids,
+                     c10::IntArrayRef digits,
+                     std::string basis_conversion,
+                     std::string moddown_rounding,
+                     bool rescale,
+                     c10::IntArrayRef drop_prime_ids,
+                     c10::IntArrayRef target_prime_ids,
+                     std::string rescale_rounding);
+
+/// Named rotation-sum quotient tables (`sum_*` slots of `KeySwitchTables`);
+/// `next_prime_ids` lists the Q rows that remain after the quotient.
+FHELIUM_API std::tuple<std::vector<std::string>, std::vector<at::Tensor>>
+rotation_sum_table_set(const at::Tensor& parameters,
+                       c10::IntArrayRef moduli,
+                       int64_t log_n,
+                       c10::IntArrayRef q_prime_ids,
+                       c10::IntArrayRef p_prime_ids,
+                       c10::IntArrayRef next_prime_ids,
+                       std::string_view rounding);
+
+/// Named `EncapsulationTables` of an encapsulated modulus raise: the low
+/// key switch over `source_q_moduli` and `low_p_moduli`, the centered
+/// extension to the return basis [guard, Q, P], and the return quotient onto
+/// `target_prime_ids`.
+FHELIUM_API std::tuple<std::vector<std::string>, std::vector<at::Tensor>>
+encapsulation_table_set(const at::Tensor& parameters,
+                        c10::IntArrayRef moduli,
+                        int64_t log_n,
+                        std::string_view ntt_backend,
+                        double scale,
+                        c10::IntArrayRef source_q_moduli,
+                        c10::IntArrayRef low_p_moduli,
+                        int64_t return_prime,
+                        c10::IntArrayRef return_p_moduli,
+                        c10::IntArrayRef q_moduli,
+                        c10::IntArrayRef target_prime_ids,
+                        std::string_view rounding);
+
+/// Named tables of the canonical embedding on `device`: the encoding scatter
+/// `pre` and the decoding gather `post` of `slot_permutations`, the forward
+/// twist `twister` and the inverse twist `skewer` of `slot_twist` of length
+/// $N$.
+FHELIUM_API std::tuple<std::vector<std::string>, std::vector<at::Tensor>>
+embedding_table_set(int64_t log_n, int64_t generator, c10::Device device);
+
+/// Named tables of a periodic plaintext with period `period` slots over the
+/// basis rows of `parameters` (moduli `moduli`), on the parameters' device:
+/// the slot scatter `pre` and twist `twister` of length $U$ =
+/// `periodic_extent`, `twice_moduli` $2q_i$, and the indexed subring NTT
+/// schedule `even_indices`, `odd_indices` and Montgomery `twiddles` whose
+/// roots are $\psi_N^{N/U}$.
+FHELIUM_API std::tuple<std::vector<std::string>, std::vector<at::Tensor>>
+periodic_table_set(const at::Tensor& parameters,
+                   c10::IntArrayRef moduli,
+                   int64_t log_n,
+                   int64_t period,
+                   int64_t generator);
+
+/// Named mixed-radix reconstruction tables of decryption over `prime_ids`.
+FHELIUM_API std::tuple<std::vector<std::string>, std::vector<at::Tensor>>
+reconstruction_table_set(const at::Tensor& parameters,
+                         c10::IntArrayRef moduli,
+                         int64_t log_n,
+                         c10::IntArrayRef prime_ids);
+
+/// `GaloisTables` of $X \mapsto X^g$ for $g$ = `galois_element` on `device`:
+/// NTT-domain source indices, coefficient source indices, and coefficient
+/// signs.
+FHELIUM_API std::vector<at::Tensor> galois_table_set(int64_t log_n,
+                                                     int64_t galois_element,
+                                                     c10::Device device);
+
+/// Slot names of one table family in positional order.
+///
+/// `family` is `ntt`, `key_switch`, `rescale`, `basis_extension`,
+/// `trailing_quotient`, `encapsulation`, `ring`, `decryption`,
+/// `secret_conversion`, or `galois`. The `key_switch` and `encapsulation`
+/// families append `digit_count` groups of `digit<i>_` slots.
+FHELIUM_API std::vector<std::string> table_slot_names(std::string_view family,
+                                                      int64_t digit_count);
 
 }  // namespace fhelium::ckks

@@ -61,11 +61,8 @@ inline TwoComponentMultiplyInputs check_two_component_multiply_inputs(
   return inputs;
 }
 
-inline ThreeComponentMultiplyOutput allocate_three_component_output(
-    const torch::Tensor& lhs) {
-  auto sizes = lhs.sizes().vec();
-  sizes[0] = 3;
-  auto packed = torch::empty(sizes, lhs.options());
+inline ThreeComponentMultiplyOutput three_component_output(
+    const torch::Tensor& packed) {
   return ThreeComponentMultiplyOutput{
       packed,
       view_rns_batch_3d(packed.select(0, 0), "out[0]"),

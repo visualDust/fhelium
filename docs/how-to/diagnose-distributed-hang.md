@@ -89,6 +89,8 @@ Check:
 - producers complete before NCCL reads payloads;
 - buffer storage is not overwritten while communication or kernels read it.
 
+A hang in `torch.distributed.destroy_process_group()` at shutdown follows from live CUDA Graphs of compiled callables or loaded artifacts that hold captured NCCL work. Destroy groups with `fhelium.distributed.shutdown(group)`, which releases those schedules first, or let the process exit, where an `atexit` handler releases them. A released compiled callable binds its groups again at its next call; a loaded artifact is loaded again with `fc.load(..., groups=...)` after the group is re-created.
+
 ## 7. Enable focused diagnostics
 
 Useful environment-level diagnostics include:

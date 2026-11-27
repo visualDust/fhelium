@@ -7,21 +7,24 @@ The **open** stack accepts Programs at several abstraction levels and lets the c
 ## The Compile lifecycle
 
 ```mermaid
-graph LR
+graph TB
     SOURCE[Python capture<br/>textual IR<br/>direct construction]
-    MANUAL[Manual Compilation and Pipeline]
-    CALLABLE[Callable capture and specialization]
+    MANUAL[Manual Compilation<br/>and Pipeline]
+    CALLABLE[Callable capture<br/>and specialization]
+    CACHE[(Specialization<br/>cache)]
     PROGRAM[Program]
-    MANUAL --> PROGRAM
-    CALLABLE --> PROGRAM
-    PASSES[Caller-selected passes]
-    READY[Backend-ready Program]
-    LINK[Implementation and resource linking]
-    EXEC[ProgramExecutable]
-    RUN[Tensor execution]
+    PASSES[Caller-selected<br/>passes]
+    READY[Backend-ready<br/>Program]
+    LINK[Implementation and<br/>resource linking]
+    SCHED[Exec schedule]
+    RUN[Runner execution<br/>over Tensors]
 
-    SOURCE --> PROGRAM
-    PROGRAM --> PASSES --> READY --> LINK --> EXEC --> RUN
+    CALLABLE --> CACHE
+    CACHE -->|miss| SOURCE
+    MANUAL --> PROGRAM
+    SOURCE --> PROGRAM --> PASSES --> READY --> LINK --> SCHED --> RUN
+    SCHED -. store .-> CACHE
+    CACHE -->|hit| RUN
     PASSES -. may stop and inspect .-> PROGRAM
 ```
 
@@ -31,7 +34,7 @@ These are separate transitions:
 2. **Transformation** analyzes or rewrites the represented computation.
 3. **Implementation assignment** selects how remaining operations should run.
 4. **Linking** resolves selected implementation calls, Tensor materials, and non-Tensor execution handles.
-5. **Execution** invokes prepared host control flow over runtime Tensor values.
+5. **Execution** runs the linked exec schedule on a native Runner over runtime Tensor values.
 
 Each transition has its own preconditions. A Program may support analysis or interchange before the available Backend can execute it.
 
@@ -131,7 +134,7 @@ Existing bindings retain their assignments. Key preparation selects supplied dat
 
 `OperationBackend` owns an implementation registry and an immutable `BackendWorkspace` containing named non-Tensor handles and an optional handle materializer. `OperationBackend.link` invokes Compile-owned linking passes using fresh workspace and material-binding mappings. The passes resolve Tensor facts and implementation calls, initialize and optionally materialize execution handles, resolve material references, prelink resource indices, and construct a `ProgramExecutable`.
 
-The executable retains a prepared host function whose local variables express the Program's dataflow and whose calls target the selected implementations. Supported structured regions become host control flow or prepared region callables. Public input adapters unwrap value payloads before numerical execution; output adapters reconstruct declared CKKS results afterward. Flat-block intermediates are released at their last use, with Tensor storage managed through ordinary PyTorch ownership.
+The executable retains a schedule of the operator calls and kernel launches of the selected implementations, executed by a native Runner. Supported structured regions become schedule loops, branches and called schedules. Public input adapters unwrap value payloads before numerical execution; output adapters reconstruct declared CKKS results afterward. Flat-block intermediates are released at their last use, with Tensor storage managed through ordinary PyTorch ownership.
 
 Bound materials remain live Tensor objects. Compatible in-place content updates are visible to execution. Replacing a material dictionary entry requires another link to bind the new object. Applications can link a transformed Compilation with different supplied bindings and non-Tensor resources while retaining its represented computation.
 
@@ -154,15 +157,17 @@ A specialization records input metadata and static scalar conditions, its transf
 
 Callable reuse has two levels: a resident executable for matching `CallSignature` conditions and an optimized Program for one input specialization. A new input specialization, including a new entry depth, is captured and transformed for its concrete value states.
 
-The default `graph=False` policy retains prepared execution. Selecting `graph="auto"` or `graph=True` attempts CUDA Graph capture after a specialization’s first prepared execution. Each callable owns its Graphs and their device-local shared pools. Unsupported capture and autograd outputs retain prepared execution. Graph results use owned storage by default; borrowed output is an optional lifetime contract. These execution states and fallback reasons are observable in callable statistics.
+A CUDA specialization captures its capture-safe schedule segments as CUDA Graphs at its second execution and replays them afterwards. The default `graph="auto"` keeps a segment's Graph only when its replays are faster than its direct execution; `graph=True` keeps every Graph and `graph=False` executes directly. Each specialization owns its Graphs; compiled specializations on one device share one Graph pool. CPU inputs and autograd inputs execute directly. Graph results occupy the specialization's output region without a copy and move to fresh storage when the next execution would overwrite a result that is still referenced; compiled specializations on one device share one arena for their temporaries. These execution states and fallback reasons are observable in callable statistics.
 
-Clearing a callable releases its Graphs before their pools, then releases resident specializations. Persistent entries have an independent lifetime. Captured Python configuration is fixed for a resident specialization; changing it requires clearing or recreating the callable.
+Clearing a callable releases its Graphs and pools, then releases resident specializations. Persistent entries have an independent lifetime. Captured Python configuration is fixed for a resident specialization; changing it requires clearing or recreating the callable.
 
-Compile constructs fusion regions, and the selected Backend generates their numerical execution. A region may contain one pointwise kernel or several synchronized transform stages. Host preparation can complete before first-use device compilation; execute the prepared workload before measuring warmed execution or recording its CUDA Graph. Callable specialization, generated device code, and CUDA Graph capture therefore have distinct preparation lifetimes.
+Compile constructs fusion regions, and the selected Backend generates their numerical execution. A region may contain one pointwise kernel or several synchronized transform stages. Preparation includes kernel compilation and warmup; the first execution runs directly and the second captures the Graph segments. Callable specialization, generated device code, and CUDA Graph capture therefore have distinct preparation lifetimes.
 
-## Optimized Programs per input specialization
+## Persistent specializations and exported artifacts
 
-Optimized Programs persist per input specialization under the cache directory. An entry stores Program structure and material relocation descriptions; material Tensor contents are absent. A hit binds the current process's materials, and compatible fresh key data can reuse the Program when the declared key layout is unchanged. Custom compilation configurations and ineligible source identities use ordinary preparation. Clearing one callable releases its resident state while disk entries retain an independent lifetime.
+Prepared specializations persist under the cache directory, one compiled artifact per input specialization. An entry stores the Program, the linked schedules, kernel images, and material relocation descriptions; material Tensor contents are absent. An entry is found by a key computed from the function source when the source lies in the statically checked subset, so a new process skips capture, or otherwise from the captured Program, so a new process skips the pipeline and linking. A hit binds the current process's materials, and compatible fresh key data reuses the entry when the declared key layout is unchanged. Custom compilation configurations use ordinary preparation. Clearing one callable releases its resident state while disk entries keep an independent lifetime.
+
+`export` writes the specializations for chosen call signatures to one artifact that stores every material other than keys, with tables as builder calls and weights raw or encoded. `load` binds the caller's keys by role and layout and returns a callable that selects the stored specialization matching each call; a C++ program loads the same file through `libfhelium`.
 
 ## Four different validity questions
 
@@ -184,7 +189,7 @@ Compile exchanges Programs, symbolic references, observations, and built callabl
 - `fhelium.runtime` supplies CPU/CUDA topology, point-in-time memory observations, reusable buffers, and CUDA Graph mechanisms. Callers can feed those observations into transformation or implementation policy and wrap a suitable linked callable for repeated execution.
 - Residency manages live materializations, accounting, leases, and admission. Program resource symbols can be resolved from caller-selected resident objects during linking.
 - Distributed applications create processes, partition values, and order collectives. Each rank can transform or execute a local Program containing registered collective operations.
-- `Program.save` and `Program.load` exchange textual IR. Compilation serialization stores Program text with no, all, or selected Tensor bindings, and `ArtifactStore` manages named generations of values or Compilations. Loading restores saved data; the execution site supplies its configuration, handles, and executable preparation.
+- `Program.save` and `Program.load` exchange textual IR. Compilation serialization stores Program text with no, all, or selected Tensor bindings, and `ValueStore` manages named generations of values or Compilations. Loading restores saved data; the execution site supplies its configuration, handles, and executable preparation.
 
 Adapters can connect these owners at Program construction, pass, linking, or callable-execution time without combining their state models.
 
@@ -193,6 +198,6 @@ Adapters can connect these owners at Program construction, pass, linking, or cal
 - [Architecture](architecture/system-overview.md) places Eager and Compile in the shared execution stack.
 - [Neutral IR programs](neutral-ir-programs.md) defines Program structure, partial state, and symbolic references.
 - [Ownership and runtime responsibilities](architecture/ownership-and-responsibilities.md) assigns execution and storage lifetimes.
-- [State transitions and orthogonality](ckks/state-transitions-and-orthogonality.md) separates mathematical state from execution choices.
+- [Value-state transitions](ckks/value-state-transitions.md) separates mathematical state from execution choices.
 - [Signatures and buffers](execution/signatures-and-buffers.md) explains reusable input storage and execution interfaces.
-- [Serialization and artifacts](execution/serialization-and-artifacts.md) explains persistent Program and value representations.
+- [Persistence and artifacts](execution/serialization-and-artifacts.md) explains persistent Program and value representations.

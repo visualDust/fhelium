@@ -24,6 +24,12 @@ Avoid placing a long source-tree walkthrough, benchmark report, and beginner tut
 - Store static documentation files under `docs/public/`; VitePress copies this directory to the site root without transforming it. Use `/figures/` for technical figures, `/brand/` for identity assets, and `/assets/` for files intended for direct download.
 - Do not commit `docs/.vitepress/dist/`, the generated `docs/api/fhelium*` module pages, or the generated `.vitepress/api-reference.json` and `api-sidebar.json` files.
 
+## Agent entry points
+
+The agent skill under `skills/fhelium/` and the site index `docs/public/llms.txt`, published as `/llms.txt`, link to documentation pages by path. When a page is renamed, moved, merged, or removed, update its links in both files in the same change, and keep the example numbers they cite consistent with `examples/`.
+
+`npx skills add visualDust/fhelium --skill fhelium` installs the skill from the default branch and requires Node.js 22.20 or newer. To test the skill from another branch, install it from the tree URL, for example `npx skills add https://github.com/visualDust/fhelium/tree/testing/skills/fhelium`. `skills/fhelium/scripts/skeleton.py` runs on CPU and CUDA and is run once after a change to the skill's API references.
+
 ## Start each tutorial from its runnable example
 
 Every numbered tutorial opens immediately after its title with a source link and a concrete description of the corresponding example:

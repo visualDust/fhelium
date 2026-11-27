@@ -6,26 +6,27 @@ torch::Tensor rns_montgomery_mul_cuda(const torch::Tensor lhs,
                                       const torch::Tensor rhs,
                                       const torch::Tensor rns_params);
 
-torch::Tensor rns_montgomery_weighted_sum_cuda(
-    at::TensorList ciphertexts,
-    at::TensorList plaintexts,
-    const torch::Tensor rns_params);
+torch::Tensor rns_montgomery_weighted_sum_cuda(at::TensorList ciphertexts,
+                                               at::TensorList plaintexts,
+                                               const torch::Tensor rns_params);
 
-torch::Tensor rns_montgomery_weighted_sums_cuda(
-    at::TensorList ciphertexts,
-    at::TensorList plaintexts,
-    int64_t group_count,
-    const torch::Tensor rns_params);
+void rns_montgomery_weighted_sums_cuda(at::TensorList ciphertexts,
+                                       at::TensorList plaintexts,
+                                       int64_t group_count,
+                                       const torch::Tensor rns_params,
+                                       torch::Tensor& out);
 
-torch::Tensor rns_montgomery_mul_cyclic_compressed_cuda(
+void rns_montgomery_mul_cyclic_compressed_out_cuda(
     const torch::Tensor lhs,
     const torch::Tensor compressed_rhs,
-    const torch::Tensor rns_params);
+    const torch::Tensor rns_params,
+    torch::Tensor out);
 
-torch::Tensor rns_montgomery_mul_contiguous_compressed_cuda(
+void rns_montgomery_mul_contiguous_compressed_out_cuda(
     const torch::Tensor lhs,
     const torch::Tensor compressed_rhs,
-    const torch::Tensor rns_params);
+    const torch::Tensor rns_params,
+    torch::Tensor out);
 
 void rns_montgomery_mul_row_scalars_inplace_cuda(
     torch::Tensor residues,
@@ -41,18 +42,15 @@ void rns_from_montgomery_inplace_cuda(torch::Tensor montgomery_residues,
 void rns_reduce_to_standard_inplace_cuda(torch::Tensor lazy_residues,
                                          const torch::Tensor rns_params);
 
-torch::Tensor rns_add_lazy_cuda(const torch::Tensor lhs,
-                                const torch::Tensor rhs,
-                                const torch::Tensor rns_params);
+void rns_montgomery_mul_out_cuda(const torch::Tensor lhs,
+                                 const torch::Tensor rhs,
+                                 const torch::Tensor rns_params,
+                                 torch::Tensor out);
 
-torch::Tensor rns_add_lazy_with_twice_modulus_cuda(
-    const torch::Tensor lhs,
-    const torch::Tensor rhs,
-    const torch::Tensor twice_modulus);
-
-torch::Tensor rns_sub_lazy_cuda(const torch::Tensor lhs,
-                                const torch::Tensor rhs,
-                                const torch::Tensor rns_params);
+void rns_add_lazy_out_cuda(const torch::Tensor lhs,
+                           const torch::Tensor rhs,
+                           const torch::Tensor rns_params,
+                           torch::Tensor out);
 
 void rns_center_residues_inplace_cuda(torch::Tensor standard_residues,
                                       const torch::Tensor rns_params);
@@ -62,3 +60,18 @@ void rns_shift_residues_positive_inplace_cuda(torch::Tensor centered_residues,
 
 torch::Tensor rns_lift_integer_coefficients_cuda(
     const torch::Tensor coefficients, const torch::Tensor twice_modulus);
+
+void rns_montgomery_weighted_sum_out_cuda(at::TensorList ciphertexts,
+                                          at::TensorList plaintexts,
+                                          const torch::Tensor rns_params,
+                                          torch::Tensor out);
+
+void rns_add_lazy_with_twice_modulus_out_cuda(const torch::Tensor lhs,
+                                              const torch::Tensor rhs,
+                                              const torch::Tensor twice_modulus,
+                                              torch::Tensor out);
+
+void rns_sub_lazy_out_cuda(const torch::Tensor lhs,
+                           const torch::Tensor rhs,
+                           const torch::Tensor rns_params,
+                           torch::Tensor out);

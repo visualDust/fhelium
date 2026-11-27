@@ -65,12 +65,12 @@ def _build(
 
 @dataclass
 class _TensorOnlyNegate:
-    """Record the Tensor payload received from a public-value boundary."""
+    """Record the Tensor payload layout received from a public-value boundary."""
 
     name: str = "test-tensor-only-negate"
     operation_types: tuple[type[Operation], ...] = (ckks.NegateOp,)
     supports_in_place: bool = False
-    inputs: list[torch.Tensor] = field(default_factory=list)
+    inputs: list[tuple[object, ...]] = field(default_factory=list)
 
     def resource_requirements(
         self,
@@ -79,16 +79,16 @@ class _TensorOnlyNegate:
         del invocation
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: object,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del invocation, resources, in_place
-        self.inputs.append(inputs[0])
+        del invocation, resources, builder
+        self.inputs.append((inputs[0].shape, inputs[0].dtype))
         return (-inputs[0][..., 1:, :],)
 
 
@@ -131,7 +131,7 @@ def test_encrypted_role_boundary_unwraps_and_reconstructs_from_result_ir() -> (
 
     result = executable.run(source)
 
-    assert implementation.inputs == [source.data]
+    assert implementation.inputs == [(source.data.shape, source.data.dtype)]
     assert isinstance(result, Ciphertext)
     assert result.depth == 1
     assert result.scale == 32.0

@@ -224,7 +224,7 @@ Decrypt after every legal materialization step to localize the first incorrect s
 
 - [Encoding, randomness, and key construction](encoding-randomness-and-keys.md)
 - [Tensor materials and operation preparation](materials-and-preparation.md)
-- [Scale and depth lifecycle](../concepts/ckks/scale-and-depth-lifecycle.md)
+- [Configuration and modulus chain](../concepts/ckks/context-and-modulus-chain.md)
 - [RNS and NTT architecture](rns-and-ntt.md)
 - [Native operator workflow](native-operator-workflow.md)
 - [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)

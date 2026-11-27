@@ -33,8 +33,8 @@ const osOrder: readonly OsId[] = [
   'macos-arm64',
 ]
 const methodOrder: readonly MethodId[] = ['prebuilt-pip', 'source-pip', 'source-github', 'source-local']
-const torchOrder = ['2.13', '2.12', 'installed-rocm'] as const
-const computeOrder: readonly ComputeId[] = ['cuda-130', 'cuda-129', 'rocm', 'cpu']
+const torchOrder = ['2.15', '2.14', '2.13', '2.12', 'installed-rocm'] as const
+const computeOrder: readonly ComputeId[] = ['cuda-132', 'cuda-130', 'cuda-129', 'rocm', 'cpu']
 
 function availableBinaryRecipes(catalog: InstallCatalog): BinaryRecipe[] {
   return catalog.binary_recipes.filter(recipe => recipe.published)

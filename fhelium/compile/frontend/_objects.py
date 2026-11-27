@@ -38,6 +38,22 @@ def unwrap(value) -> Any:
     return _binding(value)[0] if isinstance(value, StaticObject) else value
 
 
+def _residency_state() -> tuple[type, ...]:
+    from fhelium.residency import (
+        ResidencyController,
+        ResidencyLease,
+        ResidencyManager,
+        ResidencyScope,
+    )
+
+    return (
+        ResidencyManager,
+        ResidencyController,
+        ResidencyScope,
+        ResidencyLease,
+    )
+
+
 def _method(proxy, name, *args, **kwargs):
     return _attribute(proxy, name)(*args, **kwargs)
 
@@ -46,6 +62,12 @@ def _attribute(proxy, name):
     original, capture = _binding(proxy)
     if name == '__class__':
         return type(original)
+    if isinstance(original, _residency_state()):
+        # Residency decisions read and change runtime state, which a captured
+        # computation would evaluate once instead of on every call.
+        raise CaptureError(
+            f'{type(original).__name__}.{name} cannot run inside a compiled computation; call it between compiled calls and pass the resulting values as arguments'
+        )
     if type(original) in (dict, types.MappingProxyType):
         if name == 'get':
             return lambda key, default=None: (
@@ -78,6 +100,13 @@ def _attribute(proxy, name):
         if isinstance(dynamic, types.FunctionType):
             return capture.function(dynamic)(proxy, name)
         raise
+    from .._callable import CompiledCallable
+
+    if isinstance(descriptor, CompiledCallable) and isinstance(
+        descriptor._source, types.FunctionType
+    ):
+        # A compiled method is inlined as its source method.
+        descriptor = descriptor._source
     if isinstance(descriptor, property):
         if descriptor.fget is None:
             raise AttributeError(name)

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import torch
 
-from fhelium.native.wrapper import ckks_ops, ntt_ops, rns_ops
-from fhelium.backend.random.stream import advance_
+from fhelium.native.wrapper import ckks_ops
 
-from ._embedding import _twister
+from fhelium.backend.implementation import OperationInvocation
+from fhelium.backend.lowering import ExecBuilder
+from fhelium.backend.resources import BoundResource
 
 
 def periodic_extent(period: int, ring_dimension: int, generator: int) -> int:
@@ -20,33 +21,26 @@ def periodic_extent(period: int, ring_dimension: int, generator: int) -> int:
 def periodic_materials(
     config, context, period: int, depth: int, basis: str, state
 ):
-    """Build compact embedding and indexed NTT tables with the full-ring roots."""
-    n = config.N
-    u = periodic_extent(period, n, config.galois_generator)
-    device = context.device
+    """Return the compact embedding and indexed NTT tables of ``fhelium_ckks_ops::periodic_table_set`` with the parameters and live rounding state, in the operand order of ``prepare_periodic_plaintext``."""
     ids = context.rns_layout.prime_ids(depth, include_p=basis == "QP")
-    moduli = tuple(config.moduli[i] for i in ids)
     parameters = context.rns_parameters_for_prime_ids(ids)
-    pre = ckks_ops.periodic_slot_positions(u, config.galois_generator).to(
-        device
+    names, tensors = ckks_ops.periodic_table_set(
+        parameters,
+        [config.moduli[i] for i in ids],
+        config.logN,
+        period,
+        config.galois_generator,
     )
-    even_indices, odd_indices, twiddles = ntt_ops.subring_indexed_radix2_plan(
-        list(moduli), config.logN, u.bit_length() - 1, context.dtype
-    )
-    ntt_ops.validate_indexed_schedule(even_indices, odd_indices, u)
-    twiddles = twiddles.to(device)
-    rns_ops.to_montgomery_(twiddles.view(twiddles.size(0), -1), parameters)
+    tables = dict(zip(names, tensors, strict=True))
     return (
-        pre,
-        _twister(u, str(device)),
+        tables["pre"],
+        tables["twister"],
         state,
         parameters,
-        torch.tensor(
-            [2 * q for q in moduli], dtype=context.dtype, device=device
-        ),
-        even_indices.to(device=device),
-        odd_indices.to(device=device),
-        twiddles,
+        tables["twice_moduli"],
+        tables["even_indices"],
+        tables["odd_indices"],
+        tables["twiddles"],
     )
 
 
@@ -73,8 +67,15 @@ class NativePrepareCompressedPlaintextImplementation:
     def resource_requirements(self, invocation):
         return ()
 
-    def execute(self, invocation, inputs, resources, *, in_place):
-        del resources, in_place
+    def lower(
+        self,
+        invocation: OperationInvocation,
+        inputs: tuple[torch.Tensor, ...],
+        resources: tuple[BoundResource, ...],
+        builder: ExecBuilder,
+        /,
+    ) -> tuple[torch.Tensor, ...]:
+        del resources
         attributes = invocation.attributes
         (
             message,
@@ -101,5 +102,4 @@ class NativePrepareCompressedPlaintextImplementation:
             float(attributes["scale"]),
             str(attributes.get("polynomial_domain", "ntt")),
         )
-        advance_(seed)
         return tuple(result)

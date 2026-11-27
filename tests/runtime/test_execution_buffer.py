@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import queue
 import weakref
 from dataclasses import replace
 
@@ -11,6 +12,7 @@ from fhelium import Plaintext, Preset
 from fhelium.eager import Engine
 from fhelium.errors import ExecutionError, ExecutionInputError
 from fhelium.runtime import (
+    DoubleBuffer,
     ReusableValueBuffer,
     TensorSignature,
     ValueSignature,
@@ -210,3 +212,41 @@ def test_signatures_ignore_residency_but_bind_exact_value_state() -> None:
     del cpu_value, cuda_value, public_key, secret_key, engine
     gc.collect()
     torch.cuda.empty_cache()
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_double_buffer_copies_wait_for_earlier_readers() -> None:
+    device = torch.device("cuda:0")
+    requests: queue.Queue = queue.Queue()
+    sources = [
+        torch.full((1 << 20,), float(index)).pin_memory() for index in range(6)
+    ]
+    for index, source in enumerate(sources):
+        requests.put((index, source))
+    requests.put(None)
+    results = []
+    with DoubleBuffer(sources[0], device=device) as buffers:
+        for (index, _), value in buffers.feed(
+            requests, value=lambda request: request[1]
+        ):
+            # A delayed reader: the copy that next refills this buffer must
+            # start after it.
+            torch.cuda._sleep(20_000_000)
+            results.append((index, value * 1))
+        torch.cuda.synchronize(device)
+    for index, result in results:
+        assert torch.equal(result.cpu(), sources[index])
+
+
+def test_double_buffer_keeps_key_storage_form() -> None:
+    engine = Engine(Preset.slots8192_scale40_depth7, rng_seed=3)
+    secret = engine.create_secret_key(device="cpu")
+    expanded = engine.create_rotation_key(1, secret, device="cpu")
+    compact = expanded.compact()
+    for key in (expanded, compact):
+        with DoubleBuffer(key, device="cpu") as buffers:
+            loaded = buffers.put(key).result()
+        assert loaded.data.shape == key.data.shape
+        assert torch.equal(loaded.data, key.data)
+        assert torch.equal(loaded.seed, key.seed)

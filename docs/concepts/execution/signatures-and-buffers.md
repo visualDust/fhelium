@@ -32,7 +32,7 @@ Validation completes for the entire tree before any leaf is copied. A mismatch t
 
 A buffer signature describes the value tree that fits one fixed allocation. A callable specialization describes the input conditions under which a transformed Program and its prepared implementations can be reused. These conditions can include device placement and static scalar arguments as well as Tensor metadata. A CPU source may be copied into an existing CUDA buffer when its buffer signature matches; a compiled callable receiving that CPU value directly may require a different specialization.
 
-Both mechanisms keep numerical contents separate from structural compatibility. Replacing input data can reuse a buffer or a specialization when the corresponding conditions remain satisfied. [The Compile lifecycle](../open-compiler-stack.md) describes how specialization prepares and retains executable calls.
+Both mechanisms keep numerical contents separate from structural compatibility. Replacing input data can reuse a buffer or a specialization when the corresponding conditions remain satisfied. A compiled call reads its arguments where they lie, so a value in a reusable buffer is read in place. [The Compile lifecycle](../open-compiler-stack.md) describes how specialization prepares and retains executable calls.
 
 ## `ReusableValueBuffer`
 
@@ -45,7 +45,7 @@ one tree structure
 + copy ordering
 ```
 
-It can be created from a representative value tree and reused for eager streaming or CUDA Graph input staging.
+It can be created from a representative value tree and reused for eager streaming, as the argument storage of compiled calls, or for manual CUDA Graph input staging. A `DoubleBuffer` keeps two or more such buffers and fills them in turn on a transfer stream, so that the copy of the next value overlaps the computation that reads the current one; each fill waits for the work already issued on the current stream, which includes the readers of the buffer's previous value.
 
 ```mermaid
 classDiagram
@@ -136,5 +136,5 @@ Copy compatibility includes depth, prime IDs, scale, and key specialization as w
 
 ## Related concepts
 
-- [CUDA Graph execution model](cuda-graph-model.md)
+- [Compiled execution](compiled-execution.md)
 - [Residency lifetimes](residency-lifetimes.md)

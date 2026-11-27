@@ -707,7 +707,7 @@ def _validate_output_tree(value: object, *, device: torch.device) -> None:
     if value is None:
         return
     if isinstance(value, TensorResident):
-        envelope = ValueEnvelope.from_value(value)
+        envelope = ValueEnvelope.from_value(value, compact_keys=False)
         if not envelope.tensors:
             raise TypeError(
                 f"CUDA Graph output {type(value).__name__} has no tensors"
@@ -754,9 +754,11 @@ def _copy_output_tree(target: object, source: object) -> None:
     if source is None:
         return
     if isinstance(source, TensorResident):
-        source_tensors = ValueEnvelope.from_value(source).tensors
+        source_tensors = ValueEnvelope.from_value(
+            source, compact_keys=False
+        ).tensors
         target_tensors = ValueEnvelope.from_value(
-            cast(TensorResident, target)
+            cast(TensorResident, target), compact_keys=False
         ).tensors
         for name, tensor in source_tensors.items():
             target_tensors[name].copy_(tensor)
@@ -779,7 +781,7 @@ def _clone_output_tree(value: object) -> object:
     if value is None:
         return None
     if isinstance(value, TensorResident):
-        envelope = ValueEnvelope.from_value(value)
+        envelope = ValueEnvelope.from_value(value, compact_keys=False)
         tensors = {
             name: envelope.tensors[name].clone(
                 memory_format=torch.preserve_format

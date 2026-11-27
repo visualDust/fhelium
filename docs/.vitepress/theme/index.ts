@@ -5,7 +5,6 @@ import { inBrowser, type Router, type Theme } from 'vitepress'
 import { defineAsyncComponent } from 'vue'
 
 import BlogIndex from './components/BlogIndex.vue'
-import BsgsMatvecPerformance from './components/BsgsMatvecPerformance.vue'
 import DocCard from './components/DocCard.vue'
 import DocGrid from './components/DocGrid.vue'
 import HomeControlExplorer from './components/HomeControlExplorer.vue'
@@ -38,7 +37,6 @@ export default {
   extends: DefaultTheme,
   enhanceApp({ app, router }) {
     installVercelObservability(router)
-    app.component('BsgsMatvecPerformance', BsgsMatvecPerformance)
     app.component('BlogIndex', BlogIndex)
     app.component('DocCard', DocCard)
     app.component('DocGrid', DocGrid)

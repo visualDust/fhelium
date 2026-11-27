@@ -32,7 +32,11 @@ graph TB
 - **Reusable buffers** expose a fixed allocation and a copy schedule.
 - **Residency** tracks which manager-issued local handle has a materialization in which local memory location.
 
-Residency and execution buffers retain separate ownership domains. Residency manages logical-value materializations; reusable buffers and captured Programs own their fixed execution storage.
+Residency and execution buffers retain separate ownership domains. Residency manages logical-value materializations; reusable buffers and compiled Runners own their fixed execution storage.
+
+## Residency and compiled execution
+
+Residency decisions change runtime placement state, so they take place between compiled calls: a scope places the values of a stage, a lease protects them while a compiled stage on the consumer stream reads them as arguments, and the lease ends after that stream's work completes. A compiled function does not contain Residency operations. A CUDA budget at a device also accounts for the compiled execution memory of that device, the shared arena and CUDA Graph pool of compiled functions, which reduces the remaining budget for managed values as compiled functions grow.
 
 Moving a value among pageable host, pinned host, and CUDA preserves its depth, scale, prime IDs, polynomial domain, and key relation. Pinned host storage can support asynchronous host-to-device (H2D) transfer when the copy preconditions and source-lifetime requirements are satisfied.
 

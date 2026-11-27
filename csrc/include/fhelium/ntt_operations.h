@@ -2,22 +2,21 @@
 
 #include <ATen/core/Tensor.h>
 #include <fhelium/export.h>
-#include <fhelium/tensor_table.h>
+#include <fhelium/operation_tables.h>
 
 #include <cstdint>
 #include <string_view>
 
-//! NTT transitions selected by NTT policy name over named schedule tables.
+//! NTT transitions selected by NTT policy name over the tables of one
+//! direction.
 //!
 //! A policy name is one of the FHElium NTT backend names: `radix2_indexed`,
 //! `radix2_compact`, `radix2_compact_shoup32`, and `radix{4,8,16}_compact`.
-//! For a basis prefix `b` and direction `d` (`forward` or `inverse`), the
-//! table supplies `b_d_0`, the `rns_params` of
-//! the transformed rows, and the schedule of the policy family: indexed
-//! radix-2 reads twiddles `b_d_1`, even indices `b_d_2`, and odd indices
-//! `b_d_3`; compact radix-2 reads twiddles `b_d_1`; fixed radix reads outer
-//! twiddles `b_d_1` and radix root powers `b_d_2`. An empty basis prefix
-//! names the operands `d_0`, `d_1`, and so on.
+//! `NttTables::parameters` holds the `rns_params` of the transformed rows and
+//! `NttTables::schedule` the schedule of the policy family: indexed radix-2
+//! reads twiddles, even indices, and odd indices; compact radix-2 reads
+//! twiddles; fixed radix reads outer twiddles and radix root powers. Forward
+//! transitions read forward tables and inverse transitions inverse tables.
 //!
 //! A transition is one of `forward_montgomery` (coefficient Montgomery to NTT
 //! Montgomery), `forward_to_montgomery` (coefficient standard to NTT
@@ -29,20 +28,26 @@
 
 namespace fhelium::ntt {
 
-/// Applies `transition` to `residues` in place with the `basis` schedule of
-/// policy `ntt_backend`.
+/// Applies `transition` to `residues` in place with the schedule `tables`
+/// of policy `ntt_backend`.
 FHELIUM_API void transform_(at::Tensor& residues,
-                            const TensorTable& tables,
+                            const NttTables& tables,
                             std::string_view ntt_backend,
-                            std::string_view basis,
                             std::string_view transition);
 
-/// Returns `transition` of `residues` with the `basis` schedule of policy
+/// Returns `transition` of `residues` with the schedule `tables` of policy
 /// `ntt_backend`; `residues` is unchanged.
 FHELIUM_API at::Tensor transform(const at::Tensor& residues,
-                                 const TensorTable& tables,
+                                 const NttTables& tables,
                                  std::string_view ntt_backend,
-                                 std::string_view basis,
                                  std::string_view transition);
+
+/// Out form of `transform`: writes `transition` of `residues` to `out`, a
+/// Tensor of the same shape, dtype and device disjoint from `residues`.
+FHELIUM_API void transform_out(const at::Tensor& residues,
+                               const NttTables& tables,
+                               std::string_view ntt_backend,
+                               std::string_view transition,
+                               at::Tensor& out);
 
 }  // namespace fhelium::ntt

@@ -100,11 +100,11 @@ class RnsContext:
 
         parameters = self._integer_scalar_parameters.get(scalar)
         if parameters is None:
-            radix = self.montgomery_parameters.R
-            parameters = torch.tensor(
-                tuple((scalar * radix) % q for q in self.config.moduli),
-                dtype=self.dtype,
-                device=self.device,
+            parameters = rns_ops.integer_scalar_table(
+                list(self.config.moduli),
+                str(int(scalar)),
+                self.dtype,
+                self.device,
             )
             self._integer_scalar_parameters[scalar] = parameters
         return parameters
@@ -182,9 +182,9 @@ class RnsContext:
     def _cache_row_parameters(self, rows: RnsRowParameters) -> None:
         row_stop = rows.parameter_row_start + len(rows.prime_ids)
         if rows.prime_ids == tuple(range(rows.parameter_row_start, row_stop)):
-            self._native_parameter_views[(rows.parameter_row_start, row_stop)] = (
-                rows.native_parameters
-            )
+            self._native_parameter_views[
+                (rows.parameter_row_start, row_stop)
+            ] = rows.native_parameters
         self._native_parameter_views_by_prime_ids[rows.prime_ids] = (
             rows.native_parameters
         )

@@ -54,7 +54,7 @@ def test_plaintext_recipe_rebinds_weights_and_roundtrips(tmp_path):
     roundtrip = Program.parse(plan.program.to_text())
     assert roundtrip.to_text() == plan.program.to_text()
     dispatch = first.executable.dispatch_table
-    code = first.executable._call.__code__
+    schedule = first.executable._call.schedule
     weights.add_(0.125)
     for weight in (weights, weights + 0.125):
         result = compiled(value, weight)
@@ -63,7 +63,7 @@ def test_plaintext_recipe_rebinds_weights_and_roundtrips(tmp_path):
         torch.testing.assert_close(actual.real, expected, rtol=0, atol=1e-8)
         current = compiled.specializations[0]
         assert current.executable.dispatch_table is dispatch
-        assert current.executable._call.__code__ is code
+        assert current.executable._call.schedule is schedule
     weights.add_(0.25)
     actual = engine.decrypt_message(compiled(value, weights), secret)
     torch.testing.assert_close(
@@ -299,6 +299,9 @@ def test_preparation_and_host_rebinding_release_payloads_without_gc(
 
     from fhelium.backend.execution import ProgramExecutable
     from fhelium.compile._binding_time import PreparationPlan
+    from fhelium.backend.runner import Material as RunnerMaterial
+    from fhelium.backend.runner import Schedule, ScheduleFunction
+    from fhelium.compile.passes.backend._prepare_host import LoweredProgram
     from fhelium.compile.frontend._preparation_capture import _Effects
 
     engine, _, _, value = _fixture()
@@ -360,25 +363,39 @@ def test_preparation_and_host_rebinding_release_payloads_without_gc(
         operation.symbol = SimpleNamespace(data="weight")
         original, replacement = torch.ones(4), torch.zeros(4)
         first, second = weakref.ref(original), weakref.ref(replacement)
-        namespace = {"material0": original}
-        exec(
-            "def __fhelium_codegen_execute():\n    return material0\n",
-            namespace,
+        schedule = Schedule(
+            buffers=(
+                ("material", (4,), (1,), torch.float32, torch.device("cpu")),
+            ),
+            int_registers=0,
+            float_registers=0,
+            instructions=(),
+            inputs=(),
+            output_buffers=(0,),
+            outputs=(("buffer", 0),),
+            bindings=((0, RunnerMaterial("weight")),),
+            objects=(),
         )
         host = Host()
-        host._call = namespace.pop("__fhelium_codegen_execute")
+        host._static = ()
+        host._lowered = {
+            (): LoweredProgram(
+                None, ScheduleFunction(schedule, {"weight": original}), ()
+            )
+        }
         host.bound_materials = {operation: original}
-        host._material_globals = {"material0": "weight"}
         rebound = ProgramExecutable.rebind_materials(
             host, {"weight": replacement}
         )
-        del host, original, namespace
+        del host, original
         assert first() is None
-        assert rebound._call() is replacement
-        released = ProgramExecutable.rebind_materials(rebound, {"weight": None})
+        assert torch.equal(rebound._call()[0], torch.zeros(4))
+        released = ProgramExecutable.rebind_materials(
+            rebound, {"weight": torch.full((4,), 2.0)}
+        )
         del rebound, replacement
         assert second() is None
-        assert released._call() is None
+        assert torch.equal(released._call()[0], torch.full((4,), 2.0))
     finally:
         if was_enabled:
             gc.enable()

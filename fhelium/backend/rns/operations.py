@@ -11,6 +11,7 @@ from fhelium.backend.implementation import OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.ir.dialects import rns
 from fhelium.native.wrapper import ckks_ops, rns_ops
+from fhelium.backend.lowering import ExecBuilder
 
 
 class _TensorOperandImplementation:
@@ -35,23 +36,21 @@ class NativeRnsLinearImplementation(_TensorOperandImplementation):
         rns.NegateStandardOp,
     )
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
         del resources
         lhs, parameters = values[0], values[-1]
         if invocation.operation_type is rns.NegateStandardOp:
-            result = lhs if in_place else lhs.clone()
-            moduli = parameters[0] // 2
-            result.neg_().remainder_(
-                moduli.view(*([1] * (result.ndim - 2)), -1, 1)
-            )
-            return (result,)
+            if invocation.in_place:
+                rns_ops.negate_standard_(lhs, parameters)
+                return (lhs,)
+            return (rns_ops.negate_standard(lhs, parameters),)
         rhs = values[1]
         operation = (
             rns_ops.add_standard
@@ -66,8 +65,9 @@ class NativeRnsLinearImplementation(_TensorOperandImplementation):
         try:
             lhs.view(-1, lhs.size(-2), lhs.size(-1))
             rhs.view(-1, rhs.size(-2), rhs.size(-1))
-        except RuntimeError:
-            if in_place:
+        except (RuntimeError, ValueError):
+            # Placeholder Tensors raise ValueError for a non-viewable layout.
+            if invocation.in_place:
                 for index in range(lhs.size(0)):
                     mutate(lhs[index], rhs[index], parameters)
                 return (lhs,)
@@ -79,7 +79,7 @@ class NativeRnsLinearImplementation(_TensorOperandImplementation):
                     )
                 ),
             )
-        if in_place:
+        if invocation.in_place:
             mutate(lhs, rhs, parameters)
             return (lhs,)
         return (operation(lhs, rhs, parameters),)
@@ -93,15 +93,15 @@ class NativeBatchSumImplementation(_TensorOperandImplementation):
     supports_in_place: bool = False
     operation_types: tuple[type[Operation], ...] = (rns.SumStandardBatchOp,)
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources, in_place
+        del resources
         source, parameters = values
         dim = cast(int, invocation.attributes["dim"])
         return (rns_ops.sum_standard_batch(source, dim, parameters),)
@@ -120,13 +120,13 @@ class NativeRnsTransitionImplementation(_TensorOperandImplementation):
         rns.ReinterpretScaleOp,
     )
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
         source = values[0]
         if invocation.operation_type in {
@@ -134,7 +134,7 @@ class NativeRnsTransitionImplementation(_TensorOperandImplementation):
             rns.MontgomeryToStandardOp,
         }:
             parameters = values[1]
-            data = source if in_place else source.clone()
+            data = source if invocation.in_place else source.clone()
             if invocation.operation_type is rns.StandardToMontgomeryOp:
                 rns_ops.to_montgomery_(data, parameters)
             else:
@@ -164,21 +164,27 @@ class NativeRnsTransitionImplementation(_TensorOperandImplementation):
                 )
             else:
                 start = source_ids.index(expected_prime_ids[0])
-                if source_ids[start : start + result_rows] == expected_prime_ids:
+                if (
+                    source_ids[start : start + result_rows]
+                    == expected_prime_ids
+                ):
                     selected = source.narrow(-2, start, result_rows)
                 else:
                     return (
                         source.index_select(
                             -2,
                             torch.tensor(
-                                [source_ids.index(i) for i in expected_prime_ids],
+                                [
+                                    source_ids.index(i)
+                                    for i in expected_prime_ids
+                                ],
                                 device=source.device,
                             ),
                         ),
                     )
-            data = selected if in_place else selected.clone()
+            data = selected if invocation.in_place else selected.clone()
             return (data,)
-        return (source if in_place else source.clone(),)
+        return (source if invocation.in_place else source.clone(),)
 
 
 @dataclass(frozen=True)
@@ -192,13 +198,13 @@ class NativePlaintextArithmeticImplementation(_TensorOperandImplementation):
         rns.MultiplyPlaintextOp,
     )
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
         del resources
         ciphertext, plaintext, parameters = values
@@ -210,10 +216,10 @@ class NativePlaintextArithmeticImplementation(_TensorOperandImplementation):
                 component = rns_ops.add_lazy(
                     ciphertext[0], plaintext, parameters
                 )
-                if in_place:
+                if invocation.in_place:
                     ciphertext[0].copy_(component)
                     return (ciphertext,)
-            elif in_place:
+            elif invocation.in_place:
                 ckks_ops.add_prepared_plaintext_component_(
                     ciphertext[0], plaintext, parameters
                 )
@@ -225,14 +231,10 @@ class NativePlaintextArithmeticImplementation(_TensorOperandImplementation):
             return (torch.cat((component.unsqueeze(0), ciphertext[1:]), dim=0),)
         if plaintext.shape[:-2].numel() == 1:
             return (rns_ops.montgomery_mul(ciphertext, plaintext, parameters),)
-        return (
-            torch.stack(
-                tuple(
-                    rns_ops.montgomery_mul(component, plaintext, parameters)
-                    for component in ciphertext
-                )
-            ),
-        )
+        result = torch.empty_like(ciphertext)
+        for component, out in zip(ciphertext, result, strict=True):
+            rns_ops.montgomery_mul_out(component, plaintext, parameters, out)
+        return (result,)
 
 
 def weighted_sum_operands(invocation, values):
@@ -270,15 +272,15 @@ class NativeMontgomeryWeightedSumImplementation(_TensorOperandImplementation):
         rns.MontgomeryWeightedSumsOp,
     )
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources, in_place
+        del resources
         count = cast(int, invocation.attributes["term_count"])
         ciphertexts, represented, parameters = weighted_sum_operands(
             invocation, values
@@ -318,8 +320,8 @@ class NativeMontgomeryWeightedSumImplementation(_TensorOperandImplementation):
                         if layout != "dense"
                         else {},
                     )
-                    term = (dense if layout == "dense" else compact).execute(
-                        call, operands, (), in_place=False
+                    term = (dense if layout == "dense" else compact).lower(
+                        call, operands, (), builder
                     )[0]
                     if total is None:
                         total = term
@@ -355,15 +357,15 @@ class NativeMontgomeryMultiplyImplementation(_TensorOperandImplementation):
     supports_in_place: bool = False
     operation_types: tuple[type[Operation], ...] = (rns.MontgomeryMultiplyOp,)
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del invocation, resources, in_place
+        del invocation, resources
         lhs, rhs, parameters = values
         return (rns_ops.montgomery_mul(lhs, rhs, parameters),)
 
@@ -376,15 +378,15 @@ class NativeTensorProductImplementation(_TensorOperandImplementation):
     supports_in_place: bool = False
     operation_types: tuple[type[Operation], ...] = (rns.TensorProductOp,)
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del invocation, resources, in_place
+        del invocation, resources
         lhs, rhs, parameters = values
         cross = rns_ops.add_lazy(
             rns_ops.montgomery_mul(lhs[0], rhs[1], parameters),
@@ -416,15 +418,14 @@ class NativeRnsStructureImplementation(_TensorOperandImplementation):
         rns.SliceRowsOp,
     )
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del in_place
         if resources:
             raise ValueError("RNS structural operations accept no resources")
         if invocation.operation_type is rns.SliceRowsOp:
@@ -476,15 +477,15 @@ class NativeMontgomeryAccumulateImplementation(_TensorOperandImplementation):
     supports_in_place: bool = False
     operation_types: tuple[type[Operation], ...] = (rns.AddMontgomeryLazyOp,)
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del invocation, resources, in_place
+        del invocation, resources
         lhs, rhs, parameters = values
         return (rns_ops.add_lazy(lhs, rhs, parameters),)
 

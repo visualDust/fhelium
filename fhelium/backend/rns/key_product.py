@@ -11,6 +11,7 @@ from fhelium.backend.implementation import OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.ir.dialects import rns
 from fhelium.native.wrapper import ckks_ops
+from fhelium.backend.lowering import ExecBuilder
 
 
 @dataclass(frozen=True)
@@ -29,27 +30,36 @@ class NativeKeySwitchDigitProductImplementation:
         del invocation
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources, in_place
+        del resources
         digit, key, parameters, *seed = values
         index = cast(int, invocation.attributes["key_digit_index"])
         rounds = int(cast(int, invocation.attributes.get("key_rounds", 0)))
         digit_seed = seed[0][index] if seed else None
-        accumulator0, accumulator1 = (
-            torch.zeros_like(digit),
-            torch.zeros_like(digit),
+        accumulators = digit.new_zeros((2, *digit.shape))
+        accumulator0, accumulator1 = accumulators[0], accumulators[1]
+        p_start = int(
+            cast(int, invocation.attributes.get("key_p_row_start", -1))
         )
-        p_start = int(cast(int, invocation.attributes.get("key_p_row_start", -1)))
-        rows = tuple(cast(tuple[int, ...], invocation.attributes.get("key_q_rows", ())))
+        rows = tuple(
+            cast(tuple[int, ...], invocation.attributes.get("key_q_rows", ()))
+        )
         if not rows:
-            runs = ((0, digit.size(-2), cast(int, invocation.attributes["key_row_start"]), p_start),)
+            runs = (
+                (
+                    0,
+                    digit.size(-2),
+                    cast(int, invocation.attributes["key_row_start"]),
+                    p_start,
+                ),
+            )
         else:
             # Each run of consecutive key rows, then the auxiliary rows, is one product.
             runs, start = [], 0
@@ -71,4 +81,4 @@ class NativeKeySwitchDigitProductImplementation:
                 digit_seed,
                 rounds,
             )
-        return (torch.stack((accumulator0, accumulator1)),)
+        return (accumulators,)

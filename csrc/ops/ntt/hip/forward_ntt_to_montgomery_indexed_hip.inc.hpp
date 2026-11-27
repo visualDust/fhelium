@@ -118,13 +118,13 @@ void forward_ntt_to_montgomery_indexed_inplace_hip(
       }));
 }
 
-torch::Tensor forward_ntt_to_montgomery_indexed_hip(
+void forward_ntt_to_montgomery_indexed_out_hip(
     const torch::Tensor a,
     const torch::Tensor even_indices,
     const torch::Tensor odd_indices,
     const torch::Tensor forward_twiddles,
-    const torch::Tensor rns_params) {
-  torch::Tensor out = torch::empty_like(a);
+    const torch::Tensor rns_params,
+    torch::Tensor out) {
   const auto batch_rows = view_rns_batch_3d(a, "standard_residues");
   auto out_batch_rows = view_rns_batch_3d(out, "out");
   AT_DISPATCH_INTEGRAL_TYPES(
@@ -137,5 +137,4 @@ torch::Tensor forward_ntt_to_montgomery_indexed_hip(
             forward_twiddles,
             rns_params);
       }));
-  return out;
 }

@@ -18,7 +18,21 @@ from xdsl.ir import Operation
 
 from fhelium.ir.dialects.torch import CallOp, TensorCallOp
 from .implementation import OperationInvocation
+from .lowering import ExecBuilder
 from .resources import BoundResource, ResourceRequirement
+
+
+def pinned_copy(tensor: torch.Tensor) -> torch.Tensor:
+    """Return a page-locked CPU copy of ``tensor`` with its strides, as :meth:`torch.Tensor.pin_memory` does."""
+    pinned = torch.empty_strided(
+        tuple(tensor.shape),
+        tuple(tensor.stride()),
+        dtype=tensor.dtype,
+        device="cpu",
+        pin_memory=True,
+    )
+    return pinned.copy_(tensor)
+
 
 TORCH_FUNCTIONS: dict[str, Callable[..., Any]] = {
     "torch.add": torch.add,
@@ -54,6 +68,7 @@ TORCH_FUNCTIONS: dict[str, Callable[..., Any]] = {
     "torch.select": torch.select,
     "torch.narrow": torch.narrow,
     "torch.Tensor.to": torch.Tensor.to,
+    "torch.Tensor.pin_memory": pinned_copy,
     "torch.Tensor.view": torch.Tensor.view,
     "torch.Tensor.contiguous": torch.Tensor.contiguous,
 }
@@ -210,11 +225,7 @@ def prepare_tensor_call(
     )
     source = f"def call(inputs):\n    return (function({arguments}),)\n"
     exec(compile(source, "<fhelium-torch-call>", "exec"), namespace)
-    from fhelium.backend._artifact import rebuild_with
-
-    return rebuild_with(
-        namespace.pop("call"), prepare_tensor_call, function, descriptor
-    )
+    return namespace.pop("call")
 
 
 @dataclass(frozen=True)
@@ -262,13 +273,13 @@ class TorchCallImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
         assert self._call is not None
         return self._call(inputs)

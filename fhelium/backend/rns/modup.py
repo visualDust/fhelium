@@ -11,6 +11,7 @@ from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.backend._native_operands import flat_digits, named_tables
 from fhelium.ir.dialects import rns
 from fhelium.native.wrapper import rns_ops
+from fhelium.backend.lowering import ExecBuilder
 
 
 @dataclass(frozen=True)
@@ -31,20 +32,22 @@ class NativeHybridModUpImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources, in_place
+        del resources
         attributes = invocation.attributes
         return (
             rns_ops.hybrid_modup_digit(
                 values[0],
-                *named_tables(attributes["parameter_names"], values[1:]),
+                named_tables(
+                    "key_switch", attributes["parameter_names"], values[1:]
+                ),
                 int(attributes["digit_index"]),
                 flat_digits(attributes["digits"]),
             ),

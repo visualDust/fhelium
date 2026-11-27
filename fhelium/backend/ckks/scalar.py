@@ -13,7 +13,7 @@ from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.backend.rns.context import RnsContext
 from fhelium.ir.dialects import ckks
 from fhelium.native.wrapper import ckks_ops, rns_ops
-from fhelium.backend.random.stream import advance_
+from fhelium.backend.lowering import ExecBuilder
 
 
 def scalar_operands(
@@ -94,15 +94,15 @@ class NativeScalarArithmeticImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources, in_place
+        del resources
         ciphertext, parameters, auxiliary = inputs
         if invocation.operation_type is ckks.MultiplyIntegerScalarOp:
             return (
@@ -114,11 +114,11 @@ class NativeScalarArithmeticImplementation:
             ciphertext,
             parameters,
             auxiliary,
-            float(cast(float, invocation.attributes["scalar"])),
-            float(cast(float, invocation.attributes["scalar_scale"])),
+            # A HostScalar attribute stays a runtime input of the fragment.
+            cast(float, invocation.attributes["scalar"]),
+            cast(float, invocation.attributes["scalar_scale"]),
             invocation.operation_type is ckks.AddScalarOp,
         )
-        advance_(auxiliary)
         return (output,)
 
 

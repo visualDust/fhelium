@@ -19,6 +19,9 @@
 #include <tuple>
 
 #include <fhelium/export.h>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace fhelium::rns {
 
@@ -32,6 +35,15 @@ FHELIUM_API at::Tensor parameter_table(at::IntArrayRef moduli,
                                        int64_t log_n,
                                        double default_scale,
                                        at::ScalarType dtype);
+
+/// Returns $kR \bmod q$ in $[0, q)$ for the integer $k$ written in decimal by
+/// `scalar` (an optional leading minus sign and digits) and every
+/// modulus $q$ of `moduli`, the row residues of an integer-scalar product in
+/// Montgomery form, as a `dtype` Tensor of shape `[moduli]` on `device`.
+FHELIUM_API at::Tensor integer_scalar_table(at::IntArrayRef moduli,
+                                            std::string_view scalar,
+                                            at::ScalarType dtype,
+                                            c10::Device device);
 
 /// Returns $\Pi_F^{e} R^{m} \bmod q$ for every target modulus $q$.
 ///
@@ -79,10 +91,8 @@ FHELIUM_API at::Tensor quotient_offset_residues(at::IntArrayRef p_moduli,
 ///   and zero otherwise;
 /// - `extension` of shape `[w - 1, destination]`:
 ///   $M_k R^2 \bmod p$ for every destination modulus $p$.
-FHELIUM_API std::tuple<at::Tensor, at::Tensor, at::Tensor>
-mixed_radix_tables(at::IntArrayRef source,
-                   at::IntArrayRef destination,
-                   at::ScalarType dtype);
+FHELIUM_API std::tuple<at::Tensor, at::Tensor, at::Tensor> mixed_radix_tables(
+    at::IntArrayRef source, at::IntArrayRef destination, at::ScalarType dtype);
 
 /// Returns the CRT basis-extension tables from `source` into `target`.
 ///
@@ -95,7 +105,8 @@ mixed_radix_tables(at::IntArrayRef source,
 /// `target_offsets` holds $-\sum_i \frac{q_i-1}{2} D_i R \bmod p$, which makes
 /// `crt_basis_extend` lift the centered residues $[a_i u_i]_{q_i}$; all three
 /// are empty for the raw lift.
-FHELIUM_API std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+FHELIUM_API
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 crt_basis_extension_tables(at::IntArrayRef source,
                            at::IntArrayRef target,
                            bool normalized,
@@ -115,7 +126,8 @@ crt_basis_extension_tables(at::IntArrayRef source,
 /// source count. Adding $x(DE)^{-1} \bmod p$ gives $(x-r-kD)/(DE)$, which
 /// approximate ModDown (`moddown_crt_*`, $E=1$) and joint ModDown with rescale
 /// (`joint_crt_*`) consume.
-FHELIUM_API std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+FHELIUM_API
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 crt_quotient_tables(at::IntArrayRef source,
                     at::IntArrayRef target,
                     at::IntArrayRef divisor,
@@ -135,5 +147,66 @@ FHELIUM_API at::Tensor trailing_quotient_inverses(at::IntArrayRef moduli,
 /// $q_d^{-1} R \bmod q_i$ for $i \ne d$ and zero on the diagonal.
 FHELIUM_API at::Tensor rescale_inverse_matrix(at::IntArrayRef moduli,
                                               at::ScalarType dtype);
+
+/// Named tables of the ModDown quotient fused with rescaling
+/// (`JointRescaleTables`, slots prefixed `joint_`).
+///
+/// `parameters` is the parameter table of the context primes `moduli`. Q
+/// and P list the ordered input rows, D the Q rows that rescaling drops, and
+/// `target_prime_ids` the output rows (empty selects Q without D). The
+/// result pairs the slot names of the defined fields with their Tensors.
+FHELIUM_API std::tuple<std::vector<std::string>, std::vector<at::Tensor>>
+joint_rescale_table_set(const at::Tensor& parameters,
+                        c10::IntArrayRef moduli,
+                        int64_t log_n,
+                        c10::IntArrayRef q_prime_ids,
+                        c10::IntArrayRef p_prime_ids,
+                        c10::IntArrayRef drop_prime_ids,
+                        c10::IntArrayRef target_prime_ids,
+                        std::string_view moddown_rounding,
+                        std::string_view rescale_rounding,
+                        std::string_view basis_conversion);
+
+/// Named `RescaleTables` of the rational rescale from the source rows to the
+/// target rows; `ntt_input` adds $D^{-1} \bmod b'$ for NTT-domain input.
+FHELIUM_API std::tuple<std::vector<std::string>, std::vector<at::Tensor>>
+rescale_table_set(const at::Tensor& parameters,
+                  c10::IntArrayRef moduli,
+                  int64_t log_n,
+                  c10::IntArrayRef source_prime_ids,
+                  c10::IntArrayRef target_prime_ids,
+                  std::string_view rounding,
+                  bool ntt_input);
+
+/// Named `BasisExtensionTables` from the source rows of one parameter table
+/// to the target rows of another.
+FHELIUM_API std::tuple<std::vector<std::string>, std::vector<at::Tensor>>
+basis_extension_table_set(const at::Tensor& source_parameters,
+                          c10::IntArrayRef source_moduli,
+                          const at::Tensor& target_parameters,
+                          c10::IntArrayRef target_moduli,
+                          int64_t log_n,
+                          c10::IntArrayRef source_prime_ids,
+                          c10::IntArrayRef target_prime_ids);
+
+/// Named `CrtTables` of the approximate basis conversion from the source rows
+/// to the target rows; `normalized` selects the centered quotient form.
+FHELIUM_API std::tuple<std::vector<std::string>, std::vector<at::Tensor>>
+crt_table_set(const at::Tensor& parameters,
+              c10::IntArrayRef moduli,
+              int64_t log_n,
+              c10::IntArrayRef source_prime_ids,
+              c10::IntArrayRef target_prime_ids,
+              bool normalized);
+
+/// Named `CrtTables` of the centered quotient by the source rows evaluated
+/// on the target rows, scaled by the inverse of the divisor rows' product.
+FHELIUM_API std::tuple<std::vector<std::string>, std::vector<at::Tensor>>
+centered_quotient_table_set(const at::Tensor& parameters,
+                            c10::IntArrayRef moduli,
+                            int64_t log_n,
+                            c10::IntArrayRef source_prime_ids,
+                            c10::IntArrayRef target_prime_ids,
+                            c10::IntArrayRef divisor_prime_ids);
 
 }  // namespace fhelium::rns

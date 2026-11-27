@@ -227,10 +227,17 @@ def lower_shared_key_switches(
                 element = cast(int, _galois_element(member, member_config))
                 values = declared.get((parent, element, device))
                 if values is None:
-                    created, (indices, sign) = galois_tables(
-                        compilation, member, member_config, element, device
+                    created, tables_of_element = galois_tables(
+                        compilation,
+                        member,
+                        member_config,
+                        element,
+                        device,
+                        table_names,
                     )
-                    values = {"source_indices": indices, "source_sign": sign}
+                    values = dict(
+                        zip(table_names, tables_of_element, strict=True)
+                    )
                     declared[(parent, element, device)] = values
                     parent.insert_ops_before(created, member)
                     inserted += len(created)

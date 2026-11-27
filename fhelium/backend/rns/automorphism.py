@@ -12,6 +12,7 @@ from fhelium.ir.dialects import rns
 from fhelium.native.wrapper import ckks_ops
 
 from functools import cache
+from fhelium.backend.lowering import ExecBuilder
 
 
 @cache
@@ -89,15 +90,15 @@ class NativeCoefficientAutomorphismImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del invocation, resources, in_place
+        del invocation, resources
         source, parameters, source_indices, source_sign = values
         return (
             ckks_ops.apply_coefficient_galois_automorphism(

@@ -1,0 +1,49 @@
+# FHElium
+
+> FHElium is a PyTorch library for CKKS homomorphic encryption with Eager execution on encrypted values, a Program compiler, CUDA Graph execution, and exportable compiled artifacts that load in Python and C++.
+
+Install the agent skill with `npx skills add visualDust/fhelium --skill fhelium`. Values carry CKKS state (depth, actual scale, polynomial domain, modulus basis, device), and every operation applies a documented state transition without inserting alignment. Applications create the evaluation keys they use. Verify a computation in Eager against a clear reference before compiling it with `fhelium.compile`.
+
+## Start
+
+- [Installation](https://fhelium.550w.host/tutorial/installation): install the wheel matching the PyTorch and CUDA build, check `fhelium version` and `fhelium cuda info`
+- [Basic CKKS workflow](https://fhelium.550w.host/tutorial/basic-ckks-workflow): create an Engine and keys, encrypt, evaluate, decrypt
+- [Tutorials](https://fhelium.550w.host/tutorial/): numbered tutorials, one per runnable example in `examples/`
+
+## Programming
+
+- [Choose a preset and chain depth](https://fhelium.550w.host/how-to/choose-preset-and-depth): preset names, slot capacity, depth and scale schedule
+- [Depth and scale](https://fhelium.550w.host/tutorial/depth-and-scale): rescale, modulus switching, actual scales per depth
+- [Provision the minimum required keyset](https://fhelium.550w.host/how-to/provision-keyset): rotation, relinearization, and conjugation keys a computation needs
+- [Linear layer and polynomial activation](https://fhelium.550w.host/tutorial/linear-layer-and-polynomial): `fhelium.algorithms.linear` and `fhelium.algorithms.polynomial`
+- [Bootstrap a full-slot CKKS ciphertext](https://fhelium.550w.host/tutorial/composable-ckks-bootstrap): `fhelium.bootstrap` plans, keys, and refresh
+- [Diagnose a value-state mismatch](https://fhelium.550w.host/how-to/diagnose-value-state-mismatch): depth, scale, domain, and basis errors
+
+## Compile and deploy
+
+- [Choose compile boundaries](https://fhelium.550w.host/how-to/choose-compile-boundaries): capture, inlining, loop unrolling, scalar specialization, cache eligibility
+- [Compile a callable](https://fhelium.550w.host/how-to/compile-callable): `fc.compile` options, specializations, statistics
+- [Compile a layer](https://fhelium.550w.host/tutorial/compile-layer): compiled methods of a layer class
+- [Deploy a compiled callable](https://fhelium.550w.host/how-to/deploy-compiled-callable): `fc.export`, `fc.load`, and `fhelium::Artifact` in C++
+- [Serve compiled requests](https://fhelium.550w.host/how-to/serve-compiled-requests): admitted signatures, `DoubleBuffer` streaming, result release
+- [Diagnose Compile failures](https://fhelium.550w.host/how-to/diagnose-compile-failures): capture, specialization, export, and load errors
+
+## Performance
+
+- [Measure and optimize a workload](https://fhelium.550w.host/how-to/measure-and-optimize): first-call and steady latency, `stats()`, memory, mechanisms by cost
+- [Use CUDA Graphs](https://fhelium.550w.host/how-to/use-cuda-graphs): automatic Graph segments and their statistics
+- [Choose an NTT implementation](https://fhelium.550w.host/how-to/choose-ntt-implementation): NTT backends per ring dimension
+- [CKKS workload cost model](https://fhelium.550w.host/concepts/performance/cost-model): operation costs
+
+## Concepts
+
+- [Value model and identity](https://fhelium.550w.host/concepts/ckks/value-model-and-identity): value types and their state
+- [Value-state transitions](https://fhelium.550w.host/concepts/ckks/value-state-transitions): state transitions of each operation
+- [Key lifecycle](https://fhelium.550w.host/concepts/ckks/key-lifecycle): key creation, layouts, and use
+- [Compiled execution](https://fhelium.550w.host/concepts/execution/compiled-execution): specializations, Runner, CUDA Graph segments, artifacts
+
+## Optional
+
+- [API reference](https://fhelium.550w.host/api/): Python modules and the C++ interface
+- [Developer Guide](https://fhelium.550w.host/developer/): implementation mechanisms
+- [Benchmarks](https://fhelium.550w.host/benchmarks/): measured workloads across hardware and parameters

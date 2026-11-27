@@ -82,6 +82,16 @@ FHELIUM_API at::Tensor forward_ntt_to_montgomery_indexed(
     const at::Tensor& forward_twiddles,
     const at::Tensor& rns_params);
 
+/// Out form of `forward_ntt_to_montgomery_indexed`: writes the transform of
+/// `standard_residues` to `out`, a Tensor of the same shape, dtype and device.
+FHELIUM_API void forward_ntt_to_montgomery_indexed_out(
+    const at::Tensor& standard_residues,
+    const at::Tensor& even_indices,
+    const at::Tensor& odd_indices,
+    const at::Tensor& forward_twiddles,
+    const at::Tensor& rns_params,
+    at::Tensor& out);
+
 /// Forward NTT of coefficient-domain Montgomery residues with compact twiddles,
 /// in place.
 FHELIUM_API void forward_ntt_montgomery_compact_(
@@ -102,6 +112,14 @@ FHELIUM_API at::Tensor forward_ntt_to_montgomery_compact(
     const at::Tensor& standard_residues,
     const at::Tensor& forward_twiddles,
     const at::Tensor& rns_params);
+
+/// Out form of `forward_ntt_to_montgomery_compact`: writes the transform of
+/// `standard_residues` to `out`, a Tensor of the same shape, dtype and device.
+FHELIUM_API void forward_ntt_to_montgomery_compact_out(
+    const at::Tensor& standard_residues,
+    const at::Tensor& forward_twiddles,
+    const at::Tensor& rns_params,
+    at::Tensor& out);
 
 /// Transforms a correction to the NTT domain and adds a scaled NTT addend in
 /// the same pass.
@@ -161,6 +179,16 @@ FHELIUM_API at::Tensor forward_ntt_to_montgomery_power_of_two_radix_compact(
     const at::Tensor& outer_twiddles,
     const at::Tensor& radix_root_powers,
     const at::Tensor& rns_params);
+
+/// Out form of `forward_ntt_to_montgomery_power_of_two_radix_compact`: writes
+/// the transform of `standard_residues` to `out`, a Tensor of the same shape,
+/// dtype and device.
+FHELIUM_API void forward_ntt_to_montgomery_power_of_two_radix_compact_out(
+    const at::Tensor& standard_residues,
+    const at::Tensor& outer_twiddles,
+    const at::Tensor& radix_root_powers,
+    const at::Tensor& rns_params,
+    at::Tensor& out);
 
 /// Inverse NTT with an indexed schedule, in place, producing coefficient-domain
 /// Montgomery residues in $[0, 2q_j)$.

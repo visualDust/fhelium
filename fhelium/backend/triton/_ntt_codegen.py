@@ -84,22 +84,47 @@ def _parameter_policy(function: Any) -> tuple[list[str], list[str]]:
     return alignment_independent, scalars
 
 
-_PROGRAM_ELEMENTS = 2048
-_ROUND_BITS = 4
-# Coefficient values per program that loads may hold in registers: eight
-# loads of a full 2048-coefficient program.
-_LOAD_ELEMENTS = 8 * _PROGRAM_ELEMENTS
+# A full program runs on 256 threads, and each thread holds 32 bytes of
+# coefficients per register round: 2^3 int32 or 2^2 int64 residues.
+_THREADS = 256
+# Coefficient values per program that loads may hold in registers.
+_LOAD_ELEMENTS = 16384
+# Smallest program size of a stage interval.
+_MIN_ELEMENTS = 512
+# Registers per thread for residues loaded ahead of their use: half of the
+# 255 registers a thread may address.
+_HELD_REGISTERS = 128
 
 
-def radix2_elements(loads: int, elements: int = _PROGRAM_ELEMENTS) -> int:
+def round_bits(itemsize: int) -> int:
+    """Return the butterfly stages per register round for ``itemsize``-byte residues."""
+    return (32 // itemsize).bit_length() - 1
+
+
+def radix2_elements(loads: int, bits: int, elements: int | None = None) -> int:
     """Return the program size, at most ``elements``, for ``loads`` coefficient loads."""
+    elements = _THREADS << bits if elements is None else elements
     while elements > 128 and elements * loads > _LOAD_ELEMENTS:
         elements //= 2
     return elements
 
 
+def radix2_program(stages: int, tiled: bool, bits: int) -> int:
+    """Return the smallest program size for one ``stages``-stage interval.
+
+    A thread round holds ``2^bits`` residues, or 32 bytes, which is one memory
+    sector. A column interval reads ``lanes`` adjacent coefficients in each of
+    its ``2^stages`` rows, so its programs keep ``lanes >= 2^bits`` to load and
+    store whole sectors. Tile intervals are contiguous at every size.
+    """
+    ceiling = _THREADS << bits
+    if tiled:
+        return min(_MIN_ELEMENTS, ceiling)
+    return min(ceiling, max(_MIN_ELEMENTS, 1 << (bits + stages)))
+
+
 def radix2_geometry(
-    n: int, start: int, end: int, elements: int = _PROGRAM_ELEMENTS
+    n: int, start: int, end: int, elements: int
 ) -> tuple[int, int]:
     """Return (programs, lanes) of one radix-2 stage interval.
 
@@ -112,6 +137,25 @@ def radix2_geometry(
     return groups // lanes, lanes
 
 
+def radix2_warps(
+    n: int, start: int, end: int, elements: int, bits: int, loads: int
+) -> int:
+    """Return the warps of one program.
+
+    Every thread holds at least one register slot of the program. A program
+    may also issue all ``loads`` coefficient loads ahead of the arithmetic
+    that consumes them, so enough threads share its ``elements x loads``
+    residues, of ``2^(3 - bits)`` registers each, to keep each thread's
+    share within ``_HELD_REGISTERS``.
+    """
+    stages = end - start
+    lanes = radix2_geometry(n, start, end, elements)[1]
+    slots = lanes << (stages - min(bits, stages))
+    held = -(-(elements * loads << (3 - bits)) // _HELD_REGISTERS)
+    warps = -(-max(slots, held) // 32)
+    return min(8, 1 << (warps - 1).bit_length())
+
+
 class StageEmitter:
     """Emit compact-table butterflies for one NTT stage interval.
 
@@ -121,7 +165,9 @@ class StageEmitter:
     r bits [lo, lo + K) of its slot. Rounds of K stages run in registers and
     exchange r bits between rounds through a reshape and permutation. Loaded
     and transformed values use the window lo = M - K, matching the native
-    compact passes. Fixed-radix intervals exchange tiled lanes per digit and
+    compact passes. Radix-2 twiddle loads collect in ``preloads``, once per
+    index for all components, for placement ahead of the coefficient loads.
+    Fixed-radix intervals exchange tiled lanes per digit and
     keep a register tuple per strided lane. All butterflies retain the native
     lazy interval and operation order.
     """
@@ -137,7 +183,8 @@ class StageEmitter:
         radix: int | None = None,
         twiddle_encoding: str = "montgomery",
         prefix: str = "",
-        elements: int = _PROGRAM_ELEMENTS,
+        elements: int,
+        bits: int,
     ) -> None:
         self.n = n
         self.log_n = n.bit_length() - 1
@@ -151,9 +198,12 @@ class StageEmitter:
         self.pair_aligned: str | None = None
         self.roots: dict[int, str] = {}
         self.lines: list[str] = []
+        # Radix-2 twiddle loads, shared by the components of the endpoint.
+        self.preloads: list[str] = []
+        self.twiddles: dict[str, tuple[str, ...]] = {}
         self.serial = 0
         self.stages = end - start
-        self.bits = min(_ROUND_BITS, self.stages)
+        self.bits = min(bits, self.stages)
         self.programs, self.lanes = radix2_geometry(n, start, end, elements)
         self.slots = self.lanes << (self.stages - self.bits)
 
@@ -200,12 +250,16 @@ class StageEmitter:
             names.append(name)
         return tuple(names)
 
-    def _twiddle(self, index: str, *, masked: bool) -> tuple[str, ...]:
+    def _twiddle(self, index: str) -> tuple[str, ...]:
+        cached = self.twiddles.get(index)
+        if cached is not None:
+            return cached
         root = self.name("twiddle")
         address = f"twiddles + row * TWIDDLE_STRIDE + ({index}) * TWIDDLE_ELEMENT_STRIDE"
-        mask = ", mask=mask, other=0" if masked else ""
+        lines = self.preloads
         if self.twiddle_encoding == "montgomery":
-            self.lines.append(f"{root} = tl.load({address}{mask}).to(tl.int64)")
+            lines.append(f"{root} = tl.load({address}).to(tl.int64)")
+            self.twiddles[index] = (root,)
             return (root,)
         quotient = self.name("quotient")
         if self.pair_aligned is None:
@@ -213,26 +267,27 @@ class StageEmitter:
             self.pair_aligned = self.name("pair_aligned")
             # Cached launchers accept bindings with the same strides and
             # different offsets. Check the actual row address at execution.
-            self.lines.extend(
+            lines.extend(
                 (
                     f"{row_address} = (twiddles + row * TWIDDLE_STRIDE).to(tl.uint64)",
                     f"{self.pair_aligned} = (TWIDDLE_WORD_STRIDE == 1) & (TWIDDLE_ELEMENT_STRIDE % 2 == 0) & (({row_address} & 7) == 0)",
                 )
             )
         packed = self.name("root_pair")
-        self.lines.extend(
+        lines.extend(
             (
                 f"if {self.pair_aligned}:",
                 # The pair starts at an 8-byte-aligned row address plus an
                 # even number of int32 words, and the second word is adjacent.
-                f"    {packed} = tl.load(({address}).to(tl.pointer_type(tl.uint64)){mask})",
+                f"    {packed} = tl.load(({address}).to(tl.pointer_type(tl.uint64)))",
                 f"    {root} = ({packed} & 0xFFFFFFFF).to(tl.int64)",
                 f"    {quotient} = ({packed} >> 32).to(tl.uint32)",
                 "else:",
-                f"    {root} = tl.load({address}{mask}).to(tl.int64)",
-                f"    {quotient} = tl.load({address} + TWIDDLE_WORD_STRIDE{mask}).to(tl.uint32)",
+                f"    {root} = tl.load({address}).to(tl.int64)",
+                f"    {quotient} = tl.load({address} + TWIDDLE_WORD_STRIDE).to(tl.uint32)",
             )
         )
+        self.twiddles[index] = (root, quotient)
         return root, quotient
 
     def _product(self, value: str, twiddle: tuple[str, ...]) -> str:
@@ -280,7 +335,6 @@ class StageEmitter:
             registers = self._exchange(registers, window, low)
             window = low
             first = self._first_index(low)
-            twiddles: dict[tuple[int, int], tuple[str, ...]] = {}
             for local in range(round_ * k, min((round_ + 1) * k, m)):
                 stage = self.start + local
                 bit = (local if self.inverse else m - 1 - local) - low
@@ -288,15 +342,11 @@ class StageEmitter:
                     if e & (1 << bit):
                         continue
                     offset = e >> (bit + 1)
-                    twiddle = twiddles.get((stage, offset))
-                    if twiddle is None:
-                        index = (
-                            f"{self.n >> (stage + 1)} + ({first} >> {stage + 1}) + {offset}"
-                            if self.inverse
-                            else f"{1 << stage} + ({first} >> {self.log_n - stage}) + {offset}"
-                        )
-                        twiddle = self._twiddle(index, masked=False)
-                        twiddles[stage, offset] = twiddle
+                    twiddle = self._twiddle(
+                        f"{self.n >> (stage + 1)} + ({first} >> {stage + 1}) + {offset}"
+                        if self.inverse
+                        else f"{1 << stage} + ({first} >> {self.log_n - stage}) + {offset}"
+                    )
                     high = e | (1 << bit)
                     registers[e], registers[high] = self._butterfly(
                         registers[e], registers[high], twiddle

@@ -13,7 +13,7 @@ This directory contains the commands used by the manually dispatched release wor
 ```bash
 python -I packaging/matrix.py validate
 python -I packaging/matrix.py cells
-python -I packaging/matrix.py show torch213-cu130
+python -I packaging/matrix.py show torch215-cu132
 python -m pytest packaging/test_release_repository.py
 ```
 

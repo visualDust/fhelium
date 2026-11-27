@@ -15,7 +15,7 @@ from xdsl.dialects.func import ReturnOp
 from xdsl.ir import Block, Operation, SSAValue
 
 from fhelium.compile.codegen import PythonCodegenError
-from fhelium.ir.dialects import core, distributed, fusion
+from fhelium.ir.dialects import core, distributed, exec, fusion
 
 from ._common import SourceNames, constant_literal
 
@@ -32,6 +32,7 @@ def emit_host_body(
     *,
     prepared_regions: Callable[[Operation], bool],
     tuple_return: bool = True,
+    statement: Callable[[Operation], str | None] | None = None,
 ) -> list[str]:
     """Translate supported structured IR once, retaining dataflow in locals.
 
@@ -89,7 +90,14 @@ def emit_host_body(
             operands = tuple(names.operand(value) for value in op.operands)
             results = names.results(op)
             if isinstance(
-                op, (ReturnOp, scf.YieldOp, distributed.YieldOp, fusion.YieldOp)
+                op,
+                (
+                    ReturnOp,
+                    scf.YieldOp,
+                    distributed.YieldOp,
+                    fusion.YieldOp,
+                    exec.YieldOp,
+                ),
             ):
                 if yielded is not None:
                     assign(indent, yielded, operands)
@@ -111,7 +119,10 @@ def emit_host_body(
                         )
                     write(indent, f"return {expression}")
                 return
-            if isinstance(op, UnrealizedConversionCastOp):
+            text = None if statement is None else statement(op)
+            if text is not None:
+                write(indent, text)
+            elif isinstance(op, UnrealizedConversionCastOp):
                 if len(operands) != 1 or len(results) != 1:
                     raise PythonCodegenError(
                         "Host execution requires one-to-one boundary casts"

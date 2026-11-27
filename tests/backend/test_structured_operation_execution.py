@@ -46,15 +46,15 @@ class _TensorAddImplementation:
         del invocation
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: object,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del invocation, resources, in_place
+        del invocation, resources, builder
         return (inputs[0] + inputs[1],)
 
 
@@ -198,8 +198,34 @@ def _structured_worker(
         executable = backend.link(Compilation(_structured_collective_program()))
         result = executable.run(torch.tensor([rank + 1], dtype=torch.int64))
         assert isinstance(result, torch.Tensor)
+        # The loop bounds were expanded for this rank, so the artifact
+        # records it.
+        from fhelium import compile as fc
+        from fhelium.native.artifact import read_container_header
+
+        artifact = Path(output_directory, f"rank-{rank}.fhelium")
+        sample = torch.tensor([rank + 1], dtype=torch.int64)
+        fc.export(
+            fc.compile(
+                _structured_collective_program(),
+                backend=backend,
+                pipeline=Pipeline(),
+                cache=False,
+            ),
+            artifact,
+            signatures=[(sample,)],
+        )
+        metadata, _ = read_container_header(artifact)
         Path(output_directory, f"rank-{rank}.json").write_text(
-            json.dumps({"rank": rank, "result": result.item()}),
+            json.dumps(
+                {
+                    "rank": rank,
+                    "result": result.item(),
+                    "artifact_rank": json.loads(metadata["fhelium.manifest"])[
+                        "rank"
+                    ],
+                }
+            ),
             encoding="utf-8",
         )
     finally:
@@ -230,6 +256,6 @@ def test_rank_query_scf_and_collective_region_execute_end_to_end(
         json.loads((outputs / f"rank-{rank}.json").read_text(encoding="utf-8"))
         for rank in range(2)
     ] == [
-        {"rank": 0, "result": 2},
-        {"rank": 1, "result": 2},
+        {"rank": 0, "result": 2, "artifact_rank": 0},
+        {"rank": 1, "result": 2, "artifact_rank": 1},
     ]

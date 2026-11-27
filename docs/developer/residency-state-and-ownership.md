@@ -164,4 +164,4 @@ This locking establishes coherent handle, materialization, protection, and accou
 
 - [Residency plans and execution internals](residency-plans-and-execution.md)
 - [Residency lifetimes concept](../concepts/execution/residency-lifetimes.md)
-- [Explicit residency tutorial](../tutorial/explicit-residency.md)
+- [Explicit residency tutorial](../tutorial/manual-residency.md)

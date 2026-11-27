@@ -2,11 +2,10 @@
 
 from .distributed import (
     TorchBroadcastImplementation,
-    TorchCiphertextAddAllReduceImplementation,
+    TorchCiphertextAllReduceImplementation,
     TorchGenericAllReduceImplementation,
     TorchProcessGroupQueryImplementation,
     distributed_operation_contributions,
-    prepare_ciphertext_add_combine,
     ProcessGroupExecutionResource,
 )
 from .execution import (
@@ -32,7 +31,7 @@ from .workspace import BackendWorkspace
 __all__ = [
     "BackendWorkspace",
     "TorchBroadcastImplementation",
-    "TorchCiphertextAddAllReduceImplementation",
+    "TorchCiphertextAllReduceImplementation",
     "DEVICE_RESOURCE_KIND",
     "TorchGenericAllReduceImplementation",
     "ImplementationRegistry",
@@ -48,6 +47,5 @@ __all__ = [
     "ProcessGroupExecutionResource",
     "TorchProcessGroupQueryImplementation",
     "distributed_operation_contributions",
-    "prepare_ciphertext_add_combine",
     "requested_implementation",
 ]

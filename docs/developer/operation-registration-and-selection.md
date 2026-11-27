@@ -12,7 +12,7 @@ Operation declarations define computation, lowering recipes rewrite it, and Back
 | Built-in assembly | `backend/assembly.py` | Ordered implementation contributions |
 | Native schema and registration | `csrc/ops/<family>/` | Torch namespace, schema, and dispatch key |
 
-The [IR article](compiler-stack-internals.md) explains schema and effect ownership. The [operation index](ir-operation-implementation-index.md) links families to source definitions containing their signatures and equations.
+The [IR article](ir-capture-and-passes.md) explains schema and effect ownership. The [operation index](ir-operation-implementation-index.md) links families to source definitions containing their signatures and equations.
 
 ## Element dependencies
 
@@ -50,16 +50,19 @@ Generated-kernel matchers check these relationships against the indexing and ari
 
 ## What does a Backend implementation expose?
 
-`backend/implementation.py` defines the execution protocol. An implementation declares `name`, `operation_types`, and `supports_in_place`. Its `resource_requirements(invocation)` lists genuine non-Tensor handles. `execute(invocation, inputs, resources, *, in_place)` returns Tensor results using numerical operands and bound handles.
+`backend/implementation.py` defines the execution protocol. An implementation declares `name`, `operation_types`, and `supports_in_place`. Its `resource_requirements(invocation)` lists genuine non-Tensor handles. `lower(invocation, inputs, resources, builder, /)` returns the Tensor results of one call written as ordinary PyTorch operator calls on the inputs.
 
-`OperationInvocation` contains the operation class, operand/result counts, operation attributes, and represented operand/result state required by execution. Eager constructs it directly from a method call; Compile constructs it while resolving IR operations.
+Lowering runs once per operand layout. The inputs are placeholder Tensors with the sizes, strides, dtype and device of the runtime operands, and `builder` (`backend/lowering.py`) records every operator call that reads them as an `exec` operation (`ir/dialects/exec.py`): `exec.call_op` for operators, `exec.alloc`, `exec.view`, `exec.copy` and `exec.zero` for storage, and `exec.launch` for generated kernels. Operator calls whose Tensor inputs are all link-time constants run during lowering, and their results become constants of the schedule. Each value written during execution is an input, a result, or allocated storage; mutable state such as a random stream is supplied by `builder.state(resource, field)`. Host code that cannot be expressed as operator calls runs through `builder.python_call`. Computation that depends only on attributes and layouts, such as kernel plans and index tables, therefore happens once, and the recorded calls form the host schedule that executes on every call.
+
+`OperationInvocation` contains the operation class, operand/result counts, operation attributes, represented operand/result state, and whether the call may write its first operand (`in_place`). Eager constructs it directly from a method call; Compile constructs it while resolving IR operations.
 
 Optional interfaces add narrowly defined preparation:
 
 - `tensor_requirements(operation, config)` declares missing numerical operands and related attributes.
-- `PreparingOperationImplementation.prepare_operation(operation)` prepares a represented operation or region for direct execution.
+- `PreparingOperationImplementation.prepare_operation(operation)` prepares a represented operation or region for lowering.
 - `FusionImplementation.match_fusion(operations)` reports support for candidate regions.
-- `RegionOperationImplementation.execute_regions(...)` executes an operation with prepared Tensor-region callables.
+
+An operation with Tensor regions, such as a generic all-reduce, lowers its bodies through `builder.python_call(function, inputs, results=..., bodies=...)`; the function receives one callable per lowered body.
 
 Numerical algorithms live beside their implementations. `backend/assembly.py` constructs the registry from their contributions. Table construction belongs to the corresponding RNS, NTT, or CKKS numerical owner.
 

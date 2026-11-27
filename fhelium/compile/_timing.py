@@ -57,7 +57,7 @@ class ExecutionTiming:
                 devices.update(
                     tensor.device
                     for tensor in ValueEnvelope.from_value(
-                        value
+                        value, compact_keys=False
                     ).tensors.values()
                 )
         cuda_devices = {device for device in devices if device.type == "cuda"}

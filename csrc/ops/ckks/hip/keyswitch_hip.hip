@@ -1,6 +1,6 @@
-#include <type_traits>
-#include <algorithm>
 #include <torch/torch.h>
+#include <algorithm>
+#include <type_traits>
 
 #include "../../common/hip/kernel_support.hpp"
 #include "../../common/key_rows.h"
@@ -170,8 +170,7 @@ __global__ void keyswitch_moddown_qp_to_q_kernel(
   }
   __syncthreads();
   if (coefficient >= q_residues.size(2)) return;
-  scalar_t value[Rows], twice_modulus[Rows],
-      modulus_lo[Rows], modulus_hi[Rows],
+  scalar_t value[Rows], twice_modulus[Rows], modulus_lo[Rows], modulus_hi[Rows],
       neg_inv_modulus_lo[Rows], neg_inv_modulus_hi[Rows];
 #pragma unroll
   for (int k = 0; k < Rows; ++k) {
@@ -222,12 +221,14 @@ __global__ void keyswitch_moddown_qp_to_q_kernel(
 }
 
 template <bool Nearest>
-torch::Tensor keyswitch_moddown_qp_to_q_hip_impl(
+void keyswitch_moddown_qp_to_q_hip_impl(
     const torch::Tensor q_residues,
     const torch::Tensor p_residues,
     const torch::Tensor moddown_p_drop_inverses_montgomery,
     const torch::Tensor rns_params,
-    const std::optional<torch::Tensor> half) {
+    const std::optional<torch::Tensor> half,
+    torch::Tensor& out,
+    const std::optional<torch::Tensor>& p_scratch) {
   constexpr const char* operation = "keyswitch_moddown_qp_to_q";
   check_keyswitch_hip_peer(q_residues, p_residues, operation, "p_residues");
   check_keyswitch_hip_peer(q_residues,
@@ -243,8 +244,8 @@ torch::Tensor keyswitch_moddown_qp_to_q_hip_impl(
                 operation,
                 " moddown_half must contain one value per QP row");
   }
-  auto out = torch::empty_like(q_residues);
-  auto p_scratch_public = torch::empty_like(p_residues);
+  auto p_scratch_public =
+      p_scratch ? *p_scratch : torch::empty_like(p_residues);
   const auto q = view_rns_batch_3d(q_residues, "q_residues");
   const auto p_source = view_rns_batch_3d(p_residues, "p_residues");
   auto p = view_rns_batch_3d(p_scratch_public, "p_residues");
@@ -305,24 +306,26 @@ torch::Tensor keyswitch_moddown_qp_to_q_hip_impl(
           moddown(std::integral_constant<int, kModDownRows>{});
         }
       });
-  return out;
 }
 
-torch::Tensor keyswitch_moddown_qp_to_q_hip(
+void keyswitch_moddown_qp_to_q_hip(
     const torch::Tensor q,
     const torch::Tensor p,
     const torch::Tensor inverse,
     const torch::Tensor parameters,
     const std::optional<torch::Tensor> half,
-    const std::string& rounding) {
+    const std::string& rounding,
+    torch::Tensor& out,
+    const std::optional<torch::Tensor>& p_scratch) {
   TORCH_CHECK(rounding == "nearest" || rounding == "floor",
               "ModDown rounding must be 'nearest' or 'floor'");
   if (rounding == "nearest") {
-    return keyswitch_moddown_qp_to_q_hip_impl<true>(
-        q, p, inverse, parameters, half);
+    keyswitch_moddown_qp_to_q_hip_impl<true>(
+        q, p, inverse, parameters, half, out, p_scratch);
+    return;
   }
-  return keyswitch_moddown_qp_to_q_hip_impl<false>(
-      q, p, inverse, parameters, half);
+  keyswitch_moddown_qp_to_q_hip_impl<false>(
+      q, p, inverse, parameters, half, out, p_scratch);
 }
 
 // Multiply one ModUp digit by one unbatched key-switch-key pair and accumulate
@@ -355,9 +358,8 @@ __global__ void keyswitch_accumulate_digit_products_kernel(
                        source_coefficient < extended_digit.size(2));
   }
   const scalar_t digit = extended_digit[batch][row][source_coefficient];
-  const int key_row = row < key_q_rows
-                            ? key_digit_row_start + row
-                            : key_p_row_start + (row - key_q_rows);
+  const int key_row = row < key_q_rows ? key_digit_row_start + row
+                                       : key_p_row_start + (row - key_q_rows);
   const scalar_t product0 = montgomery_mul(digit,
                                            key_digit[0][key_row][coefficient],
                                            modulus_lo,
@@ -428,19 +430,20 @@ __global__ void keyswitch_accumulate_products_kernel(
   const scalar_t modulus_hi = params[RNS_PARAM_MODULUS_HI][row];
   const scalar_t neg_inv_modulus_lo = params[RNS_PARAM_NEG_INV_MODULUS_LO][row];
   const scalar_t neg_inv_modulus_hi = params[RNS_PARAM_NEG_INV_MODULUS_HI][row];
-  const int key_row = row < key_q_rows
-                            ? key_digit_row_start + row
-                            : key_p_row_start + (row - key_q_rows);
-  const int64_t key_offset = key_row * strides.key_row +
-                             coefficient * strides.key_coefficient;
+  const int key_row = row < key_q_rows ? key_digit_row_start + row
+                                       : key_p_row_start + (row - key_q_rows);
+  const int64_t key_offset =
+      key_row * strides.key_row + coefficient * strides.key_coefficient;
   const int64_t output = batch * strides.accumulator_batch +
                          row * strides.accumulator_row + coefficient;
   for (int rotation = 0; rotation < rotation_count; ++rotation) {
     int source_coefficient = coefficient;
     if constexpr (Permute) {
-      source_coefficient = rotations.source_indices[rotation]
-                                                   [coefficient * strides.source_index];
-      CUDA_KERNEL_ASSERT(source_coefficient >= 0 && source_coefficient < coefficients);
+      source_coefficient =
+          rotations
+              .source_indices[rotation][coefficient * strides.source_index];
+      CUDA_KERNEL_ASSERT(source_coefficient >= 0 &&
+                         source_coefficient < coefficients);
     }
     const scalar_t* key = rotations.key[rotation] + key_offset;
     scalar_t sum0 = 0;
@@ -450,21 +453,28 @@ __global__ void keyswitch_accumulate_products_kernel(
          ++digit_index) {
       if (digit_index >= digit_count) break;
       const scalar_t digit =
-          digits.values[digit_index][batch * digits.batch_stride[digit_index] +
-                                     row * digits.row_stride[digit_index] +
-                                     source_coefficient *
-                                         digits.coefficient_stride[digit_index]];
+          digits
+              .values[digit_index][batch * digits.batch_stride[digit_index] +
+                                   row * digits.row_stride[digit_index] +
+                                   source_coefficient *
+                                       digits.coefficient_stride[digit_index]];
       const scalar_t* key_digit = key + digit_index * strides.key_digit;
-      sum0 = add_lazy_residues(
-          sum0,
-          montgomery_mul(digit, key_digit[0], modulus_lo, modulus_hi,
-                         neg_inv_modulus_lo, neg_inv_modulus_hi),
-          twice_modulus);
-      sum1 = add_lazy_residues(
-          sum1,
-          montgomery_mul(digit, key_digit[strides.key_component], modulus_lo,
-                         modulus_hi, neg_inv_modulus_lo, neg_inv_modulus_hi),
-          twice_modulus);
+      sum0 = add_lazy_residues(sum0,
+                               montgomery_mul(digit,
+                                              key_digit[0],
+                                              modulus_lo,
+                                              modulus_hi,
+                                              neg_inv_modulus_lo,
+                                              neg_inv_modulus_hi),
+                               twice_modulus);
+      sum1 = add_lazy_residues(sum1,
+                               montgomery_mul(digit,
+                                              key_digit[strides.key_component],
+                                              modulus_lo,
+                                              modulus_hi,
+                                              neg_inv_modulus_lo,
+                                              neg_inv_modulus_hi),
+                               twice_modulus);
     }
     rotations.accumulator0[rotation][output] = sum0;
     rotations.accumulator1[rotation][output] = sum1;
@@ -516,7 +526,8 @@ __global__ void __launch_bounds__(kSeededBlockSize)
         const int key_p_row_start,
         const int32_t* source_indices,
         const int64_t source_index_stride) {
-  __shared__ std::make_unsigned_t<scalar_t> buffers[kSeededBlockSize / 32][kSeededTile];
+  __shared__ std::make_unsigned_t<scalar_t> buffers[kSeededBlockSize / 32]
+                                                   [kSeededTile];
   const int lane = threadIdx.x % 32;
   const int warp = threadIdx.x / 32;
   const int row = blockIdx.x;
@@ -529,13 +540,17 @@ __global__ void __launch_bounds__(kSeededBlockSize)
   const scalar_t modulus_hi = params[RNS_PARAM_MODULUS_HI][row];
   const scalar_t neg_inv_modulus_lo = params[RNS_PARAM_NEG_INV_MODULUS_LO][row];
   const scalar_t neg_inv_modulus_hi = params[RNS_PARAM_NEG_INV_MODULUS_HI][row];
-  const int key_row = row < key_q_rows
-                            ? key_digit_row_start + row
-                            : key_p_row_start + (row - key_q_rows);
+  const int key_row = row < key_q_rows ? key_digit_row_start + row
+                                       : key_p_row_start + (row - key_q_rows);
   auto* buffer = buffers[warp];
-  seeded_uniform_tile<scalar_t, Rounds>(seed_row, key_row, tile, coefficients,
-                                        static_cast<uint64_t>(twice_modulus) >> 1,
-                                        lane, buffer);
+  seeded_uniform_tile<scalar_t, Rounds>(
+      seed_row,
+      key_row,
+      tile,
+      coefficients,
+      static_cast<uint64_t>(twice_modulus) >> 1,
+      lane,
+      buffer);
 #pragma unroll
   for (int pass = 0; pass < seeded::kSeededKeyCoefficientsPerCall; ++pass) {
     const int coefficient = tile + pass * 32 + lane;
@@ -551,9 +566,13 @@ __global__ void __launch_bounds__(kSeededBlockSize)
                                              modulus_hi,
                                              neg_inv_modulus_lo,
                                              neg_inv_modulus_hi);
-    const scalar_t product1 = montgomery_mul(
-        digit, static_cast<scalar_t>(buffer[pass * 32 + lane]), modulus_lo,
-        modulus_hi, neg_inv_modulus_lo, neg_inv_modulus_hi);
+    const scalar_t product1 =
+        montgomery_mul(digit,
+                       static_cast<scalar_t>(buffer[pass * 32 + lane]),
+                       modulus_lo,
+                       modulus_hi,
+                       neg_inv_modulus_lo,
+                       neg_inv_modulus_hi);
     accumulator0[batch][row][coefficient] = add_lazy_residues(
         accumulator0[batch][row][coefficient], product0, twice_modulus);
     accumulator1[batch][row][coefficient] = add_lazy_residues(
@@ -583,7 +602,8 @@ __global__ void __launch_bounds__(kSeededBlockSize)
         const int key_q_rows,
         const int key_p_row_start) {
   constexpr int kPasses = seeded::kSeededKeyCoefficientsPerCall;
-  __shared__ std::make_unsigned_t<scalar_t> buffers[kSeededBlockSize / 32][kSeededTile];
+  __shared__ std::make_unsigned_t<scalar_t> buffers[kSeededBlockSize / 32]
+                                                   [kSeededTile];
   const int lane = threadIdx.x % 32;
   const int warp = threadIdx.x / 32;
   const int row = blockIdx.x;
@@ -596,11 +616,11 @@ __global__ void __launch_bounds__(kSeededBlockSize)
   const scalar_t neg_inv_modulus_lo = params[RNS_PARAM_NEG_INV_MODULUS_LO][row];
   const scalar_t neg_inv_modulus_hi = params[RNS_PARAM_NEG_INV_MODULUS_HI][row];
   const auto q = static_cast<uint64_t>(twice_modulus) >> 1;
-  const int key_row = row < key_q_rows
-                            ? key_digit_row_start + row
-                            : key_p_row_start + (row - key_q_rows);
+  const int key_row = row < key_q_rows ? key_digit_row_start + row
+                                       : key_p_row_start + (row - key_q_rows);
   const int key_offset = key_row * strides.key_row;
-  const int output = batch * strides.accumulator_batch + row * strides.accumulator_row;
+  const int output =
+      batch * strides.accumulator_batch + row * strides.accumulator_row;
   auto* buffer = buffers[warp];
   // Generation dominates each (rotation, digit) step, so the loops stay
   // rolled; the pointer arrays are read in place from parameter space.
@@ -613,9 +633,9 @@ __global__ void __launch_bounds__(kSeededBlockSize)
       source[pass] = coefficient;
       if constexpr (Permute) {
         if (coefficient < coefficients) {
-          source[pass] = rotations.source_indices[rotation]
-                                                 [coefficient * strides.source_index];
-
+          source[pass] =
+              rotations
+                  .source_indices[rotation][coefficient * strides.source_index];
         }
       }
     }
@@ -626,7 +646,12 @@ __global__ void __launch_bounds__(kSeededBlockSize)
     for (int digit_index = 0; digit_index < digit_count; ++digit_index) {
       seeded_uniform_tile<scalar_t, Rounds>(
           seeds.rows[rotation] + digit_index * seeded::kSeededKeyRowWords,
-          key_row, tile, coefficients, q, lane, buffer);
+          key_row,
+          tile,
+          coefficients,
+          q,
+          lane,
+          buffer);
       const scalar_t* digit_values = digits.values[digit_index] +
                                      batch * digits.batch_stride[digit_index] +
                                      row * digits.row_stride[digit_index];
@@ -640,15 +665,21 @@ __global__ void __launch_bounds__(kSeededBlockSize)
         const auto a = static_cast<scalar_t>(buffer[pass * 32 + lane]);
         sum0[pass] = add_lazy_residues(
             sum0[pass],
-            montgomery_mul(digit, key_digit[coefficient * strides.key_coefficient],
-                           modulus_lo, modulus_hi, neg_inv_modulus_lo,
+            montgomery_mul(digit,
+                           key_digit[coefficient * strides.key_coefficient],
+                           modulus_lo,
+                           modulus_hi,
+                           neg_inv_modulus_lo,
                            neg_inv_modulus_hi),
             twice_modulus);
-        sum1[pass] = add_lazy_residues(
-            sum1[pass],
-            montgomery_mul(digit, a, modulus_lo, modulus_hi,
-                           neg_inv_modulus_lo, neg_inv_modulus_hi),
-            twice_modulus);
+        sum1[pass] = add_lazy_residues(sum1[pass],
+                                       montgomery_mul(digit,
+                                                      a,
+                                                      modulus_lo,
+                                                      modulus_hi,
+                                                      neg_inv_modulus_lo,
+                                                      neg_inv_modulus_hi),
+                                       twice_modulus);
       }
       __builtin_amdgcn_wave_barrier();
     }
@@ -667,11 +698,12 @@ inline void check_key_seed(const torch::Tensor& reference,
                            const torch::Tensor& seed,
                            int64_t digits,
                            const char* operation) {
-  TORCH_CHECK(seed.device() == reference.device() &&
-                  seed.scalar_type() == torch::kLong && seed.is_contiguous() &&
-                  seed.numel() == digits * seeded::kSeededKeyRowWords,
-              operation,
-              " requires contiguous int64 seed rows [key_digit, 6] on the key device");
+  TORCH_CHECK(
+      seed.device() == reference.device() &&
+          seed.scalar_type() == torch::kLong && seed.is_contiguous() &&
+          seed.numel() == digits * seeded::kSeededKeyRowWords,
+      operation,
+      " requires contiguous int64 seed rows [key_digit, 6] on the key device");
 }
 
 void keyswitch_accumulate_digit_products_inplace_hip(
@@ -725,13 +757,15 @@ void keyswitch_accumulate_digit_products_inplace_hip(
   if (key_seed) {
     check_key_seed(key_switch_key_digit, *key_seed, 1, operation);
     TORCH_CHECK(digit.size(2) % seeded::kSeededKeyCoefficientsPerCall == 0,
-                operation, " requires a ring dimension divisible by 8");
+                operation,
+                " requires a ring dimension divisible by 8");
   }
-  const auto key_rows = fhelium::detail::key_row_map(digit.size(1),
-                                                     key_switch_key_digit.size(1),
-                                                     key_digit_row_start,
-                                                     key_p_row_start,
-                                                     operation);
+  const auto key_rows =
+      fhelium::detail::key_row_map(digit.size(1),
+                                   key_switch_key_digit.size(1),
+                                   key_digit_row_start,
+                                   key_p_row_start,
+                                   operation);
   TORCH_CHECK(key_switch_key_digit.size(2) == digit.size(2),
               "key digit coefficient extent mismatch");
   at::assert_no_internal_overlap(accumulator0);
@@ -759,12 +793,19 @@ void keyswitch_accumulate_digit_products_inplace_hip(
           extended_digit_ntt_qp.scalar_type(), operation, [&] {
             // Key residues are int32 or int64.
             if constexpr (sizeof(scalar_t) < 4) {
-              TORCH_CHECK(false, operation, " requires int32 or int64 seeded keys");
+              TORCH_CHECK(
+                  false, operation, " requires int32 or int64 seeded keys");
             } else {
               const auto kernel =
                   permutation
-                      ? keyswitch_accumulate_seeded_digit_products_kernel<scalar_t, true, kRounds>
-                      : keyswitch_accumulate_seeded_digit_products_kernel<scalar_t, false, kRounds>;
+                      ? keyswitch_accumulate_seeded_digit_products_kernel<
+                            scalar_t,
+                            true,
+                            kRounds>
+                      : keyswitch_accumulate_seeded_digit_products_kernel<
+                            scalar_t,
+                            false,
+                            kRounds>;
               kernel<<<grid, kSeededBlockSize, 0, stream>>>(
                   FHELIUM_HIP_ACCESSOR32(accumulator0, scalar_t, 3),
                   FHELIUM_HIP_ACCESSOR32(accumulator1, scalar_t, 3),
@@ -830,11 +871,13 @@ void keyswitch_accumulate_products_inplace_hip(
               kMaximumGroupedKeyDigits,
               " digits");
   const size_t rotation_count = key_switch_keys.size();
-  TORCH_CHECK(rotation_count > 0 && accumulators0_qp.size() == rotation_count &&
-                  accumulators1_qp.size() == rotation_count &&
-                  (source_indices.empty() || source_indices.size() == rotation_count),
-              operation,
-              " requires one accumulator pair, key and optional index vector per rotation");
+  TORCH_CHECK(
+      rotation_count > 0 && accumulators0_qp.size() == rotation_count &&
+          accumulators1_qp.size() == rotation_count &&
+          (source_indices.empty() || source_indices.size() == rotation_count),
+      operation,
+      " requires one accumulator pair, key and optional index vector per "
+      "rotation");
   const auto& prototype_tensor = extended_digits_ntt_qp.front();
   const auto prototype =
       view_rns_batch_3d(prototype_tensor, "extended_digits_ntt_qp[0]");
@@ -844,23 +887,27 @@ void keyswitch_accumulate_products_inplace_hip(
   for (const auto& digit_tensor : extended_digits_ntt_qp) {
     check_keyswitch_hip_peer(
         prototype_tensor, digit_tensor, operation, "digit");
-    check_rns_binary_3d(prototype, view_rns_batch_3d(digit_tensor, "digit"),
-                        operation, false);
+    check_rns_binary_3d(
+        prototype, view_rns_batch_3d(digit_tensor, "digit"), operation, false);
   }
   const auto& key0 = key_switch_keys.front();
-  TORCH_CHECK(key0.dim() == 4 &&
-                  key0.size(0) == static_cast<int64_t>(extended_digits_ntt_qp.size()) &&
-                  key0.size(1) == (seeded_keys ? 1 : 2) &&
-                  key0.size(3) == prototype.size(2),
-              operation,
-              " key shape mismatch");
+  TORCH_CHECK(
+      key0.dim() == 4 &&
+          key0.size(0) == static_cast<int64_t>(extended_digits_ntt_qp.size()) &&
+          key0.size(1) == (seeded_keys ? 1 : 2) &&
+          key0.size(3) == prototype.size(2),
+      operation,
+      " key shape mismatch");
   TORCH_CHECK(!seeded_keys || key_seeds.size() == key_switch_keys.size(),
-              operation, " requires one seed per seeded key");
+              operation,
+              " requires one seed per seeded key");
   for (const auto& seed : key_seeds)
     check_key_seed(key0, seed, key0.size(0), operation);
-  TORCH_CHECK(!seeded_keys ||
-                  prototype.size(2) % seeded::kSeededKeyCoefficientsPerCall == 0,
-              operation, " requires a ring dimension divisible by 8");
+  TORCH_CHECK(
+      !seeded_keys ||
+          prototype.size(2) % seeded::kSeededKeyCoefficientsPerCall == 0,
+      operation,
+      " requires a ring dimension divisible by 8");
   const auto key_rows = fhelium::detail::key_row_map(prototype.size(1),
                                                      key0.size(2),
                                                      key_digit_row_start,
@@ -869,21 +916,26 @@ void keyswitch_accumulate_products_inplace_hip(
   const auto accumulator_prototype =
       view_rns_batch_3d(accumulators0_qp.front(), "accumulators0_qp[0]");
   TORCH_CHECK(accumulator_prototype.stride(2) == 1,
-              operation, " requires contiguous accumulator coefficients");
+              operation,
+              " requires contiguous accumulator coefficients");
   std::vector<torch::Tensor> outputs;
   for (size_t rotation = 0; rotation < rotation_count; ++rotation) {
     const auto& key = key_switch_keys[rotation];
-    check_keyswitch_hip_peer(prototype_tensor, key, operation, "key_switch_key");
+    check_keyswitch_hip_peer(
+        prototype_tensor, key, operation, "key_switch_key");
     TORCH_CHECK(key.sizes() == key0.sizes() && key.strides() == key0.strides(),
-                operation, " requires rotation keys with one layout");
+                operation,
+                " requires rotation keys with one layout");
     for (const auto& accumulator_tensor :
          {accumulators0_qp[rotation], accumulators1_qp[rotation]}) {
       check_keyswitch_hip_peer(
           prototype_tensor, accumulator_tensor, operation, "accumulator");
-      const auto accumulator = view_rns_batch_3d(accumulator_tensor, "accumulator");
+      const auto accumulator =
+          view_rns_batch_3d(accumulator_tensor, "accumulator");
       check_rns_binary_3d(accumulator, prototype, operation, false);
       TORCH_CHECK(accumulator.strides() == accumulator_prototype.strides(),
-                  operation, " requires accumulators with one layout");
+                  operation,
+                  " requires accumulators with one layout");
       at::assert_no_internal_overlap(accumulator);
       outputs.push_back(accumulator);
     }
@@ -891,7 +943,8 @@ void keyswitch_accumulate_products_inplace_hip(
       const auto& indices = source_indices[rotation];
       TORCH_CHECK(indices.device() == prototype_tensor.device() &&
                       indices.scalar_type() == torch::kInt32 &&
-                      indices.dim() == 1 && indices.size(0) == prototype.size(2) &&
+                      indices.dim() == 1 &&
+                      indices.size(0) == prototype.size(2) &&
                       indices.stride(0) == source_indices.front().stride(0),
                   operation,
                   " requires int32 source indices matching N");
@@ -900,9 +953,12 @@ void keyswitch_accumulate_products_inplace_hip(
   for (size_t i = 0; i < outputs.size(); ++i) {
     for (size_t j = i + 1; j < outputs.size(); ++j)
       at::assert_no_overlap(outputs[i], outputs[j]);
-    for (const auto& digit : extended_digits_ntt_qp) at::assert_no_overlap(outputs[i], digit);
-    for (const auto& key : key_switch_keys) at::assert_no_overlap(outputs[i], key);
-    for (const auto& indices : source_indices) at::assert_no_overlap(outputs[i], indices);
+    for (const auto& digit : extended_digits_ntt_qp)
+      at::assert_no_overlap(outputs[i], digit);
+    for (const auto& key : key_switch_keys)
+      at::assert_no_overlap(outputs[i], key);
+    for (const auto& indices : source_indices)
+      at::assert_no_overlap(outputs[i], indices);
   }
   KeyswitchRotationStrides strides{};
   strides.accumulator_batch = accumulator_prototype.stride(0);
@@ -911,7 +967,8 @@ void keyswitch_accumulate_products_inplace_hip(
   strides.key_component = key0.stride(1);
   strides.key_row = key0.stride(2);
   strides.key_coefficient = key0.stride(3);
-  strides.source_index = source_indices.empty() ? 0 : source_indices.front().stride(0);
+  strides.source_index =
+      source_indices.empty() ? 0 : source_indices.front().stride(0);
   const int device = prototype_tensor.device().index();
   hipSetDevice(device);
   auto stream = c10::hip::getCurrentHIPStream(device);
@@ -936,57 +993,76 @@ void keyswitch_accumulate_products_inplace_hip(
       } else {
         constexpr int width = seeded::kSeededKeyCoefficientsPerCall;
         dim3 seeded_grid(prototype.size(1),
-                         (prototype.size(2) / width + kSeededBlockSize - 1) / kSeededBlockSize,
+                         (prototype.size(2) / width + kSeededBlockSize - 1) /
+                             kSeededBlockSize,
                          prototype.size(0));
-        seeded::dispatch_seeded_key_rounds(key_rounds, [&](auto rounds_constant) {
-          constexpr int kRounds = decltype(rounds_constant)::value;
-          const auto kernel =
-              source_indices.empty()
-                  ? keyswitch_accumulate_seeded_products_kernel<scalar_t, false, kRounds>
-                  : keyswitch_accumulate_seeded_products_kernel<scalar_t, true, kRounds>;
-          for (size_t first = 0; first < rotation_count; first += kMaximumGroupedRotations) {
-            const int count = static_cast<int>(
-                std::min<size_t>(kMaximumGroupedRotations, rotation_count - first));
-            KeyswitchRotationPointers<scalar_t> rotations{};
-            KeyswitchRotationSeeds seeds{};
-            for (int r = 0; r < count; ++r) {
-              rotations.accumulator0[r] = outputs[2 * (first + r)].data_ptr<scalar_t>();
-              rotations.accumulator1[r] = outputs[2 * (first + r) + 1].data_ptr<scalar_t>();
-              rotations.key[r] = key_switch_keys[first + r].data_ptr<scalar_t>();
-              rotations.source_indices[r] =
-                  source_indices.empty() ? nullptr : source_indices[first + r].data_ptr<int32_t>();
-              seeds.rows[r] = key_seeds[first + r].const_data_ptr<int64_t>();
-            }
-            kernel<<<seeded_grid, kSeededBlockSize, 0, stream>>>(
-                rotations,
-                seeds,
-                count,
-                strides,
-                pointers,
-                static_cast<int>(extended_digits_ntt_qp.size()),
-                static_cast<int>(prototype.size(2)),
-                FHELIUM_HIP_ACCESSOR32(rns_params, scalar_t, 2),
-                static_cast<int>(key_digit_row_start),
-                static_cast<int>(key_rows.q_rows),
-                static_cast<int>(key_rows.p_row_start));
-          }
-        });
+        seeded::dispatch_seeded_key_rounds(
+            key_rounds, [&](auto rounds_constant) {
+              constexpr int kRounds = decltype(rounds_constant)::value;
+              const auto kernel =
+                  source_indices.empty()
+                      ? keyswitch_accumulate_seeded_products_kernel<scalar_t,
+                                                                    false,
+                                                                    kRounds>
+                      : keyswitch_accumulate_seeded_products_kernel<scalar_t,
+                                                                    true,
+                                                                    kRounds>;
+              for (size_t first = 0; first < rotation_count;
+                   first += kMaximumGroupedRotations) {
+                const int count = static_cast<int>(std::min<size_t>(
+                    kMaximumGroupedRotations, rotation_count - first));
+                KeyswitchRotationPointers<scalar_t> rotations{};
+                KeyswitchRotationSeeds seeds{};
+                for (int r = 0; r < count; ++r) {
+                  rotations.accumulator0[r] =
+                      outputs[2 * (first + r)].data_ptr<scalar_t>();
+                  rotations.accumulator1[r] =
+                      outputs[2 * (first + r) + 1].data_ptr<scalar_t>();
+                  rotations.key[r] =
+                      key_switch_keys[first + r].data_ptr<scalar_t>();
+                  rotations.source_indices[r] =
+                      source_indices.empty()
+                          ? nullptr
+                          : source_indices[first + r].data_ptr<int32_t>();
+                  seeds.rows[r] =
+                      key_seeds[first + r].const_data_ptr<int64_t>();
+                }
+                kernel<<<seeded_grid, kSeededBlockSize, 0, stream>>>(
+                    rotations,
+                    seeds,
+                    count,
+                    strides,
+                    pointers,
+                    static_cast<int>(extended_digits_ntt_qp.size()),
+                    static_cast<int>(prototype.size(2)),
+                    FHELIUM_HIP_ACCESSOR32(rns_params, scalar_t, 2),
+                    static_cast<int>(key_digit_row_start),
+                    static_cast<int>(key_rows.q_rows),
+                    static_cast<int>(key_rows.p_row_start));
+              }
+            });
       }
       return;
     }
     const auto kernel =
-        source_indices.empty() ? keyswitch_accumulate_products_kernel<scalar_t, false>
-                               : keyswitch_accumulate_products_kernel<scalar_t, true>;
-    for (size_t first = 0; first < rotation_count; first += kMaximumGroupedRotations) {
+        source_indices.empty()
+            ? keyswitch_accumulate_products_kernel<scalar_t, false>
+            : keyswitch_accumulate_products_kernel<scalar_t, true>;
+    for (size_t first = 0; first < rotation_count;
+         first += kMaximumGroupedRotations) {
       const int count = static_cast<int>(
           std::min<size_t>(kMaximumGroupedRotations, rotation_count - first));
       KeyswitchRotationPointers<scalar_t> rotations{};
       for (int r = 0; r < count; ++r) {
-        rotations.accumulator0[r] = outputs[2 * (first + r)].data_ptr<scalar_t>();
-        rotations.accumulator1[r] = outputs[2 * (first + r) + 1].data_ptr<scalar_t>();
+        rotations.accumulator0[r] =
+            outputs[2 * (first + r)].data_ptr<scalar_t>();
+        rotations.accumulator1[r] =
+            outputs[2 * (first + r) + 1].data_ptr<scalar_t>();
         rotations.key[r] = key_switch_keys[first + r].data_ptr<scalar_t>();
         rotations.source_indices[r] =
-            source_indices.empty() ? nullptr : source_indices[first + r].data_ptr<int32_t>();
+            source_indices.empty()
+                ? nullptr
+                : source_indices[first + r].data_ptr<int32_t>();
       }
       kernel<<<grid, kHipBlockSize, 0, stream>>>(
           rotations,
@@ -1007,19 +1083,23 @@ void keyswitch_accumulate_products_inplace_hip(
 
 namespace fhelium::ckks::gpu {
 
-at::Tensor keyswitch_moddown_qp_to_q(
+void keyswitch_moddown_qp_to_q_out(
     const at::Tensor& q_residues,
     const at::Tensor& p_residues,
     const at::Tensor& moddown_p_drop_inverses_montgomery,
     const at::Tensor& rns_params,
     const std::optional<at::Tensor>& moddown_half,
-    c10::string_view rounding) {
-  return ::keyswitch_moddown_qp_to_q_hip(q_residues,
-                                         p_residues,
-                                         moddown_p_drop_inverses_montgomery,
-                                         rns_params,
-                                         moddown_half,
-                                         std::string(rounding));
+    c10::string_view rounding,
+    at::Tensor& out,
+    const std::optional<at::Tensor>& p_scratch) {
+  ::keyswitch_moddown_qp_to_q_hip(q_residues,
+                                  p_residues,
+                                  moddown_p_drop_inverses_montgomery,
+                                  rns_params,
+                                  moddown_half,
+                                  std::string(rounding),
+                                  out,
+                                  p_scratch);
 }
 
 void keyswitch_accumulate_digit_products_(
@@ -1045,27 +1125,26 @@ void keyswitch_accumulate_digit_products_(
                                                     key_rounds);
 }
 
-void keyswitch_accumulate_products_(
-    at::TensorList accumulators0_qp,
-    at::TensorList accumulators1_qp,
-    at::TensorList extended_digits_ntt_qp,
-    at::TensorList key_switch_keys,
-    const at::Tensor& rns_params,
-    int64_t key_digit_row_start,
-    int64_t key_p_row_start,
-    at::TensorList source_indices,
-    at::TensorList key_seeds,
-    int64_t key_rounds) {
+void keyswitch_accumulate_products_(at::TensorList accumulators0_qp,
+                                    at::TensorList accumulators1_qp,
+                                    at::TensorList extended_digits_ntt_qp,
+                                    at::TensorList key_switch_keys,
+                                    const at::Tensor& rns_params,
+                                    int64_t key_digit_row_start,
+                                    int64_t key_p_row_start,
+                                    at::TensorList source_indices,
+                                    at::TensorList key_seeds,
+                                    int64_t key_rounds) {
   ::keyswitch_accumulate_products_inplace_hip(accumulators0_qp,
-                                               accumulators1_qp,
-                                               extended_digits_ntt_qp,
-                                               key_switch_keys,
-                                               rns_params,
-                                               key_digit_row_start,
-                                               key_p_row_start,
-                                               source_indices,
-                                               key_seeds,
-                                               key_rounds);
+                                              accumulators1_qp,
+                                              extended_digits_ntt_qp,
+                                              key_switch_keys,
+                                              rns_params,
+                                              key_digit_row_start,
+                                              key_p_row_start,
+                                              source_indices,
+                                              key_seeds,
+                                              key_rounds);
 }
 
 }  // namespace fhelium::ckks::gpu

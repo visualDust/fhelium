@@ -233,7 +233,8 @@ class AggregateRotationSumsPass:
                     attrs = {
                         k: v
                         for k, v in first.attributes.items()
-                        if k in {'ckks_config', 'ntt_backend', 'basis_conversion'}
+                        if k
+                        in {'ckks_config', 'ntt_backend', 'basis_conversion'}
                     }
                     parameters = ()
                 else:

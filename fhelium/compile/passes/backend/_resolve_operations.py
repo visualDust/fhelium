@@ -60,7 +60,7 @@ class ResolveBackendOperationsPass:
         decisions: list[DecisionRecord] = []
         linked = shared_data.get(LinkedFunctions, {})
         for operation in operations:
-            invocation = operation_invocation(operation)
+            invocation = operation_invocation(operation, in_place=self.in_place)
             if isinstance(operation, CallOp):
                 called = linked[operation.callee.root_reference.data]
                 dispatches[operation] = OperationDispatch(

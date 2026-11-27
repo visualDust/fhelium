@@ -1,6 +1,6 @@
 # Rotation-parallel matrix-vector multiplication
 
-**Example source:** [`examples/23_distributed_partial_results.py`](https://github.com/VisualDust/fhelium/blob/main/examples/23_distributed_partial_results.py)
+**Example source:** [`examples/21_distributed_partial_results.py`](https://github.com/VisualDust/fhelium/blob/main/examples/21_distributed_partial_results.py)
 
 This example partitions the cyclic-diagonal terms and direct rotation keys of one packed matrix-vector product across ranks, then reduces additive ciphertext partials. The tutorial explains term ownership, key movement, and the final reduction step.
 
@@ -10,7 +10,7 @@ This example partitions the cyclic-diagonal terms and direct rotation keys of on
 
 ```bash
 torchrun --standalone --nproc-per-node=2 \
-  examples/23_distributed_partial_results.py \
+  examples/21_distributed_partial_results.py \
   --size 8
 ```
 
@@ -139,7 +139,7 @@ This partition can reduce per-rank rotation-key residency, but the input is repl
 - load balance across step owners.
 
 ::: details Source
-<<< @/../examples/23_distributed_partial_results.py
+<<< @/../examples/21_distributed_partial_results.py
 :::
 
 ## Related concepts and guides

@@ -2,7 +2,7 @@
 
 The FHElium value model defines the tensor layouts, stored arithmetic state, cryptographic relations, and placement properties of one local plaintext, ciphertext, or key. Compatibility combines Tensor shape and device with CKKS parameters, represented state, and key relations.
 
-This page defines value identity and compatibility. Primitive conversions between those states are specified separately in [State transitions and orthogonality](state-transitions-and-orthogonality.md).
+This page defines value identity and compatibility. Primitive conversions between those states are specified separately in [Value-state transitions](value-state-transitions.md).
 
 ## Core object families
 
@@ -112,7 +112,7 @@ A `Plaintext` contains exactly one active representation:
 | `"approximate_coefficients"` | `[*batch, coefficient]` float64 decrypt reconstruction | Decodable approximation produced after decrypt reconstruction |
 | `"rns"` | `[*batch, limb, coefficient_or_ntt_index]` | Polynomial domain, modulus basis, residue representation, and prime IDs |
 
-The complete plaintext and ciphertext transition graphs, strict source-state preconditions, and operation-oriented preparation equivalences are defined in [State transitions and orthogonality](state-transitions-and-orthogonality.md). Decryption names its bounded tail-Q binary64 reconstruction `approximate_coefficients`. Exact integer-coefficient output requires an exact reconstruction operation with its own numerical contract.
+The complete plaintext and ciphertext transition graphs, strict source-state preconditions, and operation-oriented preparation equivalences are defined in [Value-state transitions](value-state-transitions.md). Decryption names its bounded tail-Q binary64 reconstruction `approximate_coefficients`. Exact integer-coefficient output requires an exact reconstruction operation with its own numerical contract.
 
 If the same semantic weight is needed in two operation states or at two depths, the application creates two distinct values. Each `Plaintext` owns one active representation and depth.
 
@@ -219,8 +219,7 @@ device
 
 ## Related concepts
 
-- [State transitions and orthogonality](state-transitions-and-orthogonality.md)
-- [Scale and depth lifecycle](scale-and-depth-lifecycle.md)
+- [Value-state transitions](value-state-transitions.md)
 - [Configuration and modulus chain](context-and-modulus-chain.md)
 - [Evaluator operation transitions](evaluator-operation-transitions.md)
 - [Key lifecycle](key-lifecycle.md)

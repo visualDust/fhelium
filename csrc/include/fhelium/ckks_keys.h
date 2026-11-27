@@ -2,7 +2,7 @@
 
 #include <ATen/core/Tensor.h>
 #include <fhelium/export.h>
-#include <fhelium/tensor_table.h>
+#include <fhelium/operation_tables.h>
 
 #include <cstdint>
 #include <optional>
@@ -14,13 +14,14 @@
 //! Galois keys, and the conversion of a secret key to another RNS basis.
 //!
 //! Every key is returned in the NTT domain with Montgomery residues over the
-//! rows of the `parameters` table and the empty-basis NTT schedules
-//! (`forward_{i}`, `inverse_{i}`) of `fhelium/ntt_operations.h`. A secret key
+//! rows of `RingTables::forward.parameters` and the `forward` and `inverse`
+//! NTT schedules of `RingTables` (`fhelium/operation_tables.h`). A secret key
 //! has shape `[limb, N]`, a public key `[2, limb, N]`, and a key-switching key
-//! (`KeySwitchKey`) `[key_digit, 2, key_row, N]`. Random functions read the stream `seed` of
-//! `fhelium/random.h` at its current nonce $n$ and sample their components at
-//! consecutive nonces $n, n+1, \dots$; the caller then advances the nonce by
-//! the documented count. Discrete-Gaussian errors use the table `cdt_table`.
+//! (`KeySwitchKey`) `[key_digit, 2, key_row, N]`. Random functions read the
+//! stream `seed` of `fhelium/random.h` at its current nonce $n$ and sample
+//! their components at consecutive nonces $n, n+1, \dots$; the caller then
+//! advances the nonce by the documented count. Discrete-Gaussian errors use the
+//! table `cdt_table`.
 
 namespace fhelium::ckks {
 
@@ -98,14 +99,14 @@ struct KeySwitchKeyLayout {
 /// $1/3$ each and 0 otherwise; with weight $h$, exactly $h$ coefficients are
 /// $\pm 1$ with independent uniform signs. Uses one nonce.
 FHELIUM_API at::Tensor create_secret_key(int64_t ring_dimension,
-                                         const TensorTable& tables,
+                                         const RingTables& tables,
                                          const at::Tensor& seed,
                                          std::string_view ntt_backend,
                                          std::optional<int64_t> hamming_weight);
 
 /// Returns the secret key of the integer coefficients `[N]` (int32 or int64).
 FHELIUM_API at::Tensor prepare_secret_key(const at::Tensor& coefficients,
-                                          const TensorTable& tables,
+                                          const RingTables& tables,
                                           std::string_view ntt_backend);
 
 /// Returns the public key $(e - a s, a)$ for the leading rows of
@@ -117,7 +118,7 @@ FHELIUM_API at::Tensor prepare_secret_key(const at::Tensor& coefficients,
 /// $e, a$.
 FHELIUM_API at::Tensor create_public_key(
     const at::Tensor& secret_key,
-    const TensorTable& tables,
+    const RingTables& tables,
     const at::Tensor& seed,
     const at::Tensor& cdt_table,
     std::string_view ntt_backend,
@@ -143,49 +144,50 @@ FHELIUM_API at::Tensor create_public_key(
 /// parties, and gives a key without seed rows. `error_by_digit` `[key_digit,
 /// N]` replaces the error samples. Uses one nonce for the seed rows and one
 /// per sampled error.
-FHELIUM_API KeySwitchKey create_key_switch_key(
-    const at::Tensor& source_secret_key,
-    const at::Tensor& destination_secret_key,
-    const TensorTable& tables,
-    const at::Tensor& seed,
-    const at::Tensor& cdt_table,
-    const KeySwitchKeyLayout& layout,
-    const std::optional<at::Tensor>& uniform_by_digit,
-    const std::optional<at::Tensor>& error_by_digit);
+FHELIUM_API KeySwitchKey
+create_key_switch_key(const at::Tensor& source_secret_key,
+                      const at::Tensor& destination_secret_key,
+                      const RingTables& tables,
+                      const at::Tensor& seed,
+                      const at::Tensor& cdt_table,
+                      const KeySwitchKeyLayout& layout,
+                      const std::optional<at::Tensor>& uniform_by_digit,
+                      const std::optional<at::Tensor>& error_by_digit);
 
 /// Returns the key that switches $s^2$ to $s$ (`create_key_switch_key`).
-FHELIUM_API KeySwitchKey create_relinearization_key(
-    const at::Tensor& secret_key,
-    const TensorTable& tables,
-    const at::Tensor& seed,
-    const at::Tensor& cdt_table,
-    const KeySwitchKeyLayout& layout,
-    const std::optional<at::Tensor>& uniform_by_digit,
-    const std::optional<at::Tensor>& error_by_digit);
+FHELIUM_API KeySwitchKey
+create_relinearization_key(const at::Tensor& secret_key,
+                           const RingTables& tables,
+                           const at::Tensor& seed,
+                           const at::Tensor& cdt_table,
+                           const KeySwitchKeyLayout& layout,
+                           const std::optional<at::Tensor>& uniform_by_digit,
+                           const std::optional<at::Tensor>& error_by_digit);
 
 /// Returns the key that switches $\sigma_g(s)$ to $s$ for the automorphism
 /// $\sigma_g: X \mapsto X^g$ with $g$ = `galois_element`
 /// (`create_key_switch_key`). Rotation keys use `rotation_galois_element`;
 /// the conjugation key uses $g = 2N - 1$.
-FHELIUM_API KeySwitchKey create_galois_key(
-    const at::Tensor& secret_key,
-    int64_t galois_element,
-    const TensorTable& tables,
-    const at::Tensor& seed,
-    const at::Tensor& cdt_table,
-    const KeySwitchKeyLayout& layout,
-    const std::optional<at::Tensor>& uniform_by_digit,
-    const std::optional<at::Tensor>& error_by_digit);
+FHELIUM_API KeySwitchKey
+create_galois_key(const at::Tensor& secret_key,
+                  int64_t galois_element,
+                  const RingTables& tables,
+                  const at::Tensor& seed,
+                  const at::Tensor& cdt_table,
+                  const KeySwitchKeyLayout& layout,
+                  const std::optional<at::Tensor>& uniform_by_digit,
+                  const std::optional<at::Tensor>& error_by_digit);
 
 /// Re-expresses `secret_key` in another RNS basis.
 ///
-/// The `source` NTT schedules return the secret to coefficients, whose centered
-/// representative modulo the source product is extended to the target rows
-/// with the tables of `fhelium::rns::centered_basis_extend`, and the `target`
-/// NTT schedules transform the result. The extension tables fix the working
-/// dtype; the result takes the dtype of the target schedules.
+/// The `source_inverse` NTT schedule returns the secret to coefficients,
+/// whose centered representative modulo the source product is extended to
+/// the target rows with the `extension` tables of
+/// `fhelium::rns::centered_basis_extend`, and the `target_forward` NTT schedule
+/// transforms the result. The extension tables fix the working dtype; the
+/// result takes the dtype of the target schedule.
 FHELIUM_API at::Tensor convert_secret_key(const at::Tensor& secret_key,
-                                          const TensorTable& tables,
+                                          const SecretConversionTables& tables,
                                           std::string_view ntt_backend);
 
 }  // namespace fhelium::ckks

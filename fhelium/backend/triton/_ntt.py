@@ -42,9 +42,10 @@ from ._ntt_codegen import (
     compile_endpoint,
     radix2_elements,
     radix2_geometry,
+    radix2_program,
+    radix2_warps,
+    round_bits,
 )
-
-_RADIX2_WARPS = 4
 
 
 def _inverse(anchor: Anchor) -> bool:
@@ -446,6 +447,11 @@ class _Kernel:
     scalars: tuple[int, ...]
     elements: int
 
+    @property
+    def loads(self) -> int:
+        """Return the number of coefficient loads in ``source``."""
+        return len(_ELEMENT_LOAD.findall(self.source))
+
 
 _ELEMENT_LOAD = re.compile(
     r"= tl\.load\((?!twiddles|roots|rns_parameters)[^\n]*\bindex\b"
@@ -458,18 +464,27 @@ def _source(
     step: _Step,
     stores: tuple[tuple[ValueExpr, ...], ...],
     writes: tuple[int, ...],
+    bits: int,
 ) -> _Kernel:
-    """Generate one step at the largest program size within the load budget.
+    """Generate one step at its interval's program size within the load budget.
 
     Every coefficient load of a program may be issued ahead of the arithmetic
     that consumes it, so a program holds up to ``elements x loads`` values;
     prologues and epilogues that combine many operands use smaller programs.
     """
-    elements = radix2_elements(1)
+    first = step.endpoints[0]
+    elements = radix2_elements(
+        1,
+        bits,
+        radix2_program(first.end - first.start, first.tiled, bits)
+        if first.transform
+        else None,
+    )
     while True:
-        kernel = _source_at(graph, schedules, step, stores, writes, elements)
-        loads = len(_ELEMENT_LOAD.findall(kernel.source))
-        smaller = radix2_elements(loads, elements)
+        kernel = _source_at(
+            graph, schedules, step, stores, writes, elements, bits
+        )
+        smaller = radix2_elements(kernel.loads, bits, elements)
         if smaller == elements:
             return kernel
         elements = smaller
@@ -482,6 +497,7 @@ def _source_at(
     stores: tuple[tuple[ValueExpr, ...], ...],
     writes: tuple[int, ...],
     elements: int,
+    bits: int,
 ) -> _Kernel:
     rows, n = graph.anchors[0].source.shape[-2:]
     batches = prod(graph.anchors[0].source.batch_shape)
@@ -536,6 +552,7 @@ def _source_at(
             tiled=first.tiled,
             radix=schedules[first.anchor].radix,
             elements=elements,
+            bits=bits,
         )
         indices = stage.indices()
         segment_index = stage.segment_index
@@ -583,6 +600,7 @@ def _source_at(
                 twiddle_encoding=schedules[ordinal].twiddle_encoding,
                 prefix=f"a{position}_",
                 elements=elements,
+                bits=bits,
             )
             lines.extend(
                 (
@@ -601,6 +619,9 @@ def _source_at(
                         f"ROOT_ELEMENT_STRIDE = {table}_RESTRIDE",
                     )
                 )
+        # The stage's twiddle loads depend only on the program position, so
+        # they are issued here, ahead of the coefficient loads and butterflies.
+        preload = len(lines)
         emitter = Emitter(graph.layouts, names, segment_index=segment_index)
         cursor = 0
 
@@ -644,6 +665,8 @@ def _source_at(
                 transformed.append(stage.transform(tuple(loaded)))
                 lines.extend(stage.lines)
                 stage.lines.clear()
+        if stage is not None:
+            lines[preload:preload] = stage.preloads
         for lane, index in enumerate(indices):
             for component, values in enumerate(transformed):
                 value = values[lane]
@@ -685,12 +708,19 @@ def _source_at(
                         )
     if prior_loads:
         pattern = re.compile(r"\bprior_\w+")
-        placed = []
+        placed: list[str] = []
+        statement = 0
         for line in lines:
+            # A first use may sit inside a branch or loop body, such as a
+            # selected MAC term. Its load precedes the enclosing top-level
+            # statement, so it is defined for every later use.
+            if not line.startswith((" ", "else:", "elif ")):
+                statement = len(placed)
             for name in pattern.findall(line):
                 load = prior_loads.pop(name, None)
                 if load is not None:
-                    placed.append(load)
+                    placed.insert(statement, load)
+                    statement += 1
             placed.append(line)
         lines = placed
     arguments = [
@@ -746,7 +776,9 @@ def _kernel(source: str) -> Any:
     return compile_endpoint(source)
 
 
-def _plan_steps(graph, schedules, steps, stores, output_roots, kernel_budget):
+def _plan_steps(
+    graph, schedules, steps, stores, output_roots, kernel_budget, bits
+):
     """Bound generated endpoint groups and recompute their scratch liveness."""
     aliases = {
         i: value.root
@@ -804,7 +836,7 @@ def _plan_steps(graph, schedules, steps, stores, output_roots, kernel_budget):
             kernel = sources.get(key)
             if kernel is None:
                 kernel = _source(
-                    graph, schedules, step, stores, writes[position]
+                    graph, schedules, step, stores, writes[position], bits
                 )
                 sources[key] = kernel
             if not within_budget(kernel.source, kernel_budget):
@@ -823,16 +855,48 @@ def _plan_steps(graph, schedules, steps, stores, output_roots, kernel_budget):
             return steps, writes, required, prior_ids, kernels
 
 
-_EXECUTION_GLOBALS = frozenset(
-    (
-        "empty",
-        "dtype",
-        "device",
-        "device_scope",
-        "current_stream",
-        "__builtins__",
-    )
-)
+def _shared_outputs(graph, steps, stores, writes, prior_ids, last_use, aliases):
+    """Select outputs whose leading storage can hold an anchor's scratch.
+
+    An anchor whose last use is its own epilogue step loads its scratch
+    elements in each program before that program stores the epilogue outputs
+    at the same planar positions, ``((c * B + b) * rows + row) * N + i``. Its
+    scratch may therefore occupy the leading elements of one of those outputs
+    when no other step stores that output and no other endpoint reads the
+    scratch there. Pass outputs then overwrite the dirty intermediate lines
+    in L2 instead of adding a second buffer to the written-back footprint.
+    """
+    owners: dict[int, list[int]] = {}
+    for ordinal, values in enumerate(stores):
+        for value in values:
+            owners.setdefault(value.root, []).append(ordinal)
+    taken = set(aliases.values())
+    shared = {}
+    for position, step in enumerate(steps):
+        if step.native:
+            continue
+        for endpoint in step.endpoints:
+            ordinal = endpoint.anchor
+            if (
+                not endpoint.epilogue
+                or endpoint.prologue
+                or ordinal in aliases
+                or last_use.get(ordinal) != position
+                or ordinal in writes[position]
+                or ordinal in prior_ids[position]
+            ):
+                continue
+            size = prod(graph.anchors[ordinal].result.shape)
+            for value in stores[ordinal]:
+                if (
+                    value.root not in taken
+                    and owners[value.root] == [ordinal]
+                    and prod(value.shape) >= size
+                ):
+                    shared[ordinal] = value.root
+                    taken.add(value.root)
+                    break
+    return shared
 
 
 def _execution_call(source, filename, namespace):
@@ -846,69 +910,9 @@ def _execution_call(source, filename, namespace):
     return namespace.pop("execute")
 
 
-def _warm_kernels(
-    kernels: tuple[tuple[PreparedKernel, tuple[object, ...]], ...],
-) -> tuple[int, int]:
-    """Compile and load generated kernels from their launch signatures; return (compiled, reused)."""
-    compiled = reused = 0
-    for prepared, signature in kernels:
-        if prepared.warm(*signature):
-            compiled += 1
-        else:
-            reused += 1
-    return compiled, reused
-
-
-class _PreparedNttExecution:
-    """An NTT execution plan restored from its generated host source and launch symbols."""
-
-    def __init__(self, execution_source, symbols, dtype, device, kernels):
-        self.execution_source = execution_source
-        self._symbols = symbols
-        self.dtype = dtype
-        self.device = device
-        self.kernels = kernels
-        filename = f"<fhelium-ntt-schedule-{hashlib.sha256(execution_source.encode()).hexdigest()}>"
-        self._call = _execution_call(
-            execution_source,
-            filename,
-            {
-                "empty": torch.empty,
-                "dtype": dtype,
-                "device": device,
-                "device_scope": torch.cuda.device,
-                "current_stream": torch.cuda.current_stream,
-                **symbols,
-            },
-        )
-
-    def __reduce__(self):
-        return (
-            _PreparedNttExecution,
-            (
-                self.execution_source,
-                self._symbols,
-                self.dtype,
-                self.device,
-                self.kernels,
-            ),
-        )
-
-    def warm(self) -> tuple[int, int]:
-        return _warm_kernels(self.kernels)
-
-    def execute(self, values, tables):
-        return self._call(values, tables)
-
-
 @dataclass(frozen=True)
 class NttExecution:
-    """Execute dependency-selected endpoints with live tables and planned storage.
-
-    ``warm`` compiles every generated kernel from the planned launch
-    signature without launching it. Native stage ranges and complete
-    transforms are not Triton kernels and need no warming.
-    """
+    """Execute dependency-selected endpoints with live tables and planned storage."""
 
     graph: BoundGraph
     schedules: tuple[NttStages, ...]
@@ -921,11 +925,6 @@ class NttExecution:
     complete: tuple[Callable | None, ...]
     kernel_budget: KernelBudget = DEFAULT_KERNEL_BUDGET
     _call: Callable = field(init=False, repr=False, compare=False)
-    execution_source: str = field(init=False, repr=False, compare=False)
-    kernels: tuple[tuple[PreparedKernel, tuple[object, ...]], ...] = field(
-        init=False, repr=False, compare=False
-    )
-    _symbols: dict[str, object] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
         graph = self.graph
@@ -937,6 +936,7 @@ class NttExecution:
             for value in self.output_roots
             if value.root == anchor.result.root
         }
+        bits = round_bits(self.dtype.itemsize)
         steps, writes, required, prior_ids, sources = _plan_steps(
             graph,
             self.schedules,
@@ -944,11 +944,15 @@ class NttExecution:
             self.stores,
             self.output_roots,
             self.kernel_budget,
+            bits,
         )
         object.__setattr__(self, "steps", steps)
         last_use = {
             i: position for position, ids in enumerate(required) for i in ids
         }
+        shared = _shared_outputs(
+            graph, steps, self.stores, writes, prior_ids, last_use, aliases
+        )
         namespace = {
             "empty": torch.empty,
             "dtype": self.dtype,
@@ -956,7 +960,6 @@ class NttExecution:
             "device_scope": torch.cuda.device,
             "current_stream": torch.cuda.current_stream,
         }
-        kernels: list[tuple[PreparedKernel, tuple[object, ...]]] = []
         lines = ["def execute(values, tables):"]
         for value in self.output_roots:
             lines.append(
@@ -974,9 +977,15 @@ class NttExecution:
         radix = 32 if self.dtype == torch.int32 else 62
         for position, step in enumerate(self.steps):
             for ordinal in sorted(required[position] - allocated):
-                lines.append(
-                    f"        scratch{ordinal} = empty({graph.anchors[ordinal].result.shape!r}, dtype=dtype, device=device)"
-                )
+                shape = graph.anchors[ordinal].result.shape
+                if ordinal in shared:
+                    lines.append(
+                        f"        scratch{ordinal} = output_{shared[ordinal]}.view(-1)[:{prod(shape)}].view({shape!r})"
+                    )
+                else:
+                    lines.append(
+                        f"        scratch{ordinal} = empty({shape!r}, dtype=dtype, device=device)"
+                    )
                 allocated.add(ordinal)
             if step.native:
                 endpoint = step.endpoints[0]
@@ -1032,7 +1041,16 @@ class NttExecution:
                 prepared = PreparedKernel(
                     _kernel(kernel.source),
                     grid,
-                    num_warps=_RADIX2_WARPS if radix2 else 4,
+                    num_warps=radix2_warps(
+                        n,
+                        first.start,
+                        first.end,
+                        kernel.elements,
+                        bits,
+                        kernel.loads,
+                    )
+                    if radix2
+                    else 4,
                     source=(_kernel, kernel.source),
                 )
                 namespace[symbol] = prepared
@@ -1054,31 +1072,20 @@ class NttExecution:
                     *(f"scratch{i}" for i in scratch_ids),
                     *(f"output_{v.root}" for v in outputs),
                 ]
-                # Warm signature: dtype placeholders for pointers, values for scalars.
-                signature: list[object] = [
-                    *(
-                        torch.int64 if i in graph.seed_inputs else self.dtype
-                        for i in kernel.inputs
-                    ),
-                    *[self.dtype] * (len(args) - len(kernel.inputs)),
-                ]
                 for endpoint in step.endpoints:
                     if not endpoint.transform:
                         continue
                     ordinal = endpoint.anchor
                     table = graph.anchors[ordinal].table_indices
                     args.append(f"tables[{table[1]}]")
-                    signature.append(self.dtype)
                     if self.schedules[ordinal].radix:
                         args.append(f"tables[{table[2]}]")
-                        signature.append(self.dtype)
                     strides = tuple(
                         stride
                         for group in self.table_strides[ordinal][1:]
                         for stride in group
                     )
                     args.extend(map(str, strides))
-                    signature.extend(strides)
                 table = graph.anchors[first.anchor].table_indices
                 constants = (
                     *self.table_strides[first.anchor][0],
@@ -1088,11 +1095,8 @@ class NttExecution:
                     *kernel.scalars,
                 )
                 args.append(f"tables[{table[0]}]")
-                signature.append(self.dtype)
                 args.extend(map(str, constants))
-                signature.extend(constants)
                 args.append("stream=stream")
-                kernels.append((prepared, tuple(signature)))
                 lines.append(f"        {symbol}({', '.join(args)})")
             for ordinal in sorted(required[position]):
                 if last_use[ordinal] == position and ordinal not in aliases:
@@ -1118,33 +1122,9 @@ class NttExecution:
         )
         source = "\n".join(lines) + "\n"
         filename = f"<fhelium-ntt-schedule-{hashlib.sha256(source.encode()).hexdigest()}>"
-        symbols = {
-            name: value
-            for name, value in namespace.items()
-            if name not in _EXECUTION_GLOBALS
-        }
         object.__setattr__(
             self, "_call", _execution_call(source, filename, namespace)
         )
-        object.__setattr__(self, "execution_source", source)
-        object.__setattr__(self, "kernels", tuple(kernels))
-        object.__setattr__(self, "_symbols", symbols)
-
-    def __reduce__(self):
-        return (
-            _PreparedNttExecution,
-            (
-                self.execution_source,
-                self._symbols,
-                self.dtype,
-                self.device,
-                self.kernels,
-            ),
-        )
-
-    def warm(self) -> tuple[int, int]:
-        """Compile and load every generated kernel; return (compiled, reused)."""
-        return _warm_kernels(self.kernels)
 
     @classmethod
     def build(

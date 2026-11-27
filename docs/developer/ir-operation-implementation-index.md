@@ -4,13 +4,13 @@ This index maps operation families to their Compile transformations and Backend 
 
 The operation definitions specify operands, attributes, equations, and state transitions: [CKKS](/api/fhelium/ir/dialects/ckks), [RNS](/api/fhelium/ir/dialects/rns), [NTT](/api/fhelium/ir/dialects/ntt), and [core data references](/api/fhelium/ir/dialects/core). Numerical parameters, tables, and keys enter execution as Tensor operands. Non-Tensor execution handles use resource references.
 
-A Python implementation module listed as an owner binds its operands to a libfhelium function: whole CKKS, RNS and NTT operations are declared in `csrc/include/fhelium/ckks_operations.h`, `rns_operations.h` and `ntt_operations.h`, implemented in `csrc/ops/operations/`, and called through `fhelium.native.wrapper`. They receive their prepared tables as one name-to-Tensor table ([C++ API](/api/cpp/tensor-table)).
+A Python implementation module listed as an owner binds its operands to a libfhelium function: whole CKKS, RNS and NTT operations are declared in `csrc/include/fhelium/ckks_operations.h`, `rns_operations.h` and `ntt_operations.h`, implemented in `csrc/ops/operations/`, and called through `fhelium.native.wrapper`. They receive each family of prepared tables as one table struct, passed to the Torch operator as a positional `Tensor?[]` list ([C++ API](/api/cpp/operation-tables)).
 
 ## Program structure, binding, and interoperability
 
 | Operation | Responsibility | Direct owner |
 |---|---|---|
-| `fhelium.constant` | Materialize a represented literal in generated host code | `compile/passes/codegen/_host.py` |
+| `fhelium.constant` | Materialize a represented literal as a schedule constant or host register | `backend/runner.py` (schedule translation); `compile/passes/codegen/_host.py` (Backend Python export) |
 | `fhelium.material.ref` | Read the Tensor bound to a Program symbol | `compile/passes/backend/_operations.py`, `_prepare_host.py` |
 | `fhelium.resource.ref` | Bind a supplied execution handle | `compile/passes/backend/_operations.py`, `_link_program.py` |
 | `torch.call` | Execute supported public Tensor calls | `backend/torch.py` |
@@ -173,7 +173,7 @@ The CKKS slot-step convention is defined in `backend/ckks/rotation/_galois.py`. 
 |---|---|---|
 | `builtin.unrealized_conversion_cast` | Forward a one-input, one-result type reference | `compile/passes/codegen/_host.py` |
 | `func.return` | Return function results | `compile/passes/codegen/_host.py` |
-| `arith.constant` | Materialize a scalar integer or floating-point constant | `compile/passes/codegen/_host.py` |
+| `arith.constant` | Materialize a scalar integer or floating-point constant | `backend/runner.py` (schedule translation); `compile/passes/codegen/_host.py` (Backend Python export) |
 | `arith.addi` | Add scalar indices | `compile/passes/codegen/_host.py` |
 | `arith.subi` | Subtract scalar indices | `compile/passes/codegen/_host.py` |
 | `arith.muli` | Multiply scalar indices | `compile/passes/codegen/_host.py` |
@@ -190,12 +190,12 @@ The CKKS slot-step convention is defined in `backend/ckks/rotation/_galois.py`. 
 | `scf.for` | Execute a loop with carried values | `compile/passes/codegen/_host.py` |
 | `scf.yield` | Return region values to structured control flow | `compile/passes/codegen/_host.py` |
 
-`compile/passes/backend/_prepare_host.py` binds the emitted host function. `ProgramExecutable` invokes it with the linked Tensor materials and execution resources.
+`compile/passes/backend/_prepare_host.py` lowers the linked Program into an `exec` schedule, and `backend/runner.py` translates it into a libfhelium Runner bound to the linked Tensor materials and execution resources. `ProgramExecutable` runs that Runner.
 
 ## Continue
 
 - [Operation registration and implementation selection](./operation-registration-and-selection.md)
-- [IR, capture, effects, and open state](./compiler-stack-internals.md)
+- [IR, capture, effects, and open state](./ir-capture-and-passes.md)
 - [Values, operation semantics, and Eager dispatch](./compiler-state-and-eager-execution.md)
 - [Distributed internals](./distributed-internals.md)
 - [RNS and NTT internals](./rns-and-ntt.md)

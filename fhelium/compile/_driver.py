@@ -42,8 +42,7 @@ def compile(
     inputs: Mapping[str, InputSpec] | None = None,
     material_names: Mapping[str, object] | None = None,
     cache: bool | str | Path = True,
-    graph: Literal["auto"] | bool = False,
-    copy_output: bool = True,
+    graph: Literal["auto"] | bool = "auto",
 ) -> CompiledCallable[_P, _R]: ...
 
 
@@ -62,8 +61,7 @@ def compile(
     workspace: CompileWorkspace | None = None,
     inputs: Mapping[str, InputSpec] | None = None,
     cache: bool | str | Path = True,
-    graph: Literal["auto"] | bool = False,
-    copy_output: bool = True,
+    graph: Literal["auto"] | bool = "auto",
 ) -> CompiledCallable[..., Any]: ...
 
 
@@ -83,8 +81,7 @@ def compile(
     inputs: Mapping[str, InputSpec] | None = None,
     material_names: Mapping[str, object] | None = None,
     cache: bool | str | Path = True,
-    graph: Literal["auto"] | bool = False,
-    copy_output: bool = True,
+    graph: Literal["auto"] | bool = "auto",
 ) -> Callable[[Callable[_P, _R]], CompiledCallable[_P, _R]]: ...
 
 
@@ -103,8 +100,7 @@ def compile(
     inputs: Mapping[str, InputSpec] | None = None,
     material_names: Mapping[str, object] | None = None,
     cache: bool | str | Path = True,
-    graph: Literal["auto"] | bool = False,
-    copy_output: bool = True,
+    graph: Literal["auto"] | bool = "auto",
 ) -> (
     CompiledCallable[_P, _R]
     | Callable[[Callable[_P, _R]], CompiledCallable[_P, _R]]
@@ -129,7 +125,6 @@ def compile(
             material_names=material_names,
             cache=cache,
             graph=graph,
-            copy_output=copy_output,
         )
 
     return wrap if source is None else wrap(source)

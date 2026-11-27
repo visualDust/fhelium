@@ -6,14 +6,15 @@
 // of the same names. Each registered kernel is the public function itself.
 
 TORCH_LIBRARY_FRAGMENT(fhelium_random_ops, m) {
-  m.def("generate_seed() -> Tensor");
+  m.def("generate_seed() -> Tensor", {at::Tag::cudagraph_unsafe});
   m.def(
       "chacha20_keystream(Tensor seed, int first_block, int block_count) -> "
       "Tensor");
   m.def(
       "sample_uniform_residues(Tensor seed, int[] shape, Tensor rns_params) "
       "-> Tensor");
-  m.def("gaussian_cdt_table(float sigma) -> Tensor");
+  m.def("gaussian_cdt_table(float sigma) -> Tensor",
+        {at::Tag::cudagraph_unsafe});
   m.def(
       "sample_discrete_gaussian(Tensor seed, int[] shape, Tensor cdt_table, "
       "Tensor? rns_params=None) -> Tensor");

@@ -149,46 +149,6 @@ class KeyLayout:
     digit_prime_ids: tuple[tuple[int, ...], ...]
 
 
-def _greedy_digits(ids, moduli, limit):
-    digits, digit, product = [], [], 1
-    for i in ids:
-        if moduli[i] >= limit:
-            return None
-        if digit and product * moduli[i] >= limit:
-            digits.append(tuple(digit))
-            digit, product = [], 1
-        digit.append(i)
-        product *= moduli[i]
-    return (*digits, tuple(digit))
-
-
-def _minimax_digits(ids, moduli, count):
-    """Split ``ids`` into ``count`` runs minimizing the largest run product."""
-    prefix = [1]
-    for i in ids:
-        prefix.append(prefix[-1] * moduli[i])
-    n = len(ids)
-    # (runs, stop) -> (largest run product, start of the last run)
-    best: dict[tuple[int, int], tuple[int, int | None]] = {(0, 0): (1, None)}
-    for k in range(1, count + 1):
-        for stop in range(k, n - count + k + 1):
-            best[k, stop] = min(
-                (
-                    max(best[k - 1, start][0], prefix[stop] // prefix[start]),
-                    start,
-                )
-                for start in range(k - 1, stop)
-                if (k - 1, start) in best
-            )
-    digits, stop = [], n
-    for k in range(count, 0, -1):
-        start = best[k, stop][1]
-        assert start is not None
-        digits.append(tuple(ids[start:stop]))
-        stop = start
-    return tuple(reversed(digits))
-
-
 class CkksConfig:
     r"""Immutable CKKS mathematical and security parameters.
 
@@ -501,33 +461,13 @@ class CkksConfig:
         cache = self.__dict__.setdefault("_key_layouts", {})
         if depth in cache:
             return cache[depth]
-        moduli = self.moduli
         q_ids = self.q_bases[depth]
-        active = set(q_ids)
-        eligible = sorted(
-            (i for i in range(self.total_num_primes) if i not in active),
-            key=lambda i: (-moduli[i], i),
-        )
-        best = None
-        limit = 1
-        q = len(q_ids)
-        for width, prime_id in enumerate(eligible, start=1):
-            limit *= moduli[prime_id]
-            digits = _greedy_digits(q_ids, moduli, limit)
-            if digits is None:
-                continue
-            k = len(digits)
-            cost = ((k + 1) * (q + width), k * (q + width), width)
-            if best is None or cost < best[0]:
-                best = (cost, k, tuple(sorted(eligible[:width])))
-        if best is None:
-            raise ValueError(
-                f"the configured primes outside B_{depth} cannot bound a key digit"
-            )
-        _, count, p_ids = best
-        layout = KeyLayout(
-            depth, q_ids, p_ids, _minimax_digits(q_ids, moduli, count)
-        )
+        p_ids, sizes = ckks_ops.plan_key_layout(list(self.moduli), list(q_ids))
+        digits, start = [], 0
+        for size in sizes:
+            digits.append(tuple(q_ids[start : start + size]))
+            start += size
+        layout = KeyLayout(depth, q_ids, tuple(p_ids), tuple(digits))
         cache[depth] = layout
         return layout
 

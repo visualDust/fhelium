@@ -48,15 +48,15 @@ The numerical implementation follows the represented operation schedule. Eager a
 
 CKKS decryption is approximate. Encoding roundoff, encryption noise, key switching, and rescale contribute to the output error, while modular wrap can change the recovered message when intermediate coefficients exceed the intended centered range. Record the circuit's input bounds, actual scales, depth schedule, and output precision. Security-table assessment and numerical-error analysis measure different properties of those same parameters. [Encoding and key construction](encoding-randomness-and-keys.md) gives the implemented equations.
 
-## Files and stored Programs
+## Files, artifacts, and the compile cache
 
 FHElium value files and Compilation files store unencrypted safetensors payloads. Typed secret-key serialization requires `allow_secret=True`. Compilation persistence can include selected arbitrary Tensor materials, so the selected symbols must be reviewed for secret keys, plaintexts, and random state before saving. Restoring a saved random state can repeat a cryptographic stream.
 
-ArtifactStore records payload hashes and generation identities. SHA-256 detects accidental corruption; a party able to replace both catalog and payload can also replace the recorded digest. Sensitivity labels describe contents and do not enforce access permissions. Protect stored secrets with filesystem permissions, authenticated encryption where required, and controlled access to backups.
+ValueStore records payload hashes and generation identities. SHA-256 detects accidental corruption; a party able to replace both catalog and payload can also replace the recorded digest. Sensitivity labels describe contents and do not enforce access permissions. Protect stored secrets with filesystem permissions, authenticated encryption where required, and controlled access to backups.
 
-Compilation persistence preserves Program IR and selected numerical data. Linking and executing imported IR can invoke registered implementations and generated code with the process's privileges. Use trusted Program sources and implementation registries, and isolate execution when the submitting party is outside that trust domain. Payload-format validation checks storage extents and metadata, not the behavior of executable code.
+Compiled artifacts written by `fhelium.compile.export` and compile cache entries contain Runner schedules, kernel images (cubin and PTX), link-time constants, and stored materials, which the loader executes on the device with the process's privileges. Artifacts contain no keys, but with `weights="embedded"` or with plaintexts encoded before capture they contain encoded application weights, and with `weights="raw"` the raw weight Tensors. The identity check compares library versions and operator schemas; it does not authenticate the file's origin or contents. Load artifacts and use cache directories only from sources as trusted as the installed package, and isolate execution when the producing party is outside that trust domain. Linking and executing imported Program IR likewise invokes registered implementations and generated code. Payload-format validation checks storage extents and metadata, not the behavior of executable code.
 
-See [Compilation persistence](compilation-persistence.md) and [ArtifactStore](artifact-store-v1.md) for the formats, storage-sharing behavior, and publication lifecycle.
+See [Program files and the compile cache](compilation-persistence.md), [Compiled artifact format](compiled-artifact-format.md), and [ValueStore format](value-store-v1.md) for the formats, storage-sharing behavior, and publication lifecycle.
 
 ## Host, accelerator, and communication
 
@@ -66,7 +66,7 @@ Distributed ciphertext transport uses PyTorch process groups and their configure
 
 Experimental multiparty CKKS exposes arithmetic for collective keys, shares, and key switching. An application protocol supplies participant authentication, share freshness, transcript binding, error-distribution choices, and authorized output release. The current arithmetic APIs do not implement malicious-party validation of contributed shares. Secret-dependent output operations accept caller-supplied randomness and errors. Output privacy requires an analyzed output-error distribution; FHElium currently supplies no reviewed output-error sampler or supported noise-smudging and precision profile. [Multiparty CKKS](../how-to/use-multiparty-ckks.md) describes the individual protocol steps and their sampling requirements.
 
-Install native extensions and generated-code dependencies from trusted build and package sources. The [binary packaging](binary-packaging-and-release.md) page documents wheel identities, dependency checks, and the artifact publication process.
+Install native extensions and generated-code dependencies from trusted build and package sources. The [binary packaging](binary-packaging-and-release.md) page documents wheel identities, dependency checks, and the publication of release builds.
 
 ## Report a vulnerability
 

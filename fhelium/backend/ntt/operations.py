@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -10,6 +9,7 @@ import torch
 from xdsl.ir import Operation
 
 from fhelium.backend.implementation import OperationInvocation
+from fhelium.backend.lowering import ExecBuilder
 from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.config.ntt import (
     CompactRadix2Policy,
@@ -42,7 +42,7 @@ _NTT_OPERATION_TYPES = (
 
 @dataclass(frozen=True)
 class NativeNttImplementation(_TensorOperandImplementation):
-    """Execute logical NTT operations through one named schedule executor."""
+    """Lower logical NTT operations to one named native schedule."""
 
     name: str
     required_backend_name: str | None
@@ -74,41 +74,22 @@ class NativeNttImplementation(_TensorOperandImplementation):
             "table_count": table_count(policy),
         }
 
-    def prepare_operation(self, operation: Operation):
-        from xdsl.dialects.builtin import StringAttr
-
-        attribute = operation.attributes.get("ntt_backend")
-        name = (
-            attribute.data
-            if isinstance(attribute, StringAttr)
-            else self.required_backend_name
-        )
-        if name is None:
-            raise ValueError(
-                "NTT schedule remains unresolved; run SelectNttImplementationsPass"
-            )
-        self.select_ntt_schedule(selected=name)
-        transition = _TRANSITIONS[type(operation)]
-        return _PreparedNativeNtt(
-            self.name,
-            prepare_transition(transition, name, in_place=False),
-            prepare_transition(transition, name, in_place=True),
-        )
-
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources
-        policy_name = str(
-            invocation.attributes.get(
-                "ntt_backend", self.required_backend_name or ""
-            )
+        del resources, builder
+        policy_name = invocation.attributes.get(
+            "ntt_backend", self.required_backend_name
         )
+        if policy_name is None:
+            raise ValueError(
+                "NTT schedule remains unresolved; run SelectNttImplementationsPass"
+            )
         if (
             self.required_backend_name is not None
             and policy_name != self.required_backend_name
@@ -118,9 +99,9 @@ class NativeNttImplementation(_TensorOperandImplementation):
             )
         transition = _TRANSITIONS[invocation.operation_type]
         return (
-            execute_transition(
-                transition, values, policy_name, in_place=in_place
-            ),
+            prepare_transition(
+                transition, str(policy_name), in_place=invocation.in_place
+            )(values),
         )
 
 
@@ -132,22 +113,9 @@ _TRANSITIONS = {
 }
 
 
-@dataclass(frozen=True)
-class _PreparedNativeNtt(_TensorOperandImplementation):
-    name: str
-    functional: Callable[[tuple[torch.Tensor, ...]], torch.Tensor]
-    inplace: Callable[[tuple[torch.Tensor, ...]], torch.Tensor]
-    supports_in_place: bool = True
-    operation_types: tuple[type[Operation], ...] = _NTT_OPERATION_TYPES
-
-    def execute(self, invocation, values, resources, *, in_place):
-        return ((self.inplace if in_place else self.functional)(values),)
-
-
 @lru_cache(maxsize=128)
 def prepare_transition(transition: str, policy_name: str, *, in_place: bool):
     """Bind a native algorithm and transition without retaining operand data."""
-    original = transition
     policy = resolve_ntt_backend_policy(policy_name)
     copy_input = not in_place
     if copy_input and transition == "forward_to_montgomery_":
@@ -175,18 +143,7 @@ def prepare_transition(transition: str, policy_name: str, *, in_place: bool):
             output = source.clone() if copy_input else source
             return native(output, twiddles, roots, parameters)
 
-    from fhelium.backend._artifact import rebuild_with
-
-    return rebuild_with(
-        call, prepare_transition, original, policy_name, in_place=in_place
-    )
-
-
-def execute_transition(transition, values, policy_name, *, in_place):
-    """Execute current Tensor operands through the shared prepared native call."""
-    return prepare_transition(transition, policy_name, in_place=in_place)(
-        values
-    )
+    return call
 
 
 __all__ = ["NativeNttImplementation"]

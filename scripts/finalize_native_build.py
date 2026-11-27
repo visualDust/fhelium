@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import os
+import sys
 import tempfile
 import tomllib
 from pathlib import Path
@@ -32,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backends",
         required=True,
-        help="Comma-separated native execution backends included in _ops.",
+        help="Comma-separated native execution backends included in libfhelium_torch.",
     )
     parser.add_argument(
         "--sdk-root",
@@ -87,6 +88,10 @@ def main() -> None:
     if not soabi or not identity["python"]["ext_suffix"]:
         raise RuntimeError("Python did not report SOABI/EXT_SUFFIX")
 
+    sdk_root = Path(args.sdk_root) if args.sdk_root else package_root / "native"
+    if sys.platform == "win32":
+        os.add_dll_directory(str(sdk_root / "lib"))
+    torch.ops.load_library(str(helpers.torch_library_path(sdk_root)))
     destination = helpers.manifest_path(
         package_root / "native" / "torchops", soabi
     )
@@ -96,6 +101,7 @@ def main() -> None:
             "manifest_schema_version": helpers.MANIFEST_SCHEMA_VERSION,
             "project_version": project["version"],
             "native_backends": list(backends),
+            "operator_schema_sha256": helpers.operator_schema_digest(torch),
             **({"sdk_root": args.sdk_root} if args.sdk_root else {}),
             **(
                 {

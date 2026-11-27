@@ -1,6 +1,6 @@
 # Data-parallel encrypted batches
 
-**Example source:** [`examples/22_distributed_batch_inputs.py`](https://github.com/VisualDust/fhelium/blob/main/examples/22_distributed_batch_inputs.py)
+**Example source:** [`examples/20_distributed_batch_inputs.py`](https://github.com/VisualDust/fhelium/blob/main/examples/20_distributed_batch_inputs.py)
 
 This example starts with one encrypted batch of independent samples. The data owner assigns each rank a consecutive sample interval. Ranks evaluate the same public affine model on their sub-batches, then return their distinct outputs for decryption and concatenation in original sample order.
 
@@ -9,10 +9,10 @@ This is a centralized-input data-parallel workload. Other applications can provi
 ## Run
 
 ```bash
-python examples/22_distributed_batch_inputs.py --batch-size 7
+python examples/20_distributed_batch_inputs.py --batch-size 7
 
 torchrun --standalone --nproc-per-node=2 \
-  examples/22_distributed_batch_inputs.py --batch-size 7
+  examples/20_distributed_batch_inputs.py --batch-size 7
 ```
 
 `--batch-size` is the global number of samples, not a per-rank size. The example requires at least one sample per participating rank. Seven samples on two ranks produce sub-batches of three and four samples. `--preset` selects the CKKS configuration. `dist.init()` uses rank-local CUDA devices when available and CPU otherwise; Tensor factories follow the selected PyTorch default device.
@@ -124,5 +124,5 @@ The reconstructed clear Tensor has shape `[batch_size, sample_width]` and is che
 - [Communication semantics](../concepts/distributed/communication-semantics.md) distinguishes independent samples, additive partials, and RNS shards.
 
 ::: details Source
-<<< @/../examples/22_distributed_batch_inputs.py
+<<< @/../examples/20_distributed_batch_inputs.py
 :::

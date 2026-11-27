@@ -2,6 +2,7 @@
 
 #include <c10/util/Exception.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -29,8 +30,8 @@ uint64_t double_mod(double value, uint64_t m) {
     return static_cast<uint64_t>(value) % m;
   }
   const auto mantissa = static_cast<uint64_t>(std::ldexp(fraction, 53));
-  return host::mul_mod(mantissa % m, host::power_of_two_mod(exponent - 53, m),
-                       m);
+  return host::mul_mod(
+      mantissa % m, host::power_of_two_mod(exponent - 53, m), m);
 }
 
 }  // namespace
@@ -49,8 +50,7 @@ at::Tensor parameter_table(at::IntArrayRef moduli,
   const double scale = std::nearbyint(default_scale);
   const int64_t h = w / 2;
   const uint64_t half_mask = (uint64_t{1} << h) - 1;
-  const uint64_t radix_mask =
-      w == 64 ? ~uint64_t{0} : (uint64_t{1} << w) - 1;
+  const uint64_t radix_mask = w == 64 ? ~uint64_t{0} : (uint64_t{1} << w) - 1;
   const uint64_t radix_modulus = uint64_t{1} << w;
   std::vector<std::vector<uint64_t>> rows(RNS_PARAMETER_COUNT,
                                           std::vector<uint64_t>(q.size()));
@@ -69,10 +69,41 @@ at::Tensor parameter_table(at::IntArrayRef moduli,
     rows[RNS_PARAM_SCALED_R2][j] =
         host::mul_mod(r2, double_mod(scale, modulus), modulus);
     rows[RNS_PARAM_N_INV_MONTGOMERY][j] = host::mul_mod(
-        host::inv_mod(host::power_of_two_mod(log_n, modulus), modulus), r,
+        host::inv_mod(host::power_of_two_mod(log_n, modulus), modulus),
+        r,
         modulus);
   }
   return to_tensor(rows, dtype);
+}
+
+at::Tensor integer_scalar_table(at::IntArrayRef moduli,
+                                std::string_view scalar,
+                                at::ScalarType dtype,
+                                c10::Device device) {
+  const auto q = to_u64(moduli);
+  const int64_t w = montgomery_radix_bits(dtype);
+  check_moduli(q, w, "integer_scalar_table");
+  const bool negative = !scalar.empty() && scalar.front() == '-';
+  const auto digits = scalar.substr(negative ? 1 : 0);
+  TORCH_CHECK_VALUE(
+      !digits.empty() &&
+          std::all_of(digits.begin(),
+                      digits.end(),
+                      [](char c) { return c >= '0' && c <= '9'; }),
+      "integer_scalar_table requires a decimal integer, not '",
+      scalar,
+      "'");
+  std::vector<uint64_t> values(q.size());
+  for (size_t i = 0; i < q.size(); ++i) {
+    uint64_t residue = 0;
+    for (const char digit : digits)
+      residue = (host::mul_mod(residue, 10, q[i]) +
+                 static_cast<uint64_t>(digit - '0')) %
+                q[i];
+    if (negative && residue != 0) residue = q[i] - residue;
+    values[i] = host::mul_mod(residue, host::power_of_two_mod(w, q[i]), q[i]);
+  }
+  return to_tensor(values, dtype).to(device);
 }
 
 at::Tensor product_residues(at::IntArrayRef factors,
@@ -152,9 +183,7 @@ at::Tensor quotient_offset_residues(at::IntArrayRef p_moduli,
 }
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor> mixed_radix_tables(
-    at::IntArrayRef source,
-    at::IntArrayRef destination,
-    at::ScalarType dtype) {
+    at::IntArrayRef source, at::IntArrayRef destination, at::ScalarType dtype) {
   const auto s = to_u64(source);
   const auto p = to_u64(destination);
   const int64_t w = montgomery_radix_bits(dtype);
@@ -172,17 +201,19 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> mixed_radix_tables(
   for (size_t k = 0; k < rows; ++k) {
     prefix.push_back(s[k]);
     const uint64_t next = s[k + 1];
-    normalizers[k] = host::mul_mod(
-        host::inv_mod(host::product_mod(prefix, next), next),
-        host::power_of_two_mod(w, next), next);
+    normalizers[k] =
+        host::mul_mod(host::inv_mod(host::product_mod(prefix, next), next),
+                      host::power_of_two_mod(w, next),
+                      next);
     for (size_t t = k + 2; t < width; ++t) {
       propagation[k][t] = host::mul_mod(host::product_mod(prefix, s[t]),
-                                        host::power_of_two_mod(w, s[t]), s[t]);
+                                        host::power_of_two_mod(w, s[t]),
+                                        s[t]);
     }
     for (size_t t = 0; t < p.size(); ++t) {
       const uint64_t r = host::power_of_two_mod(w, p[t]);
-      extension[k][t] = host::mul_mod(host::product_mod(prefix, p[t]),
-                                      host::mul_mod(r, r, p[t]), p[t]);
+      extension[k][t] = host::mul_mod(
+          host::product_mod(prefix, p[t]), host::mul_mod(r, r, p[t]), p[t]);
     }
   }
   return {to_tensor(normalizers, dtype),
@@ -241,8 +272,10 @@ crt_basis_extension_tables(at::IntArrayRef source,
   }
   const std::vector<uint64_t> none;
   return {to_tensor(matrix, dtype, static_cast<int64_t>(p.size())),
-          reciprocals(p), to_tensor(normalized ? inverses : none, dtype),
-          reciprocals(normalized ? s : none), to_tensor(offsets, dtype)};
+          reciprocals(p),
+          to_tensor(normalized ? inverses : none, dtype),
+          reciprocals(normalized ? s : none),
+          to_tensor(offsets, dtype)};
 }
 
 std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
@@ -250,8 +283,11 @@ crt_quotient_tables(at::IntArrayRef source,
                     at::IntArrayRef target,
                     at::IntArrayRef divisor,
                     at::ScalarType dtype) {
-  auto [unused_matrix, target_reciprocals, source_normalizers,
-        source_reciprocals, unused_offsets] =
+  auto [unused_matrix,
+        target_reciprocals,
+        source_normalizers,
+        source_reciprocals,
+        unused_offsets] =
       crt_basis_extension_tables(source, target, true, dtype);
   const auto s = to_u64(source);
   const auto p = to_u64(target);
@@ -264,8 +300,8 @@ crt_quotient_tables(at::IntArrayRef source,
     const uint64_t divisor_mod = host::product_mod(e, p[t]);
     uint64_t sum = 0;
     for (size_t i = 0; i < s.size(); ++i) {
-      const uint64_t inverse = host::inv_mod(
-          host::mul_mod(s[i] % p[t], divisor_mod, p[t]), p[t]);
+      const uint64_t inverse =
+          host::inv_mod(host::mul_mod(s[i] % p[t], divisor_mod, p[t]), p[t]);
       matrix[i][t] = (p[t] - inverse) % p[t];
       sum = (sum + host::mul_mod((s[i] - 1) / 2 % p[t], matrix[i][t], p[t])) %
             p[t];
@@ -273,7 +309,9 @@ crt_quotient_tables(at::IntArrayRef source,
     offsets[t] = (p[t] - sum) % p[t];
   }
   return {to_tensor(matrix, dtype, static_cast<int64_t>(p.size())),
-          target_reciprocals, source_normalizers, source_reciprocals,
+          target_reciprocals,
+          source_normalizers,
+          source_reciprocals,
           to_tensor(offsets, dtype)};
 }
 
@@ -292,9 +330,9 @@ at::Tensor trailing_quotient_inverses(at::IntArrayRef moduli,
   for (size_t j = 0; j < rows.size(); ++j) {
     const uint64_t prime = q[q.size() - 1 - j];
     for (size_t i = 0; i + j + 1 < q.size(); ++i) {
-      rows[j][i] =
-          host::mul_mod(host::inv_mod(prime % q[i], q[i]),
-                        host::power_of_two_mod(w, q[i]), q[i]);
+      rows[j][i] = host::mul_mod(host::inv_mod(prime % q[i], q[i]),
+                                 host::power_of_two_mod(w, q[i]),
+                                 q[i]);
     }
   }
   return to_tensor(rows, dtype, static_cast<int64_t>(columns));
@@ -310,9 +348,9 @@ at::Tensor rescale_inverse_matrix(at::IntArrayRef moduli,
   for (size_t d = 0; d < q.size(); ++d) {
     for (size_t i = 0; i < q.size(); ++i) {
       if (i != d) {
-        rows[d][i] =
-            host::mul_mod(host::inv_mod(q[d] % q[i], q[i]),
-                          host::power_of_two_mod(w, q[i]), q[i]);
+        rows[d][i] = host::mul_mod(host::inv_mod(q[d] % q[i], q[i]),
+                                   host::power_of_two_mod(w, q[i]),
+                                   q[i]);
       }
     }
   }

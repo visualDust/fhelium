@@ -73,12 +73,12 @@ void validate_automorphism(const torch::Tensor& residues,
       " source index count must match coefficient count");
 }
 
-torch::Tensor apply_coefficient_galois_automorphism_cuda(
+void apply_coefficient_galois_automorphism_cuda(
     const torch::Tensor residues,
     const torch::Tensor source_indices,
     const torch::Tensor source_sign,
-    const torch::Tensor twice_modulus) {
-  auto out = torch::empty_like(residues);
+    const torch::Tensor twice_modulus,
+    torch::Tensor& out) {
   const auto input = view_rns_batch_3d(residues, "residues");
   auto output = view_rns_batch_3d(out, "out");
   validate_automorphism(
@@ -106,12 +106,11 @@ torch::Tensor apply_coefficient_galois_automorphism_cuda(
                 FHELIUM_CUDA_ACCESSOR32(source_sign, int8_t, 1),
                 FHELIUM_CUDA_ACCESSOR32(twice_modulus, scalar_t, 1));
       });
-  return out;
 }
 
-torch::Tensor apply_ntt_galois_automorphism_cuda(
-    const torch::Tensor residues_ntt, const torch::Tensor source_indices) {
-  auto out = torch::empty_like(residues_ntt);
+void apply_ntt_galois_automorphism_cuda(const torch::Tensor residues_ntt,
+                                        const torch::Tensor source_indices,
+                                        torch::Tensor& out) {
   const auto input = view_rns_batch_3d(residues_ntt, "residues_ntt");
   auto output = view_rns_batch_3d(out, "out");
   validate_automorphism(input, source_indices, "apply_ntt_galois_automorphism");
@@ -133,13 +132,12 @@ torch::Tensor apply_ntt_galois_automorphism_cuda(
                 FHELIUM_CUDA_ACCESSOR32(input, scalar_t, 3),
                 FHELIUM_CUDA_ACCESSOR32(source_indices, int32_t, 1));
       });
-  return out;
 }
 
 void add_ntt_galois_automorphism_cuda(torch::Tensor& target,
-                                     const torch::Tensor residues_ntt,
-                                     const torch::Tensor source_indices,
-                                     const torch::Tensor rns_params) {
+                                      const torch::Tensor residues_ntt,
+                                      const torch::Tensor source_indices,
+                                      const torch::Tensor rns_params) {
   const auto input = view_rns_batch_3d(residues_ntt, "residues_ntt");
   auto output = view_rns_batch_3d(target, "target");
   validate_automorphism(input, source_indices, "add_ntt_galois_automorphism_");
@@ -173,26 +171,27 @@ void add_ntt_galois_automorphism_cuda(torch::Tensor& target,
 
 namespace fhelium::ckks::gpu {
 
-at::Tensor apply_coefficient_galois_automorphism(
-    const at::Tensor& residues,
-    const at::Tensor& source_indices,
-    const at::Tensor& source_sign,
-    const at::Tensor& twice_modulus) {
-  return ::apply_coefficient_galois_automorphism_cuda(
-      residues, source_indices, source_sign, twice_modulus);
+void apply_coefficient_galois_automorphism_out(const at::Tensor& residues,
+                                               const at::Tensor& source_indices,
+                                               const at::Tensor& source_sign,
+                                               const at::Tensor& twice_modulus,
+                                               at::Tensor& out) {
+  ::apply_coefficient_galois_automorphism_cuda(
+      residues, source_indices, source_sign, twice_modulus, out);
 }
 
-at::Tensor apply_ntt_galois_automorphism(const at::Tensor& residues_ntt,
-                                         const at::Tensor& source_indices) {
-  return ::apply_ntt_galois_automorphism_cuda(residues_ntt, source_indices);
+void apply_ntt_galois_automorphism_out(const at::Tensor& residues_ntt,
+                                       const at::Tensor& source_indices,
+                                       at::Tensor& out) {
+  ::apply_ntt_galois_automorphism_cuda(residues_ntt, source_indices, out);
 }
-
 
 void add_ntt_galois_automorphism_(at::Tensor& target,
                                   const at::Tensor& residues_ntt,
                                   const at::Tensor& source_indices,
                                   const at::Tensor& rns_params) {
-  ::add_ntt_galois_automorphism_cuda(target, residues_ntt, source_indices, rns_params);
+  ::add_ntt_galois_automorphism_cuda(
+      target, residues_ntt, source_indices, rns_params);
 }
 
 }  // namespace fhelium::ckks::gpu

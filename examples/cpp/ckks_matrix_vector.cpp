@@ -36,8 +36,6 @@ constexpr double kTolerance = 1e-4;
 const char* const kPreset = "slots8192-scale40-depth7";
 const char* const kNttBackend = "radix2_indexed";
 
-using fhelium::TensorTable;
-
 std::vector<int64_t> select(const std::vector<int64_t>& values,
                             const std::vector<int64_t>& ids) {
   std::vector<int64_t> result;
@@ -85,31 +83,50 @@ class Tables {
         .to(device_);
   }
 
-  // Adds `<basis>_parameters` and the radix-2 indexed NTT schedules of
-  // `ids`; an empty basis names them `parameters`, `forward_i`, and
-  // `inverse_i`.
-  void add_basis(TensorTable& table,
-                 const std::string& basis,
-                 const std::vector<int64_t>& ids) const {
-    const auto prefix = basis.empty() ? std::string() : basis + "_";
+  // The forward and inverse radix-2 indexed NTT tables of the rows `ids`.
+  fhelium::RingTables ring(const std::vector<int64_t>& ids) const {
     const auto parameters = this->parameters(ids);
-    auto [forward_indices, forward_twiddles, inverse_indices, inverse_twiddles] =
+    auto [forward_indices,
+          forward_twiddles,
+          inverse_indices,
+          inverse_twiddles] =
         fhelium::ntt::indexed_radix2_plan(
             select(moduli_, ids), log_n_, torch::kInt32);
-    const auto add = [&](const std::string& direction,
-                         const torch::Tensor& indices,
+    const auto ntt = [&](const torch::Tensor& indices,
                          const torch::Tensor& twiddles) {
       auto montgomery = twiddles.to(device_);
       auto rows = montgomery.view({montgomery.size(0), -1});
       fhelium::rns::to_montgomery_(rows, parameters);
-      table.insert(prefix + direction + "_0", parameters);
-      table.insert(prefix + direction + "_1", montgomery);
-      table.insert(prefix + direction + "_2", indices.select(0, 0).to(device_));
-      table.insert(prefix + direction + "_3", indices.select(0, 1).to(device_));
+      return fhelium::NttTables{parameters,
+                                {montgomery,
+                                 indices.select(0, 0).to(device_),
+                                 indices.select(0, 1).to(device_)}};
     };
-    add("forward", forward_indices, forward_twiddles);
-    add("inverse", inverse_indices, inverse_twiddles);
-    table.insert(prefix + "parameters", parameters);
+    return {ntt(forward_indices, forward_twiddles),
+            ntt(inverse_indices, inverse_twiddles),
+            {}};
+  }
+
+  // The CRT tables that convert residues over `source` into `target` rows.
+  fhelium::CrtTables crt(const std::vector<int64_t>& source,
+                         const std::vector<int64_t>& target,
+                         const std::tuple<torch::Tensor,
+                                          torch::Tensor,
+                                          torch::Tensor,
+                                          torch::Tensor,
+                                          torch::Tensor>& tables) const {
+    const auto& [matrix,
+                 target_reciprocals,
+                 normalizers,
+                 reciprocals,
+                 offsets] = tables;
+    return {parameters(source),
+            parameters(target),
+            to_device(matrix),
+            to_device(target_reciprocals),
+            to_device(normalizers),
+            to_device(reciprocals),
+            to_device(offsets)};
   }
 
   torch::Tensor to_device(const torch::Tensor& tensor) const {
@@ -123,7 +140,8 @@ class Tables {
   torch::Device device_;
 };
 
-// Advances the nonce of `seed` after a call that read `count` nonces.
+// Advances the nonce of `seed` after a key generation that read `count`
+// nonces; encoding and encryption advance the seed they receive.
 void advance(torch::Tensor& seed, int64_t count) {
   seed.select(0, 4).add_(count);
 }
@@ -133,13 +151,12 @@ torch::Tensor encode(const std::vector<std::complex<double>>& slots,
                      const torch::Tensor& twist,
                      torch::Tensor& seed,
                      double scale) {
-  auto message = torch::empty({static_cast<int64_t>(slots.size())},
-                              torch::kComplexDouble);
+  auto message =
+      torch::empty({static_cast<int64_t>(slots.size())}, torch::kComplexDouble);
   std::copy(
       slots.begin(), slots.end(), message.data_ptr<c10::complex<double>>());
-  auto coefficients = fhelium::ckks::encode(
-      message.to(seed.device()), pre, twist, seed, scale);
-  advance(seed, 1);
+  auto coefficients =
+      fhelium::ckks::encode(message.to(seed.device()), pre, twist, seed, scale);
   return coefficients;
 }
 
@@ -166,16 +183,19 @@ bool check_matrix_vector(const torch::Device& device) {
   // Key generation.
   auto seed = fhelium::random::generate_seed().to(device);
   const auto cdt = fhelium::random::gaussian_cdt_table(3.19).to(device);
-  TensorTable key_tables;
-  tables.add_basis(key_tables, "", qp_ids);
-  key_tables.insert("source_product",
-                    tables.to_device(fhelium::rns::product_residues(
-                        p_moduli, q_moduli, 1, true, torch::kInt32)));
+  auto key_tables = tables.ring(qp_ids);
+  key_tables.source_product = tables.to_device(fhelium::rns::product_residues(
+      p_moduli, q_moduli, 1, true, torch::kInt32));
   const auto secret_key = fhelium::ckks::create_secret_key(
       n, key_tables, seed, kNttBackend, std::nullopt);
   advance(seed, 1);
-  const auto public_key = fhelium::ckks::create_public_key(
-      secret_key, key_tables, seed, cdt, kNttBackend, std::nullopt, std::nullopt);
+  const auto public_key = fhelium::ckks::create_public_key(secret_key,
+                                                           key_tables,
+                                                           seed,
+                                                           cdt,
+                                                           kNttBackend,
+                                                           std::nullopt,
+                                                           std::nullopt);
   advance(seed, 2);
   fhelium::ckks::KeySwitchKeyLayout layout{
       kNttBackend,
@@ -187,15 +207,16 @@ bool check_matrix_vector(const torch::Device& device) {
   // seed, halving key memory; the key products generate k_1 from the seed.
   std::vector<fhelium::ckks::KeySwitchKey> galois_keys;
   for (int64_t i = 1; i < kDimension; ++i) {
-    galois_keys.push_back(fhelium::ckks::compact_key_switch_key(fhelium::ckks::create_galois_key(
-        secret_key,
-        fhelium::ckks::rotation_galois_element(parameters.log_n, -i, kGenerator),
-        key_tables,
-        seed,
-        cdt,
-        layout,
-        std::nullopt,
-        std::nullopt)));
+    galois_keys.push_back(fhelium::ckks::compact_key_switch_key(
+        fhelium::ckks::create_galois_key(secret_key,
+                                         fhelium::ckks::rotation_galois_element(
+                                             parameters.log_n, -i, kGenerator),
+                                         key_tables,
+                                         seed,
+                                         cdt,
+                                         layout,
+                                         std::nullopt,
+                                         std::nullopt)));
     advance(seed, 1 + static_cast<int64_t>(layout.digit_sizes.size()));
   }
 
@@ -210,7 +231,8 @@ bool check_matrix_vector(const torch::Device& device) {
   for (auto& value : vector) {
     value = uniform(rng);
   }
-  auto [pre, post] = fhelium::ckks::slot_permutations(parameters.log_n, kGenerator);
+  auto [pre, post] =
+      fhelium::ckks::slot_permutations(parameters.log_n, kGenerator);
   pre = pre.to(device);
   post = post.to(device);
   const auto twist = fhelium::ckks::slot_twist(n, false, device);
@@ -220,51 +242,39 @@ bool check_matrix_vector(const torch::Device& device) {
     replicated[j] = vector[j % kDimension];
   }
   const double input_scale = parameters.scales[0];
-  TensorTable q_tables;
-  tables.add_basis(q_tables, "", q_ids);
-  auto ciphertext = fhelium::ckks::encrypt(
-      encode(replicated, pre, twist, seed, input_scale),
-      public_key,
-      q_tables,
-      seed,
-      cdt,
-      kNttBackend,
-      0,
-      "coefficient");
-  advance(seed, 3);
+  const auto q_tables = tables.ring(q_ids);
+  auto ciphertext =
+      fhelium::ckks::encrypt(encode(replicated, pre, twist, seed, input_scale),
+                             public_key,
+                             q_tables,
+                             seed,
+                             cdt,
+                             kNttBackend,
+                             0,
+                             "coefficient");
 
   // Rotations: hybrid key switching with normalized CRT ModUp and an
   // approximate ModDown that divides by P with the centered CRT remainder.
-  TensorTable rotation_tables;
-  tables.add_basis(rotation_tables, "q", q_ids);
-  tables.add_basis(rotation_tables, "qp", qp_ids);
-  {
-    auto [matrix_table, target_reciprocals, normalizers, reciprocals, offsets] =
-        fhelium::rns::crt_quotient_tables(p_moduli, q_moduli, {},
-                                          torch::kInt32);
-    rotation_tables.insert("moddown_crt_source_parameters",
-                           tables.parameters(p_ids));
-    rotation_tables.insert("moddown_crt_target_parameters",
-                           tables.parameters(q_ids));
-    rotation_tables.insert("moddown_crt_matrix", tables.to_device(matrix_table));
-    rotation_tables.insert("moddown_crt_target_reciprocals",
-                           tables.to_device(target_reciprocals));
-    rotation_tables.insert("moddown_crt_source_normalizers",
-                           tables.to_device(normalizers));
-    rotation_tables.insert("moddown_crt_source_reciprocals",
-                           tables.to_device(reciprocals));
-    rotation_tables.insert("moddown_crt_target_offsets",
-                           tables.to_device(offsets));
-    rotation_tables.insert(
-        "p_inverse",
-        tables.to_device(fhelium::rns::product_residues(
-            p_moduli, q_moduli, -1, true, torch::kInt32)));
-  }
+  fhelium::KeySwitchTables rotation_tables;
+  const auto q_ring = tables.ring(q_ids);
+  const auto qp_ring = tables.ring(qp_ids);
+  rotation_tables.q_parameters = q_ring.forward.parameters;
+  rotation_tables.qp_parameters = qp_ring.forward.parameters;
+  rotation_tables.q_forward = q_ring.forward;
+  rotation_tables.q_inverse = q_ring.inverse;
+  rotation_tables.qp_forward = qp_ring.forward;
+  rotation_tables.qp_inverse = qp_ring.inverse;
+  rotation_tables.moddown_crt = tables.crt(
+      p_ids,
+      q_ids,
+      fhelium::rns::crt_quotient_tables(p_moduli, q_moduli, {}, torch::kInt32));
+  rotation_tables.p_inverse = tables.to_device(fhelium::rns::product_residues(
+      p_moduli, q_moduli, -1, true, torch::kInt32));
   fhelium::ckks::KeySwitchOptions options;
   options.ntt_backend = kNttBackend;
   options.basis_conversion = "normalized_crt";
   options.p_count = p_count;
-  options.galois_generator = kGenerator;
+  rotation_tables.digits.resize(layout.digit_sizes.size());
   int64_t start = 0;
   for (size_t digit = 0; digit < layout.digit_sizes.size(); ++digit) {
     const int64_t stop = start + layout.digit_sizes[digit];
@@ -272,22 +282,14 @@ bool check_matrix_vector(const torch::Device& device) {
                           {start, stop, static_cast<int64_t>(digit)});
     const std::vector<int64_t> digit_ids(q_ids.begin() + start,
                                          q_ids.begin() + stop);
-    auto [matrix_table, target_reciprocals, normalizers, reciprocals, offsets] =
-        fhelium::rns::crt_basis_extension_tables(
-            select(tables.moduli(), digit_ids), qp_moduli, true, torch::kInt32);
-    const auto prefix = "digit" + std::to_string(digit) + "_crt_";
-    rotation_tables.insert(prefix + "source_parameters",
-                           tables.parameters(digit_ids));
-    rotation_tables.insert(prefix + "target_parameters",
-                           tables.parameters(qp_ids));
-    rotation_tables.insert(prefix + "matrix", tables.to_device(matrix_table));
-    rotation_tables.insert(prefix + "target_reciprocals",
-                           tables.to_device(target_reciprocals));
-    rotation_tables.insert(prefix + "source_normalizers",
-                           tables.to_device(normalizers));
-    rotation_tables.insert(prefix + "source_reciprocals",
-                           tables.to_device(reciprocals));
-    rotation_tables.insert(prefix + "target_offsets", tables.to_device(offsets));
+    rotation_tables.digits[digit].crt =
+        tables.crt(digit_ids,
+                   qp_ids,
+                   fhelium::rns::crt_basis_extension_tables(
+                       select(tables.moduli(), digit_ids),
+                       qp_moduli,
+                       true,
+                       torch::kInt32));
     start = stop;
   }
 
@@ -310,17 +312,28 @@ bool check_matrix_vector(const torch::Device& device) {
   const double ratio = product(select(tables.moduli(), dropped_ids)) /
                        product(select(tables.moduli(), restored_ids));
   const double plaintext_scale = parameters.scales[1] * ratio / input_scale;
-  const auto q_parameters = rotation_tables.at("q_parameters");
+  const auto& q_parameters = rotation_tables.q_parameters;
+  // Rotation by -i applies the automorphism of Galois element g^i.
+  const auto galois = [&](int64_t step) {
+    const auto slots =
+        fhelium::ckks::galois_table_set(parameters.log_n,
+                                        fhelium::ckks::rotation_galois_element(
+                                            parameters.log_n, step, kGenerator),
+                                        device);
+    return fhelium::GaloisTables{slots[0], slots[1], slots[2]};
+  };
 
   std::vector<torch::Tensor> rotated;
   std::vector<torch::Tensor> diagonals;
   for (int64_t i = 0; i < kDimension; ++i) {
-    const auto term =
-        i == 0 ? ciphertext
-               : fhelium::ckks::rotate(
-                     ciphertext, galois_keys[i - 1], -i, rotation_tables, options);
+    const auto term = i == 0 ? ciphertext
+                             : fhelium::ckks::rotate(ciphertext,
+                                                     galois_keys[i - 1],
+                                                     galois(-i),
+                                                     rotation_tables,
+                                                     options);
     rotated.push_back(fhelium::ntt::transform(
-        term, rotation_tables, kNttBackend, "q", "forward_to_montgomery"));
+        term, rotation_tables.q_forward, kNttBackend, "forward_to_montgomery"));
     std::vector<std::complex<double>> diagonal(slots);
     for (int64_t j = 0; j < slots; ++j) {
       const int64_t row = j % kDimension;
@@ -330,13 +343,15 @@ bool check_matrix_vector(const torch::Device& device) {
         encode(diagonal, pre, twist, seed, plaintext_scale),
         q_parameters.select(0, 0));
     fhelium::rns::reduce_to_standard_(residues, q_parameters);
-    diagonals.push_back(fhelium::ntt::transform(
-        residues, rotation_tables, kNttBackend, "q", "forward_to_montgomery"));
+    diagonals.push_back(fhelium::ntt::transform(residues,
+                                                rotation_tables.q_forward,
+                                                kNttBackend,
+                                                "forward_to_montgomery"));
   }
-  auto sum = fhelium::rns::montgomery_weighted_sum(
-      rotated, diagonals, q_parameters);
+  auto sum =
+      fhelium::rns::montgomery_weighted_sum(rotated, diagonals, q_parameters);
   fhelium::ntt::transform_(
-      sum, rotation_tables, kNttBackend, "q", "inverse_to_standard");
+      sum, rotation_tables.q_inverse, kNttBackend, "inverse_to_standard");
 
   // Rescale from the depth-0 basis B to the depth-1 basis B'.
   std::vector<int64_t> ordered_ids(target_ids);
@@ -344,69 +359,77 @@ bool check_matrix_vector(const torch::Device& device) {
   const auto dropped_moduli = select(tables.moduli(), dropped_ids);
   const auto offset = [&](const std::vector<int64_t>& ids) {
     return tables.to_device(
-        fhelium::rns::quotient_offset_residues(
-            {}, dropped_moduli, false, true, select(tables.moduli(), ids),
-            torch::kInt32)
+        fhelium::rns::quotient_offset_residues({},
+                                               dropped_moduli,
+                                               false,
+                                               true,
+                                               select(tables.moduli(), ids),
+                                               torch::kInt32)
             .view({-1, 1})
             .expand({-1, n})
             .contiguous());
   };
-  TensorTable rescale_tables;
-  rescale_tables.insert("source_parameters", tables.parameters(q_ids));
-  rescale_tables.insert("target_parameters", tables.parameters(target_ids));
-  rescale_tables.insert("dropped_parameters", tables.parameters(dropped_ids));
-  rescale_tables.insert("ordered_parameters", tables.parameters(ordered_ids));
-  rescale_tables.insert("drop_positions",
-                        tables.to_device(positions(dropped_ids, q_ids)));
-  rescale_tables.insert("keep_positions",
-                        tables.to_device(positions(kept_ids, q_ids)));
-  rescale_tables.insert(
-      "inverses",
+  fhelium::RescaleTables rescale_tables;
+  rescale_tables.source_parameters = tables.parameters(q_ids);
+  rescale_tables.target_parameters = tables.parameters(target_ids);
+  rescale_tables.dropped_parameters = tables.parameters(dropped_ids);
+  rescale_tables.ordered_parameters = tables.parameters(ordered_ids);
+  rescale_tables.drop_positions =
+      tables.to_device(positions(dropped_ids, q_ids));
+  rescale_tables.keep_positions = tables.to_device(positions(kept_ids, q_ids));
+  rescale_tables.inverses =
       tables.to_device(fhelium::rns::trailing_quotient_inverses(
           select(tables.moduli(), ordered_ids),
           static_cast<int64_t>(dropped_ids.size()),
-          torch::kInt32)));
-  rescale_tables.insert("dropped_offset", offset(dropped_ids));
-  rescale_tables.insert("target_offset", offset(target_ids));
+          torch::kInt32));
+  rescale_tables.dropped_offset = offset(dropped_ids);
+  rescale_tables.target_offset = offset(target_ids);
   if (!restored_ids.empty()) {
-    rescale_tables.insert("target_keep_positions",
-                          tables.to_device(positions(kept_ids, target_ids)));
-    rescale_tables.insert(
-        "restore",
-        tables.to_device(fhelium::rns::product_residues(
-            select(tables.moduli(), restored_ids), q_moduli, 1, true,
-            torch::kInt32)));
+    rescale_tables.target_keep_positions =
+        tables.to_device(positions(kept_ids, target_ids));
+    rescale_tables.restore = tables.to_device(
+        fhelium::rns::product_residues(select(tables.moduli(), restored_ids),
+                                       q_moduli,
+                                       1,
+                                       true,
+                                       torch::kInt32));
   }
   const auto result = fhelium::rns::rational_rescale(
       sum, rescale_tables, "coefficient", kNttBackend);
 
   // The expanded form of a key gives the same rotation bitwise.
-  const bool forms_match = fhelium::ckks::rotate(
-      ciphertext, fhelium::ckks::expand_key_switch_key(galois_keys[0]), -1, rotation_tables,
-      options).equal(fhelium::ckks::rotate(
-          ciphertext, galois_keys[0], -1, rotation_tables, options));
+  const bool forms_match =
+      fhelium::ckks::rotate(
+          ciphertext,
+          fhelium::ckks::expand_key_switch_key(galois_keys[0]),
+          galois(-1),
+          rotation_tables,
+          options)
+          .equal(fhelium::ckks::rotate(ciphertext,
+                                       galois_keys[0],
+                                       galois(-1),
+                                       rotation_tables,
+                                       options));
 
   // Decrypt at depth 1 and decode at the depth-1 scale.
   const auto target_moduli = select(tables.moduli(), target_ids);
-  TensorTable decrypt_tables;
-  tables.add_basis(decrypt_tables, "", target_ids);
-  auto [normalizers, propagation, extension] =
-      fhelium::rns::mixed_radix_tables(target_moduli, target_moduli,
-                                       torch::kInt32);
-  decrypt_tables.insert("reconstruction_parameters",
-                        tables.parameters(target_ids));
-  decrypt_tables.insert("normalizers", tables.to_device(normalizers));
-  decrypt_tables.insert("propagation", tables.to_device(propagation));
-  decrypt_tables.insert("half_digits",
-                        tables.to_device(fhelium::rns::half_product_digits(
-                            target_moduli, torch::kInt32)));
+  fhelium::DecryptionTables decrypt_tables;
+  decrypt_tables.ring = tables.ring(target_ids);
+  auto [normalizers, propagation, extension] = fhelium::rns::mixed_radix_tables(
+      target_moduli, target_moduli, torch::kInt32);
+  decrypt_tables.reconstruction_parameters = tables.parameters(target_ids);
+  decrypt_tables.normalizers = tables.to_device(normalizers);
+  decrypt_tables.propagation = tables.to_device(propagation);
+  decrypt_tables.half_digits = tables.to_device(
+      fhelium::rns::half_product_digits(target_moduli, torch::kInt32));
   const auto secret_rows = secret_key.index_select(
       0, torch::tensor(target_ids, torch::kInt64).to(device));
   const auto coefficients = fhelium::ckks::decrypt(
       result, secret_rows, decrypt_tables, kNttBackend, 0, "coefficient");
-  const auto decoded = fhelium::ckks::decode(
-                           coefficients, post, skew, parameters.scales[1], false)
-                           .cpu();
+  const auto decoded =
+      fhelium::ckks::decode(
+          coefficients, post, skew, parameters.scales[1], false)
+          .cpu();
 
   double max_error = 0.0;
   const auto values = decoded.accessor<c10::complex<double>, 1>();
@@ -416,8 +439,8 @@ bool check_matrix_vector(const torch::Device& device) {
     for (int64_t k = 0; k < kDimension; ++k) {
       expected += matrix[row * kDimension + k] * vector[k];
     }
-    max_error = std::max(
-        max_error, std::abs(std::complex<double>(values[j]) - expected));
+    max_error = std::max(max_error,
+                         std::abs(std::complex<double>(values[j]) - expected));
   }
   std::cout << "  " << kDimension << "x" << kDimension
             << " matrix-vector product over " << slots

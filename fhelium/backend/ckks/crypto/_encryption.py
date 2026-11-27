@@ -11,7 +11,8 @@ from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.backend._native_operands import named_tables
 from fhelium.ir.dialects import ckks
 from fhelium.native.wrapper import ckks_ops
-from fhelium.backend.random.stream import RandomStream, advance_
+from fhelium.backend.random.stream import RandomStream
+from fhelium.backend.lowering import ExecBuilder
 from ._resources import (
     RANDOM_STREAM_RESOURCE_KIND,
     RANDOM_STREAM_RESOURCE_SYMBOL,
@@ -45,28 +46,27 @@ class NativeEncryptImplementation:
             ),
         )
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del in_place
         attributes = invocation.attributes
         stream = cast(RandomStream, resources[0].value)
+        seed = builder.state(stream, "seed")
         ciphertext = ckks_ops.encrypt(
             inputs[0],
             inputs[1],
-            *named_tables(attributes["parameter_names"], inputs[2:]),
-            stream.seed,
-            stream.cdt_table,
+            named_tables("ring", attributes["parameter_names"], inputs[2:]),
+            seed,
+            builder.state(stream, "cdt_table"),
             str(attributes["ntt_backend"]),
             int(cast(int, attributes["key_row_start"])),
             str(attributes.get("output_domain", "coefficient")),
         )
-        advance_(stream.seed, 3)
         return (ciphertext,)
 
 

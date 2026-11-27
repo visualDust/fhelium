@@ -18,18 +18,21 @@ from ._abi import (
     python_abi_identity,
     read_manifest,
     runtime_identity,
+    torch_library_path,
 )
 
 
 @dataclass(frozen=True)
 class NativeStatus:
-    """Native-extension availability and diagnostic paths for this runtime.
+    """Native-operator availability and diagnostic paths for this runtime.
 
     ``available`` is true only after binary discovery, ABI-manifest validation,
     PyTorch loading, and FakeTensor registration succeed. ``reason`` and
     ``details`` explain the recorded result without triggering a new load.
-    ``sdk_root`` contains libfhelium under ``lib``, its public headers under
-    ``include``, and the FHElium CMake package under ``share/cmake``.
+    ``sdk_root`` contains libfhelium and libfhelium_torch under ``lib``, the
+    public headers under ``include``, and the FHElium CMake package under
+    ``share/cmake``. ``binary_path`` is the libfhelium_torch file that registers
+    the operators.
     """
 
     available: bool
@@ -50,8 +53,6 @@ _SOURCE_ROOT = _NATIVE_DIR.parents[1]
 _TORCHOPS_DIR = _NATIVE_DIR / "torchops"
 _PYTHON_ABI = python_abi_identity()
 _SOABI = _PYTHON_ABI["soabi"]
-_EXTENSION_SUFFIX = _PYTHON_ABI["ext_suffix"]
-_OPS_PATH = _TORCHOPS_DIR / f"_ops{_EXTENSION_SUFFIX}"
 _MANIFEST_PATH = manifest_path(_TORCHOPS_DIR, _SOABI)
 _IS_SOURCE_CHECKOUT = all(
     path.exists()
@@ -98,15 +99,17 @@ def _diagnostic(status: NativeStatus) -> str:
     return "\n".join(lines)
 
 
-def _unavailable(reason: str, *details: str) -> NativeStatus:
+def _unavailable(
+    reason: str, *details: str, sdk_root: Path = _NATIVE_DIR
+) -> NativeStatus:
     status = NativeStatus(
         available=False,
         reason=reason,
         details=tuple(details),
-        binary_path=_OPS_PATH,
+        binary_path=torch_library_path(sdk_root),
         manifest_path=_MANIFEST_PATH,
         backends=(),
-        sdk_root=_NATIVE_DIR,
+        sdk_root=sdk_root,
     )
     if not _IS_SOURCE_CHECKOUT:
         raise NativeExtensionError(_diagnostic(status))
@@ -114,12 +117,8 @@ def _unavailable(reason: str, *details: str) -> NativeStatus:
 
 
 def _initialize_native() -> NativeStatus:
-    if not _SOABI or not _EXTENSION_SUFFIX:
-        return _unavailable(
-            "the current Python interpreter has no SOABI/EXT_SUFFIX"
-        )
-    if not _OPS_PATH.is_file():
-        return _unavailable("the current-ABI native operator file is missing")
+    if not _SOABI:
+        return _unavailable("the current Python interpreter has no SOABI")
     if not _MANIFEST_PATH.is_file():
         return _unavailable("the native ABI manifest is missing")
 
@@ -149,23 +148,29 @@ def _initialize_native() -> NativeStatus:
     # Wheels install the libfhelium SDK under native/; editable manifests
     # record their ABI-specific build-tree SDK.
     sdk_root = Path(manifest.get("sdk_root") or _NATIVE_DIR)
+    library = torch_library_path(sdk_root)
+    if not library.is_file():
+        return _unavailable(
+            "the native operator library is missing", sdk_root=sdk_root
+        )
     try:
-        # _ops links libfhelium. Windows resolves it through the DLL search
-        # path; other platforms use the module's runtime search path.
+        # libfhelium_torch links libfhelium. Windows resolves it through the
+        # DLL search path; other platforms use the library's runtime path.
         if sys.platform == "win32":
             os.add_dll_directory(str(sdk_root / "lib"))
-        torch.ops.load_library(str(_OPS_PATH))
+        torch.ops.load_library(str(library))
     except Exception as error:
         return _unavailable(
-            "PyTorch could not load the native operator file",
+            "PyTorch could not load the native operator library",
             f"{type(error).__name__}: {error}",
+            sdk_root=sdk_root,
         )
 
     return NativeStatus(
         available=True,
         reason="native Python/Torch ABI matches the runtime",
         details=(),
-        binary_path=_OPS_PATH,
+        binary_path=library,
         manifest_path=_MANIFEST_PATH,
         backends=backends,
         sdk_root=sdk_root,

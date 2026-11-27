@@ -31,7 +31,7 @@ from fhelium.backend.rns.layout import RnsLayout
 from fhelium.config import CkksConfig, Preset
 from fhelium.eager._key_inventory import KeyInventory
 from fhelium.eager._operation_dispatch import _EagerOperationDispatcher
-from fhelium.eager._validation import CkksValidator
+from fhelium.eager._validation import CkksValidator, require_matching_operands
 from fhelium.errors import MaximumDepthError
 from fhelium.native.wrapper import ckks_ops
 from fhelium.ir.ckks_state import (
@@ -1791,6 +1791,7 @@ class Engine:
         representation, and actual scale are preserved; ``inplace=True`` writes
         the result into ``lhs``, whose component count must not be smaller."""
 
+        require_matching_operands("add", lhs, rhs, scale=True, components=False)
         bases = self._operand_bases(lhs, rhs)
         lhs_count, rhs_count = lhs.data.size(0), rhs.data.size(0)
         if lhs_count != rhs_count:
@@ -1952,6 +1953,7 @@ class Engine:
         prime rows, component count, polynomial domain, and residue representation.
         ``inplace=True`` writes into ``lhs``."""
 
+        require_matching_operands("subtract", lhs, rhs, scale=True)
         bases = self._operand_bases(lhs, rhs)
         data = cast(
             torch.Tensor,
@@ -3122,6 +3124,9 @@ class Engine:
         logically.  Matching depth, prime rows, and actual scale are required; output
         state and later components are preserved."""
 
+        require_matching_operands(
+            "add_plaintext", ciphertext, plaintext, scale=True, plaintext=True
+        )
         if isinstance(plaintext, CompressedPlaintext):
             if (
                 plaintext.residue_representation != "montgomery"
@@ -3360,6 +3365,16 @@ class Engine:
         if term_chunk_size is not None and term_chunk_size <= 0:
             raise ValueError("term_chunk_size must be positive")
         plaintexts = tuple(p for row in rows for p in row)
+        first = ciphertexts[0]
+        for value in ciphertexts[1:]:
+            require_matching_operands("weighted sum", first, value, scale=True)
+        for value in plaintexts:
+            require_matching_operands(
+                "weighted sum", first, value, scale=False, plaintext=True
+            )
+            require_matching_operands(
+                "weighted sum", plaintexts[0], value, scale=True, plaintext=True
+            )
         layouts = tuple(
             p.compression_layout
             if isinstance(p, CompressedPlaintext)
@@ -3382,7 +3397,6 @@ class Engine:
             attributes["plaintext_layouts"] = layouts
         if term_chunk_size is not None:
             attributes["term_chunk_size"] = term_chunk_size
-        first = ciphertexts[0]
         selected = self.plaintext_product_implementation(
             first.device,
             compressed=any(layout != "dense" for layout in layouts),

@@ -1,6 +1,6 @@
 # Concepts
 
-Concepts explain the mental models that remain useful across APIs and implementations. FHElium's foundation consists of two use models, shared CKKS value and operation semantics, and a Backend execution interface. Eager evaluates one requested operation at a time. Compile represents and transforms a Program before linking it for execution. Manual Program/Compilation/Pipeline execution and callable specialization are equally supported paths through that Compile machinery.
+Concepts explain the mental models that remain useful across APIs and implementations. FHElium's foundation consists of two usage models, shared CKKS value and operation semantics, and registered implementations. Eager evaluates one requested operation at a time. Compile captures a callable or takes a constructed Program, transforms it, and links it into an exec schedule that a native Runner executes.
 
 ## Core model
 
@@ -18,40 +18,48 @@ graph TB
     subgraph Compile
         MANUAL[Manual Compilation and Pipeline]
         CALLABLE[Callable capture and specialization]
+        CACHE[(Specialization cache<br/>resident or on disk)]
         PROGRAM[Partially specified Program]
-        MANUAL --> PROGRAM
-        CALLABLE --> PROGRAM
         PASSES[Analysis and transformation passes]
-        LINK[Implementation and resource linking]
-        EXEC[ProgramExecutable]
-        PROGRAM --> PASSES --> LINK --> EXEC
+        LINK[Implementation selection and linking]
+        SCHED[Exec schedule]
+        CALLABLE --> CACHE
+        CACHE -->|miss| PROGRAM
+        MANUAL --> PROGRAM
+        PROGRAM --> PASSES --> LINK --> SCHED
+        SCHED -. store .-> CACHE
     end
 
-    BACKEND[Registered Backend implementation]
-    NATIVE[Whole or lower-level native execution]
-    GENERATED[Selected generated kernels]
-    RUNTIME[Runtime observation and execution mechanisms]
-    DIST[Application-controlled SPMD]
-    STORAGE[Artifacts and live Residency]
+    subgraph EXEC[Execution]
+        BACKEND[Registered Backend implementation]
+        RUNNER[libfhelium Runner<br/>arena, Graph segments, transfer overlap]
+    end
 
-    APP --> ENGINE
-    APP --> MANUAL
-    APP --> CALLABLE
-    VALUES --> ENGINE
-    VALUES --> EXEC
+    subgraph KERNELS[Kernels]
+        NATIVE[Whole or lower-level native execution]
+        GENERATED[Selected generated kernels]
+    end
+
+    subgraph COMPOSE[Application composition]
+        RUNTIME[Runtime buffers<br/>and DoubleBuffer]
+        DIST[Application-controlled SPMD<br/>and compiled collectives]
+        STORAGE[Artifacts and<br/>live Residency]
+    end
+
+    APP --> Eager
+    APP --> Compile
+    VALUES --> Eager
+    VALUES --> Compile
     TRANSITION --> BACKEND
-    EXEC --> BACKEND
-    BACKEND --> NATIVE
-    BACKEND --> GENERATED
-    APP --> RUNTIME
-    APP --> DIST
-    APP --> STORAGE
-    RUNTIME -. supplies observations and mechanisms .-> BACKEND
-    DIST -. composes rank-local work .-> BACKEND
-    STORAGE -. supplies live values and resources .-> BACKEND
+    CACHE -->|hit| RUNNER
+    SCHED --> RUNNER
+    BACKEND --> KERNELS
+    RUNNER --> KERNELS
+    APP --> COMPOSE
+    COMPOSE -. supplies inputs, groups, and schedules .-> EXEC
 ```
 
-Eager and Compile differ in when CKKS state and scheduling decisions are made. They converge on registered implementations that consume Tensor operands and non-Tensor execution handles. A Compilation keeps one live material-binding dictionary alongside its Program, workspace, and pass reports; linking prepares host calls to selected native or generated implementations. Runtime, distributed execution, persistence, and Residency compose with these paths without becoming hidden properties of a ciphertext or Program.
+Eager and Compile differ in when CKKS state and scheduling decisions are made. Eager calls a registered implementation per operation; Compile lowers the same implementations into an exec schedule, and the Runner issues their operator calls and launches generated kernels. A compiled callable stores the schedule of each call signature in its specialization cache, so later calls with that signature skip capture and compilation. The same schedule can be exported to an artifact for another Python or C++ process, serve requests whose keys arrive as call arguments, or run on each rank with compiled collectives. Runtime buffers, persistence, and Residency compose with these paths between calls.
 
 ## Choose a starting point
 
@@ -63,7 +71,7 @@ Eager and Compile differ in when CKKS state and scheduling decisions are made. T
   />
   <DocCard
     title="Reason about CKKS values"
-    description="Start from value identity, represented state, operation transitions, and the scale-depth lifecycle."
+    description="Start from value identity, value-state axes, and the scale and depth effects of each operation."
     href="/concepts/ckks/value-model-and-identity"
   />
   <DocCard
@@ -124,8 +132,8 @@ For immediate evaluator work:
 ```text
 Architecture
 → Value model and identity
+→ Value-state transitions
 → Evaluator operation transitions
-→ Scale and depth lifecycle
 → Key lifecycle
 ```
 
@@ -135,7 +143,7 @@ For Program transformation and execution:
 Architecture
 → Neutral IR programs
 → Open compiler stack
-→ State transitions and orthogonality
+→ Value-state transitions
 → System ownership
 ```
 

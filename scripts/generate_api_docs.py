@@ -1038,6 +1038,8 @@ def documented_modules(
     for name, module in modules.items():
         if name.split(".")[0] != PACKAGE_ROOT.name:
             continue
+        if any(component.startswith("_") for component in name.split(".")):
+            continue
         if module.is_package and "__all__" not in module.objects:
             continue
         if any(
@@ -1091,11 +1093,9 @@ def write_generated_module_pages(module_names: tuple[str, ...]) -> None:
 def render_api_sidebar(
     module_names: tuple[str, ...],
 ) -> list[dict[str, object]]:
-    """Nest module pages along the package tree.
+    """Nest public module pages along the package tree.
 
-    Each package lists its public modules first and collects modules whose
-    last component starts with an underscore under a collapsed ``Internal``
-    entry. Item text is the last module-path component.
+    Item text is the last module-path component.
     """
 
     documented = set(module_names)
@@ -1121,16 +1121,7 @@ def render_api_sidebar(
             children[package],
             key=lambda name: name.rpartition(".")[2].casefold(),
         )
-        public = [item(name) for name in names if not is_internal(name)]
-        internal = [item(name) for name in names if is_internal(name)]
-        if internal:
-            public.append(
-                {"text": "Internal", "collapsed": True, "items": internal}
-            )
-        return public
-
-    def is_internal(module_name: str) -> bool:
-        return module_name.rpartition(".")[2].startswith("_")
+        return [item(name) for name in names]
 
     root_name = PACKAGE_ROOT.name
     return [

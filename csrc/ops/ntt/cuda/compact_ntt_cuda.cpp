@@ -28,8 +28,10 @@ void forward_ntt_montgomery_compact_(at::Tensor& montgomery_residues,
                                      const at::Tensor& forward_twiddles,
                                      const at::Tensor& rns_params) {
   validate(montgomery_residues, forward_twiddles, rns_params);
-  compact_forward_ntt_cuda(montgomery_residues, montgomery_residues,
-                           forward_twiddles, rns_params,
+  compact_forward_ntt_cuda(montgomery_residues,
+                           montgomery_residues,
+                           forward_twiddles,
+                           rns_params,
                            CompactForwardInput::Montgomery);
 }
 
@@ -37,29 +39,34 @@ void forward_ntt_to_montgomery_compact_(at::Tensor& standard_residues,
                                         const at::Tensor& forward_twiddles,
                                         const at::Tensor& rns_params) {
   validate(standard_residues, forward_twiddles, rns_params);
-  compact_forward_ntt_cuda(standard_residues, standard_residues,
-                           forward_twiddles, rns_params,
+  compact_forward_ntt_cuda(standard_residues,
+                           standard_residues,
+                           forward_twiddles,
+                           rns_params,
                            CompactForwardInput::Standard);
 }
 
-at::Tensor forward_ntt_to_montgomery_compact(const at::Tensor& standard_residues,
-                                             const at::Tensor& forward_twiddles,
-                                             const at::Tensor& rns_params) {
+void forward_ntt_to_montgomery_compact_out(const at::Tensor& standard_residues,
+                                           const at::Tensor& forward_twiddles,
+                                           const at::Tensor& rns_params,
+                                           at::Tensor& out) {
   validate(standard_residues, forward_twiddles, rns_params);
-  auto out = at::empty(standard_residues.sizes(), standard_residues.options());
-  compact_forward_ntt_cuda(standard_residues, out, forward_twiddles, rns_params,
+  compact_forward_ntt_cuda(standard_residues,
+                           out,
+                           forward_twiddles,
+                           rns_params,
                            CompactForwardInput::Standard);
-  return out;
 }
 
-void forward_ntt_to_montgomery_compact_add_scaled_(at::Tensor& source,
-                                                   const at::Tensor& addend,
-                                                   const at::Tensor& multiplier,
-                                                   const at::Tensor& forward_twiddles,
-                                                   const at::Tensor& rns_params) {
+void forward_ntt_to_montgomery_compact_add_scaled_(
+    at::Tensor& source,
+    const at::Tensor& addend,
+    const at::Tensor& multiplier,
+    const at::Tensor& forward_twiddles,
+    const at::Tensor& rns_params) {
   validate(source, forward_twiddles, rns_params);
-  compact_forward_ntt_add_scaled_cuda(source, addend, multiplier,
-                                      forward_twiddles, rns_params);
+  compact_forward_ntt_add_scaled_cuda(
+      source, addend, multiplier, forward_twiddles, rns_params);
 }
 
 void forward_ntt_montgomery_compact_keyswitch_accumulate_(
@@ -74,36 +81,49 @@ void forward_ntt_montgomery_compact_keyswitch_accumulate_(
   // coefficient_digit_qp is disposable scratch with coefficient/Montgomery
   // input [*batch, QP limb, N]; its NTT values are consumed by the final pass.
   validate(coefficient_digit_qp, forward_twiddles, rns_params);
-  compact_forward_ntt_keyswitch_accumulate_cuda(
-      coefficient_digit_qp, forward_twiddles, rns_params, key_digit_qp,
-      accumulator0_qp, accumulator1_qp, key_row_start, key_p_row_start);
+  compact_forward_ntt_keyswitch_accumulate_cuda(coefficient_digit_qp,
+                                                forward_twiddles,
+                                                rns_params,
+                                                key_digit_qp,
+                                                accumulator0_qp,
+                                                accumulator1_qp,
+                                                key_row_start,
+                                                key_p_row_start);
 }
 
 void inverse_ntt_montgomery_compact_(at::Tensor& montgomery_residues,
                                      const at::Tensor& inverse_twiddles,
                                      const at::Tensor& rns_params) {
-  inverse(montgomery_residues, inverse_twiddles, rns_params,
+  inverse(montgomery_residues,
+          inverse_twiddles,
+          rns_params,
           CompactInverseResult::Montgomery);
 }
 
 void inverse_ntt_to_standard_lazy_compact_(at::Tensor& montgomery_residues,
                                            const at::Tensor& inverse_twiddles,
                                            const at::Tensor& rns_params) {
-  inverse(montgomery_residues, inverse_twiddles, rns_params,
+  inverse(montgomery_residues,
+          inverse_twiddles,
+          rns_params,
           CompactInverseResult::StandardLazy);
 }
 
 void inverse_ntt_to_standard_compact_(at::Tensor& montgomery_residues,
                                       const at::Tensor& inverse_twiddles,
                                       const at::Tensor& rns_params) {
-  inverse(montgomery_residues, inverse_twiddles, rns_params,
+  inverse(montgomery_residues,
+          inverse_twiddles,
+          rns_params,
           CompactInverseResult::Standard);
 }
 
 void inverse_ntt_to_centered_compact_(at::Tensor& montgomery_residues,
                                       const at::Tensor& inverse_twiddles,
                                       const at::Tensor& rns_params) {
-  inverse(montgomery_residues, inverse_twiddles, rns_params,
+  inverse(montgomery_residues,
+          inverse_twiddles,
+          rns_params,
           CompactInverseResult::Centered);
 }
 

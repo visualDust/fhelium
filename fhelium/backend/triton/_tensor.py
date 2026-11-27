@@ -18,7 +18,8 @@ from xdsl.dialects.builtin import (
 from xdsl.ir import Operation, SSAValue
 
 from fhelium.backend.implementation import OperationInvocation
-from fhelium.backend.resources import ResourceRequirement
+from fhelium.backend.lowering import ExecBuilder
+from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.backend.torch import decode_argument
 from fhelium.ir import operation_dependencies
 from fhelium.ir.dialects import core, fusion
@@ -211,8 +212,15 @@ class TritonTensorFusionImplementation:
             )
         return _PreparedTensorFusion.build(operation, self.name)
 
-    def execute(self, invocation, inputs, resources, *, in_place):
-        raise RuntimeError("Prepare the Tensor fusion region before execution")
+    def lower(
+        self,
+        invocation: OperationInvocation,
+        inputs: tuple[torch.Tensor, ...],
+        resources: tuple[BoundResource, ...],
+        builder: ExecBuilder,
+        /,
+    ) -> tuple[torch.Tensor, ...]:
+        raise RuntimeError("Prepare the Tensor fusion region before lowering")
 
 
 @dataclass
@@ -336,19 +344,14 @@ class _PreparedTensorFusion:
     def resource_requirements(self, invocation):
         return ()
 
-    def warm(self) -> tuple[int, int]:
-        """Compile and load the kernel for the prepared layouts."""
-        compiled = self.kernel.warm(
-            *(getattr(torch, f[1].removeprefix("torch.")) for f in self.inputs),
-            *(
-                getattr(torch, f[1].removeprefix("torch."))
-                for f in self.outputs
-            ),
-            256,
-        )
-        return int(compiled), int(not compiled)
-
-    def execute(self, invocation, inputs, resources, *, in_place):
+    def lower(
+        self,
+        invocation: OperationInvocation,
+        inputs: tuple[torch.Tensor, ...],
+        resources: tuple[BoundResource, ...],
+        builder: ExecBuilder,
+        /,
+    ) -> tuple[torch.Tensor, ...]:
         for tensor, facts in zip(inputs, self.inputs, strict=True):
             shape, dtype, device, strides = facts
             if (

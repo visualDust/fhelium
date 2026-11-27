@@ -11,11 +11,13 @@ from fhelium.backend.implementation import OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.backend._native_operands import (
     named_tables,
+    rotation_galois,
     seeded_key_operands,
 )
 from fhelium.ir.dialects import ckks
 from fhelium.native.wrapper import ckks_ops
 
+from fhelium.backend.lowering import ExecBuilder
 from .._key_switch_preparation import (
     native_key_switch_requirements,
     rotation_sum_requirements,
@@ -39,23 +41,29 @@ class NativeRotateImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources, in_place
+        del resources
         attributes = invocation.attributes
         options, end = seeded_key_operands(attributes, inputs, 2, 1)
         return (
             ckks_ops.rotate(
                 inputs[0],
                 inputs[1],
-                int(cast(int, attributes["rotation_step"])),
-                *named_tables(attributes["parameter_names"], inputs[end:]),
+                rotation_galois(
+                    attributes,
+                    (int(cast(int, attributes["rotation_step"])),),
+                    inputs[0],
+                ),
+                named_tables(
+                    "key_switch", attributes["parameter_names"], inputs[end:]
+                ),
                 **options,
             ),
         )
@@ -74,8 +82,15 @@ class NativeRotationSumImplementation:
     def resource_requirements(self, invocation):
         return ()
 
-    def execute(self, invocation, inputs, resources, *, in_place):
-        del resources, in_place
+    def lower(
+        self,
+        invocation: OperationInvocation,
+        inputs: tuple[torch.Tensor, ...],
+        resources: tuple[BoundResource, ...],
+        builder: ExecBuilder,
+        /,
+    ) -> tuple[torch.Tensor, ...]:
+        del resources
         attributes = invocation.attributes
         count = int(attributes["source_count"])
         steps = [int(step) for step in attributes["rotation_steps"]]
@@ -88,7 +103,10 @@ class NativeRotationSumImplementation:
                 list(inputs[:count]),
                 list(inputs[count : count + key_count]),
                 steps,
-                *named_tables(attributes["parameter_names"], inputs[end:]),
+                rotation_galois(attributes, steps, inputs[0]),
+                named_tables(
+                    "key_switch", attributes["parameter_names"], inputs[end:]
+                ),
                 **options,
                 remaining_q_count=int(attributes["sum_remaining_q_count"]),
             ),
@@ -111,15 +129,15 @@ class NativeHoistedRotateManyImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources, in_place
+        del resources
         attributes = invocation.attributes
         count = invocation.result_count
         options, end = seeded_key_operands(attributes, inputs, 1 + count, count)
@@ -127,8 +145,14 @@ class NativeHoistedRotateManyImplementation:
             ckks_ops.rotate_many(
                 inputs[0],
                 list(inputs[1 : 1 + count]),
-                [int(step) for step in attributes["rotation_steps"]],
-                *named_tables(attributes["parameter_names"], inputs[end:]),
+                rotation_galois(
+                    attributes,
+                    [int(step) for step in attributes["rotation_steps"]],
+                    inputs[0],
+                ),
+                named_tables(
+                    "key_switch", attributes["parameter_names"], inputs[end:]
+                ),
                 **options,
             )
         )
@@ -151,30 +175,35 @@ class NativeGroupedRotationWeightedSumImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources, in_place
+        del resources
         attributes = invocation.attributes
         steps = [int(step) for step in attributes["baby_steps"]]
         term_count = int(cast(int, attributes["term_count"]))
         group_count = int(cast(int, attributes["group_count"]))
         key_count = sum(step != 0 for step in steps)
         end = 1 + key_count + term_count * group_count
-        options, tables = seeded_key_operands(attributes, inputs, end, key_count)
+        options, tables = seeded_key_operands(
+            attributes, inputs, end, key_count
+        )
         return (
             ckks_ops.grouped_rotation_weighted_sum(
                 inputs[0],
                 list(inputs[1 : 1 + key_count]),
                 steps,
+                rotation_galois(attributes, steps, inputs[0]),
                 list(inputs[1 + key_count : end]),
                 group_count,
-                *named_tables(attributes["parameter_names"], inputs[tables:]),
+                named_tables(
+                    "key_switch", attributes["parameter_names"], inputs[tables:]
+                ),
                 **options,
             ),
         )

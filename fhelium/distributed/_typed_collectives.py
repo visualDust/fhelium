@@ -1,5 +1,4 @@
-"""Collect typed value and ciphertext-arithmetic collectives for the public distributed interface.
-"""
+"""Collect typed value and ciphertext-arithmetic collectives for the public distributed interface."""
 
 from fhelium.distributed._ciphertext_reduction import (
     all_reduce_ciphertext,

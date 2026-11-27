@@ -1,13 +1,13 @@
 # Late relinearization and NTT reuse
 
-**Example source:** [`examples/05_eager_ntt_reuse.py`](https://github.com/VisualDust/fhelium/blob/main/examples/05_eager_ntt_reuse.py)
+**Example source:** [`examples/04_eager_ntt_reuse.py`](https://github.com/VisualDust/fhelium/blob/main/examples/04_eager_ntt_reuse.py)
 
 This example accumulates three-component products before relinearization and reuses fixed multiplication operands in NTT form. The tutorial explains the state preconditions that make both optimizations valid.
 
 ## Run the example
 
 ```bash
-python examples/05_eager_ntt_reuse.py \
+python examples/04_eager_ntt_reuse.py \
   --preset slots8192-scale40-depth7 \
   --pair-count 3
 ```
@@ -102,12 +102,11 @@ Use those fields when debugging a schedule. A tensor with the expected shape but
 For represented programs, the Compile stack can insert relinearization automatically. [Compose and execute a pipeline from built-in Compile passes](compose-and-execute-compile-pipeline.md) shows `InsertRelinearizationPass` placing the operation in a transformed Program.
 
 ::: details Source
-<<< @/../examples/05_eager_ntt_reuse.py
+<<< @/../examples/04_eager_ntt_reuse.py
 :::
 
 ## Related concepts and guides
 
-- [Scale and depth lifecycle](../concepts/ckks/scale-and-depth-lifecycle.md)
 - [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)
 - [CKKS workload cost model](../concepts/performance/cost-model.md)
-- [Optimize a workload systematically](../how-to/optimize-workload.md)
+- [Measure and optimize a workload](../how-to/measure-and-optimize.md)

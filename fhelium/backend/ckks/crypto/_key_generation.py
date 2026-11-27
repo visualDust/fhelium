@@ -28,6 +28,7 @@ from fhelium.errors import (
     ResidueRepresentationError,
     SecretKeyModulusBasisError,
 )
+from fhelium.native.tables import table_slots
 from fhelium.native.wrapper import ckks_ops, rns_ops
 from fhelium.backend.ntt.context import NttContext
 from fhelium.backend.rns.context import RnsContext
@@ -36,8 +37,7 @@ from fhelium.values._validation import validate_prime_ids
 from fhelium.backend.random.stream import RandomStream, advance_
 
 _KeySwitchArguments: TypeAlias = tuple[
-    list[str],
-    list[torch.Tensor],
+    list[torch.Tensor | None],
     torch.Tensor,
     torch.Tensor,
     str,
@@ -47,7 +47,7 @@ _KeySwitchArguments: TypeAlias = tuple[
     torch.Tensor | None,
     torch.Tensor | None,
 ]
-"""Native key-generation arguments after the secret-key operands: table names, tables, seed, CDT table, NTT backend, Q rows, digit sizes, P rows, and optional uniform/error samples."""
+"""Native key-generation arguments after the secret-key operands: positional ring tables, seed, CDT table, NTT backend, Q rows, digit sizes, P rows, and optional uniform/error samples."""
 
 
 class _KeySwitchKeyLayout(TypedDict):
@@ -303,8 +303,7 @@ class CkksKeyGenerator:
         }
         data = ckks_ops.convert_secret_key(
             secret_key.data,
-            list(tables),
-            list(tables.values()),
+            table_slots("secret_conversion", tables),
             resources.ntt_backend,
         )
         return SecretKey(data=data, prime_ids=target_ids)
@@ -339,8 +338,7 @@ class CkksKeyGenerator:
         )
         data = ckks_ops.prepare_secret_key(
             coefficients,
-            list(tables),
-            list(tables.values()),
+            table_slots("ring", tables),
             resources.ntt_backend,
         )
         return SecretKey(
@@ -380,8 +378,7 @@ class CkksKeyGenerator:
         )
         data = ckks_ops.create_secret_key(
             n,
-            list(tables),
-            list(tables.values()),
+            table_slots("ring", tables),
             resources.rng.seed,
             resources.ntt_backend,
             hamming_weight,
@@ -448,8 +445,7 @@ class CkksKeyGenerator:
         )
         public_key_data = ckks_ops.create_public_key(
             secret_key.data,
-            list(tables),
-            list(tables.values()),
+            table_slots("ring", tables),
             resources.rng.seed,
             resources.rng.cdt_table,
             resources.ntt_backend,
@@ -525,8 +521,7 @@ class CkksKeyGenerator:
             ),
         }
         arguments = (
-            list(tables),
-            list(tables.values()),
+            table_slots("ring", tables),
             resources.rng.seed,
             resources.rng.cdt_table,
             resources.ntt_backend,

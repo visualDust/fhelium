@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
 import torch
-from safetensors import safe_open
-from safetensors.torch import save_file
 
+from fhelium.native.artifact import (
+    load_container,
+    read_container_header,
+    save_container,
+)
 from fhelium.values import SecretKey, TensorResident
 from fhelium.serialization.value import (
     VALUE_SCHEMA_VERSION,
@@ -102,7 +104,7 @@ def _write_safetensors(
     *,
     overwrite: bool,
 ) -> None:
-    """Write one safetensors payload through a caller-directory temporary file."""
+    """Atomically write one safetensors container, readable by its owner only."""
     destination = Path(path).expanduser()
     parent = destination.parent
     if not parent.exists():
@@ -117,26 +119,9 @@ def _write_safetensors(
         if not overwrite:
             raise FileExistsError(destination)
 
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.",
-        suffix=".tmp",
-        dir=parent,
+    save_container(
+        destination, payload_tensors, safetensors_metadata, overwrite=overwrite
     )
-    os.close(descriptor)
-    temporary = Path(temporary_name)
-    try:
-        save_file(
-            payload_tensors,
-            str(temporary),
-            metadata=safetensors_metadata,
-        )
-        os.chmod(temporary, 0o600)
-        if destination.exists() and not overwrite:
-            raise FileExistsError(destination)
-        os.replace(temporary, destination)
-    except Exception:
-        temporary.unlink(missing_ok=True)
-        raise
 
 
 def inspect_value(
@@ -146,11 +131,11 @@ def inspect_value(
 
     source = _require_value_file(path)
     try:
-        with safe_open(str(source), framework="pt", device="cpu") as handle:
-            metadata = _metadata_from_safetensors(handle.metadata())
-            _validate_payload_names(set(handle.keys()), metadata)
-            _validate_payload_headers(handle, metadata)
-            return metadata
+        raw_metadata, header = read_container_header(source)
+        metadata = _metadata_from_safetensors(raw_metadata)
+        _validate_payload_names(set(header), metadata)
+        _validate_payload_headers(header, metadata)
+        return metadata
     except Exception as error:
         if isinstance(error, (TypeError, ValueError, OSError)):
             raise
@@ -166,7 +151,7 @@ def load_value(
     """Load one value from a caller-selected value-file path.
 
     This is a file-codec operation: the caller owns path naming, replacement,
-    and lifecycle. ``ArtifactStore.get`` is the separate repository operation
+    and lifecycle. ``ValueStore.get`` is the separate repository operation
     for logical names, generations, checksums, and catalog transactions.
     Materialization defaults to CPU unless ``device`` selects another target.
     """
@@ -174,24 +159,19 @@ def load_value(
     source = _require_value_file(path)
     target = torch.device(device)
     try:
-        with safe_open(
-            str(source),
-            framework="pt",
-            device=str(target),
-        ) as handle:
-            metadata = _metadata_from_safetensors(handle.metadata())
-            if (
-                expected_type is not None
-                and metadata.value_type != expected_type.__name__
-            ):
-                raise TypeError(
-                    f"Value file has type {metadata.value_type}, "
-                    f"expected {expected_type.__name__}"
-                )
-            payload_names = set(handle.keys())
-            _validate_payload_names(payload_names, metadata)
-            _validate_payload_headers(handle, metadata)
-            physical = {name: handle.get_tensor(name) for name in payload_names}
+        raw_metadata, header = read_container_header(source)
+        metadata = _metadata_from_safetensors(raw_metadata)
+        if (
+            expected_type is not None
+            and metadata.value_type != expected_type.__name__
+        ):
+            raise TypeError(
+                f"Value file has type {metadata.value_type}, "
+                f"expected {expected_type.__name__}"
+            )
+        _validate_payload_names(set(header), metadata)
+        _validate_payload_headers(header, metadata)
+        physical, _ = load_container(source, target)
     except Exception as error:
         if isinstance(error, (TypeError, ValueError, OSError)):
             raise
@@ -460,10 +440,10 @@ _SAFETENSORS_DTYPE_BY_TORCH = {
 
 
 def _validate_payload_headers(
-    handle: Any,
+    header: dict[str, Any],
     metadata: ValueFileMetadata,
 ) -> None:
-    """Compare manifest claims with safetensors headers without loading data."""
+    """Compare manifest claims with the container's tensor header without loading data."""
 
     for logical_name, item in metadata.tensor_metadata.items():
         expected_shape = tuple(item["shape"])
@@ -476,9 +456,8 @@ def _validate_payload_headers(
                 f"{logical_name!r}"
             ) from error
         for payload_name in item["payloads"]:
-            payload_slice = handle.get_slice(payload_name)
-            actual_shape = tuple(payload_slice.get_shape())
-            actual_dtype = payload_slice.get_dtype()
+            actual_shape = tuple(header[payload_name]["shape"])
+            actual_dtype = header[payload_name]["dtype"]
             if actual_shape != expected_shape or actual_dtype != expected_dtype:
                 raise ValueError(
                     "Value file payload header does not match logical tensor "

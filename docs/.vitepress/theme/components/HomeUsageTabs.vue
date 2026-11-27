@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { withBase } from 'vitepress'
 
 import NavArrow from './NavArrow.vue'
+import { useAutoAdvance } from '../composables/useAutoAdvance'
 
-type UsageId = 'eager' | 'compile' | 'runtime' | 'distributed'
+type UsageId = 'eager' | 'compile' | 'deploy' | 'serve' | 'distributed'
 
 interface UsageTab {
   id: UsageId
   label: string
   title: string
   description: string
+  link: string
   href: string
   code: string
 }
@@ -21,108 +23,116 @@ const tabs: readonly UsageTab[] = [
     label: 'Eager',
     title: 'Execute one CKKS operation at a time',
     description:
-      'Create Tensor-backed values, apply visible CKKS state transitions, and dispatch from operand placement on CPU or CUDA.',
+      'Create keys and Tensor-backed values, then apply each operation and its depth, scale, and domain transition immediately on CPU or CUDA.',
+    link: 'Open tutorial',
     href: '/tutorial/basic-ckks-workflow',
     code: `import torch
 import fhelium as fh
 from fhelium.eager import Engine
 
-torch.set_default_device("cuda:0")
-engine = Engine(
-    fh.Preset.slots8192_scale40_depth7
-)
+engine = Engine(fh.Preset.slots8192_scale40_depth7)
+secret = engine.create_secret_key()
+public = engine.create_public_key(secret)
+rotation = engine.create_rotation_key(1, secret)
+relin = engine.create_relinearization_key(secret)
 
-ciphertext = engine.encrypt_message(message)
-rotated = engine.rotate_with_key(
-    ciphertext, engine.rotation_key(1)
-)
-triplet = engine.multiply(
-    engine.coefficient_domain_to_ntt_domain(ciphertext),
+message = torch.rand(engine.num_slots)
+x = engine.encrypt_message(message, public)
+rotated = engine.rotate_with_key(x, rotation)
+product = engine.multiply(
+    engine.coefficient_domain_to_ntt_domain(x),
     engine.coefficient_domain_to_ntt_domain(rotated),
 )
-result = engine.rescale_to_next_depth(
-    engine.relinearize(triplet)
-)`,
+y = engine.relinearize(product, relin, rescale=True)
+print(y.depth, y.scale)`,
   },
   {
     id: 'compile',
     label: 'Compile',
-    title: 'Transform and execute a Program',
+    title: 'Compile the same code into a schedule',
     description:
-      'Capture typed inputs, apply selected passes, inspect the Program, and link it through the shared Backend.',
-    href: '/tutorial/compose-and-execute-compile-pipeline',
-    code: `from fhelium import compile as fh_compile
-from fhelium.backend import OperationBackend
+      'The first call captures a Program, applies the default passes, and links an exec schedule; later calls with the same signature run that schedule.',
+    link: 'Open tutorial',
+    href: '/tutorial/compile-layer',
+    code: `from fhelium import compile as fc
 
-captured = fh_compile.capture(
-    workload,
-    inputs={"x": fh_compile.encrypted()},
-)
-pipeline = fh_compile.Pipeline(selected_passes)
-compiled = pipeline.run(captured)
+@fc.compile
+def layer(x):
+    rotated = engine.rotate_with_key(x, rotation)
+    product = engine.multiply(
+        engine.coefficient_domain_to_ntt_domain(x),
+        engine.coefficient_domain_to_ntt_domain(rotated),
+    )
+    return engine.relinearize(product, relin, rescale=True)
 
-print(compiled.program.to_text())
-print(compiled.reports)
-
-fh_compile.prepare_material_bindings(
-    compiled, resources=resources, keys=keys
-)
-executable = OperationBackend().link(compiled)
-result = executable.run(ciphertext)`,
+y = layer(x)  # capture, passes, lowering, linking
+y = layer(x)  # Runner executes the linked schedule
+print(len(layer.specializations))`,
   },
   {
-    id: 'runtime',
-    label: 'Runtime',
-    title: 'Observe, stage, capture, and replay',
+    id: 'deploy',
+    label: 'Deploy',
+    title: 'Export once and load in another process',
     description:
-      'Read device memory, retain fixed Tensor storage, and replay a stable CUDA schedule with changing compatible inputs.',
-    href: '/tutorial/cuda-graph-matvec',
-    code: `from fhelium.runtime import (
-    CudaGraphProgram,
-    MemorySnapshot,
-    ReusableValueBuffer,
-)
+      'The artifact stores schedules, kernel images, and constants. The serving process supplies the keys and runs without capture or compilation.',
+    link: 'Open tutorial',
+    href: '/tutorial/export-and-load',
+    code: `fc.export(layer, "layer.fhelium", signatures=[(x,)])
+fh.save_value(rotation, "rotation.fhelium")
+fh.save_value(relin, "relin.fhelium")
 
-memory = MemorySnapshot.read("cuda:0")
-buffer = ReusableValueBuffer.like(
-    prototype, device="cuda:0"
-)
-copy = buffer.copy_from(next_input)
-copy.wait_on()
+# Serving process
+keys = [
+    fh.load_value("rotation.fhelium"),
+    fh.load_value("relin.fhelium"),
+]
+loaded = fc.load("layer.fhelium", keys=keys)
+y = loaded(x)`,
+  },
+  {
+    id: 'serve',
+    label: 'Serve',
+    title: 'Serve a stream of user requests',
+    description:
+      'Each request brings its ciphertext and keys. One compiled model serves every user while DoubleBuffer copies the next request.',
+    link: 'Open guide',
+    href: '/how-to/serve-compiled-requests',
+    code: `from fhelium.runtime import DoubleBuffer
 
-program = CudaGraphProgram.capture(
-    evaluator,
-    example_inputs=(prototype,),
-)
-result = program.replay(
-    next_input, synchronize=True
-)`,
+@fc.compile
+def model(x, rotation, relin):
+    rotated = engine.rotate_with_key(x, rotation)
+    product = engine.multiply(
+        engine.coefficient_domain_to_ntt_domain(x),
+        engine.coefficient_domain_to_ntt_domain(rotated),
+    )
+    return engine.relinearize(product, relin, rescale=True)
+
+# requests: (ciphertext, rotation key, relinearization key)
+with DoubleBuffer(requests[0], device=x.device) as buffers:
+    for _, (ct, rotation, relin) in buffers.feed(requests):
+        respond(model(ct, rotation, relin))  # consumed here`,
   },
   {
     id: 'distributed',
     label: 'Distributed',
-    title: 'Partition values across rank-local programs',
+    title: 'Combine rank-local results with collectives',
     description:
-      'Bind one process to each local device and use typed collectives to scatter, evaluate, and gather encrypted values.',
-    href: '/tutorial/spmd-independent-ciphertexts',
-    code: `import torch
-import fhelium.distributed as dist
-from fhelium.eager import Engine
+      'Each process evaluates its own values; a ciphertext collective inside the compiled function becomes part of every rank\'s exec schedule.',
+    link: 'Open guide',
+    href: '/how-to/choose-multi-gpu-partition',
+    code: `import fhelium.distributed as dist
+from fhelium import compile as fc
 
 dist.init()
-torch.set_default_device(dist.local_device())
-engine = Engine(preset)
 
-local_input = dist.scatter_ciphertexts(
-    encrypted_inputs
-    if dist.get_rank() == 0 else None,
-    src=0,
-)
-local_output = evaluate(engine, local_input)
-outputs = dist.gather_ciphertexts(
-    local_output,
-    dst=0,
-)
+@fc.compile
+def total(partial):
+    dist.all_reduce_ciphertext(partial, engine=engine)
+    return partial
+
+local = engine.encrypt_message(local_values, public)
+result = total(local)  # every rank receives the sum
 dist.shutdown()`,
   },
 ]
@@ -132,34 +142,22 @@ const activeTab = computed(
   () => tabs.find((tab) => tab.id === activeId.value) ?? tabs[0],
 )
 
-let rotationTimer: ReturnType<typeof setInterval> | undefined
-
-function stopRotation(): void {
-  if (rotationTimer === undefined) return
-  clearInterval(rotationTimer)
-  rotationTimer = undefined
-}
-
-function startRotation(): void {
-  stopRotation()
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
-  rotationTimer = setInterval(() => {
-    const currentIndex = tabs.findIndex((tab) => tab.id === activeId.value)
-    activeId.value = tabs[(currentIndex + 1) % tabs.length].id
-  }, 3000)
-}
+const { stop: stopRotation } = useAutoAdvance(
+  tabs.map((tab) => tab.id),
+  activeId,
+  3000,
+)
 
 function selectTab(id: UsageId): void {
   stopRotation()
   activeId.value = id
 }
 
-onMounted(startRotation)
-onBeforeUnmount(stopRotation)
-
 const pythonKeywords = new Set([
   'as',
   'def',
+  'del',
+  'for',
   'else',
   'False',
   'from',
@@ -169,6 +167,7 @@ const pythonKeywords = new Set([
   'is',
   'None',
   'return',
+  'with',
   'True',
 ])
 
@@ -272,7 +271,7 @@ const highlightedCode = computed(() => highlightPython(activeTab.value.code))
         <h3>{{ activeTab.title }}</h3>
         <p>{{ activeTab.description }}</p>
         <a :href="withBase(activeTab.href)">
-          Open tutorial
+          {{ activeTab.link }}
           <NavArrow />
         </a>
       </div>
@@ -296,7 +295,7 @@ const highlightedCode = computed(() => highlightPython(activeTab.value.code))
 
 .usage-tab-list {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 7px;
   padding: 8px;
   border-bottom: 1px solid var(--fhe-c-divider);

@@ -58,7 +58,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         reason="requires at least two visible CUDA devices"
     )
     try:
-        pinned_probe = torch.empty(0, device="cpu", pin_memory=True)
+        pinned_probe = torch.empty(1, device="cpu", pin_memory=True)
         pinned_memory_ready = (
             pinned_probe.device.type == "cpu" and pinned_probe.is_pinned()
         )

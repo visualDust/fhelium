@@ -8,6 +8,12 @@ from fhelium.backend.implementation import OperationImplementationRegistry
 from .torch import TorchCallImplementation
 from .ckks.codec._periodic import NativePrepareCompressedPlaintextImplementation
 from fhelium.backend.memory import TorchMemoryTransferImplementation
+from .distributed.operations import (
+    TorchBroadcastImplementation,
+    TorchCiphertextAllReduceImplementation,
+    TorchGenericAllReduceImplementation,
+    TorchProcessGroupQueryImplementation,
+)
 from fhelium.backend.ckks import (
     NativeDecodeImplementation,
     NativeDecryptImplementation,
@@ -94,6 +100,10 @@ def create_builtin_operation_registry(
             *generated,
             TorchCallImplementation(),
             TorchMemoryTransferImplementation(),
+            TorchProcessGroupQueryImplementation(),
+            TorchBroadcastImplementation(),
+            TorchGenericAllReduceImplementation(),
+            TorchCiphertextAllReduceImplementation(),
             NativeRnsLinearImplementation(),
             NativeBatchSumImplementation(),
             NativeRnsTransitionImplementation(),

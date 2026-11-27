@@ -286,10 +286,17 @@ function(add_fhelium_library name include_dir)
 
   set(FHELIUM_LIBRARY_FILE
       "${CMAKE_SHARED_LIBRARY_PREFIX}fhelium${CMAKE_SHARED_LIBRARY_SUFFIX}")
+  set(FHELIUM_TORCH_LIBRARY_FILE
+      "${CMAKE_SHARED_LIBRARY_PREFIX}fhelium_torch${CMAKE_SHARED_LIBRARY_SUFFIX}"
+  )
   set(FHELIUM_IMPORT_LIBRARY_FILE "")
+  set(FHELIUM_TORCH_IMPORT_LIBRARY_FILE "")
   if(WIN32)
     set(FHELIUM_IMPORT_LIBRARY_FILE
         "${CMAKE_IMPORT_LIBRARY_PREFIX}fhelium${CMAKE_IMPORT_LIBRARY_SUFFIX}")
+    set(FHELIUM_TORCH_IMPORT_LIBRARY_FILE
+        "${CMAKE_IMPORT_LIBRARY_PREFIX}fhelium_torch${CMAKE_IMPORT_LIBRARY_SUFFIX}"
+    )
   endif()
   string(TOLOWER "${_FHELIUM_ENABLED_BACKENDS}" FHELIUM_PACKAGE_BACKENDS)
   set(FHELIUM_PACKAGE_CXX_STANDARD ${_FHELIUM_CXX_STANDARD})
@@ -306,14 +313,39 @@ function(add_fhelium_library name include_dir)
           DESTINATION ${FHELIUM_SDK_ROOT}/share/cmake/FHElium)
 endfunction()
 
-function(add_fhelium_torch_module name src_dir library out_subdir)
+function(add_fhelium_torch_library name src_dir runner_dir artifact_dir library)
+  # Torch operator schemas and kernel registrations of libfhelium, the exec
+  # schedule Runner, and the container, value-file and artifact codecs. The
+  # library has no Python dependency: Python loads it with
+  # torch.ops.load_library, and C++ programs link it to dispatch the operators
+  # through c10::Dispatcher, to run schedules and to load artifacts.
   _fhelium_torch_cxx_standard(_FHELIUM_CXX_STANDARD)
-  file(GLOB REGISTRATION_SOURCES CONFIGURE_DEPENDS "${src_dir}/*.cpp")
+  file(GLOB REGISTRATION_SOURCES CONFIGURE_DEPENDS "${src_dir}/*.cpp"
+       "${runner_dir}/*.cpp" "${artifact_dir}/*.cpp")
+  # The Runner loads device kernels with the CUDA runtime or HIP module API.
+  if(FHELIUM_BUILD_CUDA)
+    file(GLOB RUNNER_GPU_SOURCES CONFIGURE_DEPENDS "${runner_dir}/cuda/*.cpp")
+  elseif(FHELIUM_BUILD_HIP)
+    file(GLOB RUNNER_GPU_SOURCES CONFIGURE_DEPENDS "${runner_dir}/hip/*.cpp")
+  endif()
+  list(APPEND REGISTRATION_SOURCES ${RUNNER_GPU_SOURCES})
   list(SORT REGISTRATION_SOURCES)
-  message(STATUS "Torch module ${name} C++ sources: ${REGISTRATION_SOURCES}")
-
-  add_library(${name} MODULE ${REGISTRATION_SOURCES})
-  target_compile_definitions(${name} PRIVATE ${FHELIUM_BACKEND_DEFINITIONS})
+  message(STATUS "Torch library ${name} C++ sources: ${REGISTRATION_SOURCES}")
+  add_library(${name} SHARED ${REGISTRATION_SOURCES})
+  if(FHELIUM_BUILD_CUDA)
+    # Segment capture uses the c10 CUDA streams and caching-allocator pools.
+    find_library(
+      FHELIUM_TORCH_c10_cuda_LIBRARY
+      NAMES c10_cuda
+      PATHS "${TORCH_LIB_PATH}"
+      NO_DEFAULT_PATH REQUIRED)
+    target_link_libraries(${name} PRIVATE CUDA::cudart
+                                          "${FHELIUM_TORCH_c10_cuda_LIBRARY}")
+  elseif(FHELIUM_BUILD_HIP)
+    target_link_libraries(${name} PRIVATE hip::host)
+  endif()
+  target_compile_definitions(${name} PRIVATE ${FHELIUM_BACKEND_DEFINITIONS}
+                                             FHELIUM_BUILDING_TORCH_LIBRARY)
   if(NOT MSVC)
     target_compile_definitions(
       ${name} PRIVATE _GLIBCXX_USE_CXX11_ABI=${FHELIUM_TORCH_CXX11_ABI})
@@ -324,33 +356,41 @@ function(add_fhelium_torch_module name src_dir library out_subdir)
                     "${FHELIUM_TORCH_c10_LIBRARY}")
   target_link_directories(${name} PRIVATE "${TORCH_LIB_PATH}")
   target_include_directories(${name} PRIVATE ${TORCH_INCLUDE_DIRS})
+  # JSON for Modern C++ parses container headers; installed headers do not
+  # include it.
+  target_include_directories(
+    ${name} PRIVATE "${PROJECT_SOURCE_DIR}/third_party/nlohmann_json/include")
+  # Artifacts record the version of the package that built the library.
+  file(STRINGS "${PROJECT_SOURCE_DIR}/pyproject.toml" _FHELIUM_VERSION_LINE
+       REGEX "^version = ")
+  string(REGEX REPLACE "^version = \"([^\"]*)\".*" "\\1" _FHELIUM_VERSION
+                       "${_FHELIUM_VERSION_LINE}")
+  target_compile_definitions(${name}
+                             PRIVATE FHELIUM_VERSION="${_FHELIUM_VERSION}")
+  if(APPLE)
+    set(_FHELIUM_SIBLING_RPATH "@loader_path")
+  elseif(UNIX)
+    set(_FHELIUM_SIBLING_RPATH "$ORIGIN")
+  else()
+    set(_FHELIUM_SIBLING_RPATH "")
+  endif()
   set_target_properties(
     ${name}
-    PROPERTIES PREFIX ""
-               CXX_STANDARD ${_FHELIUM_CXX_STANDARD}
+    PROPERTIES CXX_STANDARD ${_FHELIUM_CXX_STANDARD}
                CXX_STANDARD_REQUIRED ON
                CXX_EXTENSIONS OFF
+               CXX_VISIBILITY_PRESET hidden
                BUILD_RPATH "$<TARGET_FILE_DIR:${library}>;${TORCH_LIB_PATH}"
                INSTALL_RPATH
-               "${FHELIUM_SDK_LIBRARY_RPATH};${FHELIUM_TORCH_INSTALL_RPATH}"
+               "${_FHELIUM_SIBLING_RPATH};${FHELIUM_TORCH_INSTALL_RPATH}"
                INSTALL_RPATH_USE_LINK_PATH FALSE
                INSTALL_REMOVE_ENVIRONMENT_RPATH TRUE
-               OUTPUT_NAME "${name}"
-               SUFFIX "${FHELIUM_PYTHON_EXTENSION_SUFFIX}")
-
-  if(SKBUILD_STATE STREQUAL "editable")
-    install(
-      TARGETS ${name}
-      LIBRARY
-        DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/fhelium/native/${out_subdir}
-      RUNTIME
-        DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/fhelium/native/${out_subdir})
-  else()
-    install(
-      TARGETS ${name}
-      LIBRARY DESTINATION native/${out_subdir}
-      RUNTIME DESTINATION native/${out_subdir})
-  endif()
+               OUTPUT_NAME "${name}")
+  install(
+    TARGETS ${name}
+    LIBRARY DESTINATION ${FHELIUM_SDK_ROOT}/lib
+    RUNTIME DESTINATION ${FHELIUM_SDK_ROOT}/lib
+    ARCHIVE DESTINATION ${FHELIUM_SDK_ROOT}/lib)
 endfunction()
 
 function(add_fhelium_runtime_info_module name cpp_path out_subdir)

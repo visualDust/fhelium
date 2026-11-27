@@ -1076,7 +1076,6 @@ def _provider_tensor(
     )
     from fhelium.backend.ckks.tables import KeySwitchTables
     from fhelium.backend.rns.tables import (
-        moddown_inverse_tables,
         rescale_tables,
     )
     from fhelium.backend.ntt.context import NttContext
@@ -1136,23 +1135,19 @@ def _provider_tensor(
             return tensors[1]
         return parameters[0] if kind == "twice_modulus" else parameters
     if kind == "galois_table":
-        from fhelium.backend.rns.automorphism import (
-            coefficient_galois_gather_indices,
-        )
+        from fhelium.native.tables import galois_slots, slot_names
 
-        element, name = (
-            description.get("galois_element"),
-            description.get("name"),
-        )
-        if type(element) is not int or name not in (
-            "source_indices",
-            "source_sign",
-        ):
+        element = description.get("galois_element")
+        if type(element) is not int:
             return None
-        tables = coefficient_galois_gather_indices(
-            config.N, element, context.device
+        tables = dict(
+            zip(
+                slot_names("galois"),
+                galois_slots(config.N, (element,), context.device),
+                strict=True,
+            )
         )
-        return tables[0 if name == "source_indices" else 1]
+        return tables.get(cast(str, description.get("name")))
     if kind == "rounding_state":
         return (
             provider.rng.seed
@@ -1187,14 +1182,10 @@ def _provider_tensor(
             return None
         from fhelium.backend.ckks.codec import _embedding
 
-        pre, _ = _embedding._permutations(
-            config.N, str(context.device), config.galois_generator
+        tables = _embedding.embedding_tables(
+            config.N, config.galois_generator, str(context.device)
         )
-        return (
-            pre
-            if index == 0
-            else _embedding._twister(config.N, str(context.device))
-        )
+        return tables["pre" if index == 0 else "twister"]
     policy = description.get("ntt_backend")
     ntt: NttContext | None = (
         provider if isinstance(provider, NttContext) else None
@@ -1382,20 +1373,6 @@ def _provider_tensor(
             )[0]
         return cast(dict[str, torch.Tensor], cache[token]).get(name)
     if kind == "rotation_sum_table":
-        if name.startswith("sum_galois_"):
-            from fhelium.backend.ntt.automorphism import ntt_galois_indices
-            from fhelium.backend.ckks.rotation._galois import (
-                rotation_galois_element,
-            )
-
-            step = int(name.removeprefix("sum_galois_"))
-            return ntt_galois_indices(
-                config.N,
-                rotation_galois_element(
-                    config.N, step, config.galois_generator
-                ),
-                context.device,
-            )
         from fhelium.backend.ckks.tables import (
             prepare_rotation_sum_tables,
         )
@@ -1429,10 +1406,7 @@ def _provider_tensor(
             base_token = (id(context), "key_switch_rns")
             if base_token not in cache:
                 cache[base_token] = KeySwitchTables(
-                    context,
-                    None,
-                    moddown_inverse_tables(context),
-                    config.galois_generator,
+                    context, None, config.galois_generator
                 )
             base = cast(KeySwitchTables, cache[base_token])
             cache[token] = prepare_rotation_sum_tables(
@@ -1451,10 +1425,7 @@ def _provider_tensor(
         token = (id(context), "key_switch_rns")
         if token not in cache:
             cache[token] = KeySwitchTables(
-                context,
-                None,
-                (),
-                config.galois_generator,
+                context, None, config.galois_generator
             )
         if (
             (

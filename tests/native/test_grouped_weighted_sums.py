@@ -194,6 +194,7 @@ def test_represented_weighted_sums_preserve_mixed_layouts_and_strides(
 
         # A new parameter-table row stride changes the launch ABI, not its values.
         from fhelium.backend.implementation import OperationInvocation
+        from fhelium.backend.lowering import LoweredCall
         from fhelium.ir.dialects import rns
 
         dispatcher = engine._dispatcher_for(device)
@@ -241,7 +242,5 @@ def test_represented_weighted_sums_preserve_mixed_layouts_and_strides(
             requested=implementation,
             in_place=False,
         )
-        rebound_result = consumer.execute(
-            invocation, operands, (), in_place=False
-        )[0]
+        rebound_result = LoweredCall(consumer, invocation)(operands)[0]
         assert torch.equal(rebound_result, expected.data)

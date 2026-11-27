@@ -326,15 +326,15 @@ def test_zero_sized_batch_dimensions_are_rejected():
 
 def test_slot_embedding_preserves_leading_batch_dimensions():
     messages = torch.randn(3, 2, 4, dtype=torch.float64)
-    pre, post = slot_embedding._permutations(16, "cpu", 3)
+    tables = slot_embedding.embedding_tables(16, 3, "cpu")
     seed = torch.zeros(5, dtype=torch.int64)
     encoded = ckks_ops.encode(
-        messages, pre, slot_embedding._twister(16, "cpu"), seed, 2.0**20
+        messages, tables["pre"], tables["twister"], seed, 2.0**20
     )
     decoded = ckks_ops.decode(
         encoded.to(torch.float64),
-        post,
-        slot_embedding._skewer(16, "cpu"),
+        tables["post"],
+        tables["skewer"],
         2.0**20,
         True,
     )

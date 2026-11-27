@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace fhelium::ckks {
@@ -226,6 +227,132 @@ std::vector<int64_t> key_digit_sizes(c10::ArrayRef<int64_t> q_moduli,
     start = stop;
   }
   return sizes;
+}
+
+namespace {
+
+std::vector<int64_t> gather(c10::ArrayRef<int64_t> moduli,
+                            c10::ArrayRef<int64_t> ids) {
+  std::vector<int64_t> result;
+  result.reserve(ids.size());
+  for (const auto id : ids) {
+    result.push_back(moduli[id]);
+  }
+  return result;
+}
+
+// Number of greedy runs of `ids` whose products are below `limit`, or zero
+// when one modulus reaches the limit.
+size_t greedy_digit_count(c10::ArrayRef<int64_t> moduli,
+                          c10::ArrayRef<int64_t> ids,
+                          const std::vector<uint64_t>& limit) {
+  size_t count = 0;
+  size_t start = 0;
+  for (size_t i = 0; i < ids.size(); ++i) {
+    const std::vector<int64_t> single{moduli[ids[i]]};
+    if (!less_than(product_limbs(single), limit)) {
+      return 0;
+    }
+    if (i > start && !less_than(product_limbs(gather(
+                                    moduli, ids.slice(start, i - start + 1))),
+                                limit)) {
+      ++count;
+      start = i;
+    }
+  }
+  return ids.empty() ? 0 : count + 1;
+}
+
+// Splits `ids` into `count` runs that minimize the largest run product.
+std::vector<std::vector<int64_t>> minimax_digits(c10::ArrayRef<int64_t> moduli,
+                                                 c10::ArrayRef<int64_t> ids,
+                                                 size_t count) {
+  const size_t n = ids.size();
+  const auto run = [&](size_t start, size_t stop) {
+    return product_limbs(gather(moduli, ids.slice(start, stop - start)));
+  };
+  struct Entry {
+    bool set = false;
+    std::vector<uint64_t> largest;
+    size_t start = 0;
+  };
+  // best[k][stop]: the smallest largest product of k runs covering ids[:stop]
+  // and the start of the last run; ties keep the smaller start.
+  std::vector<std::vector<Entry>> best(count + 1, std::vector<Entry>(n + 1));
+  best[0][0] = {true, {1}, 0};
+  for (size_t k = 1; k <= count; ++k) {
+    for (size_t stop = k; stop <= n - count + k; ++stop) {
+      auto& entry = best[k][stop];
+      for (size_t start = k - 1; start < stop; ++start) {
+        const auto& previous = best[k - 1][start];
+        if (!previous.set) {
+          continue;
+        }
+        auto product = run(start, stop);
+        auto largest =
+            less_than(previous.largest, product) ? product : previous.largest;
+        if (!entry.set || less_than(largest, entry.largest)) {
+          entry = {true, std::move(largest), start};
+        }
+      }
+    }
+  }
+  std::vector<std::vector<int64_t>> digits(count);
+  size_t stop = n;
+  for (size_t k = count; k > 0; --k) {
+    const auto start = best[k][stop].start;
+    digits[k - 1].assign(ids.begin() + start, ids.begin() + stop);
+    stop = start;
+  }
+  return digits;
+}
+
+}  // namespace
+
+KeyLayout plan_key_layout(c10::ArrayRef<int64_t> moduli,
+                          c10::ArrayRef<int64_t> q_prime_ids) {
+  std::vector<int64_t> eligible;
+  for (int64_t id = 0; id < static_cast<int64_t>(moduli.size()); ++id) {
+    if (std::find(q_prime_ids.begin(), q_prime_ids.end(), id) ==
+        q_prime_ids.end()) {
+      eligible.push_back(id);
+    }
+  }
+  std::stable_sort(eligible.begin(), eligible.end(), [&](int64_t a, int64_t b) {
+    return moduli[a] > moduli[b];
+  });
+  const auto q = static_cast<int64_t>(q_prime_ids.size());
+  bool found = false;
+  std::tuple<int64_t, int64_t, int64_t> best_cost;
+  size_t best_count = 0;
+  size_t best_width = 0;
+  for (size_t width = 1; width <= eligible.size(); ++width) {
+    const auto limit = product_limbs(
+        gather(moduli, c10::ArrayRef<int64_t>(eligible.data(), width)));
+    const auto k =
+        static_cast<int64_t>(greedy_digit_count(moduli, q_prime_ids, limit));
+    if (k == 0) {
+      continue;
+    }
+    const auto w = static_cast<int64_t>(width);
+    const std::tuple<int64_t, int64_t, int64_t> cost{
+        (k + 1) * (q + w), k * (q + w), w};
+    if (!found || cost < best_cost) {
+      found = true;
+      best_cost = cost;
+      best_count = static_cast<size_t>(k);
+      best_width = width;
+    }
+  }
+  TORCH_CHECK_VALUE(found,
+                    "the configured primes outside the active rows cannot "
+                    "bound a key digit");
+  KeyLayout layout;
+  layout.q_prime_ids = q_prime_ids.vec();
+  layout.p_prime_ids.assign(eligible.begin(), eligible.begin() + best_width);
+  std::sort(layout.p_prime_ids.begin(), layout.p_prime_ids.end());
+  layout.digit_prime_ids = minimax_digits(moduli, q_prime_ids, best_count);
+  return layout;
 }
 
 std::optional<int64_t> maximum_modulus_bits(

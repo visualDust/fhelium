@@ -1,7 +1,9 @@
 """Runtime observation, execution buffers, signatures, and CUDA Graphs."""
 
 from fhelium.runtime.buffer import (
+    BufferedValue,
     CopyHandle,
+    DoubleBuffer,
     ReusableValueBuffer,
     pin_value_tree,
     value_tree_nbytes,
@@ -24,6 +26,7 @@ from fhelium.runtime.signature import (
 )
 
 __all__ = [
+    "BufferedValue",
     "CopyHandle",
     "CpuTopology",
     "CudaDeviceInfo",
@@ -31,6 +34,7 @@ __all__ = [
     "CudaGraphPool",
     "CudaGraphProgram",
     "CudaTopology",
+    "DoubleBuffer",
     "MemorySnapshot",
     "ReusableValueBuffer",
     "TensorSignature",

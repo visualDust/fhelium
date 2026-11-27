@@ -22,6 +22,7 @@ from xdsl.dialects.scf import Scf
 from xdsl.ir import Attribute, Operation, SSAValue
 
 from .dialects import REGISTERED_DIALECTS
+from .dialects.exec import Exec
 from .dialects._common import OpenStateType, ValueRole, dictionary_state
 from .dialects.core import (
     EncryptedType,
@@ -55,6 +56,7 @@ def create_dialect_context() -> XdslContext:
     context.load_dialect(Scf)
     for dialect in REGISTERED_DIALECTS:
         context.load_dialect(dialect)
+    context.load_dialect(Exec)
     return context
 
 

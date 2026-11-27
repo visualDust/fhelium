@@ -9,11 +9,12 @@ import torch
 from xdsl.ir import Operation
 from fhelium.backend.implementation import OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
-from fhelium.backend._native_operands import named_tables
+from fhelium.native.tables import table_slots
 from fhelium.ir.dialects import rns
 from fhelium.native.wrapper import rns_ops
 
 from ._preparation import native_moddown_requirements, prepare_native_moddown
+from fhelium.backend.lowering import ExecBuilder
 
 
 @dataclass(frozen=True)
@@ -57,18 +58,18 @@ class NativeModDownImplementation:
         del invocation
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources, in_place
+        del resources
         attributes = invocation.attributes
         names = cast(tuple[str, ...], attributes["parameter_names"])
-        table_names, tables = named_tables(names, values)
+        tensors = dict(zip(names, values[len(values) - len(names) :]))
         operation_type = invocation.operation_type
         rounding = str(
             attributes.get(
@@ -79,8 +80,7 @@ class NativeModDownImplementation:
             return (
                 rns_ops.rounded_trailing_quotient(
                     values[0],
-                    table_names,
-                    tables,
+                    table_slots("trailing_quotient", tensors),
                     int(cast(int, attributes["drop_count"])),
                     str(attributes["rounding"]),
                 ),
@@ -88,15 +88,12 @@ class NativeModDownImplementation:
         if operation_type is rns.ModDownAddRescaleOp:
             drop_count = attributes.get("joint_drop_count")
             if drop_count is None:
-                drop_count = tables[
-                    table_names.index("joint_drop_positions")
-                ].numel()
+                drop_count = tensors["joint_drop_positions"].numel()
             return (
                 rns_ops.moddown_add_rescale(
                     values[0],
                     values[1],
-                    table_names,
-                    tables,
+                    table_slots("key_switch", tensors),
                     str(attributes["ntt_backend"]),
                     int(cast(int, attributes["q_count"])),
                     int(cast(int, drop_count)),
@@ -110,8 +107,7 @@ class NativeModDownImplementation:
                 rns_ops.moddown_ntt_qp_to_q(
                     values[0],
                     values[1] if len(values) - len(names) == 2 else None,
-                    table_names,
-                    tables,
+                    table_slots("key_switch", tensors),
                     str(attributes["ntt_backend"]),
                     p_count,
                     rounding,
@@ -119,6 +115,6 @@ class NativeModDownImplementation:
             )
         return (
             rns_ops.moddown_qp_to_q(
-                values[0], table_names, tables, p_count, rounding
+                values[0], table_slots("key_switch", tensors), p_count, rounding
             ),
         )

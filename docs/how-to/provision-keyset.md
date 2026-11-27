@@ -1,6 +1,6 @@
 # Provision the minimum required keyset
 
-Build a shared inventory from the operations your evaluators will execute. Reuse compatible key values across consumers, generate missing material during setup, and prepare each consumer with the keys selected for its actual input state and device.
+Build a shared inventory from the operations your evaluators will execute. Reuse compatible key values across consumers, generate missing material during setup, and bind each consumer, an Eager call, a prepared algorithm, a compiled function, or a loaded artifact, to the keys selected for its actual input state and device.
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ print(sorted(requirements.rotation_steps))
 print(requirements.requires_relinearization)
 ```
 
-Here `compiled` is the Compilation after the chosen scheduling passes. The analysis reports roles and rotation steps; provisioning also needs the consuming Q/P bases, key layouts and devices. Supply the resulting material through [Compilation preparation](persist-compiled-program.md#3-supply-missing-data-or-replace-an-assignment).
+Here `compiled` is the Compilation after the chosen scheduling passes. The analysis reports roles and rotation steps; provisioning also needs the consuming Q/P bases, key layouts and devices. Supply the resulting material through [Compilation preparation](save-and-relink-program.md#3-supply-missing-data-or-replace-an-assignment).
 
 For a custom stored key layout, set `workspace["key_layouts"] = {symbol: {"prime_ids": rows, "digit_prime_ids": digits}}`. Supplied keys, whether generated or loaded, must match the layout selected for numerical lowering. See [Evaluation-key layout declarations](../developer/materials-and-preparation.md#evaluation-key-layout-declarations) for default selection and partial declarations.
 
@@ -123,7 +123,7 @@ A depth-specific key can reduce one operation's key payload and digit work, but 
 
 ## 5. Keep keys compact when memory is short
 
-Generated keys are expanded by default: each digit holds both components, and key switches read them. Compact keys hold the first component and a seed and generate the uniform component during each key switch, which halves key memory and lengthens key switches (about 6% for a 13-tier bootstrap and 13–16% for Eager key switches on an RTX PRO 6000 Blackwell Max-Q; unchanged bootstrap latency on an RTX A6000). Create the Engine with `expand_keys=False` to generate and keep compact keys:
+Generated keys are expanded by default: each digit holds both components, and key switches read them. Compact keys hold the first component and a seed and generate the uniform component during each key switch, which halves key memory and lengthens key switches (about 6% for a 13-tier bootstrap and 13–16% for Eager key switches on an RTX PRO 6000 Blackwell Max-Q Workstation Edition at 300 W; unchanged bootstrap latency on an RTX A6000 at 300 W). Create the Engine with `expand_keys=False` to generate and keep compact keys:
 
 ```python
 engine = Engine(config, expand_keys=False)
@@ -162,7 +162,34 @@ Existing prepared users can still retain those keys. Close prepared callables af
 
 Primitive Eager operations remain available when the key choice is already known. Pass a key directly or install it with `engine.set_relinearization_key(...)` or `engine.set_rotation_key(...)`. Construct `Engine(config, allow_automatic_key_generation=False)` when missing material must be resolved by application provisioning. Compile capture and linking consume supplied numerical data.
 
-## 7. Assign devices, ranks and residency
+## 7. Bind keys to compiled and loaded functions
+
+A compiled function receives its keys at construction:
+
+```python
+from fhelium import compile as fc
+
+@fc.compile(keys=pool)
+def layer(x, weights):
+    ...
+```
+
+`keys=` accepts an `EvaluationKeySet`, a sequence of key objects, or a mapping whose values are keys. Capture reads the keys that the function body passes to operations; the supplied keys select layouts and bind execution for key operations introduced by lowering. The cache identity of a specialization includes the layouts of the supplied keys, their role, prime rows, digit supports, representation, rotation step, and expanded or compact state, and excludes their data. A cached specialization binds each recorded key symbol to the one supplied key with the recorded description; without a unique match, the cached linked schedule is not used and the specialization is linked or compiled again. Supply different key objects with the same layouts to reuse a cached specialization for another key owner; replacing the key objects of a live compiled function requires constructing it again with the new `keys=`.
+
+An artifact written by `fc.export` stores the role and layout of every key it reads and no key data. `fc.load(path, keys=...)` binds them:
+
+```python
+loaded = fc.load("layer.fhelium", keys=[rotation_key, relinearization_key])
+```
+
+- A sequence of key objects is matched to the recorded keys by role, prime rows, digit supports, and representation; one supplied key binds every recorded symbol it matches.
+- A mapping binds keys by artifact material symbol; values whose key is not a recorded symbol are matched as above.
+- A compact key matches the layout of its expanded form. Loading expands it once on the device and binds the expanded rows, so the loaded function holds expanded key memory; an expanded key is bound by sharing its storage.
+- A recorded key without a match raises `ValueError` with the message `No supplied key matches artifact keys ...`, listing the unmatched symbols and roles.
+
+Provision the artifact's keys with the layouts used at export: generate them from the same configuration and layout arguments, or load the saved key values.
+
+## 8. Assign devices, ranks and residency
 
 For every worker, record its local operations, permitted secret material, required key values, host storage and CUDA residency windows. Typical allocations include:
 
@@ -175,7 +202,7 @@ An inventory can contain device-local alternatives. Place a key with `key.to(dev
 
 Use the existing Residency facilities for pageable host holds, fixed-capacity pinned/CUDA windows, active leases and prefetch. Inventory membership retains key objects, while Residency controls physical materializations. A collective can create temporary peer copies even when only one rank ultimately retains a key, so include distribution peaks in capacity planning.
 
-## 8. Verify specialist key relations
+## 9. Verify specialist key relations
 
 Generate a generic key switch from the intended source and destination secrets, record that relation in application metadata, and verify under the destination secret:
 
@@ -202,9 +229,9 @@ conjugated = engine.conjugate(source, conjugation_key)
 
 Compare the decoded result with `message.conj()` under the selected packing convention. Provision these values before evaluation and retain their source relation with the application's inventory records.
 
-## 9. Persist values and report key cost
+## 10. Persist values and report key cost
 
-Save individual key values through the existing value or artifact persistence APIs. Stored metadata preserves the actual prime rows, digit supports and operation specialization. After loading, reconstruct the application's inventory and restore its parameter and secret-relation associations. Saving a key leaves its live placement unchanged.
+Save individual key values with `fh.save_value` or a `ValueStore`. Stored metadata preserves the actual prime rows, digit supports and operation specialization. After loading, reconstruct the application's inventory and restore its parameter and secret-relation associations. Saving a key leaves its live placement unchanged.
 
 Before writing sensitive material, verify the destination's access controls, encryption and deletion policy. Typed secret serialization requires an opt-in. Sensitivity labels classify stored data; the storage system supplies confidentiality and access control. Keep key payloads out of logs and benchmark metadata.
 
@@ -220,3 +247,4 @@ Run the evaluator with its provisioned material and verify the required numerica
 - [Key-materials tutorial](../tutorial/key-materials.md)
 - [Residency lifetimes](../concepts/execution/residency-lifetimes.md)
 - [Choose a multi-GPU partition](choose-multi-gpu-partition.md)
+- [Deploy a compiled callable](deploy-compiled-callable.md)

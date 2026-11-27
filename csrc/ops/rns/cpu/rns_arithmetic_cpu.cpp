@@ -130,22 +130,51 @@ void binary_loop(torch::Tensor out,
 }
 
 template <BinaryOperation operation>
-torch::Tensor binary_cpu(const torch::Tensor lhs,
-                         const torch::Tensor rhs,
-                         const torch::Tensor params,
-                         const char* operation_name) {
+void binary_cpu_into(torch::Tensor out,
+                     const torch::Tensor lhs,
+                     const torch::Tensor rhs,
+                     const torch::Tensor params,
+                     const char* operation_name) {
   check_cpu_peer(lhs, rhs, operation_name, "rhs");
   check_cpu_peer(lhs, params, operation_name, "rns_params");
   const auto left = view_rns_batch_3d(lhs, "lhs");
   const auto right = view_rns_batch_3d(rhs, "rhs");
   check_rns_binary_3d(left, right, operation_name, true);
   check_rns_parameter_rows(left, params, operation_name);
-  auto out = torch::empty_like(lhs);
   auto output = view_rns_batch_3d(out, "out");
   AT_DISPATCH_INTEGRAL_TYPES(lhs.scalar_type(), "rns_binary_cpu", [&] {
     binary_loop<scalar_t, operation>(output, left, right, params);
   });
+}
+
+template <BinaryOperation operation>
+torch::Tensor binary_cpu(const torch::Tensor lhs,
+                         const torch::Tensor rhs,
+                         const torch::Tensor params,
+                         const char* operation_name) {
+  auto out = torch::empty_like(lhs);
+  binary_cpu_into<operation>(out, lhs, rhs, params, operation_name);
   return out;
+}
+
+// Out forms write into a caller-owned Tensor, such as one slice of a
+// stacked result. `out` may coincide with an operand element by element.
+template <BinaryOperation operation>
+void binary_cpu_out(torch::Tensor out,
+                    const torch::Tensor lhs,
+                    const torch::Tensor rhs,
+                    const torch::Tensor params,
+                    const char* operation_name) {
+  TORCH_CHECK(out.sizes() == lhs.sizes() &&
+                  out.scalar_type() == lhs.scalar_type() &&
+                  out.device() == lhs.device(),
+              operation_name,
+              " out must match the shape, dtype and device of lhs");
+  at::assert_no_internal_overlap(out);
+  at::assert_no_partial_overlap(out, lhs);
+  at::assert_no_partial_overlap(out, rhs);
+  at::assert_no_overlap(out, params);
+  binary_cpu_into<operation>(out, lhs, rhs, params, operation_name);
 }
 
 template <UnaryOperation operation>
@@ -201,19 +230,18 @@ torch::Tensor montgomery_weighted_sum_cpu(const at::TensorList ciphertexts,
   return out;
 }
 
-torch::Tensor montgomery_weighted_sums_cpu(const at::TensorList ciphertexts,
-                                           const at::TensorList plaintexts,
-                                           const int64_t group_count,
-                                           const torch::Tensor rns_params) {
+void montgomery_weighted_sums_cpu(const at::TensorList ciphertexts,
+                                  const at::TensorList plaintexts,
+                                  const int64_t group_count,
+                                  const torch::Tensor rns_params,
+                                  torch::Tensor& out) {
   constexpr const char* operation = "rns_montgomery_weighted_sums";
   TORCH_CHECK(group_count > 0, operation, " requires at least one group");
   TORCH_CHECK(!ciphertexts.empty(), operation, " requires at least one term");
   TORCH_CHECK(plaintexts.size() == group_count * ciphertexts.size(),
               operation,
               " plaintext matrix must have group_count * term_count entries");
-  std::vector<torch::Tensor> outputs;
   std::vector<torch::Tensor> group_plaintexts;
-  outputs.reserve(group_count);
   group_plaintexts.reserve(ciphertexts.size());
   for (int64_t group = 0; group < group_count; ++group) {
     group_plaintexts.clear();
@@ -221,10 +249,9 @@ torch::Tensor montgomery_weighted_sums_cpu(const at::TensorList ciphertexts,
     for (int64_t term = 0; term < ciphertexts.size(); ++term) {
       group_plaintexts.push_back(plaintexts[first + term]);
     }
-    outputs.push_back(
+    out.select(1, group).copy_(
         montgomery_weighted_sum_cpu(ciphertexts, group_plaintexts, rns_params));
   }
-  return torch::stack(outputs, 1);
 }
 
 template <typename scalar_t, UnaryOperation operation>
@@ -361,22 +388,21 @@ void compressed_loop(torch::Tensor out,
 }
 
 template <RepetitionLayout layout>
-torch::Tensor compressed_cpu(const torch::Tensor lhs,
-                             const torch::Tensor rhs,
-                             const torch::Tensor params,
-                             const char* operation_name) {
+void compressed_cpu(const torch::Tensor lhs,
+                    const torch::Tensor rhs,
+                    const torch::Tensor params,
+                    torch::Tensor out,
+                    const char* operation_name) {
   check_cpu_peer(lhs, rhs, operation_name, "compressed_rhs");
   check_cpu_peer(lhs, params, operation_name, "rns_params");
   const auto left = view_rns_batch_3d(lhs, "lhs");
   const auto right = view_rns_batch_3d(rhs, "compressed_rhs");
   check_compressed_binary(left, right, operation_name);
   check_rns_parameter_rows(left, params, operation_name);
-  auto out = torch::empty_like(lhs);
   auto output = view_rns_batch_3d(out, "out");
   AT_DISPATCH_INTEGRAL_TYPES(lhs.scalar_type(), "rns_compressed_cpu", [&] {
     compressed_loop<scalar_t, layout>(output, left, right, params);
   });
-  return out;
 }
 
 void row_scalars_cpu_(torch::Tensor residues,
@@ -434,9 +460,10 @@ void row_scalars_cpu_(torch::Tensor residues,
   });
 }
 
-torch::Tensor add_lazy_twice_modulus_cpu(const torch::Tensor lhs,
-                                         const torch::Tensor rhs,
-                                         const torch::Tensor twice_modulus) {
+void add_lazy_twice_modulus_cpu(torch::Tensor out,
+                                const torch::Tensor lhs,
+                                const torch::Tensor rhs,
+                                const torch::Tensor twice_modulus) {
   constexpr const char* operation = "rns_add_lazy_with_twice_modulus";
   check_cpu_peer(lhs, rhs, operation, "rhs");
   check_cpu_peer(lhs, twice_modulus, operation, "twice_modulus");
@@ -444,7 +471,8 @@ torch::Tensor add_lazy_twice_modulus_cpu(const torch::Tensor lhs,
   const auto right = view_rns_batch_3d(rhs, "rhs");
   check_rns_binary_3d(left, right, operation, true);
   check_rns_row_vector(twice_modulus, left.size(1), operation, "twice_modulus");
-  auto out = torch::empty_like(lhs);
+  at::assert_no_internal_overlap(out);
+  at::assert_no_partial_overlap(out, rhs);
   auto output = view_rns_batch_3d(out, "out");
   AT_DISPATCH_INTEGRAL_TYPES(lhs.scalar_type(), operation, [&] {
     scalar_t* values = output.data_ptr<scalar_t>();
@@ -499,7 +527,6 @@ torch::Tensor add_lazy_twice_modulus_cpu(const torch::Tensor lhs,
           }
         });
   });
-  return out;
 }
 
 template <typename residue_t, typename integer_t>
@@ -916,32 +943,36 @@ at::Tensor montgomery_mul(const at::Tensor& a,
       a, b, p, "rns_montgomery_mul");
 }
 
-at::Tensor montgomery_weighted_sum(at::TensorList ciphertexts,
-                                   at::TensorList plaintexts,
-                                   const at::Tensor& rns_params) {
-  return ::montgomery_weighted_sum_cpu(ciphertexts, plaintexts, rns_params);
+void montgomery_weighted_sum_out(at::TensorList ciphertexts,
+                                 at::TensorList plaintexts,
+                                 const at::Tensor& rns_params,
+                                 at::Tensor& out) {
+  out.copy_(::montgomery_weighted_sum_cpu(ciphertexts, plaintexts, rns_params));
 }
 
-at::Tensor montgomery_weighted_sums(at::TensorList ciphertexts,
-                                    at::TensorList plaintexts,
-                                    int64_t group_count,
-                                    const at::Tensor& rns_params) {
-  return ::montgomery_weighted_sums_cpu(
-      ciphertexts, plaintexts, group_count, rns_params);
+void montgomery_weighted_sums_out(at::TensorList ciphertexts,
+                                  at::TensorList plaintexts,
+                                  int64_t group_count,
+                                  const at::Tensor& rns_params,
+                                  at::Tensor& out) {
+  ::montgomery_weighted_sums_cpu(
+      ciphertexts, plaintexts, group_count, rns_params, out);
 }
 
-at::Tensor montgomery_mul_cyclic_compressed(const at::Tensor& a,
-                                            const at::Tensor& b,
-                                            const at::Tensor& p) {
-  return compressed_cpu<RepetitionLayout::kCyclic>(
-      a, b, p, "rns_montgomery_mul_cyclic_compressed");
+void montgomery_mul_cyclic_compressed_out(const at::Tensor& a,
+                                          const at::Tensor& b,
+                                          const at::Tensor& p,
+                                          at::Tensor& out) {
+  compressed_cpu<RepetitionLayout::kCyclic>(
+      a, b, p, out, "rns_montgomery_mul_cyclic_compressed");
 }
 
-at::Tensor montgomery_mul_contiguous_compressed(const at::Tensor& a,
-                                                const at::Tensor& b,
-                                                const at::Tensor& p) {
-  return compressed_cpu<RepetitionLayout::kContiguous>(
-      a, b, p, "rns_montgomery_mul_contiguous_compressed");
+void montgomery_mul_contiguous_compressed_out(const at::Tensor& a,
+                                              const at::Tensor& b,
+                                              const at::Tensor& p,
+                                              at::Tensor& out) {
+  compressed_cpu<RepetitionLayout::kContiguous>(
+      a, b, p, out, "rns_montgomery_mul_contiguous_compressed");
 }
 
 void montgomery_mul_row_scalars_(at::Tensor& residues,
@@ -958,22 +989,33 @@ void from_montgomery_(at::Tensor& a, const at::Tensor& p) {
   unary_cpu<UnaryOperation::kFromMontgomery>(a, p, "rns_from_montgomery");
 }
 
-at::Tensor add_lazy(const at::Tensor& a,
-                    const at::Tensor& b,
-                    const at::Tensor& p) {
-  return binary_cpu<BinaryOperation::kAddLazy>(a, b, p, "rns_add_lazy");
+void montgomery_mul_out(const at::Tensor& a,
+                        const at::Tensor& b,
+                        const at::Tensor& p,
+                        at::Tensor& out) {
+  binary_cpu_out<BinaryOperation::kMontgomeryMul>(
+      out, a, b, p, "rns_montgomery_mul_out");
 }
 
-at::Tensor add_lazy_with_twice_modulus(const at::Tensor& lhs,
-                                       const at::Tensor& rhs,
-                                       const at::Tensor& twice_modulus) {
-  return ::add_lazy_twice_modulus_cpu(lhs, rhs, twice_modulus);
+void add_lazy_out(const at::Tensor& a,
+                  const at::Tensor& b,
+                  const at::Tensor& p,
+                  at::Tensor& out) {
+  binary_cpu_out<BinaryOperation::kAddLazy>(out, a, b, p, "rns_add_lazy_out");
 }
 
-at::Tensor sub_lazy(const at::Tensor& a,
-                    const at::Tensor& b,
-                    const at::Tensor& p) {
-  return binary_cpu<BinaryOperation::kSubLazy>(a, b, p, "rns_sub_lazy");
+void add_lazy_with_twice_modulus_out(const at::Tensor& lhs,
+                                     const at::Tensor& rhs,
+                                     const at::Tensor& twice_modulus,
+                                     at::Tensor& out) {
+  ::add_lazy_twice_modulus_cpu(out, lhs, rhs, twice_modulus);
+}
+
+void sub_lazy_out(const at::Tensor& a,
+                  const at::Tensor& b,
+                  const at::Tensor& p,
+                  at::Tensor& out) {
+  binary_cpu_out<BinaryOperation::kSubLazy>(out, a, b, p, "rns_sub_lazy_out");
 }
 
 void reduce_to_standard_(at::Tensor& a, const at::Tensor& p) {
@@ -1010,7 +1052,7 @@ at::Tensor mixed_radix_decompose(
                                      neg_inv_modulus_hi);
 }
 
-void mixed_radix_decompose_out_(
+void mixed_radix_decompose_out(
     const at::Tensor& source_residues,
     const at::Tensor& mixed_radix_normalizers,
     const at::Tensor& mixed_radix_propagation_coefficients,
@@ -1040,7 +1082,7 @@ at::Tensor mixed_radix_basis_extend_to_montgomery(
                                   destination_row_count);
 }
 
-void mixed_radix_basis_extend_to_montgomery_out_(
+void mixed_radix_basis_extend_to_montgomery_out(
     const at::Tensor& mixed_radix_components,
     const at::Tensor& basis_extension_coefficients,
     const at::Tensor& rns_params,

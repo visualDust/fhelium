@@ -6,7 +6,7 @@ The generated files expose dynamically registered ``torch.ops`` operators to IDE
 Invoke this file directly from the repository root to discover operator schemas without importing the wrapper package being generated.
 
 Design goals:
-- discover real schemas from the PyTorch dispatcher after loading local .so files;
+- discover real schemas from the PyTorch dispatcher after loading libfhelium_torch;
 - preserve PyTorch alias/mutation semantics in docstrings;
 - enforce trailing-underscore names for mutating operators;
 - keep generated wrappers thin and predictable.
@@ -17,17 +17,18 @@ from __future__ import annotations
 import argparse
 import ast
 import difflib
+import importlib.util
 import keyword
 import os
 import shutil
 import subprocess
 import sys
-import sysconfig
 import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import indent
+from types import ModuleType
 
 import torch
 
@@ -36,6 +37,7 @@ TYPE_MAP = {
     "Optional[Tensor]": "torch.Tensor | None",
     "List[Tensor]": "list[torch.Tensor]",
     "List[List[Tensor]]": "list[list[torch.Tensor]]",
+    "List[Optional[Tensor]]": "list[torch.Tensor | None]",
     "int": "int",
     "List[int]": "list[int]",
     "float": "float",
@@ -74,12 +76,14 @@ class ArgSpec:
     kwarg_only: bool
     default: object | None = None
     has_default: bool = False
+    alias: str | None = None
 
 
 @dataclass(frozen=True)
 class ReturnSpec:
     type_repr: str
     py_type: str
+    alias: str | None = None
 
 
 @dataclass(frozen=True)
@@ -193,6 +197,95 @@ FAKE_TENSOR_SHAPE_RULES = {
 }
 
 
+FAKE_TABLE_HELPER = '''def _table(
+    tables: list[torch.Tensor | None], family: str, name: str
+) -> torch.Tensor:
+    index = torch.ops.fhelium_ckks_ops.table_slot_names(family, 0).index(name)
+    return cast(torch.Tensor, tables[index])'''
+
+# Fake implementations of operators whose outputs depend on several
+# arguments or on the extents of named tables. Each body runs inside the
+# generated fake function and may call ``_table`` for the Tensor of a
+# named slot in a positional table argument.
+FAKE_BODIES = {
+    "fhelium_rns_ops::centered_basis_extend": (
+        "rows = _table(tables, 'basis_extension', 'target_parameters').size(1)\n"
+        "return source.new_empty((*source.shape[:-2], rows, source.size(-1)))"
+    ),
+    "fhelium_rns_ops::hybrid_modup_digit": (
+        "rows = _table(tables, 'key_switch', 'qp_parameters').size(1)\n"
+        "return source.new_empty((*source.shape[:-2], rows, source.size(-1)))"
+    ),
+    "fhelium_rns_ops::moddown_qp_to_q": (
+        "return source.new_empty((*source.shape[:-2], source.size(-2) - p_count, source.size(-1)))"
+    ),
+    "fhelium_rns_ops::moddown_ntt_qp_to_q": (
+        "return source.new_empty((*source.shape[:-2], source.size(-2) - p_count, source.size(-1)))"
+    ),
+    "fhelium_rns_ops::moddown_add_rescale": (
+        "rows = _table(tables, 'key_switch', 'joint_remaining_parameters').size(1)\n"
+        "return products.new_empty((*products.shape[:-2], rows, products.size(-1)))"
+    ),
+    "fhelium_rns_ops::rational_rescale": (
+        "rows = _table(tables, 'rescale', 'target_parameters').size(1)\n"
+        "return source.new_empty((*source.shape[:-2], rows, source.size(-1)))"
+    ),
+    "fhelium_rns_ops::rounded_trailing_quotient": (
+        "return source.new_empty((*source.shape[:-2], source.size(-2) - drop_count, source.size(-1)))"
+    ),
+    "fhelium_ckks_ops::relinearize": (
+        "rows = _table(tables, 'key_switch', 'joint_remaining_parameters').size(1) if rescale else source.size(-2)\n"
+        "return source.new_empty((2, *source.shape[1:-2], rows, source.size(-1)))"
+    ),
+    "fhelium_ckks_ops::rotate_hoisted": "return c0.new_empty((2, *c0.shape))",
+    "fhelium_ckks_ops::rotate_many": (
+        "return [source.new_empty(source.shape) for _ in range(len(galois) // 3)]"
+    ),
+    "fhelium_ckks_ops::rotation_digits": (
+        "rows = _table(tables, 'key_switch', 'qp_parameters').size(1)\n"
+        "return component.new_empty((len(digits) // 3, *component.shape[:-2], rows, component.size(-1)))"
+    ),
+    "fhelium_ckks_ops::rotation_sum": (
+        "source = sources[0]\n"
+        "return source.new_empty((source.size(0), *source.shape[1:-2], remaining_q_count, source.size(-1)))"
+    ),
+    "fhelium_ckks_ops::rotation_sum_finish_": (
+        "return ordinary.new_empty((ordinary.size(0), *ordinary.shape[1:-2], remaining_q_count, ordinary.size(-1)))"
+    ),
+    "fhelium_ckks_ops::grouped_rotation_weighted_sum": (
+        "return source.new_empty((group_count, *source.shape))"
+    ),
+    "fhelium_ckks_ops::encapsulated_modulus_raise": (
+        "return source.new_empty((source.size(0), *source.shape[1:-2], q_count - target_row_start, source.size(-1)))"
+    ),
+    "fhelium_ckks_ops::encode": (
+        "return message.new_empty((*message.shape[:-1], twister.size(-1)), dtype=torch.int64)"
+    ),
+    "fhelium_ckks_ops::decode": (
+        "return coefficients.new_empty((*coefficients.shape[:-1], coefficients.size(-1) // 2), dtype=torch.float64 if is_real else torch.complex128)"
+    ),
+    "fhelium_ckks_ops::encrypt": (
+        "parameters = _table(tables, 'ring', 'forward_0')\n"
+        "return parameters.new_empty((2, *coefficients.shape[:-1], parameters.size(1), coefficients.size(-1)))"
+    ),
+    "fhelium_ckks_ops::decrypt_phase": (
+        "return ciphertext.new_empty(ciphertext.shape[1:])"
+    ),
+    "fhelium_ckks_ops::decrypt": (
+        "return ciphertext.new_empty((*ciphertext.shape[1:-2], ciphertext.size(-1)), dtype=torch.float64)"
+    ),
+    "fhelium_ckks_ops::reconstruct_q_coefficients": (
+        "return residues.new_empty((*residues.shape[:-2], residues.size(-1)), dtype=torch.float64)"
+    ),
+    "fhelium_ckks_ops::prepare_periodic_plaintext": (
+        "residues = parameters.new_empty((*message.shape[:-1], parameters.size(1), 2 * pre.numel()))\n"
+        "if polynomial_domain == 'coefficient':\n"
+        "    return [residues, parameters.new_empty((*residues.shape[:-1], 1))]\n"
+        "return [residues]"
+    ),
+}
+
+
 def type_to_annotation(type_repr: str) -> str:
     return TYPE_MAP.get(type_repr, "Any")
 
@@ -212,23 +305,27 @@ def sanitize_arg_name(name: str, used: set[str]) -> str:
     return py_name
 
 
-def load_libraries(
-    lib_dir: Path, *, library_dir: Path | None, verbose: bool
-) -> list[Path]:
-    if not lib_dir.is_dir():
-        raise FileNotFoundError(f"Torch-op directory not found: {lib_dir}")
+def load_abi_helpers() -> ModuleType:
+    path = (
+        Path(__file__).resolve().parents[1] / "fhelium" / "native" / "_abi.py"
+    )
+    spec = importlib.util.spec_from_file_location("_fhelium_native_abi", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load native ABI helpers from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
-    extension_suffix = sysconfig.get_config_var("EXT_SUFFIX")
-    if not extension_suffix:
-        raise RuntimeError("Python did not report EXT_SUFFIX")
-    path = lib_dir / f"_ops{extension_suffix}"
+
+def load_libraries(library_dir: Path, *, verbose: bool) -> list[Path]:
+    path = load_abi_helpers().torch_library_path(library_dir.parent)
     if not path.is_file():
-        raise RuntimeError(f"No current-ABI FHElium _ops library found: {path}")
+        raise RuntimeError(f"FHElium Torch library not found: {path}")
     if verbose:
         print(f"  -> loading {path}")
-    # Windows resolves _ops' libfhelium dependency through DLL directories;
-    # other platforms use the module's runtime search path.
-    if library_dir is not None and sys.platform == "win32":
+    # Windows resolves the libfhelium dependency through DLL directories;
+    # other platforms use the library's runtime search path.
+    if sys.platform == "win32":
         os.add_dll_directory(str(library_dir))
     torch.ops.load_library(str(path))
     return [path]
@@ -237,6 +334,13 @@ def load_libraries(
 def dispatcher_op_names(namespace_prefix: str) -> list[str]:
     names = torch._C._dispatch_get_all_op_names()
     return sorted(name for name in names if name.startswith(namespace_prefix))
+
+
+def alias_set(argument: torch.Argument) -> str | None:
+    info = argument.alias_info
+    if info is None or not info.before_set:
+        return None
+    return ",".join(sorted(info.before_set))
 
 
 def schema_to_spec(schema: torch.FunctionSchema) -> OpSpec:
@@ -258,12 +362,15 @@ def schema_to_spec(schema: torch.FunctionSchema) -> OpSpec:
                 kwarg_only=bool(arg.kwarg_only),
                 default=arg.default_value if has_default else None,
                 has_default=has_default,
+                alias=alias_set(arg),
             )
         )
 
     returns = tuple(
         ReturnSpec(
-            type_repr=str(ret.type), py_type=type_to_annotation(str(ret.type))
+            type_repr=str(ret.type),
+            py_type=type_to_annotation(str(ret.type)),
+            alias=alias_set(ret),
         )
         for ret in schema.returns
     )
@@ -303,11 +410,18 @@ def validate_specs(specs: dict[str, list[OpSpec]]) -> None:
                 )
             seen_python_names.add(spec.python_name)
 
-            if spec.mutating_args and not spec.name.endswith("_"):
-                args = ", ".join(arg.name for arg in spec.mutating_args)
+            # A trailing underscore marks an operator that writes its first
+            # argument. Operators may also advance state arguments, such as
+            # random-stream seeds, which their schemas declare as written.
+            if (
+                spec.args
+                and spec.args[0].is_write
+                and not spec.name.endswith("_")
+            ):
                 raise ValueError(
-                    f"Mutating op {namespace}::{spec.name} writes [{args}] "
-                    "but does not follow PyTorch trailing-underscore naming"
+                    f"Mutating op {namespace}::{spec.name} writes its first "
+                    "argument but does not follow PyTorch trailing-underscore "
+                    "naming"
                 )
 
 
@@ -382,6 +496,15 @@ def fake_return_expression(spec: OpSpec) -> str:
         return "pass"
 
     qualified_name = f"{spec.namespace}::{spec.name}"
+    body = FAKE_BODIES.get(qualified_name)
+    if body is not None:
+        return body
+    if len(spec.returns) == 1 and spec.returns[0].alias is not None:
+        # A mutating operator returns the argument it writes.
+        aliased = next(
+            arg for arg in spec.args if arg.alias == spec.returns[0].alias
+        )
+        return f"return {aliased.py_name}"
     shape_rule = FAKE_TENSOR_SHAPE_RULES.get(qualified_name)
     if shape_rule is not None:
         if len(spec.returns) != 1 or spec.returns[0].py_type != "torch.Tensor":
@@ -499,8 +622,11 @@ def specs_need_any(specs: Iterable[OpSpec]) -> bool:
     return False
 
 
-def render_header(needs_any: bool, *, require_native: bool) -> str:
-    typing_import = "from typing import Any\n" if needs_any else ""
+def render_header(
+    needs_any: bool, *, require_native: bool, typing_names: tuple[str, ...] = ()
+) -> str:
+    names = sorted({*typing_names, *(("Any",) if needs_any else ())})
+    typing_import = f"from typing import {', '.join(names)}\n" if names else ""
     native_guard = (
         "def _require_native() -> None:\n"
         "    from fhelium.native import require_native\n\n"
@@ -537,16 +663,24 @@ def render_fake_module(specs_by_namespace: dict[str, list[OpSpec]]) -> str:
     # Operators without Tensor arguments run their host kernel under fake
     # tensor modes, and CompositeImplicitAutograd operators decompose into
     # registered operators; neither needs a fake implementation.
+    # Operators that return host values computed from Tensor data, such as
+    # key moduli, have no fake implementation unless one is listed.
     fake_specs = [
         spec
         for specs in specs_by_namespace.values()
         for spec in specs
         if not spec.decomposes
         and any("Tensor" in arg.type_repr for arg in spec.args)
+        and (
+            f"{spec.namespace}::{spec.name}" in FAKE_BODIES
+            or all("Tensor" in ret.type_repr for ret in spec.returns)
+        )
     ]
     fake_ops = [render_fake(spec) for spec in fake_specs]
     return (
-        f"{render_header(specs_need_any(fake_specs), require_native=False)}\n\n"
+        f"{render_header(specs_need_any(fake_specs), require_native=False, typing_names=('cast',))}\n\n"
+        + FAKE_TABLE_HELPER
+        + "\n\n\n"
         + "\n\n\n".join(fake_ops)
         + "\n"
     )
@@ -627,16 +761,10 @@ def parse_args() -> argparse.Namespace:
         description="Generate typed Python wrappers for FHElium custom Torch ops."
     )
     parser.add_argument(
-        "--path",
-        type=Path,
-        default=Path("fhelium/native/torchops"),
-        help="Directory containing compiled custom op .so files.",
-    )
-    parser.add_argument(
         "--library-dir",
         type=Path,
-        default=None,
-        help="Directory containing libfhelium, added to the Windows DLL search path.",
+        required=True,
+        help="SDK library directory containing libfhelium and libfhelium_torch.",
     )
     parser.add_argument(
         "--output",
@@ -669,11 +797,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def generate(args: argparse.Namespace) -> dict[str, list[OpSpec]]:
-    load_libraries(
-        args.path.resolve(),
-        library_dir=args.library_dir.resolve() if args.library_dir else None,
-        verbose=args.verbose,
-    )
+    load_libraries(args.library_dir.resolve(), verbose=args.verbose)
     specs = collect_specs(args.namespace_prefix)
     if not specs:
         raise RuntimeError(

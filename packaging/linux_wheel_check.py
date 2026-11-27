@@ -18,7 +18,7 @@ from zipfile import ZipFile
 from packaging.requirements import Requirement
 
 
-EXPECTED_OPS_RUNPATH = "$ORIGIN/../lib:$ORIGIN/../../../torch/lib"
+EXPECTED_TORCH_LIBRARY_RUNPATH = "$ORIGIN:$ORIGIN/../../../torch/lib"
 EXPECTED_LIBRARY_RUNPATH = "$ORIGIN/../../../torch/lib"
 SDK_FILES = (
     "fhelium/native/include/fhelium/fhelium.h",
@@ -230,13 +230,16 @@ def main() -> None:
                 f"actual={torch_requirements!r}"
             )
 
-        ops_files = list(root.glob("fhelium/native/torchops/_ops*.so"))
-        library_files = list(root.glob("fhelium/native/lib/*.so*"))
-        if [path.name for path in library_files] != ["libfhelium.so"]:
+        library_files = {
+            path.name: path for path in root.glob("fhelium/native/lib/*.so*")
+        }
+        if sorted(library_files) != ["libfhelium.so", "libfhelium_torch.so"]:
             raise RuntimeError(
-                "wheel must contain exactly one native library, libfhelium.so"
+                "wheel native libraries must be libfhelium.so and "
+                "libfhelium_torch.so"
             )
-        library = library_files[0]
+        library = library_files["libfhelium.so"]
+        torch_library = library_files["libfhelium_torch.so"]
         missing_sdk_files = [
             name for name in SDK_FILES if not (root / name).is_file()
         ]
@@ -245,10 +248,6 @@ def main() -> None:
                 "wheel C++ SDK is incomplete: " + ", ".join(missing_sdk_files)
             )
         cuda_info_files = list(root.glob("fhelium/native/cuda/cuda_info*.so"))
-        if len(ops_files) != 1:
-            raise RuntimeError(
-                "wheel must contain exactly one native _ops file"
-            )
         expected_cuda_info_count = 1 if configuration.has_gpu else 0
         if len(cuda_info_files) != expected_cuda_info_count:
             raise RuntimeError(
@@ -320,21 +319,19 @@ def main() -> None:
             raise RuntimeError(
                 "native manifest Python ABI differs from wheel tag"
             )
-        suffix = python_identity.get("ext_suffix")
-        if ops_files[0].name != "_ops" + str(suffix):
-            raise RuntimeError(
-                "native extension suffix differs from manifest Python ABI"
-            )
 
-        ops_section = dynamic_section(ops_files[0])
-        ops_paths = dynamic_values(ops_section, "(?:RPATH|RUNPATH)")
-        if ops_paths != [EXPECTED_OPS_RUNPATH]:
+        torch_section = dynamic_section(torch_library)
+        torch_paths = dynamic_values(torch_section, "(?:RPATH|RUNPATH)")
+        if torch_paths != [EXPECTED_TORCH_LIBRARY_RUNPATH]:
             raise RuntimeError(
-                f"_ops runtime path must be {EXPECTED_OPS_RUNPATH!r}, got {ops_paths!r}"
+                "libfhelium_torch runtime path must be "
+                f"{EXPECTED_TORCH_LIBRARY_RUNPATH!r}, got {torch_paths!r}"
             )
-        assert_no_build_paths(ops_section, label="_ops dynamic section")
-        if "libfhelium.so" not in dynamic_values(ops_section, "NEEDED"):
-            raise RuntimeError("_ops must link libfhelium.so")
+        assert_no_build_paths(
+            torch_section, label="libfhelium_torch dynamic section"
+        )
+        if "libfhelium.so" not in dynamic_values(torch_section, "NEEDED"):
+            raise RuntimeError("libfhelium_torch must link libfhelium.so")
 
         library_section = dynamic_section(library)
         library_paths = dynamic_values(library_section, "(?:RPATH|RUNPATH)")
@@ -387,7 +384,7 @@ def main() -> None:
 
         external = {
             library
-            for native_file in (*ops_files, library, *cuda_info_files)
+            for native_file in (torch_library, library, *cuda_info_files)
             for library in dynamic_values(
                 dynamic_section(native_file), "NEEDED"
             )

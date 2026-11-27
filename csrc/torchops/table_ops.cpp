@@ -44,31 +44,45 @@ preset_parameters_op(std::string_view name) {
 TORCH_LIBRARY_FRAGMENT(fhelium_rns_ops, m) {
   m.def(
       "parameter_table(int[] moduli, int log_n, float default_scale, "
-      "ScalarType dtype) -> Tensor");
+      "ScalarType dtype) -> Tensor",
+      {at::Tag::cudagraph_unsafe});
   m.def(
       "product_residues(int[] factors, int[] targets, int exponent, bool "
-      "montgomery, ScalarType dtype) -> Tensor");
+      "montgomery, ScalarType dtype) -> Tensor",
+      {at::Tag::cudagraph_unsafe});
   m.def(
       "half_product_residues(int[] factors, int[] targets, ScalarType dtype) "
-      "-> Tensor");
-  m.def("half_product_digits(int[] factors, ScalarType dtype) -> Tensor");
+      "-> Tensor",
+      {at::Tag::cudagraph_unsafe});
+  m.def("half_product_digits(int[] factors, ScalarType dtype) -> Tensor",
+        {at::Tag::cudagraph_unsafe});
   m.def(
       "quotient_offset_residues(int[] p_moduli, int[] d_moduli, bool "
-      "p_nearest, bool d_nearest, int[] targets, ScalarType dtype) -> Tensor");
+      "p_nearest, bool d_nearest, int[] targets, ScalarType dtype) -> Tensor",
+      {at::Tag::cudagraph_unsafe});
   m.def(
       "mixed_radix_tables(int[] source, int[] destination, ScalarType dtype) "
-      "-> (Tensor, Tensor, Tensor)");
+      "-> (Tensor, Tensor, Tensor)",
+      {at::Tag::cudagraph_unsafe});
   m.def(
       "crt_basis_extension_tables(int[] source, int[] target, bool "
       "normalized, ScalarType dtype) -> (Tensor, Tensor, Tensor, Tensor, "
-      "Tensor)");
+      "Tensor)",
+      {at::Tag::cudagraph_unsafe});
   m.def(
       "crt_quotient_tables(int[] source, int[] target, int[] divisor, "
-      "ScalarType dtype) -> (Tensor, Tensor, Tensor, Tensor, Tensor)");
+      "ScalarType dtype) -> (Tensor, Tensor, Tensor, Tensor, Tensor)",
+      {at::Tag::cudagraph_unsafe});
   m.def(
       "trailing_quotient_inverses(int[] moduli, int drop_count, ScalarType "
-      "dtype) -> Tensor");
-  m.def("rescale_inverse_matrix(int[] moduli, ScalarType dtype) -> Tensor");
+      "dtype) -> Tensor",
+      {at::Tag::cudagraph_unsafe});
+  m.def("rescale_inverse_matrix(int[] moduli, ScalarType dtype) -> Tensor",
+        {at::Tag::cudagraph_unsafe});
+  m.def(
+      "integer_scalar_table(int[] moduli, str scalar, ScalarType dtype, "
+      "Device device) -> Tensor",
+      {at::Tag::cudagraph_unsafe});
 }
 
 TORCH_LIBRARY_IMPL(fhelium_rns_ops, CompositeImplicitAutograd, m) {
@@ -84,23 +98,30 @@ TORCH_LIBRARY_IMPL(fhelium_rns_ops, CompositeImplicitAutograd, m) {
   m.impl("trailing_quotient_inverses",
          &fhelium::rns::trailing_quotient_inverses);
   m.impl("rescale_inverse_matrix", &fhelium::rns::rescale_inverse_matrix);
+  m.impl("integer_scalar_table", &fhelium::rns::integer_scalar_table);
 }
 
 TORCH_LIBRARY_FRAGMENT(fhelium_ntt_ops, m) {
-  m.def("negacyclic_root(int modulus, int log_n) -> int");
+  m.def("negacyclic_root(int modulus, int log_n) -> int",
+        {at::Tag::cudagraph_unsafe});
   m.def(
       "compact_twiddles(int[] moduli, int log_n, ScalarType dtype, bool "
-      "shoup32=False) -> (Tensor, Tensor)");
+      "shoup32=False) -> (Tensor, Tensor)",
+      {at::Tag::cudagraph_unsafe});
   m.def(
       "power_of_two_radix_twiddles(int[] moduli, int log_n, int radix, "
-      "ScalarType dtype) -> (Tensor, Tensor, Tensor, Tensor)");
+      "ScalarType dtype) -> (Tensor, Tensor, Tensor, Tensor)",
+      {at::Tag::cudagraph_unsafe});
   m.def(
       "indexed_radix2_plan(int[] moduli, int log_n, ScalarType dtype) -> "
-      "(Tensor, Tensor, Tensor, Tensor)");
+      "(Tensor, Tensor, Tensor, Tensor)",
+      {at::Tag::cudagraph_unsafe});
   m.def(
       "subring_indexed_radix2_plan(int[] moduli, int log_n, int log_extent, "
-      "ScalarType dtype) -> (Tensor, Tensor, Tensor)");
-  m.def("galois_indices(int log_n, int galois_element) -> Tensor");
+      "ScalarType dtype) -> (Tensor, Tensor, Tensor)",
+      {at::Tag::cudagraph_unsafe});
+  m.def("galois_indices(int log_n, int galois_element) -> Tensor",
+        {at::Tag::cudagraph_unsafe});
 }
 
 TORCH_LIBRARY_IMPL(fhelium_ntt_ops, CompositeImplicitAutograd, m) {
@@ -115,26 +136,38 @@ TORCH_LIBRARY_IMPL(fhelium_ntt_ops, CompositeImplicitAutograd, m) {
 }
 
 TORCH_LIBRARY_FRAGMENT(fhelium_ckks_ops, m) {
-  m.def("rotation_galois_element(int log_n, int step, int generator) -> int");
+  m.def("rotation_galois_element(int log_n, int step, int generator) -> int",
+        {at::Tag::cudagraph_unsafe});
   m.def(
       "coefficient_galois_indices(int log_n, int galois_element) -> (Tensor, "
-      "Tensor)");
-  m.def("slot_permutations(int log_n, int generator) -> (Tensor, Tensor)");
-  m.def("periodic_extent(int period, int log_n, int generator) -> int");
-  m.def("periodic_slot_positions(int extent, int generator) -> Tensor");
-  m.def("slot_twist(int length, bool inverse, Device device) -> Tensor");
-  m.def("scaling_primes(int prime_bits, int ring_dimension) -> int[]");
-  m.def("special_primes(int prime_bits, int ring_dimension) -> int[]");
-  m.def("preset_names() -> str[]");
+      "Tensor)",
+      {at::Tag::cudagraph_unsafe});
+  m.def("slot_permutations(int log_n, int generator) -> (Tensor, Tensor)",
+        {at::Tag::cudagraph_unsafe});
+  m.def("periodic_extent(int period, int log_n, int generator) -> int",
+        {at::Tag::cudagraph_unsafe});
+  m.def("periodic_slot_positions(int extent, int generator) -> Tensor",
+        {at::Tag::cudagraph_unsafe});
+  m.def("slot_twist(int length, bool inverse, Device device) -> Tensor",
+        {at::Tag::cudagraph_unsafe});
+  m.def("scaling_primes(int prime_bits, int ring_dimension) -> int[]",
+        {at::Tag::cudagraph_unsafe});
+  m.def("special_primes(int prime_bits, int ring_dimension) -> int[]",
+        {at::Tag::cudagraph_unsafe});
+  m.def("preset_names() -> str[]", {at::Tag::cudagraph_unsafe});
   m.def(
       "preset_parameters(str name) -> (int, int[], int[], int[], float[], "
-      "int[])");
-  m.def("validate_moduli(int log_n, int[] moduli) -> ()");
-  m.def("modulus_bits(int[] moduli) -> int");
-  m.def("key_digit_sizes(int[] q_moduli, int[] p_moduli) -> int[]");
+      "int[])",
+      {at::Tag::cudagraph_unsafe});
+  m.def("validate_moduli(int log_n, int[] moduli) -> ()",
+        {at::Tag::cudagraph_unsafe});
+  m.def("modulus_bits(int[] moduli) -> int", {at::Tag::cudagraph_unsafe});
+  m.def("key_digit_sizes(int[] q_moduli, int[] p_moduli) -> int[]",
+        {at::Tag::cudagraph_unsafe});
   m.def(
       "maximum_modulus_bits(int ring_dimension, int target_bits, str "
-      "secret_distribution, float error_stddev) -> int?");
+      "secret_distribution, float error_stddev) -> int?",
+      {at::Tag::cudagraph_unsafe});
 }
 
 TORCH_LIBRARY_IMPL(fhelium_ckks_ops, CompositeImplicitAutograd, m) {

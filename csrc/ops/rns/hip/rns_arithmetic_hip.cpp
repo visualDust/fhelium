@@ -12,33 +12,36 @@ at::Tensor montgomery_mul(const at::Tensor& lhs,
   return rns_montgomery_mul_hip(lhs, rhs, rns_params);
 }
 
-at::Tensor montgomery_weighted_sum(at::TensorList ciphertexts,
-                                   at::TensorList plaintexts,
-                                   const at::Tensor& rns_params) {
-  return rns_montgomery_weighted_sum_hip(ciphertexts, plaintexts, rns_params);
+void montgomery_weighted_sum_out(at::TensorList ciphertexts,
+                                 at::TensorList plaintexts,
+                                 const at::Tensor& rns_params,
+                                 at::Tensor& out) {
+  rns_montgomery_weighted_sum_out_hip(ciphertexts, plaintexts, rns_params, out);
 }
 
-at::Tensor montgomery_weighted_sums(at::TensorList ciphertexts,
-                                    at::TensorList plaintexts,
-                                    int64_t group_count,
-                                    const at::Tensor& rns_params) {
-  return rns_montgomery_weighted_sums_hip(
-      ciphertexts, plaintexts, group_count, rns_params);
+void montgomery_weighted_sums_out(at::TensorList ciphertexts,
+                                  at::TensorList plaintexts,
+                                  int64_t group_count,
+                                  const at::Tensor& rns_params,
+                                  at::Tensor& out) {
+  rns_montgomery_weighted_sums_hip(
+      ciphertexts, plaintexts, group_count, rns_params, out);
 }
 
-at::Tensor montgomery_mul_cyclic_compressed(const at::Tensor& lhs,
-                                            const at::Tensor& compressed_rhs,
-                                            const at::Tensor& rns_params) {
-  return rns_montgomery_mul_cyclic_compressed_hip(
-      lhs, compressed_rhs, rns_params);
+void montgomery_mul_cyclic_compressed_out(const at::Tensor& lhs,
+                                          const at::Tensor& compressed_rhs,
+                                          const at::Tensor& rns_params,
+                                          at::Tensor& out) {
+  rns_montgomery_mul_cyclic_compressed_out_hip(
+      lhs, compressed_rhs, rns_params, out);
 }
 
-at::Tensor montgomery_mul_contiguous_compressed(
-    const at::Tensor& lhs,
-    const at::Tensor& compressed_rhs,
-    const at::Tensor& rns_params) {
-  return rns_montgomery_mul_contiguous_compressed_hip(
-      lhs, compressed_rhs, rns_params);
+void montgomery_mul_contiguous_compressed_out(const at::Tensor& lhs,
+                                              const at::Tensor& compressed_rhs,
+                                              const at::Tensor& rns_params,
+                                              at::Tensor& out) {
+  rns_montgomery_mul_contiguous_compressed_out_hip(
+      lhs, compressed_rhs, rns_params, out);
 }
 
 void montgomery_mul_row_scalars_(at::Tensor& residues,
@@ -57,22 +60,32 @@ void from_montgomery_(at::Tensor& montgomery_residues,
   rns_from_montgomery_inplace_hip(montgomery_residues, rns_params);
 }
 
-at::Tensor add_lazy(const at::Tensor& lhs,
-                    const at::Tensor& rhs,
-                    const at::Tensor& rns_params) {
-  return rns_add_lazy_hip(lhs, rhs, rns_params);
+void montgomery_mul_out(const at::Tensor& lhs,
+                        const at::Tensor& rhs,
+                        const at::Tensor& rns_params,
+                        at::Tensor& out) {
+  rns_montgomery_mul_out_hip(lhs, rhs, rns_params, out);
 }
 
-at::Tensor add_lazy_with_twice_modulus(const at::Tensor& lhs,
-                                       const at::Tensor& rhs,
-                                       const at::Tensor& twice_modulus) {
-  return rns_add_lazy_with_twice_modulus_hip(lhs, rhs, twice_modulus);
+void add_lazy_out(const at::Tensor& lhs,
+                  const at::Tensor& rhs,
+                  const at::Tensor& rns_params,
+                  at::Tensor& out) {
+  rns_add_lazy_out_hip(lhs, rhs, rns_params, out);
 }
 
-at::Tensor sub_lazy(const at::Tensor& lhs,
-                    const at::Tensor& rhs,
-                    const at::Tensor& rns_params) {
-  return rns_sub_lazy_hip(lhs, rhs, rns_params);
+void add_lazy_with_twice_modulus_out(const at::Tensor& lhs,
+                                     const at::Tensor& rhs,
+                                     const at::Tensor& twice_modulus,
+                                     at::Tensor& out) {
+  rns_add_lazy_with_twice_modulus_out_hip(lhs, rhs, twice_modulus, out);
+}
+
+void sub_lazy_out(const at::Tensor& lhs,
+                  const at::Tensor& rhs,
+                  const at::Tensor& rns_params,
+                  at::Tensor& out) {
+  rns_sub_lazy_out_hip(lhs, rhs, rns_params, out);
 }
 
 void reduce_to_standard_(at::Tensor& lazy_residues,
@@ -124,7 +137,7 @@ at::Tensor mixed_radix_basis_extend_to_montgomery(
       destination_row_count);
 }
 
-void mixed_radix_decompose_out_(
+void mixed_radix_decompose_out(
     const at::Tensor& source_residues,
     const at::Tensor& mixed_radix_normalizers,
     const at::Tensor& mixed_radix_propagation_coefficients,
@@ -143,7 +156,7 @@ void mixed_radix_decompose_out_(
                                   out);
 }
 
-void mixed_radix_basis_extend_to_montgomery_out_(
+void mixed_radix_basis_extend_to_montgomery_out(
     const at::Tensor& mixed_radix_components,
     const at::Tensor& basis_extension_coefficients,
     const at::Tensor& rns_params,

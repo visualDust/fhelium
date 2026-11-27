@@ -159,7 +159,13 @@ def shutdown(
         a direct process before ``init``, is a no-op.  A world-size-one group
         is destroyed in the same way as any other initialized group.  No
         asynchronous :class:`torch.distributed.Work` handle is returned.
+        Compiled schedules bound to the destroyed groups (every group for the
+        default group) first release their group references and captured
+        graphs; they bind their groups again at their next execution.
     """
 
     if torch.distributed.is_available() and torch.distributed.is_initialized():
+        from fhelium.backend.runner import release_groups
+
+        release_groups(None if group is None else group.group_name)
         torch.distributed.destroy_process_group(group)

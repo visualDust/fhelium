@@ -13,6 +13,7 @@ import torch
 
 from fhelium.ir.dialects import rns
 from fhelium.native.wrapper import rns_ops
+from fhelium.backend.lowering import ExecBuilder
 
 if TYPE_CHECKING:
     from fhelium.backend.rns.context import RnsContext
@@ -50,36 +51,19 @@ def crt_basis_extension_tables(
     """
     if method not in {"raw", "normalized"}:
         raise ValueError("CRT lift method must be 'raw' or 'normalized'")
-    source_moduli = [context.config.moduli[i] for i in source_prime_ids]
-    target_moduli = [context.config.moduli[i] for i in target_prime_ids]
-    (
-        matrix,
-        target_reciprocals,
-        source_normalizers,
-        source_reciprocals,
-        target_offsets,
-    ) = rns_ops.crt_basis_extension_tables(
-        source_moduli, target_moduli, method == "normalized", context.dtype
+    return dict(
+        zip(
+            *rns_ops.crt_table_set(
+                context.rns_parameter_tensor,
+                list(context.config.moduli),
+                context.config.logN,
+                list(source_prime_ids),
+                list(target_prime_ids),
+                method == "normalized",
+            ),
+            strict=True,
+        )
     )
-    return {
-        "source_parameters": context.rns_parameter_tensor.index_select(
-            1,
-            torch.tensor(
-                source_prime_ids, dtype=torch.int64, device=context.device
-            ),
-        ),
-        "target_parameters": context.rns_parameter_tensor.index_select(
-            1,
-            torch.tensor(
-                target_prime_ids, dtype=torch.int64, device=context.device
-            ),
-        ),
-        "matrix": matrix.to(context.device),
-        "target_reciprocals": target_reciprocals.to(context.device),
-        "source_normalizers": source_normalizers.to(context.device),
-        "source_reciprocals": source_reciprocals.to(context.device),
-        "target_offsets": target_offsets.to(context.device),
-    }
 
 
 def centered_quotient_tables(
@@ -101,28 +85,17 @@ def centered_quotient_tables(
     divided by $E$. Names carry ``prefix`` followed by the
     :data:`CRT_OPERANDS` names.
     """
-    moduli = context.config.moduli
-    tables: dict[str, torch.Tensor] = dict(
-        zip(
-            CRT_OPERANDS[2:],
-            rns_ops.crt_quotient_tables(
-                [moduli[i] for i in source_prime_ids],
-                [moduli[i] for i in target_prime_ids],
-                [moduli[i] for i in divisor_prime_ids],
-                context.dtype,
-            ),
-            strict=True,
-        )
+    names, tensors = rns_ops.centered_quotient_table_set(
+        context.rns_parameter_tensor,
+        list(context.config.moduli),
+        context.config.logN,
+        list(source_prime_ids),
+        list(target_prime_ids),
+        list(divisor_prime_ids),
     )
-    for name, ids in (
-        ("source_parameters", source_prime_ids),
-        ("target_parameters", target_prime_ids),
-    ):
-        tables[name] = context.rns_parameter_tensor.index_select(
-            1, torch.tensor(ids, dtype=torch.int64, device=context.device)
-        )
-    tables = {name: tables[name].to(context.device) for name in CRT_OPERANDS}
-    return {prefix + name: value for name, value in tables.items()}
+    return {
+        prefix + name: value for name, value in zip(names, tensors, strict=True)
+    }
 
 
 @dataclass(frozen=True)
@@ -143,15 +116,15 @@ class NativeCrtBasisExtensionImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del invocation, resources, in_place
+        del invocation, resources
         tensors = dict(zip(CRT_OPERANDS, inputs[1:], strict=True))
         normalized = tensors["source_normalizers"].numel() != 0
         return (

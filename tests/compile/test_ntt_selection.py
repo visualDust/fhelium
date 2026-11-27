@@ -234,7 +234,7 @@ def test_ntt_fusion_preserves_surrounding_arithmetic_and_escaping_results(
     ("p_bits", "dtype"), [(28, torch.int32), (60, torch.int64)]
 )
 def test_compiled_ntt_matches_native_ntt_for_each_storage_width(p_bits, dtype):
-    """Compiled transforms, fused or native by device, equal Eager's native NTT."""
+    """Compiled NTT transforms equal Eager's native NTT for each residue storage width."""
     if not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
     from fhelium import compile as fc

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import torch
 
-from fhelium.backend._native_operands import key_switch_options, mapping_tables
+from fhelium.backend._native_operands import (
+    key_switch_options,
+    mapping_tables,
+    rotation_galois,
+)
 from fhelium.backend.ckks.tables import RotationSumTables
 from fhelium.native.wrapper import ckks_ops
 
@@ -31,18 +35,18 @@ class RotationSumAccumulator:
         self.products: torch.Tensor | None = None
 
     def _arguments(self):
-        names, tables = mapping_tables(self.tables.tensor_operands())
+        tensors = self.tables.tensor_operands()
         options = key_switch_options(self.tables.attributes)
         options["input_domain"] = self.input_domain
-        return names, tables, options
+        return tensors, mapping_tables("key_switch", tensors), options
 
-    def _products(self, names, tables) -> torch.Tensor:
+    def _products(self, tensors) -> torch.Tensor:
         if self.products is None:
             assert self.ordinary is not None
             self.products = self.ordinary.new_zeros(
                 (
                     *self.ordinary.shape[:-2],
-                    tables[names.index("qp_parameters")].size(1),
+                    tensors["qp_parameters"].size(1),
                     self.ordinary.size(-1),
                 )
             )
@@ -61,23 +65,22 @@ class RotationSumAccumulator:
 
         A seeded key supplies its seed rows and ChaCha round count.
         """
-        names, tables, options = self._arguments()
+        tensors, tables, options = self._arguments()
         if seed is not None:
             options.update(key_seeds=[seed], key_rounds=key_rounds)
         if self.ordinary is None:
             self.ordinary = torch.zeros_like(source)
         # Step zero reads no key products, and the QP layout of a later key
         # selects the product rows.
-        products = (
-            self._products(names, tables) if step else source.new_empty(0)
-        )
+        products = self._products(tensors) if step else source.new_empty(0)
         ckks_ops.rotation_sum_add_(
             self.ordinary,
             products,
             source,
             key,
-            int(step),
-            names,
+            rotation_galois(self.tables.attributes, (int(step),), source)
+            if step
+            else [],
             tables,
             **options,
         )
@@ -86,11 +89,10 @@ class RotationSumAccumulator:
         """Return surviving Q coefficient/standard residues after one quotient."""
         if self.ordinary is None:
             raise ValueError("Rotation sum requires at least one contribution")
-        names, tables, options = self._arguments()
+        tensors, tables, options = self._arguments()
         result = ckks_ops.rotation_sum_finish_(
             self.ordinary,
-            self._products(names, tables),
-            names,
+            self._products(tensors),
             tables,
             **options,
             remaining_q_count=self.tables.remaining_q_count,

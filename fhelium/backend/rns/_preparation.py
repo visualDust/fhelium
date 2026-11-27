@@ -92,7 +92,9 @@ def rns_names(
 ) -> tuple[str, ...]:
     """List RNS-only preparation tables, independently of an NTT schedule."""
     if basis_conversion not in {"exact", "crt", "normalized_crt"}:
-        raise ValueError("basis_conversion must be exact, crt, or normalized_crt")
+        raise ValueError(
+            "basis_conversion must be exact, crt, or normalized_crt"
+        )
     names = ["q_parameters", "qp_parameters"]
     names.extend(
         MODDOWN_RESCALE_TABLE_NAMES
@@ -113,7 +115,6 @@ def rns_names(
         if basis_conversion != "exact":
             names.extend(f"digit{i}_crt_{name}" for name in CRT_OPERANDS)
             continue
-        names.append(f"digit{i}_parameters")
         if stop - start > 1:
             names.extend(
                 (

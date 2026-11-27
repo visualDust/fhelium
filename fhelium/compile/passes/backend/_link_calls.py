@@ -9,6 +9,8 @@ from xdsl.dialects.builtin import ModuleOp, StringAttr
 from xdsl.dialects.func import CallOp
 
 from fhelium.backend.execution import OperationBackend, ProgramExecutable
+from fhelium.backend._planning import destination_results
+from fhelium.backend.runner import CalledSchedule
 from fhelium.ir import Program
 
 from ..._pipeline import PassResult
@@ -19,7 +21,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class CalledProgram:
-    """Execute ``func.call`` operations with the linked executable of their callee."""
+    """Lower ``func.call`` operations to calls of their callee's lowered schedule."""
 
     executable: ProgramExecutable
     symbol: str | None = None
@@ -38,8 +40,22 @@ class CalledProgram:
     def resource_requirements(self, invocation) -> tuple[()]:
         return ()
 
-    def execute(self, invocation, inputs, resources, /, *, in_place):
-        return self.executable._call(*inputs)
+    def lower(self, invocation, inputs, resources, builder, /):
+        from ._prepare_host import runtime_input_layout
+
+        layouts = tuple(runtime_input_layout(value) for value in inputs)
+        lowered = self.executable._lowered.get(layouts)
+        if lowered is None:
+            lowered = self.executable._lower(layouts)
+        # The callee writes results it allocates alone into storage the
+        # caller places, such as its arena, instead of allocating them.
+        destinations = destination_results(lowered.schedule)
+        return builder.call_schedule(
+            CalledSchedule(self.executable, layouts, destinations),
+            inputs,
+            lowered.result_layouts,
+            destinations,
+        )
 
 
 class LinkedFunctions(dict):

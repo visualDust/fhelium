@@ -1,6 +1,6 @@
 # Rotation hoisting
 
-**Example source:** [`examples/06_eager_rotation_hoisting.py`](https://github.com/VisualDust/fhelium/blob/main/examples/06_eager_rotation_hoisting.py)
+**Example source:** [`examples/05_eager_rotation_hoisting.py`](https://github.com/VisualDust/fhelium/blob/main/examples/05_eager_rotation_hoisting.py)
 
 This example benchmarks caller-selected independent rotations against one caller-selected hoisted group over the same source and direct keys. Rotation hoisting shares decomposition and preparation derived from one ciphertext; it is a scheduling choice rather than an implementation selected invisibly by a backend.
 
@@ -22,7 +22,7 @@ Both sequence methods accept `use_hoisting`. `True` forms one scheduled group fr
 ## Run the benchmark
 
 ```bash
-python examples/06_eager_rotation_hoisting.py \
+python examples/05_eager_rotation_hoisting.py \
   --preset slots32768-scale40-depth34 \
   --counts 4,8,16 \
   --warmup 5 \
@@ -32,7 +32,7 @@ python examples/06_eager_rotation_hoisting.py \
 Start with fewer runs when checking a new environment:
 
 ```bash
-python examples/06_eager_rotation_hoisting.py \
+python examples/05_eager_rotation_hoisting.py \
   --preset slots8192-scale40-depth7 \
   --counts 2,4 \
   --warmup 1 \
@@ -141,7 +141,7 @@ The benchmark reports:
 Hoisting tends to become more valuable as the number of rotations from one source increases. Actual benefit depends on active RNS rows, decomposition shape, backend, GPU, key residency, and whether the surrounding algorithm can consume all produced rotations.
 
 ::: details Source
-<<< @/../examples/06_eager_rotation_hoisting.py
+<<< @/../examples/05_eager_rotation_hoisting.py
 :::
 
 ## Related concepts and guides

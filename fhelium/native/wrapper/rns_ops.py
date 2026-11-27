@@ -34,6 +34,31 @@ def add_lazy(
     return torch.ops.fhelium_rns_ops.add_lazy(lhs, rhs, rns_params)
 
 
+def add_lazy_out(
+    lhs: torch.Tensor,
+    rhs: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::add_lazy_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::add_lazy_out(Tensor lhs, Tensor rhs, Tensor rns_params, Tensor(a!) out) -> ()
+
+    Args:
+        lhs: torch.Tensor.
+        rhs: torch.Tensor.
+        rns_params: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.add_lazy_out(lhs, rhs, rns_params, out)
+
+
 def add_lazy_with_twice_modulus(
     lhs: torch.Tensor, rhs: torch.Tensor, twice_modulus: torch.Tensor
 ) -> torch.Tensor:
@@ -54,6 +79,33 @@ def add_lazy_with_twice_modulus(
     _require_native()
     return torch.ops.fhelium_rns_ops.add_lazy_with_twice_modulus(
         lhs, rhs, twice_modulus
+    )
+
+
+def add_lazy_with_twice_modulus_out(
+    lhs: torch.Tensor,
+    rhs: torch.Tensor,
+    twice_modulus: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::add_lazy_with_twice_modulus_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::add_lazy_with_twice_modulus_out(Tensor lhs, Tensor rhs, Tensor twice_modulus, Tensor(a!) out) -> ()
+
+    Args:
+        lhs: torch.Tensor.
+        rhs: torch.Tensor.
+        twice_modulus: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.add_lazy_with_twice_modulus_out(
+        lhs, rhs, twice_modulus, out
     )
 
 
@@ -99,6 +151,70 @@ def add_standard_(
     torch.ops.fhelium_rns_ops.add_standard_(lhs, rhs, rns_params)
 
 
+def add_standard_out(
+    lhs: torch.Tensor,
+    rhs: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::add_standard_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::add_standard_out(Tensor lhs, Tensor rhs, Tensor rns_params, Tensor(a!) out) -> ()
+
+    Args:
+        lhs: torch.Tensor.
+        rhs: torch.Tensor.
+        rns_params: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.add_standard_out(lhs, rhs, rns_params, out)
+
+
+def basis_extension_table_set(
+    source_parameters: torch.Tensor,
+    source_moduli: list[int],
+    target_parameters: torch.Tensor,
+    target_moduli: list[int],
+    log_n: int,
+    source_prime_ids: list[int],
+    target_prime_ids: list[int],
+) -> tuple[list[str], list[torch.Tensor]]:
+    """
+    Typed wrapper for ``fhelium_rns_ops::basis_extension_table_set``.
+
+    Torch schema::
+
+        fhelium_rns_ops::basis_extension_table_set(Tensor source_parameters, int[] source_moduli, Tensor target_parameters, int[] target_moduli, int log_n, int[] source_prime_ids, int[] target_prime_ids) -> (str[], Tensor[])
+
+    Args:
+        source_parameters: torch.Tensor.
+        source_moduli: list[int].
+        target_parameters: torch.Tensor.
+        target_moduli: list[int].
+        log_n: int.
+        source_prime_ids: list[int].
+        target_prime_ids: list[int].
+
+    Returns: tuple[list[str], list[torch.Tensor]].
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.basis_extension_table_set(
+        source_parameters,
+        source_moduli,
+        target_parameters,
+        target_moduli,
+        log_n,
+        source_prime_ids,
+        target_prime_ids,
+    )
+
+
 def center_residues_(
     standard_residues: torch.Tensor, rns_params: torch.Tensor
 ) -> None:
@@ -120,25 +236,107 @@ def center_residues_(
 
 
 def centered_basis_extend(
-    source: torch.Tensor, table_names: list[str], tables: list[torch.Tensor]
+    source: torch.Tensor, tables: list[torch.Tensor | None]
 ) -> torch.Tensor:
     """
     Typed wrapper for ``fhelium_rns_ops::centered_basis_extend``.
 
     Torch schema::
 
-        fhelium_rns_ops::centered_basis_extend(Tensor source, str[] table_names, Tensor[] tables) -> Tensor
+        fhelium_rns_ops::centered_basis_extend(Tensor source, Tensor?[] tables) -> Tensor
 
     Args:
         source: torch.Tensor.
-        table_names: list[str].
-        tables: list[torch.Tensor].
+        tables: list[torch.Tensor | None].
 
     Returns: torch.Tensor.
     """
     _require_native()
-    return torch.ops.fhelium_rns_ops.centered_basis_extend(
-        source, table_names, tables
+    return torch.ops.fhelium_rns_ops.centered_basis_extend(source, tables)
+
+
+def centered_basis_extend_out(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    out: torch.Tensor,
+    workspace: torch.Tensor | None = None,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::centered_basis_extend_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::centered_basis_extend_out(Tensor source, Tensor?[] tables, Tensor(a!) out, Tensor(b!)? workspace=None) -> ()
+
+    Args:
+        source: torch.Tensor.
+        tables: list[torch.Tensor | None].
+        out: torch.Tensor (modified in-place).
+        workspace: torch.Tensor | None (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.centered_basis_extend_out(
+        source, tables, out, workspace
+    )
+
+
+def centered_basis_extend_workspace_bytes(
+    source: torch.Tensor, tables: list[torch.Tensor | None]
+) -> int:
+    """
+    Typed wrapper for ``fhelium_rns_ops::centered_basis_extend_workspace_bytes``.
+
+    Torch schema::
+
+        fhelium_rns_ops::centered_basis_extend_workspace_bytes(Tensor source, Tensor?[] tables) -> int
+
+    Args:
+        source: torch.Tensor.
+        tables: list[torch.Tensor | None].
+
+    Returns: int.
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.centered_basis_extend_workspace_bytes(
+        source, tables
+    )
+
+
+def centered_quotient_table_set(
+    parameters: torch.Tensor,
+    moduli: list[int],
+    log_n: int,
+    source_prime_ids: list[int],
+    target_prime_ids: list[int],
+    divisor_prime_ids: list[int],
+) -> tuple[list[str], list[torch.Tensor]]:
+    """
+    Typed wrapper for ``fhelium_rns_ops::centered_quotient_table_set``.
+
+    Torch schema::
+
+        fhelium_rns_ops::centered_quotient_table_set(Tensor parameters, int[] moduli, int log_n, int[] source_prime_ids, int[] target_prime_ids, int[] divisor_prime_ids) -> (str[], Tensor[])
+
+    Args:
+        parameters: torch.Tensor.
+        moduli: list[int].
+        log_n: int.
+        source_prime_ids: list[int].
+        target_prime_ids: list[int].
+        divisor_prime_ids: list[int].
+
+    Returns: tuple[list[str], list[torch.Tensor]].
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.centered_quotient_table_set(
+        parameters,
+        moduli,
+        log_n,
+        source_prime_ids,
+        target_prime_ids,
+        divisor_prime_ids,
     )
 
 
@@ -184,7 +382,7 @@ def crt_basis_extend(
     )
 
 
-def crt_basis_extend_out_(
+def crt_basis_extend_out(
     source_residues: torch.Tensor,
     source_parameters: torch.Tensor,
     target_parameters: torch.Tensor,
@@ -193,14 +391,14 @@ def crt_basis_extend_out_(
     source_normalizers: torch.Tensor | None,
     source_reciprocals: torch.Tensor | None,
     target_offsets: torch.Tensor | None,
-    output: torch.Tensor,
+    out: torch.Tensor,
 ) -> None:
     """
-    Typed wrapper for ``fhelium_rns_ops::crt_basis_extend_out_``.
+    Typed wrapper for ``fhelium_rns_ops::crt_basis_extend_out``.
 
     Torch schema::
 
-        fhelium_rns_ops::crt_basis_extend_out_(Tensor source_residues, Tensor source_parameters, Tensor target_parameters, Tensor matrix, Tensor target_reciprocals, Tensor? source_normalizers, Tensor? source_reciprocals, Tensor? target_offsets, Tensor(a!) output) -> ()
+        fhelium_rns_ops::crt_basis_extend_out(Tensor source_residues, Tensor source_parameters, Tensor target_parameters, Tensor matrix, Tensor target_reciprocals, Tensor? source_normalizers, Tensor? source_reciprocals, Tensor? target_offsets, Tensor(a!) out) -> ()
 
     Args:
         source_residues: torch.Tensor.
@@ -211,12 +409,12 @@ def crt_basis_extend_out_(
         source_normalizers: torch.Tensor | None.
         source_reciprocals: torch.Tensor | None.
         target_offsets: torch.Tensor | None.
-        output: torch.Tensor (modified in-place).
+        out: torch.Tensor (modified in-place).
 
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_rns_ops.crt_basis_extend_out_(
+    torch.ops.fhelium_rns_ops.crt_basis_extend_out(
         source_residues,
         source_parameters,
         target_parameters,
@@ -225,7 +423,7 @@ def crt_basis_extend_out_(
         source_normalizers,
         source_reciprocals,
         target_offsets,
-        output,
+        out,
     )
 
 
@@ -278,6 +476,42 @@ def crt_quotient_tables(
     _require_native()
     return torch.ops.fhelium_rns_ops.crt_quotient_tables(
         source, target, divisor, dtype
+    )
+
+
+def crt_table_set(
+    parameters: torch.Tensor,
+    moduli: list[int],
+    log_n: int,
+    source_prime_ids: list[int],
+    target_prime_ids: list[int],
+    normalized: bool,
+) -> tuple[list[str], list[torch.Tensor]]:
+    """
+    Typed wrapper for ``fhelium_rns_ops::crt_table_set``.
+
+    Torch schema::
+
+        fhelium_rns_ops::crt_table_set(Tensor parameters, int[] moduli, int log_n, int[] source_prime_ids, int[] target_prime_ids, bool normalized) -> (str[], Tensor[])
+
+    Args:
+        parameters: torch.Tensor.
+        moduli: list[int].
+        log_n: int.
+        source_prime_ids: list[int].
+        target_prime_ids: list[int].
+        normalized: bool.
+
+    Returns: tuple[list[str], list[torch.Tensor]].
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.crt_table_set(
+        parameters,
+        moduli,
+        log_n,
+        source_prime_ids,
+        target_prime_ids,
+        normalized,
     )
 
 
@@ -344,8 +578,7 @@ def half_product_residues(
 
 def hybrid_modup_digit(
     source: torch.Tensor,
-    table_names: list[str],
-    tables: list[torch.Tensor],
+    tables: list[torch.Tensor | None],
     digit_index: int,
     digits: list[int],
 ) -> torch.Tensor:
@@ -354,12 +587,11 @@ def hybrid_modup_digit(
 
     Torch schema::
 
-        fhelium_rns_ops::hybrid_modup_digit(Tensor source, str[] table_names, Tensor[] tables, int digit_index, int[] digits) -> Tensor
+        fhelium_rns_ops::hybrid_modup_digit(Tensor source, Tensor?[] tables, int digit_index, int[] digits) -> Tensor
 
     Args:
         source: torch.Tensor.
-        table_names: list[str].
-        tables: list[torch.Tensor].
+        tables: list[torch.Tensor | None].
         digit_index: int.
         digits: list[int].
 
@@ -367,7 +599,108 @@ def hybrid_modup_digit(
     """
     _require_native()
     return torch.ops.fhelium_rns_ops.hybrid_modup_digit(
-        source, table_names, tables, digit_index, digits
+        source, tables, digit_index, digits
+    )
+
+
+def hybrid_modup_digit_out(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    digit_index: int,
+    digits: list[int],
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::hybrid_modup_digit_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::hybrid_modup_digit_out(Tensor source, Tensor?[] tables, int digit_index, int[] digits, Tensor(a!) out) -> ()
+
+    Args:
+        source: torch.Tensor.
+        tables: list[torch.Tensor | None].
+        digit_index: int.
+        digits: list[int].
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.hybrid_modup_digit_out(
+        source, tables, digit_index, digits, out
+    )
+
+
+def integer_scalar_table(
+    moduli: list[int], scalar: str, dtype: torch.dtype, device: torch.device
+) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_rns_ops::integer_scalar_table``.
+
+    Torch schema::
+
+        fhelium_rns_ops::integer_scalar_table(int[] moduli, str scalar, ScalarType dtype, Device device) -> Tensor
+
+    Args:
+        moduli: list[int].
+        scalar: str.
+        dtype: torch.dtype.
+        device: torch.device.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.integer_scalar_table(
+        moduli, scalar, dtype, device
+    )
+
+
+def joint_rescale_table_set(
+    parameters: torch.Tensor,
+    moduli: list[int],
+    log_n: int,
+    q_prime_ids: list[int],
+    p_prime_ids: list[int],
+    drop_prime_ids: list[int],
+    target_prime_ids: list[int],
+    moddown_rounding: str,
+    rescale_rounding: str,
+    basis_conversion: str,
+) -> tuple[list[str], list[torch.Tensor]]:
+    """
+    Typed wrapper for ``fhelium_rns_ops::joint_rescale_table_set``.
+
+    Torch schema::
+
+        fhelium_rns_ops::joint_rescale_table_set(Tensor parameters, int[] moduli, int log_n, int[] q_prime_ids, int[] p_prime_ids, int[] drop_prime_ids, int[] target_prime_ids, str moddown_rounding, str rescale_rounding, str basis_conversion) -> (str[], Tensor[])
+
+    Args:
+        parameters: torch.Tensor.
+        moduli: list[int].
+        log_n: int.
+        q_prime_ids: list[int].
+        p_prime_ids: list[int].
+        drop_prime_ids: list[int].
+        target_prime_ids: list[int].
+        moddown_rounding: str.
+        rescale_rounding: str.
+        basis_conversion: str.
+
+    Returns: tuple[list[str], list[torch.Tensor]].
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.joint_rescale_table_set(
+        parameters,
+        moduli,
+        log_n,
+        q_prime_ids,
+        p_prime_ids,
+        drop_prime_ids,
+        target_prime_ids,
+        moddown_rounding,
+        rescale_rounding,
+        basis_conversion,
     )
 
 
@@ -423,7 +756,7 @@ def mixed_radix_basis_extend_to_montgomery(
     )
 
 
-def mixed_radix_basis_extend_to_montgomery_out_(
+def mixed_radix_basis_extend_to_montgomery_out(
     mixed_radix_components: torch.Tensor,
     basis_extension_coefficients: torch.Tensor,
     rns_params: torch.Tensor,
@@ -431,11 +764,11 @@ def mixed_radix_basis_extend_to_montgomery_out_(
     out: torch.Tensor,
 ) -> None:
     """
-    Typed wrapper for ``fhelium_rns_ops::mixed_radix_basis_extend_to_montgomery_out_``.
+    Typed wrapper for ``fhelium_rns_ops::mixed_radix_basis_extend_to_montgomery_out``.
 
     Torch schema::
 
-        fhelium_rns_ops::mixed_radix_basis_extend_to_montgomery_out_(Tensor mixed_radix_components, Tensor basis_extension_coefficients, Tensor rns_params, int destination_row_count, Tensor(a!) out) -> ()
+        fhelium_rns_ops::mixed_radix_basis_extend_to_montgomery_out(Tensor mixed_radix_components, Tensor basis_extension_coefficients, Tensor rns_params, int destination_row_count, Tensor(a!) out) -> ()
 
     Args:
         mixed_radix_components: torch.Tensor.
@@ -447,7 +780,7 @@ def mixed_radix_basis_extend_to_montgomery_out_(
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_rns_ops.mixed_radix_basis_extend_to_montgomery_out_(
+    torch.ops.fhelium_rns_ops.mixed_radix_basis_extend_to_montgomery_out(
         mixed_radix_components,
         basis_extension_coefficients,
         rns_params,
@@ -495,7 +828,7 @@ def mixed_radix_decompose(
     )
 
 
-def mixed_radix_decompose_out_(
+def mixed_radix_decompose_out(
     source_residues: torch.Tensor,
     mixed_radix_normalizers: torch.Tensor,
     mixed_radix_propagation_coefficients: torch.Tensor,
@@ -506,11 +839,11 @@ def mixed_radix_decompose_out_(
     out: torch.Tensor,
 ) -> None:
     """
-    Typed wrapper for ``fhelium_rns_ops::mixed_radix_decompose_out_``.
+    Typed wrapper for ``fhelium_rns_ops::mixed_radix_decompose_out``.
 
     Torch schema::
 
-        fhelium_rns_ops::mixed_radix_decompose_out_(Tensor source_residues, Tensor mixed_radix_normalizers, Tensor mixed_radix_propagation_coefficients, Tensor modulus_lo, Tensor modulus_hi, Tensor neg_inv_modulus_lo, Tensor neg_inv_modulus_hi, Tensor(a!) out) -> ()
+        fhelium_rns_ops::mixed_radix_decompose_out(Tensor source_residues, Tensor mixed_radix_normalizers, Tensor mixed_radix_propagation_coefficients, Tensor modulus_lo, Tensor modulus_hi, Tensor neg_inv_modulus_lo, Tensor neg_inv_modulus_hi, Tensor(a!) out) -> ()
 
     Args:
         source_residues: torch.Tensor.
@@ -525,7 +858,7 @@ def mixed_radix_decompose_out_(
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_rns_ops.mixed_radix_decompose_out_(
+    torch.ops.fhelium_rns_ops.mixed_radix_decompose_out(
         source_residues,
         mixed_radix_normalizers,
         mixed_radix_propagation_coefficients,
@@ -564,7 +897,7 @@ def mixed_radix_modup_tiled(
     )
 
 
-def mixed_radix_modup_tiled_out_(
+def mixed_radix_modup_tiled_out(
     source_residues: torch.Tensor,
     decomposition_tables: list[torch.Tensor],
     extension: torch.Tensor,
@@ -572,11 +905,11 @@ def mixed_radix_modup_tiled_out_(
     out: torch.Tensor,
 ) -> None:
     """
-    Typed wrapper for ``fhelium_rns_ops::mixed_radix_modup_tiled_out_``.
+    Typed wrapper for ``fhelium_rns_ops::mixed_radix_modup_tiled_out``.
 
     Torch schema::
 
-        fhelium_rns_ops::mixed_radix_modup_tiled_out_(Tensor source_residues, Tensor[] decomposition_tables, Tensor extension, Tensor parameters, Tensor(a!) out) -> ()
+        fhelium_rns_ops::mixed_radix_modup_tiled_out(Tensor source_residues, Tensor[] decomposition_tables, Tensor extension, Tensor parameters, Tensor(a!) out) -> ()
 
     Args:
         source_residues: torch.Tensor.
@@ -588,7 +921,7 @@ def mixed_radix_modup_tiled_out_(
     Returns: None.
     """
     _require_native()
-    torch.ops.fhelium_rns_ops.mixed_radix_modup_tiled_out_(
+    torch.ops.fhelium_rns_ops.mixed_radix_modup_tiled_out(
         source_residues, decomposition_tables, extension, parameters, out
     )
 
@@ -619,8 +952,7 @@ def mixed_radix_tables(
 def moddown_add_rescale(
     products: torch.Tensor,
     base: torch.Tensor,
-    table_names: list[str],
-    tables: list[torch.Tensor],
+    tables: list[torch.Tensor | None],
     ntt_backend: str,
     q_count: int,
     joint_drop_count: int,
@@ -632,13 +964,12 @@ def moddown_add_rescale(
 
     Torch schema::
 
-        fhelium_rns_ops::moddown_add_rescale(Tensor products, Tensor base, str[] table_names, Tensor[] tables, str ntt_backend, int q_count, int joint_drop_count, bool joint_drop_is_prefix, str output_domain) -> Tensor
+        fhelium_rns_ops::moddown_add_rescale(Tensor products, Tensor base, Tensor?[] tables, str ntt_backend, int q_count, int joint_drop_count, bool joint_drop_is_prefix, str output_domain) -> Tensor
 
     Args:
         products: torch.Tensor.
         base: torch.Tensor.
-        table_names: list[str].
-        tables: list[torch.Tensor].
+        tables: list[torch.Tensor | None].
         ntt_backend: str.
         q_count: int.
         joint_drop_count: int.
@@ -651,7 +982,96 @@ def moddown_add_rescale(
     return torch.ops.fhelium_rns_ops.moddown_add_rescale(
         products,
         base,
-        table_names,
+        tables,
+        ntt_backend,
+        q_count,
+        joint_drop_count,
+        joint_drop_is_prefix,
+        output_domain,
+    )
+
+
+def moddown_add_rescale_out(
+    products: torch.Tensor,
+    base: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    q_count: int,
+    joint_drop_count: int,
+    joint_drop_is_prefix: bool,
+    output_domain: str,
+    out: torch.Tensor,
+    workspace: torch.Tensor | None = None,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::moddown_add_rescale_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::moddown_add_rescale_out(Tensor products, Tensor base, Tensor?[] tables, str ntt_backend, int q_count, int joint_drop_count, bool joint_drop_is_prefix, str output_domain, Tensor(a!) out, Tensor(b!)? workspace=None) -> ()
+
+    Args:
+        products: torch.Tensor.
+        base: torch.Tensor.
+        tables: list[torch.Tensor | None].
+        ntt_backend: str.
+        q_count: int.
+        joint_drop_count: int.
+        joint_drop_is_prefix: bool.
+        output_domain: str.
+        out: torch.Tensor (modified in-place).
+        workspace: torch.Tensor | None (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.moddown_add_rescale_out(
+        products,
+        base,
+        tables,
+        ntt_backend,
+        q_count,
+        joint_drop_count,
+        joint_drop_is_prefix,
+        output_domain,
+        out,
+        workspace,
+    )
+
+
+def moddown_add_rescale_workspace_bytes(
+    products: torch.Tensor,
+    base: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    q_count: int,
+    joint_drop_count: int,
+    joint_drop_is_prefix: bool,
+    output_domain: str,
+) -> int:
+    """
+    Typed wrapper for ``fhelium_rns_ops::moddown_add_rescale_workspace_bytes``.
+
+    Torch schema::
+
+        fhelium_rns_ops::moddown_add_rescale_workspace_bytes(Tensor products, Tensor base, Tensor?[] tables, str ntt_backend, int q_count, int joint_drop_count, bool joint_drop_is_prefix, str output_domain) -> int
+
+    Args:
+        products: torch.Tensor.
+        base: torch.Tensor.
+        tables: list[torch.Tensor | None].
+        ntt_backend: str.
+        q_count: int.
+        joint_drop_count: int.
+        joint_drop_is_prefix: bool.
+        output_domain: str.
+
+    Returns: int.
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.moddown_add_rescale_workspace_bytes(
+        products,
+        base,
         tables,
         ntt_backend,
         q_count,
@@ -664,8 +1084,7 @@ def moddown_add_rescale(
 def moddown_ntt_qp_to_q(
     source: torch.Tensor,
     coefficient_c0: torch.Tensor | None,
-    table_names: list[str],
-    tables: list[torch.Tensor],
+    tables: list[torch.Tensor | None],
     ntt_backend: str,
     p_count: int,
     rounding: str,
@@ -675,13 +1094,12 @@ def moddown_ntt_qp_to_q(
 
     Torch schema::
 
-        fhelium_rns_ops::moddown_ntt_qp_to_q(Tensor source, Tensor? coefficient_c0, str[] table_names, Tensor[] tables, str ntt_backend, int p_count, str rounding) -> Tensor
+        fhelium_rns_ops::moddown_ntt_qp_to_q(Tensor source, Tensor? coefficient_c0, Tensor?[] tables, str ntt_backend, int p_count, str rounding) -> Tensor
 
     Args:
         source: torch.Tensor.
         coefficient_c0: torch.Tensor | None.
-        table_names: list[str].
-        tables: list[torch.Tensor].
+        tables: list[torch.Tensor | None].
         ntt_backend: str.
         p_count: int.
         rounding: str.
@@ -690,20 +1108,46 @@ def moddown_ntt_qp_to_q(
     """
     _require_native()
     return torch.ops.fhelium_rns_ops.moddown_ntt_qp_to_q(
-        source,
-        coefficient_c0,
-        table_names,
-        tables,
-        ntt_backend,
-        p_count,
-        rounding,
+        source, coefficient_c0, tables, ntt_backend, p_count, rounding
+    )
+
+
+def moddown_ntt_qp_to_q_out(
+    source: torch.Tensor,
+    coefficient_c0: torch.Tensor | None,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    p_count: int,
+    rounding: str,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::moddown_ntt_qp_to_q_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::moddown_ntt_qp_to_q_out(Tensor source, Tensor? coefficient_c0, Tensor?[] tables, str ntt_backend, int p_count, str rounding, Tensor(a!) out) -> ()
+
+    Args:
+        source: torch.Tensor.
+        coefficient_c0: torch.Tensor | None.
+        tables: list[torch.Tensor | None].
+        ntt_backend: str.
+        p_count: int.
+        rounding: str.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.moddown_ntt_qp_to_q_out(
+        source, coefficient_c0, tables, ntt_backend, p_count, rounding, out
     )
 
 
 def moddown_qp_to_q(
     source: torch.Tensor,
-    table_names: list[str],
-    tables: list[torch.Tensor],
+    tables: list[torch.Tensor | None],
     p_count: int,
     rounding: str,
 ) -> torch.Tensor:
@@ -712,12 +1156,11 @@ def moddown_qp_to_q(
 
     Torch schema::
 
-        fhelium_rns_ops::moddown_qp_to_q(Tensor source, str[] table_names, Tensor[] tables, int p_count, str rounding) -> Tensor
+        fhelium_rns_ops::moddown_qp_to_q(Tensor source, Tensor?[] tables, int p_count, str rounding) -> Tensor
 
     Args:
         source: torch.Tensor.
-        table_names: list[str].
-        tables: list[torch.Tensor].
+        tables: list[torch.Tensor | None].
         p_count: int.
         rounding: str.
 
@@ -725,7 +1168,65 @@ def moddown_qp_to_q(
     """
     _require_native()
     return torch.ops.fhelium_rns_ops.moddown_qp_to_q(
-        source, table_names, tables, p_count, rounding
+        source, tables, p_count, rounding
+    )
+
+
+def moddown_qp_to_q_out(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    p_count: int,
+    rounding: str,
+    out: torch.Tensor,
+    workspace: torch.Tensor | None = None,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::moddown_qp_to_q_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::moddown_qp_to_q_out(Tensor source, Tensor?[] tables, int p_count, str rounding, Tensor(a!) out, Tensor(b!)? workspace=None) -> ()
+
+    Args:
+        source: torch.Tensor.
+        tables: list[torch.Tensor | None].
+        p_count: int.
+        rounding: str.
+        out: torch.Tensor (modified in-place).
+        workspace: torch.Tensor | None (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.moddown_qp_to_q_out(
+        source, tables, p_count, rounding, out, workspace
+    )
+
+
+def moddown_qp_to_q_workspace_bytes(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    p_count: int,
+    rounding: str,
+) -> int:
+    """
+    Typed wrapper for ``fhelium_rns_ops::moddown_qp_to_q_workspace_bytes``.
+
+    Torch schema::
+
+        fhelium_rns_ops::moddown_qp_to_q_workspace_bytes(Tensor source, Tensor?[] tables, int p_count, str rounding) -> int
+
+    Args:
+        source: torch.Tensor.
+        tables: list[torch.Tensor | None].
+        p_count: int.
+        rounding: str.
+
+    Returns: int.
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.moddown_qp_to_q_workspace_bytes(
+        source, tables, p_count, rounding
     )
 
 
@@ -773,6 +1274,33 @@ def montgomery_mul_contiguous_compressed(
     )
 
 
+def montgomery_mul_contiguous_compressed_out(
+    lhs: torch.Tensor,
+    compressed_rhs: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::montgomery_mul_contiguous_compressed_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::montgomery_mul_contiguous_compressed_out(Tensor lhs, Tensor compressed_rhs, Tensor rns_params, Tensor(a!) out) -> ()
+
+    Args:
+        lhs: torch.Tensor.
+        compressed_rhs: torch.Tensor.
+        rns_params: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.montgomery_mul_contiguous_compressed_out(
+        lhs, compressed_rhs, rns_params, out
+    )
+
+
 def montgomery_mul_cyclic_compressed(
     lhs: torch.Tensor, compressed_rhs: torch.Tensor, rns_params: torch.Tensor
 ) -> torch.Tensor:
@@ -794,6 +1322,58 @@ def montgomery_mul_cyclic_compressed(
     return torch.ops.fhelium_rns_ops.montgomery_mul_cyclic_compressed(
         lhs, compressed_rhs, rns_params
     )
+
+
+def montgomery_mul_cyclic_compressed_out(
+    lhs: torch.Tensor,
+    compressed_rhs: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::montgomery_mul_cyclic_compressed_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::montgomery_mul_cyclic_compressed_out(Tensor lhs, Tensor compressed_rhs, Tensor rns_params, Tensor(a!) out) -> ()
+
+    Args:
+        lhs: torch.Tensor.
+        compressed_rhs: torch.Tensor.
+        rns_params: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.montgomery_mul_cyclic_compressed_out(
+        lhs, compressed_rhs, rns_params, out
+    )
+
+
+def montgomery_mul_out(
+    lhs: torch.Tensor,
+    rhs: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::montgomery_mul_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::montgomery_mul_out(Tensor lhs, Tensor rhs, Tensor rns_params, Tensor(a!) out) -> ()
+
+    Args:
+        lhs: torch.Tensor.
+        rhs: torch.Tensor.
+        rns_params: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.montgomery_mul_out(lhs, rhs, rns_params, out)
 
 
 def montgomery_mul_row_scalars_(
@@ -842,6 +1422,33 @@ def montgomery_mul_row_scalars_standard(
     )
 
 
+def montgomery_mul_row_scalars_standard_out(
+    residues: torch.Tensor,
+    row_scalars: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::montgomery_mul_row_scalars_standard_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::montgomery_mul_row_scalars_standard_out(Tensor residues, Tensor row_scalars, Tensor rns_params, Tensor(a!) out) -> ()
+
+    Args:
+        residues: torch.Tensor.
+        row_scalars: torch.Tensor.
+        rns_params: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.montgomery_mul_row_scalars_standard_out(
+        residues, row_scalars, rns_params, out
+    )
+
+
 def montgomery_weighted_sum(
     ciphertexts: list[torch.Tensor],
     plaintexts: list[torch.Tensor],
@@ -864,6 +1471,33 @@ def montgomery_weighted_sum(
     _require_native()
     return torch.ops.fhelium_rns_ops.montgomery_weighted_sum(
         ciphertexts, plaintexts, rns_params
+    )
+
+
+def montgomery_weighted_sum_out(
+    ciphertexts: list[torch.Tensor],
+    plaintexts: list[torch.Tensor],
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::montgomery_weighted_sum_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::montgomery_weighted_sum_out(Tensor[] ciphertexts, Tensor[] plaintexts, Tensor rns_params, Tensor(a!) out) -> ()
+
+    Args:
+        ciphertexts: list[torch.Tensor].
+        plaintexts: list[torch.Tensor].
+        rns_params: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.montgomery_weighted_sum_out(
+        ciphertexts, plaintexts, rns_params, out
     )
 
 
@@ -892,6 +1526,94 @@ def montgomery_weighted_sums(
     return torch.ops.fhelium_rns_ops.montgomery_weighted_sums(
         ciphertexts, plaintexts, group_count, rns_params
     )
+
+
+def montgomery_weighted_sums_out(
+    ciphertexts: list[torch.Tensor],
+    plaintexts: list[torch.Tensor],
+    group_count: int,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::montgomery_weighted_sums_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::montgomery_weighted_sums_out(Tensor[] ciphertexts, Tensor[] plaintexts, int group_count, Tensor rns_params, Tensor(a!) out) -> ()
+
+    Args:
+        ciphertexts: list[torch.Tensor].
+        plaintexts: list[torch.Tensor].
+        group_count: int.
+        rns_params: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.montgomery_weighted_sums_out(
+        ciphertexts, plaintexts, group_count, rns_params, out
+    )
+
+
+def negate_standard(
+    source: torch.Tensor, rns_params: torch.Tensor
+) -> torch.Tensor:
+    """
+    Typed wrapper for ``fhelium_rns_ops::negate_standard``.
+
+    Torch schema::
+
+        fhelium_rns_ops::negate_standard(Tensor source, Tensor rns_params) -> Tensor
+
+    Args:
+        source: torch.Tensor.
+        rns_params: torch.Tensor.
+
+    Returns: torch.Tensor.
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.negate_standard(source, rns_params)
+
+
+def negate_standard_(source: torch.Tensor, rns_params: torch.Tensor) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::negate_standard_``.
+
+    Torch schema::
+
+        fhelium_rns_ops::negate_standard_(Tensor(a!) source, Tensor rns_params) -> ()
+
+    Args:
+        source: torch.Tensor (modified in-place).
+        rns_params: torch.Tensor.
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.negate_standard_(source, rns_params)
+
+
+def negate_standard_out(
+    source: torch.Tensor, rns_params: torch.Tensor, out: torch.Tensor
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::negate_standard_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::negate_standard_out(Tensor source, Tensor rns_params, Tensor(a!) out) -> ()
+
+    Args:
+        source: torch.Tensor.
+        rns_params: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.negate_standard_out(source, rns_params, out)
 
 
 def parameter_table(
@@ -980,8 +1702,7 @@ def quotient_offset_residues(
 
 def rational_rescale(
     source: torch.Tensor,
-    table_names: list[str],
-    tables: list[torch.Tensor],
+    tables: list[torch.Tensor | None],
     input_domain: str,
     ntt_backend: str,
 ) -> torch.Tensor:
@@ -990,12 +1711,11 @@ def rational_rescale(
 
     Torch schema::
 
-        fhelium_rns_ops::rational_rescale(Tensor source, str[] table_names, Tensor[] tables, str input_domain, str ntt_backend) -> Tensor
+        fhelium_rns_ops::rational_rescale(Tensor source, Tensor?[] tables, str input_domain, str ntt_backend) -> Tensor
 
     Args:
         source: torch.Tensor.
-        table_names: list[str].
-        tables: list[torch.Tensor].
+        tables: list[torch.Tensor | None].
         input_domain: str.
         ntt_backend: str.
 
@@ -1003,7 +1723,65 @@ def rational_rescale(
     """
     _require_native()
     return torch.ops.fhelium_rns_ops.rational_rescale(
-        source, table_names, tables, input_domain, ntt_backend
+        source, tables, input_domain, ntt_backend
+    )
+
+
+def rational_rescale_out(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    input_domain: str,
+    ntt_backend: str,
+    out: torch.Tensor,
+    workspace: torch.Tensor | None = None,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::rational_rescale_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::rational_rescale_out(Tensor source, Tensor?[] tables, str input_domain, str ntt_backend, Tensor(a!) out, Tensor(b!)? workspace=None) -> ()
+
+    Args:
+        source: torch.Tensor.
+        tables: list[torch.Tensor | None].
+        input_domain: str.
+        ntt_backend: str.
+        out: torch.Tensor (modified in-place).
+        workspace: torch.Tensor | None (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.rational_rescale_out(
+        source, tables, input_domain, ntt_backend, out, workspace
+    )
+
+
+def rational_rescale_workspace_bytes(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    input_domain: str,
+    ntt_backend: str,
+) -> int:
+    """
+    Typed wrapper for ``fhelium_rns_ops::rational_rescale_workspace_bytes``.
+
+    Torch schema::
+
+        fhelium_rns_ops::rational_rescale_workspace_bytes(Tensor source, Tensor?[] tables, str input_domain, str ntt_backend) -> int
+
+    Args:
+        source: torch.Tensor.
+        tables: list[torch.Tensor | None].
+        input_domain: str.
+        ntt_backend: str.
+
+    Returns: int.
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.rational_rescale_workspace_bytes(
+        source, tables, input_domain, ntt_backend
     )
 
 
@@ -1047,10 +1825,48 @@ def rescale_inverse_matrix(
     return torch.ops.fhelium_rns_ops.rescale_inverse_matrix(moduli, dtype)
 
 
+def rescale_table_set(
+    parameters: torch.Tensor,
+    moduli: list[int],
+    log_n: int,
+    source_prime_ids: list[int],
+    target_prime_ids: list[int],
+    rounding: str,
+    ntt_input: bool,
+) -> tuple[list[str], list[torch.Tensor]]:
+    """
+    Typed wrapper for ``fhelium_rns_ops::rescale_table_set``.
+
+    Torch schema::
+
+        fhelium_rns_ops::rescale_table_set(Tensor parameters, int[] moduli, int log_n, int[] source_prime_ids, int[] target_prime_ids, str rounding, bool ntt_input) -> (str[], Tensor[])
+
+    Args:
+        parameters: torch.Tensor.
+        moduli: list[int].
+        log_n: int.
+        source_prime_ids: list[int].
+        target_prime_ids: list[int].
+        rounding: str.
+        ntt_input: bool.
+
+    Returns: tuple[list[str], list[torch.Tensor]].
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.rescale_table_set(
+        parameters,
+        moduli,
+        log_n,
+        source_prime_ids,
+        target_prime_ids,
+        rounding,
+        ntt_input,
+    )
+
+
 def rounded_trailing_quotient(
     source: torch.Tensor,
-    table_names: list[str],
-    tables: list[torch.Tensor],
+    tables: list[torch.Tensor | None],
     drop_count: int,
     rounding: str,
 ) -> torch.Tensor:
@@ -1059,12 +1875,11 @@ def rounded_trailing_quotient(
 
     Torch schema::
 
-        fhelium_rns_ops::rounded_trailing_quotient(Tensor source, str[] table_names, Tensor[] tables, int drop_count, str rounding) -> Tensor
+        fhelium_rns_ops::rounded_trailing_quotient(Tensor source, Tensor?[] tables, int drop_count, str rounding) -> Tensor
 
     Args:
         source: torch.Tensor.
-        table_names: list[str].
-        tables: list[torch.Tensor].
+        tables: list[torch.Tensor | None].
         drop_count: int.
         rounding: str.
 
@@ -1072,7 +1887,65 @@ def rounded_trailing_quotient(
     """
     _require_native()
     return torch.ops.fhelium_rns_ops.rounded_trailing_quotient(
-        source, table_names, tables, drop_count, rounding
+        source, tables, drop_count, rounding
+    )
+
+
+def rounded_trailing_quotient_out(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    drop_count: int,
+    rounding: str,
+    out: torch.Tensor,
+    workspace: torch.Tensor | None = None,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::rounded_trailing_quotient_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::rounded_trailing_quotient_out(Tensor source, Tensor?[] tables, int drop_count, str rounding, Tensor(a!) out, Tensor(b!)? workspace=None) -> ()
+
+    Args:
+        source: torch.Tensor.
+        tables: list[torch.Tensor | None].
+        drop_count: int.
+        rounding: str.
+        out: torch.Tensor (modified in-place).
+        workspace: torch.Tensor | None (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.rounded_trailing_quotient_out(
+        source, tables, drop_count, rounding, out, workspace
+    )
+
+
+def rounded_trailing_quotient_workspace_bytes(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    drop_count: int,
+    rounding: str,
+) -> int:
+    """
+    Typed wrapper for ``fhelium_rns_ops::rounded_trailing_quotient_workspace_bytes``.
+
+    Torch schema::
+
+        fhelium_rns_ops::rounded_trailing_quotient_workspace_bytes(Tensor source, Tensor?[] tables, int drop_count, str rounding) -> int
+
+    Args:
+        source: torch.Tensor.
+        tables: list[torch.Tensor | None].
+        drop_count: int.
+        rounding: str.
+
+    Returns: int.
+    """
+    _require_native()
+    return torch.ops.fhelium_rns_ops.rounded_trailing_quotient_workspace_bytes(
+        source, tables, drop_count, rounding
     )
 
 
@@ -1119,6 +1992,31 @@ def sub_lazy(
     return torch.ops.fhelium_rns_ops.sub_lazy(lhs, rhs, rns_params)
 
 
+def sub_lazy_out(
+    lhs: torch.Tensor,
+    rhs: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::sub_lazy_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::sub_lazy_out(Tensor lhs, Tensor rhs, Tensor rns_params, Tensor(a!) out) -> ()
+
+    Args:
+        lhs: torch.Tensor.
+        rhs: torch.Tensor.
+        rns_params: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.sub_lazy_out(lhs, rhs, rns_params, out)
+
+
 def sub_standard(
     lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
 ) -> torch.Tensor:
@@ -1161,6 +2059,31 @@ def sub_standard_(
     torch.ops.fhelium_rns_ops.sub_standard_(lhs, rhs, rns_params)
 
 
+def sub_standard_out(
+    lhs: torch.Tensor,
+    rhs: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::sub_standard_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::sub_standard_out(Tensor lhs, Tensor rhs, Tensor rns_params, Tensor(a!) out) -> ()
+
+    Args:
+        lhs: torch.Tensor.
+        rhs: torch.Tensor.
+        rns_params: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.sub_standard_out(lhs, rhs, rns_params, out)
+
+
 def sum_standard_batch(
     source: torch.Tensor, dim: int, rns_params: torch.Tensor
 ) -> torch.Tensor:
@@ -1180,6 +2103,30 @@ def sum_standard_batch(
     """
     _require_native()
     return torch.ops.fhelium_rns_ops.sum_standard_batch(source, dim, rns_params)
+
+
+def sum_standard_batch_out(
+    source: torch.Tensor, dim: int, rns_params: torch.Tensor, out: torch.Tensor
+) -> None:
+    """
+    Typed wrapper for ``fhelium_rns_ops::sum_standard_batch_out``.
+
+    Torch schema::
+
+        fhelium_rns_ops::sum_standard_batch_out(Tensor source, int dim, Tensor rns_params, Tensor(a!) out) -> ()
+
+    Args:
+        source: torch.Tensor.
+        dim: int.
+        rns_params: torch.Tensor.
+        out: torch.Tensor (modified in-place).
+
+    Returns: None.
+    """
+    _require_native()
+    torch.ops.fhelium_rns_ops.sum_standard_batch_out(
+        source, dim, rns_params, out
+    )
 
 
 def to_montgomery_(

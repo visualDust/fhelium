@@ -52,7 +52,6 @@ class RnsRowParameters:
     mixed_radix_propagation_coefficients: torch.Tensor | None = None
 
 
-
 class RnsParameterStore:
     r"""Build context-owned parameter views for RNS basis extension.
 
@@ -147,7 +146,9 @@ class RnsParameterStore:
             rows: slice | torch.Tensor = slice(start, start + len(prime_ids))
         else:
             rows = torch.tensor(
-                prime_ids, dtype=torch.long, device=self.native_parameter_tensor.device
+                prime_ids,
+                dtype=torch.long,
+                device=self.native_parameter_tensor.device,
             )
         return RnsRowParameters(
             prime_ids=prime_ids,

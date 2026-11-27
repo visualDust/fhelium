@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from copy import copy
 from threading import RLock
 from typing import cast
 
@@ -17,6 +18,11 @@ from fhelium.backend.ckks._key_switch_preparation import (
     key_switch_runtime_attributes,
 )
 from fhelium.backend.execution import OperationBackend
+from fhelium.backend.lowering import (
+    active_builder,
+    compile_fragment,
+    layout_key,
+)
 from fhelium.backend.implementation import (
     OperationImplementation,
     OperationInvocation,
@@ -47,6 +53,7 @@ class _EagerOperationDispatcher:
             tuple[OperationImplementation, tuple[BoundResource, ...]],
         ] = {}
         self._invocations: dict[tuple[object, ...], OperationInvocation] = {}
+        self._fragments: dict[tuple[object, ...], Callable] = {}
 
     @property
     def rns_context(self) -> RnsContext:
@@ -142,8 +149,23 @@ class _EagerOperationDispatcher:
         implementation: str | None = None,
         in_place: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, ...]:
-        """Execute one registered operation through this device's Backend."""
+        """Execute one registered operation through this device's Backend.
 
+        The selected implementation is lowered once per operation, attributes and operand layouts; later calls run the cached fragment. Real scalars of scalar arithmetic are fragment inputs, so their values do not select fragments.
+        """
+
+        operands = inputs
+        host: tuple[float, ...] = ()
+        if attributes is not None and operation_type in _HOST_SCALARS:
+            host = tuple(
+                float(cast(float, attributes[name]))
+                for name in _HOST_SCALARS[operation_type]
+            )
+            attributes = {
+                name: value
+                for name, value in attributes.items()
+                if name not in _HOST_SCALARS[operation_type]
+            }
         invocation, invocation_key = self._invocation(
             operation_type,
             len(inputs),
@@ -203,7 +225,11 @@ class _EagerOperationDispatcher:
                 key = inputs[1]
                 rows = torch.tensor(ids, device=key.device)
                 dimension = 1 if operation_type is ckks.EncryptOp else 0
-                inputs = (inputs[0], key.index_select(dimension, rows), *inputs[2:])
+                inputs = (
+                    inputs[0],
+                    key.index_select(dimension, rows),
+                    *inputs[2:],
+                )
                 start = 0
             inputs = (*inputs, *tensors.values())
             invocation = OperationInvocation._from_eager(
@@ -258,10 +284,10 @@ class _EagerOperationDispatcher:
             tensors, facts = scalar_operands(
                 context,
                 prime_ids,
-                cast(int | float, invocation.attributes["scalar"]),
-                None
+                cast(int, invocation.attributes["scalar"])
                 if integer
-                else cast(float, invocation.attributes["scalar_scale"]),
+                else cast(tuple[float, float], host)[0],
+                None if integer else cast(tuple[float, float], host)[1],
                 None if integer else self.rng.seed,
             )
             inputs = (*inputs, *tensors)
@@ -274,8 +300,12 @@ class _EagerOperationDispatcher:
             prepared_resources = ()
         elif operation_type is rns.RescaleOp:
             tensors, facts = self.device_resources.rescale_operands(
-                cast(tuple[int, ...], invocation.attributes["source_prime_ids"]),
-                cast(tuple[int, ...], invocation.attributes["target_prime_ids"]),
+                cast(
+                    tuple[int, ...], invocation.attributes["source_prime_ids"]
+                ),
+                cast(
+                    tuple[int, ...], invocation.attributes["target_prime_ids"]
+                ),
                 rounding=str(invocation.attributes.get("rounding", "nearest")),
                 input_domain=str(
                     invocation.attributes.get("input_domain", "coefficient")
@@ -397,13 +427,56 @@ class _EagerOperationDispatcher:
             )
             inputs = (*inputs, *tables)
             prepared_resources = ()
-        outputs = selected.execute(
-            invocation,
-            inputs,
-            prepared_resources,
-            in_place=in_place,
+        # Device tables follow from the key and the caller operands' layouts.
+        builder = active_builder()
+        fragment_key = (key, prime_ids, *map(layout_key, operands))
+        fragment = (
+            None if builder is not None else self._fragments.get(fragment_key)
         )
+        if fragment is None:
+            names = _HOST_SCALARS.get(operation_type, ())
+            call = copy(invocation)
+            object.__setattr__(call, "in_place", in_place)
+
+            def lower(builder, values):
+                tensors = values[: len(inputs)]
+                if names:
+                    object.__setattr__(
+                        call,
+                        "attributes",
+                        {
+                            **invocation.attributes,
+                            **dict(zip(names, values[len(inputs) :])),
+                        },
+                    )
+                return selected.lower(
+                    call, tensors, prepared_resources, builder
+                )
+
+            if builder is not None:
+                # A schedule being lowered, such as a preparation entry,
+                # records the operation in place; the rounding stream stays
+                # live state rather than a link-time constant.
+                stream = self.rng
+                inputs = tuple(
+                    builder.state(stream, "seed")
+                    if value is stream.seed
+                    else value
+                    for value in inputs
+                )
+                outputs = tuple(lower(builder, (*inputs, *host)))
+                return outputs[0] if result_count == 1 else outputs
+            fragment = compile_fragment(lower, (*inputs, *host)).function
+            self._fragments[fragment_key] = fragment
+        outputs = cast(tuple[torch.Tensor, ...], fragment(*inputs, *host))
         return outputs[0] if result_count == 1 else outputs
+
+
+_HOST_SCALARS: dict[type[Operation], tuple[str, ...]] = {
+    ckks.AddScalarOp: ("scalar", "scalar_scale"),
+    ckks.MultiplyScalarOp: ("scalar", "scalar_scale"),
+}
+"""Real scalar attributes that Eager supplies as fragment inputs."""
 
 
 __all__ = ["_EagerOperationDispatcher"]

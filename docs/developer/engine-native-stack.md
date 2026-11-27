@@ -16,19 +16,24 @@ graph TB
     subgraph Compile
         MANUAL[Manual Program and Compilation]
         CALLABLE[Callable capture and specialization]
+        CACHE[(Specialization cache<br/>resident or on disk)]
         INPUT[Captured or constructed Program]
-        MANUAL --> INPUT
-        CALLABLE --> INPUT
         PASSES[Caller-composed passes<br/>state, lowering, scheduling, selection]
-        LINK[Backend linking passes<br/>resolve operations and bind resources]
-        EXEC[ProgramExecutable<br/>prepared host execution]
+        LINK[Backend linking<br/>lower selected implementations<br/>to exec instructions]
+        EXEC[Exec schedule]
+        CALLABLE --> CACHE
+        CACHE -->|miss| INPUT
+        MANUAL --> INPUT
         INPUT --> PASSES --> LINK --> EXEC
+        EXEC -. store .-> CACHE
     end
     IMPL[Registered Backend implementation<br/>Tensor payloads + bound resources]
     PYALG[Python CKKS, RNS, and NTT execution]
     WRAP[Generated typed wrappers]
+    RUNNER[libfhelium Runner<br/>call_op and launch instructions]
     OPS[torch.ops.fhelium_*]
     DISP[PyTorch dispatcher<br/>operator schema + tensor dispatch key]
+    GENERATED[Backend-generated kernels<br/>pointwise and NTT regions]
     CXXAPP[C++ application]
     LIB[libfhelium public functions<br/>fhelium::ckks, rns, ntt]
     CPU[C++ CPU implementation<br/>ATen + at::parallel_for]
@@ -40,10 +45,14 @@ graph TB
     APP --> MANUAL
     APP --> CALLABLE
     EDISP --> IMPL
-    EXEC --> IMPL
     IMPL --> PYALG --> WRAP --> OPS --> DISP --> LIB
-    IMPL --> GENERATED[Backend-generated kernels<br/>pointwise and NTT regions]
+    IMPL --> GENERATED
+    CACHE -->|hit| RUNNER
+    EXEC --> RUNNER
+    RUNNER --> OPS
+    RUNNER --> GENERATED
     CXXAPP --> LIB
+    CXXAPP --> RUNNER
     LIB -->|CPU tensors| CPU --> OMP
     LIB -->|CUDA tensor| GPU --> CUDA
 ```
@@ -57,7 +66,7 @@ Eager direct dispatch and Compile Program execution are independent entry paths.
 | Runtime values | `fhelium.values` | Carry Tensor payloads and represented CKKS state at public interfaces |
 | Eager use model | `fhelium.eager.Engine` | Apply the called operation's metadata transition, select device-local resources from operand placement, and invoke one registered implementation without an SSA graph |
 | Compile use model | `fhelium.ir`, `fhelium.compile` | Represent partially specified Programs; capture source; analyze, transform, lower, schedule, and assign implementations through caller-composed passes |
-| Program linking and execution | Backend-stage passes and `ProgramExecutable` | Resolve every executable operation, bind materials and resources, prepare host control flow over Tensor payloads, and reconstruct declared public outputs |
+| Program linking and execution | Backend-stage passes and `ProgramExecutable` | Resolve every executable operation, bind materials and resources, translate the Program into an exec schedule that a native Runner executes over Tensor payloads, and reconstruct declared public outputs |
 | Shared Backend interface | `OperationBackend`, `OperationImplementationRegistry`, and `BackendWorkspace` | Own the implementation registry, named non-Tensor handles, and optional handle materialization; Compilation owns Tensor materials |
 | CKKS and arithmetic implementations | `fhelium.backend.ckks`, `fhelium.backend.rns`, `fhelium.backend.ntt` | Execute whole CKKS operations or lower-level RNS/NTT compositions with concrete parameter, table, key, and index resources |
 | Python/native bridge | Generated modules in `fhelium.native.wrapper` | Present typed Python call signatures and invoke registered `torch.ops.fhelium_*` operators |
@@ -74,7 +83,7 @@ A public `Ciphertext` or `Plaintext` contains a Tensor payload and the CKKS stat
 
 ### Eager
 
-An `Engine` method checks its public inputs, computes the operation's result metadata, and asks a private device-local dispatcher to execute a registered operation class. The dispatcher creates an `OperationInvocation`, resolves the selected implementation and its resource requirements through an `OperationBackend`, materializes missing device resources, and caches the prepared direct call. It then passes Tensor payloads and `BoundResource` objects to the implementation. The Engine constructs the returned public value after execution succeeds.
+An `Engine` method checks its public inputs, computes the operation's result metadata, and asks a private device-local dispatcher to execute a registered operation class. The dispatcher creates an `OperationInvocation`, resolves the selected implementation and its resource requirements through an `OperationBackend`, materializes missing device resources, and appends the device tables the operation reads to its Tensor payloads. The first call with a given operation, attributes and payload layouts lowers the implementation into a fragment, an `exec` schedule of operator calls and kernel launches executed by a libfhelium Runner (a fragment of one operator call invokes the operator directly); later calls with the same key run the cached fragment. The real scalars of scalar addition and multiplication are fragment inputs, so different scalar values share one fragment. The Engine constructs the returned public value after execution succeeds.
 
 This route resolves and executes one graph-free operation call. A whole-operation implementation can execute directly, while an Eager method may select shared CKKS-to-RNS/NTT composition before dispatch when that is the requested implementation route.
 
@@ -84,7 +93,7 @@ Compile begins with a captured, parsed, or programmatically constructed `Program
 
 Manual Compile runs `Pipeline.run(compilation)` and links the resulting Compilation. Callable Compile captures or accepts a Program, specializes input facts, runs the same pass machinery, and retains linked specializations for repeated calls. `default_lower_and_fuse_pipeline` is the common editable recipe; both routes can provide their own pipelines and Backend implementations.
 
-`OperationBackend.link(compilation)` runs Compile-owned linking passes on fresh workspace and binding mappings. They resolve Tensor facts and implementations, initialize non-Tensor resources, bind material references, and construct a `ProgramExecutable`. Its prepared host function calls selected implementations through local-variable dataflow and supported structured control flow. Input and output adapters apply the declared public value interface when invoked; incomplete output state can remain an execution-time error. See [linking and prepared host execution](prepared-host-execution.md) for the preparation sequence and lifetime rules.
+`OperationBackend.link(compilation)` runs Compile-owned linking passes on fresh workspace and binding mappings. They resolve Tensor facts and implementations, initialize non-Tensor resources, bind material references, and construct a `ProgramExecutable`. Its Runner executes the lowered schedule of the selected implementations, including supported structured control flow. Input and output adapters apply the declared public value interface when invoked; incomplete output state can remain an execution-time error. See [Linking, exec schedules, and the Runner](linking-and-runner.md) for the preparation sequence and lifetime rules.
 
 ### Shared implementation and native path
 
@@ -224,17 +233,17 @@ graph TD
         EA[Engine.add]
         EV[Check public state<br/>compute result metadata]
         ED[Direct operation dispatcher]
-        EA --> EV --> ED
+        I[Registered addition implementation]
+        R[RnsContext.add_standard_]
+        W[native.wrapper.rns_ops.add_standard_]
+        EA --> EV --> ED --> I --> R --> W
     end
     subgraph Compile
         CP[fhelium_ckks.add<br/>or lowered fhelium_rns.add]
-        CL[Resolve implementation<br/>bind resources]
-        CE[ProgramExecutable]
-        CP --> CL --> CE
+        CL[Resolve implementation<br/>lower to exec call_op]
+        RUN[Runner executes call_op]
+        CP --> CL --> RUN
     end
-    I[Registered addition implementation]
-    R[RnsContext.add_standard_]
-    W[native.wrapper.rns_ops.add_standard_]
     T[torch.ops.fhelium_rns_ops.add_standard_]
     D{PyTorch dispatch key}
     CPU[CPU C++ implementation]
@@ -243,11 +252,11 @@ graph TD
     K[CUDA kernel on current stream]
     DATA[Result Tensor]
     EO[Engine constructs Ciphertext]
-    CO[ProgramExecutable constructs declared output]
+    CO[Compiled call returns declared output]
 
-    ED --> I
-    CE --> I
-    I --> R --> W --> T --> D
+    W --> T
+    RUN --> T
+    T --> D
     D -->|CPU| CPU --> PF --> DATA
     D -->|CUDA| CU --> K --> DATA
     DATA --> EO

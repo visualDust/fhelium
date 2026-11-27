@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import fhelium as fh
+from fhelium.native.tables import table_slots
 from fhelium.native.wrapper import ckks_ops
 from fhelium.eager import Engine
 from fhelium.values import Ciphertext, ModulusBasis
@@ -64,8 +65,7 @@ def test_decryption_phase_matches_across_input_domains(
         return ckks_ops.decrypt_phase(
             ciphertext.data,
             secret.data,
-            names,
-            tables,
+            table_slots("ring", dict(zip(names, tables, strict=True))),
             ntt_context.ntt_backend_name,
             0,
             domain,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, cast
 
 from fhelium.values import EvaluationKeySet, Ciphertext, RelinearizationKey
@@ -36,10 +36,12 @@ class EvenChebyshevPlan:
         coefficients = list(polynomial.coefficients[::2])
         while len(coefficients) > 1 and coefficients[-1] == 0:
             coefficients.pop()
-        return replace(
-            polynomial,
-            coefficients=tuple(coefficients),
-            name=polynomial.name + "_in_T2",
+        return Polynomial(
+            polynomial.basis,
+            tuple(coefficients),
+            polynomial.domain,
+            polynomial.name + "_in_T2",
+            polynomial.max_error,
         )
 
     def required_depths(self, polynomial: Polynomial) -> int:
@@ -48,9 +50,7 @@ class EvenChebyshevPlan:
             return self.evaluator.required_depths(folded)
         return 1 + self.evaluator.required_depths(folded)
 
-    def operation_inventory(
-        self, polynomial: Polynomial
-    ) -> dict[str, int]:
+    def operation_inventory(self, polynomial: Polynomial) -> dict[str, int]:
         folded = self._fold(polynomial)
         counts = dict(self.evaluator.operation_inventory(folded))
         if folded.degree > 0:

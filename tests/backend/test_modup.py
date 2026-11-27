@@ -7,6 +7,7 @@ import torch
 
 from fhelium import CkksConfig, Preset
 from fhelium.backend.rns.context import RnsContext
+from fhelium.native.tables import table_slots
 from fhelium.native.wrapper import rns_ops
 
 
@@ -56,7 +57,7 @@ def test_modup_digit_matches_integer_reference_across_workspace_sizes(device):
             },
         }
         result = rns_ops.hybrid_modup_digit(
-            source, list(tables), list(tables.values()), 0, [0, width, 0]
+            source, table_slots("key_switch", tables), 0, [0, width, 0]
         )
         radix = context.montgomery_parameters.R
         expected = torch.tensor(

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "overlap.h"
+
 #include <ATen/MemoryOverlap.h>
 #include <torch/torch.h>
 
@@ -28,23 +30,27 @@ inline torch::Tensor view_rns_batch_3d(const torch::Tensor& tensor,
 }
 
 // Validate caller-owned RNS output storage and collapse its batch prefix.
-inline torch::Tensor view_rns_output_3d(
-    const torch::Tensor& out,
-    const torch::Tensor& reference,
-    const int64_t limb_count,
-    at::TensorList read_only,
-    const char* operation) {
-  TORCH_CHECK(out.device() == reference.device(), operation,
+inline torch::Tensor view_rns_output_3d(const torch::Tensor& out,
+                                        const torch::Tensor& reference,
+                                        const int64_t limb_count,
+                                        at::TensorList read_only,
+                                        const char* operation) {
+  TORCH_CHECK(out.device() == reference.device(),
+              operation,
               " requires out on the operand device");
-  TORCH_CHECK(out.scalar_type() == reference.scalar_type(), operation,
+  TORCH_CHECK(out.scalar_type() == reference.scalar_type(),
+              operation,
               " requires out with the operand dtype");
-  TORCH_CHECK(out.dim() == reference.dim(), operation,
+  TORCH_CHECK(out.dim() == reference.dim(),
+              operation,
               " output rank must match the operand");
   for (int64_t axis = 0; axis < out.dim(); ++axis) {
     const int64_t expected =
         axis == out.dim() - 2 ? limb_count : reference.size(axis);
-    TORCH_CHECK(out.size(axis) == expected, operation,
-                " output shape mismatch at axis ", axis);
+    TORCH_CHECK(out.size(axis) == expected,
+                operation,
+                " output shape mismatch at axis ",
+                axis);
   }
   auto rows = view_rns_batch_3d(out, "out");
   // Sorted strides prove disjoint writes for dense and padded row layouts,
@@ -56,14 +62,15 @@ inline torch::Tensor view_rns_output_3d(
   int64_t span = 1;
   for (const int64_t axis : axes) {
     if (rows.size(axis) <= 1) continue;
-    TORCH_CHECK(rows.stride(axis) >= span, operation,
+    TORCH_CHECK(rows.stride(axis) >= span,
+                operation,
                 " requires out with non-overlapping strides");
     span += (rows.size(axis) - 1) * rows.stride(axis);
   }
   for (const auto& input : read_only) {
-    TORCH_CHECK(!out.is_alias_of(input) ||
-                    at::get_overlap_status(out, input) == at::MemOverlapStatus::No,
-                operation, " requires out disjoint from inputs and tables");
+    TORCH_CHECK(fhelium::detail::storage_disjoint(out, input),
+                operation,
+                " requires out disjoint from inputs and tables");
   }
   return rows;
 }
@@ -90,7 +97,9 @@ inline void check_rns_binary_3d(const torch::Tensor& lhs,
   TORCH_CHECK(lhs.device() == rhs.device(),
               operation,
               " requires operands on the same device; got ",
-              lhs.device(), " and ", rhs.device());
+              lhs.device(),
+              " and ",
+              rhs.device());
   TORCH_CHECK(lhs.dim() == 3 && rhs.dim() == 3,
               operation,
               " requires [batch, limb, coefficient] operands");
@@ -121,7 +130,9 @@ inline void check_rns_parameter_rows(const torch::Tensor& operand,
   TORCH_CHECK(operand.device() == rns_params.device(),
               operation,
               " requires RNS parameters on the operand device; got ",
-              operand.device(), " and ", rns_params.device());
+              operand.device(),
+              " and ",
+              rns_params.device());
   TORCH_CHECK(rns_params.dim() == 2,
               operation,
               " requires [parameter, limb] RNS parameters");

@@ -13,6 +13,7 @@ from typing import Protocol
 import torch
 
 from fhelium.config import CkksConfig
+from fhelium.errors import ScaleMismatchError, StateError
 from fhelium.values import (
     Ciphertext,
     ConjugationKey,
@@ -236,4 +237,43 @@ class CkksValidator:
                 raise ValueError("RotationKey step is not normalized")
 
 
-__all__ = ["CkksValidator", "RnsLayout"]
+def require_matching_operands(
+    operation: str,
+    lhs: object,
+    rhs: object,
+    *,
+    scale: bool,
+    plaintext: bool = False,
+    components: bool = True,
+) -> None:
+    """Require the shared value state of two operands of one Eager operation.
+
+    The compared fields are those of the corresponding captured operation:
+    depth, prime rows and modulus basis; polynomial domain and residue
+    representation for ciphertext pairs; component count when the operation
+    does not zero-extend; and the actual scale for additive operations.
+    """
+
+    fields = ("depth", "prime_ids", "modulus_basis")
+    if not plaintext:
+        fields += ("polynomial_domain", "residue_representation")
+        if components:
+            fields += ("component_count",)
+    for field in fields:
+        left, right = getattr(lhs, field), getattr(rhs, field)
+        if left != right:
+            raise StateError(
+                f"{operation} operands disagree on {field}: {left!r} and "
+                f"{right!r}; align them before the operation"
+            )
+    if scale and lhs.scale != rhs.scale:  # type: ignore[attr-defined]
+        raise ScaleMismatchError(
+            operation=operation,
+            lhs_name="lhs",
+            lhs_scale=lhs.scale,  # type: ignore[attr-defined]
+            rhs_name="rhs",
+            rhs_scale=rhs.scale,  # type: ignore[attr-defined]
+        )
+
+
+__all__ = ["CkksValidator", "RnsLayout", "require_matching_operands"]

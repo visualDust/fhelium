@@ -4,7 +4,7 @@ Implementation selection chooses the Backend code that executes an operation. Lo
 
 ## Prerequisites
 
-Have a correct Eager evaluator or a Compilation and a clear-message reference. Keep the input state, parameter set, and measurement scope fixed while comparing candidates. See [Build and transform a Program](build-program-pipeline.md) for a manual compilation and [Compile a callable](compile-callable.md) for a callable interface.
+Have a correct Eager evaluator or a Compilation and a clear-message reference. Keep the input state, parameter set, and measurement scope fixed while comparing candidates. See [Build a Program pipeline and write passes](build-program-pipeline.md) for a manual compilation and [Compile a callable](compile-callable.md) for a callable interface.
 
 ## 1. Inspect the available implementations
 
@@ -59,7 +59,7 @@ engine = Engine(
 )
 ```
 
-This selects the Engine's NTT policy while the actual device is chosen by factories or operands. Keep key material on the operation device. For CUDA alternatives, [screen compatible NTT backends](screen-ntt-backends.md), then [interpret the timing evidence](choose-ntt-backend.md). Confirm the result with the execution path being deployed.
+This selects the Engine's NTT policy while the actual device is chosen by factories or operands. Keep key material on the operation device. For CUDA alternatives, [measure the compatible NTT backends](choose-ntt-implementation.md). Confirm the result with the execution path being deployed.
 
 ## 5. Validate and record the selected execution
 

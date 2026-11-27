@@ -7,10 +7,10 @@ from typing import cast
 import torch
 
 from fhelium.backend.implementation import OperationInvocation
-from fhelium.backend.random.stream import advance_
 from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.ir.dialects import ckks
 from fhelium.native.wrapper import ckks_ops, rns_ops
+from fhelium.backend.lowering import ExecBuilder
 
 
 class NativeEncodeImplementation:
@@ -30,15 +30,15 @@ class NativeEncodeImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources, in_place
+        del resources
         message, pre, twister, rounding_state = inputs
         coefficients = ckks_ops.encode(
             message,
@@ -47,7 +47,6 @@ class NativeEncodeImplementation:
             rounding_state,
             float(cast(float, invocation.attributes["scale"])),
         )
-        advance_(rounding_state)
         return (coefficients,)
 
 
@@ -63,15 +62,15 @@ class NativeDecodeImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources, in_place
+        del resources
         return (
             ckks_ops.decode(
                 inputs[0],
@@ -95,15 +94,15 @@ class NativeIntegerCoefficientsToRnsImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources, in_place
+        del resources
         return (rns_ops.lift_integer_coefficients(inputs[0], inputs[1]),)
 
 

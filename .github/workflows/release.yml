@@ -168,7 +168,7 @@ jobs:
           "$verification_python" -I -m pip install --only-binary=:all: \
             "jsonschema==4.26.0"
           configuration=$(
-            "$verification_python" -I packaging/matrix.py show torch213-cu130
+            "$verification_python" -I packaging/matrix.py show torch215-cu132
           )
           torch_requirement=$("$verification_python" -c \
             'import json,sys; print(json.load(sys.stdin)["torch_requirement"])' \
@@ -194,8 +194,7 @@ jobs:
           "$verification_python" -I -m pytest \
             packaging/test_release_repository.py -q
           "$verification_python" examples/13_compile_pipeline.py
-          "$verification_python" examples/15_compile_custom_pass.py
-          "$verification_python" examples/16_compile_python_codegen.py
+          "$verification_python" examples/14_compile_custom_pass.py
           npm --prefix docs ci
           npm --prefix docs run build
           git diff --check
@@ -226,10 +225,10 @@ jobs:
             "twine==6.2.0"
           docker build --file packaging/manylinux_2_28.Dockerfile \
             --tag fhelium-manylinux-cpu .
-          docker build --file packaging/manylinux_2_28_cuda12_9.Dockerfile \
-            --tag fhelium-manylinux-cuda-12.9 .
-          docker build --file packaging/manylinux_2_28_cuda13.Dockerfile \
+          docker build --file packaging/manylinux_2_28_cuda13_0.Dockerfile \
             --tag fhelium-manylinux-cuda-13.0 .
+          docker build --file packaging/manylinux_2_28_cuda13_2.Dockerfile \
+            --tag fhelium-manylinux-cuda-13.2 .
           work_root="$RUNNER_TEMP/fhelium-linux-release-build"
           "$driver_python" -I packaging/matrix.py cells \
             --platform manylinux_2_28_x86_64 |

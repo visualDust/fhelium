@@ -58,8 +58,6 @@ class NttContext:
             self.ntt_policy,
             rns_context.modulus_values,
             self.config.logN,
-            device=self.device,
-            dtype=rns_context.dtype,
             rns_params=rns_context.rns_parameter_tensor,
         )
 
@@ -198,9 +196,7 @@ class NttContext:
             include_p=include_p,
             parameter_row_start=parameter_row_start,
         )
-        return self._transform(
-            a, ids, "forward_to_montgomery_", in_place=False
-        )
+        return self._transform(a, ids, "forward_to_montgomery_", in_place=False)
 
     def inverse_montgomery_(
         self,

@@ -16,7 +16,9 @@ def _tensors(value: object) -> Iterator[torch.Tensor]:
         if value.device.type == "cuda":
             yield value
     elif isinstance(value, TensorResident):
-        for tensor in ValueEnvelope.from_value(value).tensors.values():
+        for tensor in ValueEnvelope.from_value(
+            value, compact_keys=False
+        ).tensors.values():
             yield from _tensors(tensor)
     elif isinstance(value, dict):
         for item in value.values():

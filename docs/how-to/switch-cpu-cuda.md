@@ -115,11 +115,9 @@ The Engine does not silently resample a destination secret key. Unless automatic
 
 ## Compiled execution placement
 
-Prepare a Compilation’s numerical materials on the intended device before linking with `OperationBackend`. `prepare_material_bindings` can fill missing symbols from caller-supplied device-local providers and keys; direct Tensor assignment is also available. Neither a material lookup nor linking generates evaluation keys or silently transfers incompatible operands. See [Bind and deploy a Program](persist-compiled-program.md) for a complete procedure.
+Placement in a compiled function is part of its dataflow. A `.to(device)`, `.cpu()`, or `.cuda()` call on a value inside the function is captured as a transfer of its Tensors and executes at that position on every call; every other operation executes on the device of its operands, as in Eager mode. Compile neither inserts nor removes transfers, so a function that mixes devices states each transfer where it occurs. Argument devices are part of the call signature: calling the same function with CPU and CUDA inputs prepares two specializations. Materials such as keys and plaintexts captured from the function's closure or instance keep the device they had at capture; place them on the execution device before the first call.
 
-For a callable, placement contributes to its input signature. Prepare the intended placed inputs and retain the specialization’s resources while reusing it. A manually linked Program and a compiled callable use the same Backend execution mechanisms; neither requires an Engine to own the binding. Non-Tensor handles such as process groups must be supplied for the destination process. CUDA Graph captures and fixed buffers need their own destination-device construction and lifetime management.
-
-A creation operation may define its own static or dynamic device parameter when it allocates a new Tensor without a placed Tensor operand. Operations over existing Tensor values dispatch from operand placement. A pass that changes placement must insert a real transfer operation before or after the numerical operation, rather than attaching a generic device attribute to every operation. `fhelium_memory.transfer` represents an actual placement change; mixed-device arithmetic regions still require callers to insert and schedule those transfers.
+A loaded artifact runs on the device passed to `fc.load(..., device=...)`, which places its CUDA materials and execution there; keys supplied to it are read on their own device and should be on that device. For a manual Program, prepare the materials on the intended device before linking with `OperationBackend`; `prepare_material_bindings` fills missing symbols from caller-supplied device-local providers and keys and never transfers or generates them. See [Save and relink a Program](save-and-relink-program.md).
 
 ## Account for backend-specific capabilities
 
@@ -127,7 +125,7 @@ CPU and CUDA share public CKKS methods, but not every optimization exists on bot
 
 - CPU uses the indexed radix-2 NTT backend and Torch intra-op parallelism;
 - CUDA may provide indexed radix-2 and configuration-selected compact NTT implementations;
-- CUDA Graph capture, CUDA streams, and device-resident graph buffers remain CUDA-specific execution mechanisms.
+- CUDA Graph execution of compiled callables, CUDA streams, and fixed device buffers are CUDA-specific; compiled callables on CPU run their schedules directly.
 
 Callers that depend on one implementation should check the installed backend and requested implementation rather than infer capability from the public method name.
 

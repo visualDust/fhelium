@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 import math
 
 from fhelium.values import EvaluationKeySet, Ciphertext, RelinearizationKey
@@ -41,9 +41,7 @@ class _BlockSchedule:
     inventory: tuple[tuple[str, int], ...]
 
 
-def _plan(
-    polynomial: Polynomial, baby_step: int | None
-) -> _BlockSchedule:
+def _plan(polynomial: Polynomial, baby_step: int | None) -> _BlockSchedule:
     degree = polynomial.degree
     direct = BinaryChebyshevPlan()
     if degree < 4 or (baby_step is not None and baby_step > degree):
@@ -182,11 +180,6 @@ class BlockedChebyshevPlan:
 
     baby_step: int | None = None
     skip_near_zero: float = 0.0
-    _plans: dict[Polynomial, _BlockSchedule] = field(
-        default_factory=dict,
-        repr=False,
-        compare=False,
-    )
 
     def __post_init__(self) -> None:
         if self.baby_step is not None and self.baby_step < 2:
@@ -197,12 +190,7 @@ class BlockedChebyshevPlan:
     def plan(self, polynomial: Polynomial) -> _BlockSchedule:
         """Return the shared coefficient, basis, depth and operation plan."""
         if polynomial.basis != 'chebyshev':
-            raise ValueError(
-                'BlockedChebyshevPlan requires Chebyshev basis'
-            )
-        cached = self._plans.get(polynomial)
-        if cached is not None:
-            return cached
+            raise ValueError('BlockedChebyshevPlan requires Chebyshev basis')
         _validate_polynomial_coefficients(polynomial)
         coefficients = [
             c if i == 0 or abs(c) > self.skip_near_zero else 0j
@@ -210,18 +198,22 @@ class BlockedChebyshevPlan:
         ]
         while len(coefficients) > 1 and coefficients[-1] == 0:
             coefficients.pop()
-        effective = replace(polynomial, coefficients=tuple(coefficients))
-        result = _plan(effective, self.baby_step)
-        self._plans[polynomial] = result
-        return result
+        effective = Polynomial(
+            polynomial.basis,
+            tuple(coefficients),
+            polynomial.domain,
+            polynomial.name,
+            polynomial.max_error,
+        )
+        # Recomputing the schedule (microseconds) keeps the plan immutable,
+        # so a plan can be passed into a captured function.
+        return _plan(effective, self.baby_step)
 
     def required_depths(self, polynomial: Polynomial) -> int:
         """Return the depth consumed by this polynomial's selected plan."""
         return self.plan(polynomial).required_depths
 
-    def operation_inventory(
-        self, polynomial: Polynomial
-    ) -> dict[str, int]:
+    def operation_inventory(self, polynomial: Polynomial) -> dict[str, int]:
         """Count products, relinearizations and group rescales in the plan."""
         return dict(self.plan(polynomial).inventory)
 
@@ -231,10 +223,8 @@ class BlockedChebyshevPlan:
         """Return basis-product depths and the single delayed giant-sum depth."""
         plan = self.plan(polynomial)
         if plan.baby_step == 0:
-            return (
-                BinaryChebyshevPlan().relinearization_depths(
-                    plan.polynomial, input_depth=input_depth
-                )
+            return BinaryChebyshevPlan().relinearization_depths(
+                plan.polynomial, input_depth=input_depth
             )
         depths = {
             input_depth + depth - 1

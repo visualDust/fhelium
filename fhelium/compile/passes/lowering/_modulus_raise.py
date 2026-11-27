@@ -184,7 +184,9 @@ def lower_modulus_raise(operation, config, compilation):
                 key_digit_index=0,
                 key_row_start=0,
                 key_seed=seeds[1] if seeds else None,
-                key_rounds=key_seed_rounds(operation.return_key) if seeds else 0,
+                key_rounds=key_seed_rounds(operation.return_key)
+                if seeds
+                else 0,
             )
         )
         products = transform(products, inverse=True, components=2)

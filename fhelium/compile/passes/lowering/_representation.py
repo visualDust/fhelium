@@ -457,7 +457,13 @@ def _lower_level_reduce(
         / Fraction(float(scale_attr.value.data))
     )
     scaled = ckks.MultiplyIntegerScalarOp(
-        operation.value, scalar=IntegerAttr(multiplier, 64)
+        operation.value,
+        scalar=IntegerAttr(multiplier, 64),
+        attributes={
+            name: value
+            for name, value in operation.attributes.items()
+            if name == "ckks_config"
+        },
     )
     basis = _modulus_basis(state)
     source_ids = depth_prime_ids(config, source_depth, basis)

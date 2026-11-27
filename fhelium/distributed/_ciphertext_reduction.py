@@ -164,7 +164,9 @@ def reduce_ciphertext(
     Returns:
         None.  Only ``value`` on ``dst`` is guaranteed to contain the global
         sum.  For world size one, the sole value is already the sum and remains
-        unchanged.
+        unchanged.  In a captured computation the call records a ciphertext
+        sum across the group that ``dst`` receives; the captured value on
+        every other rank holds zeros.
 
     Raises:
         ValueError: If ``dst`` is outside ``group``; rank-local values are not
@@ -174,6 +176,10 @@ def reduce_ciphertext(
             caller is not a member of ``group``.
     """
 
+    from fhelium.compile.frontend._eager_capture import capture_all_reduce
+
+    if capture_all_reduce(value, group, engine, dst):
+        return
     info = _group_info(group)
     _validate_ciphertext_reduce_layout(
         value,
@@ -213,7 +219,8 @@ def all_reduce_ciphertext(
         None.  Every rank's existing ``value`` object contains the global sum
         after return.  For world size one, the value remains unchanged.  The
         function accepts no ``async_op`` argument and returns no
-        :class:`torch.distributed.Work`.
+        :class:`torch.distributed.Work`.  In a captured computation the call
+        records ``fhelium_dist.all_reduce_add_ciphertext``.
 
     Raises:
         ValueError: If rank-local values are not ciphertexts with identical
@@ -223,6 +230,10 @@ def all_reduce_ciphertext(
             caller is not a member of ``group``.
     """
 
+    from fhelium.compile.frontend._eager_capture import capture_all_reduce
+
+    if capture_all_reduce(value, group, engine):
+        return
     info = _group_info(group)
     _validate_ciphertext_reduce_layout(
         value,

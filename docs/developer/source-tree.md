@@ -73,22 +73,27 @@ graph TB
         CALLABLE --> CAP
         PASS[Caller-composed Compile passes]
         LINK[Backend linking passes]
-        EXE[ProgramExecutable]
-        CAP --> PASS --> LINK --> EXE
+        SCHED[Exec schedule]
+        CAP --> PASS --> LINK --> SCHED
     end
 
     IMPL[Registered Backend implementation]
     PY[CKKS, RNS, and NTT Python execution]
     NATIVE[Typed wrapper and torch.ops]
+    RUNNER[libfhelium Runner]
     DEVICE[CPU C++, CUDA, or HIP kernel]
+    GENERATED[Backend-generated kernels]
 
     APP --> ENG
     APP --> MANUAL
     APP --> CALLABLE
     ECALL --> IMPL
-    EXE --> IMPL
     IMPL --> PY --> NATIVE --> DEVICE
-    IMPL --> GENERATED[Backend-generated kernels]
+    IMPL --> GENERATED
+    IMPL -. lowered by .-> LINK
+    SCHED --> RUNNER
+    RUNNER --> NATIVE
+    RUNNER --> GENERATED
 ```
 
 Eager executes a requested operation without an SSA graph. Compile owns Program construction and transformation, then links a complete Program before running it. Manual Program/Pipeline execution and callable specialization use the same Compile machinery. Eager and Compile invoke the `OperationImplementation` interface with Tensor payloads and concrete resources.
@@ -105,7 +110,7 @@ Eager executes a requested operation without an SSA graph. Compile owns Program 
 | Tensor movement and value-local byte accounting | `fhelium/values/tensor_resident.py` |
 | CKKS configuration and packaged primes | `fhelium/config/` |
 
-Public value classes carry value state and Tensor storage. Execution services, process groups, artifact names, and application cache policy remain with their own packages.
+Public value classes carry value state and Tensor storage. Execution services, process groups, stored-value names, and application cache policy remain with their own packages.
 
 ## Eager execution
 
@@ -188,13 +193,19 @@ Run `python scripts/generate_native_wrappers.py` after changing a native schema 
 
 | Goal | Location |
 | --- | --- |
-| Callable preparation and specialization | `fhelium/compile/` |
+| Callable preparation and specialization | `fhelium/compile/_callable.py`, `fhelium/compile/_specialization.py` |
+| Graph route and segment statistics | `fhelium/compile/_graph.py` |
+| Compile cache, source identity, and material relocation | `fhelium/compile/_cache.py` |
+| Export and load of compiled artifacts | `fhelium/compile/_export.py`, `fhelium/backend/_artifact.py`, `fhelium/native/artifact.py` |
+| Exec schedules, translation, and the Runner | `fhelium/backend/runner.py`, `fhelium/backend/_planning.py` (storage classes, arena, Graph segments) |
+| Native Runner and Graph capture | `csrc/runner/runner.cpp`, `csrc/runner/graph_capture.h`, `csrc/include/fhelium/runner.h`, `csrc/torchops/runner_ops.cpp` |
+| Native artifact and container loading | `csrc/artifact/artifact.cpp`, `csrc/artifact/container.cpp`, `csrc/artifact/values.cpp`, `csrc/include/fhelium/artifact.h`, `csrc/include/fhelium/container.h` |
 | CPU/GPU topology and memory observation | `fhelium/runtime/topology.py`, `fhelium/runtime/memory.py` |
-| Reusable buffers and CUDA Graphs | `fhelium/runtime/buffer.py`, `fhelium/runtime/cuda_graph.py` |
+| Reusable buffers, `DoubleBuffer`, and manual CUDA Graphs | `fhelium/runtime/buffer.py`, `fhelium/runtime/cuda_graph.py` |
 | Rank and process-group initialization | `fhelium/distributed/_state.py` |
 | Typed value transport and collectives | `fhelium/distributed/_transfer.py`, `fhelium/distributed/_value_collectives.py` |
 | Limb collectives and ciphertext reduction | `fhelium/distributed/_limb_collectives.py`, `fhelium/distributed/_ciphertext_reduction.py` |
-| Artifact references and repository | `fhelium/artifacts/artifact.py`, `fhelium/artifacts/store.py` |
+| Value store references and repository | `fhelium/store/reference.py`, `fhelium/store/store.py` |
 | Residency ownership and accounting | `fhelium/residency/manager.py`, `fhelium/residency/model.py` |
 | Residency requests, policy, plans, and controller | `fhelium/residency/request.py`, `policy.py`, `plan.py`, `controller.py` |
 | Leases and tensor-free snapshots | `fhelium/residency/lease.py`, `fhelium/residency/snapshot.py` |
@@ -218,7 +229,8 @@ Start with the package that owns the changed behavior:
 | Distributed execution | `tests/distributed/test_distributed_operation_execution.py`, `tests/distributed/test_distributed_transfer.py` |
 | Runtime buffers and CUDA Graphs | `tests/runtime/test_execution_buffer.py`, `tests/runtime/test_cuda_graph_execution.py` |
 | Residency | `tests/residency/test_resource_residency.py`, `tests/residency/test_residency_controller.py` |
-| Artifacts and serialization | `tests/artifacts/test_artifact_store.py`, `tests/values/test_serialization.py` |
+| Value store and serialization | `tests/store/test_value_store.py`, `tests/values/test_serialization.py` |
+| Callable cache, export, and Graph route | `tests/compile/test_callable_cache.py`, `tests/compile/test_export.py`, `tests/compile/test_graph_executor.py` |
 
 Repository test discovery is the final authority because test files can evolve.
 
@@ -238,7 +250,7 @@ Program → Compilation → Pipeline.run(compilation) → Backend linking passes
 → ProgramExecutable → Backend implementation → native wrapper → csrc kernel
 ```
 
-For callable specialization, `compile.compile` captures or accepts the same Program, prepares it through a Pipeline, and caches its linked executable. See [prepared host execution](prepared-host-execution.md).
+For callable specialization, `compile.compile` captures or accepts the same Program, prepares it through a Pipeline, links an exec schedule that `backend/runner.py` builds into a native Runner, and caches the linked executable. See [Linking, exec schedules, and the Runner](linking-and-runner.md).
 
 Read the focused tests beside each owner before changing an execution path. They capture value-state, mutation, resource, singleton-row, last-depth, and Q/QP behavior that may not be visible from a benchmark.
 

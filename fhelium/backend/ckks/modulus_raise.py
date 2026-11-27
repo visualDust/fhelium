@@ -10,6 +10,11 @@ from xdsl.ir import Attribute
 from fhelium.backend._native_operands import key_switch_options, named_tables
 from fhelium.native.wrapper import ckks_ops, rns_ops
 from .tables import encapsulation_configs
+import torch
+
+from fhelium.backend.implementation import OperationInvocation
+from fhelium.backend.lowering import ExecBuilder
+from fhelium.backend.resources import BoundResource
 from ._key_switch_preparation import (
     key_switch_runtime_attributes,
     operation_key_rounds,
@@ -157,14 +162,25 @@ class NativeModulusRaiseImplementation:
             )
         return self
 
-    def execute(self, invocation, inputs, resources, *, in_place):
-        del resources, in_place
+    def lower(
+        self,
+        invocation: OperationInvocation,
+        inputs: tuple[torch.Tensor, ...],
+        resources: tuple[BoundResource, ...],
+        builder: ExecBuilder,
+        /,
+    ) -> tuple[torch.Tensor, ...]:
+        del resources
         attributes = invocation.attributes
         if invocation.operation_type is not ckks.EncapsulatedModulusRaiseOp:
             return (
                 rns_ops.centered_basis_extend(
                     inputs[0],
-                    *named_tables(attributes["parameter_names"], inputs[1:]),
+                    named_tables(
+                        "basis_extension",
+                        attributes["parameter_names"],
+                        inputs[1:],
+                    ),
                 ),
             )
         low = key_switch_options(attributes, prefix="low_")
@@ -182,7 +198,9 @@ class NativeModulusRaiseImplementation:
                 inputs[0],
                 inputs[1],
                 inputs[2],
-                *named_tables(attributes["parameter_names"], inputs[end:]),
+                named_tables(
+                    "encapsulation", attributes["parameter_names"], inputs[end:]
+                ),
                 **low,
                 return_drop_count=int(attributes["return_drop_count"]),
                 target_row_start=int(attributes["target_row_start"]),

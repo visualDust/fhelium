@@ -14,10 +14,11 @@ namespace {
 
 using fhelium::ckks::cpu::check_cpu_peer;
 
-torch::Tensor coefficient_galois_cpu(const torch::Tensor residues,
-                                     const torch::Tensor source_indices,
-                                     const torch::Tensor source_sign,
-                                     const torch::Tensor twice_modulus) {
+void coefficient_galois_cpu(const torch::Tensor residues,
+                            const torch::Tensor source_indices,
+                            const torch::Tensor source_sign,
+                            const torch::Tensor twice_modulus,
+                            torch::Tensor& out) {
   constexpr const char* operation = "apply_coefficient_galois_automorphism";
   for (const auto& peer : {source_indices, source_sign, twice_modulus}) {
     TORCH_CHECK(peer.device() == residues.device(),
@@ -36,7 +37,6 @@ torch::Tensor coefficient_galois_cpu(const torch::Tensor residues,
   check_rns_row_vector(
       twice_modulus, input.size(1), operation, "twice_modulus");
   check_cpu_peer(residues, twice_modulus, operation, "twice_modulus");
-  auto out = torch::empty_like(residues);
   auto output = view_rns_batch_3d(out, "out");
   AT_DISPATCH_INTEGRAL_TYPES(residues.scalar_type(), operation, [&] {
     const scalar_t* source = input.data_ptr<scalar_t>();
@@ -95,11 +95,11 @@ torch::Tensor coefficient_galois_cpu(const torch::Tensor residues,
           }
         });
   });
-  return out;
 }
 
-torch::Tensor ntt_galois_cpu(const torch::Tensor residues,
-                             const torch::Tensor source_indices) {
+void ntt_galois_cpu(const torch::Tensor residues,
+                    const torch::Tensor source_indices,
+                    torch::Tensor& out) {
   constexpr const char* operation = "apply_ntt_galois_automorphism";
   TORCH_CHECK(residues.device().is_cpu() &&
                   source_indices.device() == residues.device() &&
@@ -111,7 +111,6 @@ torch::Tensor ntt_galois_cpu(const torch::Tensor residues,
       source_indices.dim() == 1 && source_indices.size(0) == input.size(2),
       operation,
       " source index count mismatch");
-  auto out = torch::empty_like(residues);
   auto output = view_rns_batch_3d(out, "out");
   AT_DISPATCH_INTEGRAL_TYPES(residues.scalar_type(), operation, [&] {
     const scalar_t* source = input.data_ptr<scalar_t>();
@@ -162,33 +161,34 @@ torch::Tensor ntt_galois_cpu(const torch::Tensor residues,
           }
         });
   });
-  return out;
 }
 
 }  // namespace
 
 namespace fhelium::ckks::cpu {
 
-at::Tensor apply_coefficient_galois_automorphism(
-    const at::Tensor& residues,
-    const at::Tensor& source_indices,
-    const at::Tensor& source_sign,
-    const at::Tensor& twice_modulus) {
-  return ::coefficient_galois_cpu(
-      residues, source_indices, source_sign, twice_modulus);
+void apply_coefficient_galois_automorphism_out(const at::Tensor& residues,
+                                               const at::Tensor& source_indices,
+                                               const at::Tensor& source_sign,
+                                               const at::Tensor& twice_modulus,
+                                               at::Tensor& out) {
+  ::coefficient_galois_cpu(
+      residues, source_indices, source_sign, twice_modulus, out);
 }
 
-at::Tensor apply_ntt_galois_automorphism(const at::Tensor& residues_ntt,
-                                         const at::Tensor& source_indices) {
-  return ::ntt_galois_cpu(residues_ntt, source_indices);
+void apply_ntt_galois_automorphism_out(const at::Tensor& residues_ntt,
+                                       const at::Tensor& source_indices,
+                                       at::Tensor& out) {
+  ::ntt_galois_cpu(residues_ntt, source_indices, out);
 }
 
 void add_ntt_galois_automorphism_(at::Tensor& target,
                                   const at::Tensor& residues_ntt,
                                   const at::Tensor& source_indices,
                                   const at::Tensor& rns_params) {
-  target.copy_(fhelium::rns::add_lazy(
-      target, ::ntt_galois_cpu(residues_ntt, source_indices), rns_params));
+  auto permuted = torch::empty_like(residues_ntt);
+  ::ntt_galois_cpu(residues_ntt, source_indices, permuted);
+  target.copy_(fhelium::rns::add_lazy(target, permuted, rns_params));
 }
 
 }  // namespace fhelium::ckks::cpu

@@ -1,6 +1,6 @@
 # Generated kernels, fusion, and NTT execution
 
-Compile constructs fusion regions from compatible represented operations, and selected Backend implementations generate their device execution. The resulting Program can be linked and run manually or reused through callable Compile. This page owns fusion representation, modular code generation, and generated NTT execution; [Compilation and passes](compilation-and-passes.md) owns the surrounding recipe and [prepared host execution](prepared-host-execution.md) owns invocation and caches.
+Compile constructs fusion regions from compatible represented operations, and selected Backend implementations generate their device execution. The resulting Program can be linked and run manually or reused through callable Compile. This page owns fusion representation, modular code generation, and generated NTT execution; [IR, capture, and passes](ir-capture-and-passes.md) owns the surrounding recipe and [Linking, exec schedules, and the Runner](linking-and-runner.md) owns invocation and caches.
 
 ## From represented operations to kernels
 
@@ -55,7 +55,6 @@ Compile's Python source emitters export a Program stage as Eager calls or direct
 
 `fhelium.backend.triton` supplies individual-operation and region implementations:
 
-- `TritonRnsImplementation`, named `triton-rns-pointwise`, implements individual supported RNS arithmetic operations.
 - `TritonFusionImplementation`, named `triton-rns-fused`, generates a component-indexed arithmetic kernel.
 - `TritonFusionImplementation(name="triton-ntt-fused", include_ntt=True)` supplies the region implementation selected for transform schedules.
 
@@ -93,9 +92,9 @@ The Backend schedules stage dependencies, advancing independent branches before 
 
 An indexed schedule retains its supplied butterfly pairings through the existing complete native transform. Its execution plan can combine pointwise expressions before and after that call; the native call owns all transform stages and residue transitions. Automatic fusion requires a generated combination in those surrounding expressions. A manually supplied region can retain a complete native transform without claiming fusion inside it.
 
-Forward standard-input conversion remains part of input loading. Inverse normalization and standard-residue conversion precede consumers of that output. Each exported result is written when its transform dependencies are ready, and temporary storage is released after its last scheduled use. Execution consumes the current input and table Tensors through a prepared Python function.
+Forward standard-input conversion remains part of input loading. Inverse normalization and standard-residue conversion precede consumers of that output. Each exported result is written when its transform dependencies are ready, and temporary storage is released after its last scheduled use. Execution consumes the current input and table Tensors through the lowered schedule.
 
-Generated kernels obtain a compiled-kernel launcher on their first use. Warm execution supplies current Tensor pointers and the current stream to that launcher rather than repeating Triton's generic argument specialization. Pointer-alignment specialization is disabled for these generated signatures, allowing valid offset views to retain the same prepared layout. Launch hooks remain active, and changed debug or instrumentation settings trigger preparation under those settings.
+Lowering records each generated kernel launch with its compiled signature. The Runner loads the kernel's device image and launches it with the current Tensor pointers on the current stream, without Triton's Python launcher or argument specialization. Pointer-alignment specialization is disabled for these generated signatures, allowing valid offset views to retain the same prepared layout. Triton launch hooks and the Triton interpreter do not apply to Runner launches.
 
 Basis extension and rounded rescale/ModDown execute through their selected implementations. Their changed basis and numerical states constrain dependent endpoint grouping. Communication and other effects preserve execution order. Native whole-operation key-switch and rescale paths remain selectable.
 
@@ -109,11 +108,11 @@ Basis extension and rounded rescale/ModDown execute through their selected imple
 
 ## Preparation and measurement
 
-Backend operation preparation consumes a region once to construct its execution plan. Known layouts can be prepared from physical IR facts; missing layout facts may defer that step until execution. Device-code compilation can remain lazy after host linking. Prepare and warm the intended workload before timing or CUDA Graph capture.
+Backend operation preparation consumes a region once, and lowering builds its kernel plan for each operand layout. Known layouts are lowered during linking from physical IR facts; missing layout facts defer lowering to the first call with each layout. Device-code compilation can remain lazy after host linking. Prepare and warm the intended workload before timing or CUDA Graph capture.
 
 For integer fusion, compare the specified residue representatives as well as agreement modulo each prime. Whole and lowered algorithms can legitimately choose different lazy representatives when their contracts permit it. Check component indexing, broadcast and offset views, externally used intermediates, and rounding transitions using the owning numerical contract. Measure cold preparation, warmed execution, and launch counts separately to evaluate the effect of a lowering.
 
-[Execution buffers and CUDA Graphs](execution-buffers-and-cuda-graphs.md) describes stable-address capture of native and generated kernels together. The [Compile tutorial](../tutorial/compile-jit.md) provides a runnable callable example, and [manual Program execution](../how-to/build-program-pipeline.md) uses the same Pipeline and Backend mechanisms directly.
+[Execution buffers and CUDA Graphs](execution-buffers-and-cuda-graphs.md) describes stable-address capture of native and generated kernels together. The [Compile tutorial](../tutorial/compile-layer.md) provides a runnable callable example, and [manual Program execution](../how-to/build-program-pipeline.md) uses the same Pipeline and Backend mechanisms directly.
 
 ## Generated NTT kernel size
 

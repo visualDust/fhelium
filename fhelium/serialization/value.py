@@ -60,10 +60,15 @@ class ValueEnvelope:
     tensors: dict[str, torch.Tensor]
 
     @classmethod
-    def from_value(cls, value: TensorResident) -> Self:
-        """Collect one live value's metadata and Tensor payloads."""
+    def from_value(
+        cls, value: TensorResident, *, compact_keys: bool = True
+    ) -> Self:
+        """Collect one live value's metadata and Tensor payloads.
 
-        return cast(Self, _envelope_from_value(value, cls))
+        With ``compact_keys``, a key with a seed contributes $k_0$ and its seed rows, the form in which files store it; otherwise its payload is the key's ``data`` in its current storage form, compact or expanded.
+        """
+
+        return cast(Self, _envelope_from_value(value, cls, compact_keys))
 
     def to_value(self) -> TensorResident:
         """Reconstruct the concrete FHElium value type."""
@@ -81,6 +86,7 @@ class ValueEnvelope:
 def _envelope_from_value(
     value: TensorResident,
     envelope_type: type[ValueEnvelope],
+    compact_keys: bool = True,
 ) -> ValueEnvelope:
     """Build the path-independent representation of one live value."""
 
@@ -189,8 +195,10 @@ def _envelope_from_value(
                 ),
             },
             tensors=(
-                # A key with a seed is written compact: k_0 and the seed rows.
-                {"data": value.data[:, :1], "seed": value.seed}
+                {
+                    "data": value.data[:, :1] if compact_keys else value.data,
+                    "seed": value.seed,
+                }
                 if isinstance(value, KeySwitchKey) and value.seed is not None
                 else {"data": key_value.data}
             ),
@@ -690,7 +698,11 @@ def validate_value_description(
     _require_metadata_fields(typed_metadata, value_type, fields)
     if key_type is RotationKey:
         _metadata_integer(typed_metadata, "rotation_step", value_type)
-    _validate_required_rns_metadata(typed_metadata, value_type)
+    _validate_required_rns_metadata(
+        typed_metadata,
+        value_type,
+        require_increasing=not issubclass(key_type, KeySwitchKey),
+    )
     seeded = issubclass(key_type, KeySwitchKey) and "seed" in typed_metadata
     if seeded:
         _seed_spec(typed_metadata, value_type)
@@ -700,7 +712,10 @@ def validate_value_description(
 
 
 def _validate_required_rns_metadata(
-    metadata: dict[str, Any], value_type: str
+    metadata: dict[str, Any],
+    value_type: str,
+    *,
+    require_increasing: bool = True,
 ) -> None:
     _validate_rns_metadata(
         value_type,
@@ -708,6 +723,7 @@ def _validate_required_rns_metadata(
         _metadata_string(metadata, "modulus_basis", value_type),
         _metadata_residue_representation(metadata, value_type),
         _metadata_prime_ids(metadata, value_type),
+        require_increasing=require_increasing,
     )
 
 
@@ -717,6 +733,8 @@ def _validate_rns_metadata(
     modulus_basis: str | None,
     residue_representation: str | None,
     prime_ids: tuple[int, ...],
+    *,
+    require_increasing: bool = True,
 ) -> None:
     if polynomial_domain not in ("coefficient", "ntt"):
         raise ValueError(f"Unsupported {value_type} polynomial_domain")
@@ -730,7 +748,11 @@ def _validate_rns_metadata(
         )
     if not prime_ids:
         raise ValueError(f"{value_type} prime_ids cannot be empty")
-    if any(a >= b for a, b in zip(prime_ids, prime_ids[1:])):
+    # Key switching keys store their rows in digit order.
+    if not require_increasing:
+        if len(set(prime_ids)) != len(prime_ids):
+            raise ValueError(f"{value_type} prime_ids must be unique")
+    elif any(a >= b for a, b in zip(prime_ids, prime_ids[1:])):
         raise ValueError(f"{value_type} prime_ids must be strictly increasing")
 
 

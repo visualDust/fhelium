@@ -37,7 +37,7 @@ HEADERS = (
     ("fhelium/ntt_tables.h", "ntt-tables"),
     ("fhelium/ckks_tables.h", "ckks-tables"),
     ("fhelium/ckks_parameters.h", "ckks-parameters"),
-    ("fhelium/tensor_table.h", "tensor-table"),
+    ("fhelium/operation_tables.h", "operation-tables"),
     ("fhelium/ntt_operations.h", "ntt-operations"),
     ("fhelium/rns_operations.h", "rns-operations"),
     ("fhelium/ckks_operations.h", "ckks-operations"),

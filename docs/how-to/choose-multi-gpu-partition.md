@@ -130,9 +130,9 @@ Run the same worker under:
 
 Compare every final result to the same oracle and report maximum error per rank or at the reconstructed root.
 
-## 8. Keep graph capture local
+## 8. Compile the rank-local evaluator
 
-If the local evaluator has a fixed schedule, capture one `CudaGraphProgram` per rank. Leave dynamic input/key provisioning and typed final reduction eager.
+Compile the rank-local evaluator with `fc.compile` on every rank. `fhelium.distributed.all_reduce_ciphertext` and `reduce_ciphertext` in the function are captured as one ciphertext all-reduce, which the default pipeline lowers to an `all_gather` and $P-1$ modular additions in rank order: every rank receives the same bitwise sum, holds a gather buffer of $P$ ciphertexts, and performs the $P-1$ additions itself. For `reduce_ciphertext` the destination argument selects the rank whose caller uses the sum. `broadcast_ciphertext` is not captured; broadcast inputs and keys before the compiled call. Each rank reads its rank and group size from the bound process group when the schedule runs. Collectives on CUDA buffers belong to CUDA Graph segments; the Runner runs a segment directly when its process group cannot be captured. Every rank must call the compiled function with the same sequence of collectives. Keep input and key provisioning outside the compiled function. An exported artifact with collectives is loaded on every rank with `fc.load`, which binds the default group automatically and other groups from `groups=`; a source that reads `torch.distributed.get_rank()` during capture produces a cache entry and an artifact for that rank only. A function that closes over a process group is cached under the group's c10d registry name, and a cache hit binds the group registered under that name, so every process creates its groups in the same order. Shut process groups down with `fhelium.distributed.shutdown(group)`, which first releases the compiled schedules and loaded artifacts bound to the group; a direct `torch.distributed.destroy_process_group()` call can hang on CUDA Graphs that still hold captured NCCL work.
 
 ## 9. Report the complete result
 
@@ -149,7 +149,7 @@ Record:
 
 ## Verify the outcome
 
-Each rank must own a defined input region or contribution, enter the same collective protocol, and produce the single-rank mathematical result after combination. Compare decoded messages under the same error criterion when the distributed summation schedule changes. See `examples/22_distributed_batch_inputs.py` through `examples/25_distributed_collective_ir.py` for input, partial-result, row-shard, and IR collective procedures.
+Each rank must own a defined input region or contribution, enter the same collective protocol, and produce the single-rank mathematical result after combination. Compare decoded messages under the same error criterion when the distributed summation schedule changes. See `examples/20_distributed_batch_inputs.py` through `examples/23_distributed_collective_ir.py` for input, partial-result, row-shard, and IR collective procedures.
 
 ## Related documentation
 

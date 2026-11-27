@@ -1,11 +1,33 @@
 #include "backends.h"
 
 #include "../common/backend_dispatch.h"
+#include "../common/overlap.h"
+
+#include <ATen/ops/empty_like.h>
 
 #undef FHELIUM_DISPATCH_NAMESPACE
 #define FHELIUM_DISPATCH_NAMESPACE "fhelium::ntt::"
 
 namespace fhelium::ntt {
+
+namespace {
+
+void check_output(const at::Tensor& out,
+                  const at::Tensor& like,
+                  const char* operation) {
+  TORCH_CHECK_VALUE(out.sizes() == like.sizes() &&
+                        out.scalar_type() == like.scalar_type() &&
+                        out.device() == like.device(),
+                    operation,
+                    " requires an output of shape ",
+                    like.sizes(),
+                    ", dtype ",
+                    like.scalar_type(),
+                    " and device ",
+                    like.device());
+}
+
+}  // namespace
 
 void forward_ntt_montgomery_indexed_(at::Tensor& montgomery_residues,
                                      const at::Tensor& even_indices,
@@ -33,48 +55,82 @@ void forward_ntt_to_montgomery_indexed_(at::Tensor& standard_residues,
                            rns_params);
 }
 
+void forward_ntt_to_montgomery_indexed_out(const at::Tensor& standard_residues,
+                                           const at::Tensor& even_indices,
+                                           const at::Tensor& odd_indices,
+                                           const at::Tensor& forward_twiddles,
+                                           const at::Tensor& rns_params,
+                                           at::Tensor& out) {
+  check_output(out, standard_residues, "forward_ntt_to_montgomery_indexed_out");
+  TORCH_CHECK_VALUE(fhelium::detail::storage_disjoint(out, standard_residues),
+                    "forward_ntt_to_montgomery_indexed_out requires out "
+                    "disjoint from its input");
+  FHELIUM_DISPATCH_CPU_GPU(forward_ntt_to_montgomery_indexed_out,
+                           standard_residues,
+                           even_indices,
+                           odd_indices,
+                           forward_twiddles,
+                           rns_params,
+                           out);
+}
+
 at::Tensor forward_ntt_to_montgomery_indexed(
     const at::Tensor& standard_residues,
     const at::Tensor& even_indices,
     const at::Tensor& odd_indices,
     const at::Tensor& forward_twiddles,
     const at::Tensor& rns_params) {
-  FHELIUM_DISPATCH_CPU_GPU(forward_ntt_to_montgomery_indexed,
-                           standard_residues,
-                           even_indices,
-                           odd_indices,
-                           forward_twiddles,
-                           rns_params);
+  auto out = at::empty_like(standard_residues);
+  forward_ntt_to_montgomery_indexed_out(standard_residues,
+                                        even_indices,
+                                        odd_indices,
+                                        forward_twiddles,
+                                        rns_params,
+                                        out);
+  return out;
 }
 
-void forward_ntt_montgomery_compact_(
-    at::Tensor& montgomery_residues,
-    const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params) {
+void forward_ntt_montgomery_compact_(at::Tensor& montgomery_residues,
+                                     const at::Tensor& forward_twiddles,
+                                     const at::Tensor& rns_params) {
   FHELIUM_DISPATCH_GPU(forward_ntt_montgomery_compact_,
                        montgomery_residues,
                        forward_twiddles,
                        rns_params);
 }
 
-void forward_ntt_to_montgomery_compact_(
-    at::Tensor& standard_residues,
-    const at::Tensor& forward_twiddles,
-    const at::Tensor& rns_params) {
+void forward_ntt_to_montgomery_compact_(at::Tensor& standard_residues,
+                                        const at::Tensor& forward_twiddles,
+                                        const at::Tensor& rns_params) {
   FHELIUM_DISPATCH_GPU(forward_ntt_to_montgomery_compact_,
                        standard_residues,
                        forward_twiddles,
                        rns_params);
 }
 
+void forward_ntt_to_montgomery_compact_out(const at::Tensor& standard_residues,
+                                           const at::Tensor& forward_twiddles,
+                                           const at::Tensor& rns_params,
+                                           at::Tensor& out) {
+  check_output(out, standard_residues, "forward_ntt_to_montgomery_compact_out");
+  TORCH_CHECK_VALUE(fhelium::detail::storage_disjoint(out, standard_residues),
+                    "forward_ntt_to_montgomery_compact_out requires out "
+                    "disjoint from its input");
+  FHELIUM_DISPATCH_GPU(forward_ntt_to_montgomery_compact_out,
+                       standard_residues,
+                       forward_twiddles,
+                       rns_params,
+                       out);
+}
+
 at::Tensor forward_ntt_to_montgomery_compact(
     const at::Tensor& standard_residues,
     const at::Tensor& forward_twiddles,
     const at::Tensor& rns_params) {
-  FHELIUM_DISPATCH_GPU(forward_ntt_to_montgomery_compact,
-                       standard_residues,
-                       forward_twiddles,
-                       rns_params);
+  auto out = at::empty_like(standard_residues);
+  forward_ntt_to_montgomery_compact_out(
+      standard_residues, forward_twiddles, rns_params, out);
+  return out;
 }
 
 void forward_ntt_to_montgomery_compact_add_scaled_(
@@ -135,16 +191,35 @@ void forward_ntt_to_montgomery_power_of_two_radix_compact_(
                        rns_params);
 }
 
+void forward_ntt_to_montgomery_power_of_two_radix_compact_out(
+    const at::Tensor& standard_residues,
+    const at::Tensor& outer_twiddles,
+    const at::Tensor& radix_root_powers,
+    const at::Tensor& rns_params,
+    at::Tensor& out) {
+  check_output(out,
+               standard_residues,
+               "forward_ntt_to_montgomery_power_of_two_radix_compact_out");
+  TORCH_CHECK_VALUE(fhelium::detail::storage_disjoint(out, standard_residues),
+                    "forward_ntt_to_montgomery_power_of_two_radix_compact_out "
+                    "requires out disjoint from its input");
+  FHELIUM_DISPATCH_GPU(forward_ntt_to_montgomery_power_of_two_radix_compact_out,
+                       standard_residues,
+                       outer_twiddles,
+                       radix_root_powers,
+                       rns_params,
+                       out);
+}
+
 at::Tensor forward_ntt_to_montgomery_power_of_two_radix_compact(
     const at::Tensor& standard_residues,
     const at::Tensor& outer_twiddles,
     const at::Tensor& radix_root_powers,
     const at::Tensor& rns_params) {
-  FHELIUM_DISPATCH_GPU(forward_ntt_to_montgomery_power_of_two_radix_compact,
-                       standard_residues,
-                       outer_twiddles,
-                       radix_root_powers,
-                       rns_params);
+  auto out = at::empty_like(standard_residues);
+  forward_ntt_to_montgomery_power_of_two_radix_compact_out(
+      standard_residues, outer_twiddles, radix_root_powers, rns_params, out);
+  return out;
 }
 
 void inverse_ntt_montgomery_indexed_(at::Tensor& montgomery_residues,
@@ -199,40 +274,36 @@ void inverse_ntt_to_centered_indexed_(at::Tensor& montgomery_residues,
                            rns_params);
 }
 
-void inverse_ntt_montgomery_compact_(
-    at::Tensor& montgomery_residues,
-    const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params) {
+void inverse_ntt_montgomery_compact_(at::Tensor& montgomery_residues,
+                                     const at::Tensor& inverse_twiddles,
+                                     const at::Tensor& rns_params) {
   FHELIUM_DISPATCH_GPU(inverse_ntt_montgomery_compact_,
                        montgomery_residues,
                        inverse_twiddles,
                        rns_params);
 }
 
-void inverse_ntt_to_standard_lazy_compact_(
-    at::Tensor& montgomery_residues,
-    const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params) {
+void inverse_ntt_to_standard_lazy_compact_(at::Tensor& montgomery_residues,
+                                           const at::Tensor& inverse_twiddles,
+                                           const at::Tensor& rns_params) {
   FHELIUM_DISPATCH_GPU(inverse_ntt_to_standard_lazy_compact_,
                        montgomery_residues,
                        inverse_twiddles,
                        rns_params);
 }
 
-void inverse_ntt_to_standard_compact_(
-    at::Tensor& montgomery_residues,
-    const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params) {
+void inverse_ntt_to_standard_compact_(at::Tensor& montgomery_residues,
+                                      const at::Tensor& inverse_twiddles,
+                                      const at::Tensor& rns_params) {
   FHELIUM_DISPATCH_GPU(inverse_ntt_to_standard_compact_,
                        montgomery_residues,
                        inverse_twiddles,
                        rns_params);
 }
 
-void inverse_ntt_to_centered_compact_(
-    at::Tensor& montgomery_residues,
-    const at::Tensor& inverse_twiddles,
-    const at::Tensor& rns_params) {
+void inverse_ntt_to_centered_compact_(at::Tensor& montgomery_residues,
+                                      const at::Tensor& inverse_twiddles,
+                                      const at::Tensor& rns_params) {
   FHELIUM_DISPATCH_GPU(inverse_ntt_to_centered_compact_,
                        montgomery_residues,
                        inverse_twiddles,

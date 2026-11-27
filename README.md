@@ -91,9 +91,9 @@ print(compiled.program.to_text())
 print(compiled.reports)
 ```
 
-A caller can continue from the same `Compilation` with CKKS state assignment, transition placement, CKKS-to-RNS/NTT lowering, key analysis, Backend linking, or custom passes. See [`examples/13_compile_pipeline.py`](./examples/13_compile_pipeline.py) for an encrypted end-to-end execution and [`examples/15_compile_custom_pass.py`](./examples/15_compile_custom_pass.py) for a caller-defined BSGS transformation.
+A caller can continue from the same `Compilation` with CKKS state assignment, transition placement, CKKS-to-RNS/NTT lowering, key analysis, Backend linking, or custom passes. See [`examples/13_compile_pipeline.py`](./examples/13_compile_pipeline.py) for an encrypted end-to-end execution and [`examples/14_compile_custom_pass.py`](./examples/14_compile_custom_pass.py) for a caller-defined BSGS transformation.
 
-`fh_compile.compile` also provides a bare function decorator that captures Tensor materials and uses the `default_lower_and_fuse_pipeline` recipe when no pipeline is supplied. Backend and pipeline overrides expose finer control over the same compilation stages as the manual path. See [`examples/12_compile_jit.py`](./examples/12_compile_jit.py) for prepared execution and component/NTT fusion.
+`fh_compile.compile` also provides a bare function decorator that captures Tensor materials and uses the `default_lower_and_fuse_pipeline` recipe when no pipeline is supplied. Backend and pipeline overrides expose finer control over the same compilation stages as the manual path. See [`examples/12_compile_layer.py`](./examples/12_compile_layer.py) for prepared execution and component/NTT fusion.
 
 ## Runtime and distributed execution
 

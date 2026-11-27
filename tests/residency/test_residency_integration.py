@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from fhelium import Ciphertext, Plaintext, Preset, RotationKey
-from fhelium.artifacts import ArtifactRef, ArtifactStore
+from fhelium.store import StoredValueRef, ValueStore
 from fhelium.eager import Engine
 from fhelium.errors import ResidencyLifetimeClosedError
 from fhelium.residency import (
@@ -49,11 +49,11 @@ def _locations(
     )
 
 
-class _ArtifactPlaintextSource:
+class _StoredPlaintextSource:
     def __init__(
         self,
-        store: ArtifactStore,
-        reference: ArtifactRef[Plaintext],
+        store: ValueStore,
+        reference: StoredValueRef[Plaintext],
     ) -> None:
         self._store = store
         self._reference = reference
@@ -217,10 +217,10 @@ def test_ckks_values_follow_plan_and_lease_through_real_operation() -> None:
         torch.cuda.empty_cache()
 
 
-def test_artifact_source_reconstructs_exact_value_and_obeys_lifetimes(
+def test_stored_value_source_reconstructs_exact_value_and_obeys_lifetimes(
     tmp_path: Path,
 ) -> None:
-    store_root = tmp_path / "artifacts"
+    store_root = tmp_path / "values"
     original = Plaintext(
         message=None,
         depth=2,
@@ -238,13 +238,13 @@ def test_artifact_source_reconstructs_exact_value_and_obeys_lifetimes(
     )
     assert original.data is not None
     expected_data = original.data.clone()
-    reference = ArtifactStore(store_root).put(
+    reference = ValueStore(store_root).put(
         "integration/plaintext",
         original,
     )
     del original
 
-    source = _ArtifactPlaintextSource(ArtifactStore(store_root), reference)
+    source = _StoredPlaintextSource(ValueStore(store_root), reference)
     manager = ResidencyManager({PAGEABLE_HOST: spec.storage_nbytes})
     try:
         handle = manager.register_source(spec, source)

@@ -73,7 +73,8 @@ Move to a lower layer when measurements show that it controls the target workloa
 | NTT-domain product accumulation | Per-term inverse transforms in additive PT×CT regions | Quotient-rounding and output-representation constraints |
 | NTT grouping/compact tables | Launches and table/global-memory traffic | Registers, occupancy, index arithmetic |
 | Rotation hoisting | Repeated decomposition/ModUp/NTT prefix | Hoist temporaries and output memory |
-| CUDA Graph | Repeated host/dispatcher submission | Fixed signatures, retained graph memory |
+| CUDA Graph segments | Repeated host/dispatcher submission | Fixed signatures, Graph pool memory, per-segment capture time |
+| Shared arena | Sum of per-function temporaries | Executions on one device ordered on the arena |
 | Budget-constrained residency | All-resident CUDA footprint | Host-to-device (H2D) traffic and event coordination |
 | Multi-GPU partition | Rank-local dominant work | Communication, imbalance, key placement |
 | Minimal keyset | Key memory and movement | Possible extra operations with decomposition |
@@ -144,7 +145,9 @@ CUDA Graph and homogeneous batching also overlap as launch-amortization mechanis
 
 ## Compilation and compact materials change different costs
 
-Compile can reuse repeated transforms, share rotation preparation, and combine compatible arithmetic into generated regions. These changes affect operation count, temporary storage, and device work. Prepared host calls reduce repeated interpretation and dispatch work. CUDA Graph replay further reduces host submission overhead for a fixed sequence. The wall-clock benefit depends on whether device execution, submission, data transfer, or synchronization limits the workload.
+Compile can reuse repeated transforms, share rotation preparation, and combine compatible arithmetic into generated regions. These changes affect operation count, temporary storage, and device work. A native Runner executes the linked schedule without Python dispatch per operation, and CUDA Graph replay of its segments further reduces host submission overhead for a fixed sequence. The wall-clock benefit depends on whether device execution, submission, data transfer, or synchronization limits the workload.
+
+A compiled callable has three time components: the first call, which runs capture, the pass pipeline, linking, and kernel compilation or a cache load; the second call, which captures the Graph segments; and the steady call, which replays them. Its device memory consists of its materials, its output region, and its share of the device's compiled execution memory, the shared arena and Graph pool, which grows to the largest single requirement among compiled functions on the device rather than their sum. A result that the caller keeps across the next call costs one device copy.
 
 A generated region can launch several kernels. In particular, a fused NTT region can use generated endpoint stages and native middle stages. Region count, kernel count, and elapsed device time therefore describe different parts of the cost model. Retaining a whole operation can also keep a streaming implementation that limits the lifetime of intermediate digits.
 
@@ -252,7 +255,7 @@ flowchart TD
     Q1 -->|no| Q2
     Q2 -->|yes| N[backend and grouping ablation]
     Q2 -->|no| Q3
-    Q3 -->|yes| G[rank-local CUDA Graph]
+    Q3 -->|yes| G[compiled CUDA Graph segments]
     Q3 -->|no| Q4
     Q4 -->|yes| R[prepared-state audit and budget-constrained residency]
     Q4 -->|no| Q5

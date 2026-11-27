@@ -7,7 +7,7 @@ from xdsl.dialects.builtin import ModuleOp
 from xdsl.dialects.func import ReturnOp
 from xdsl.ir import Block
 
-from fhelium.artifacts import ArtifactStore
+from fhelium.store import ValueStore
 from fhelium.backend import OperationBackend
 from fhelium.compile import Compilation
 from fhelium.ir import Program
@@ -75,7 +75,7 @@ def test_partial_bindings_preserve_views_without_enforcing_descriptions(
     assert load_compilation(bare_path).material_bindings == {}
 
 
-def test_artifacts_store_compilation_through_the_same_codec(
+def test_value_store_stores_compilation_through_the_same_codec(
     tmp_path: Path,
 ) -> None:
     compilation = Compilation(
@@ -84,7 +84,7 @@ def test_artifacts_store_compilation_through_the_same_codec(
     compilation.program.set_material_description(
         "weight", {"label": "external weight"}
     )
-    store = ArtifactStore(tmp_path / "store")
+    store = ValueStore(tmp_path / "store")
     external = store.put("program", compilation)
     loaded = store.get(external, expected_type=Compilation)
     assert loaded.material_bindings == {}

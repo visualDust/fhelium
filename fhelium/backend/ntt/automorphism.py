@@ -9,6 +9,7 @@ from fhelium.ir.dialects.ntt import AutomorphismOp
 import torch
 
 from fhelium.native.wrapper import ntt_ops
+from fhelium.backend.lowering import ExecBuilder
 
 
 @cache
@@ -31,13 +32,13 @@ class NativeNttAutomorphismImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         values: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
         from fhelium.native.wrapper import ckks_ops
 

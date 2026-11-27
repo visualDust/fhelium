@@ -3,8 +3,53 @@
 
 from __future__ import annotations
 
+from typing import cast
 
 import torch
+
+
+def _table(
+    tables: list[torch.Tensor | None], family: str, name: str
+) -> torch.Tensor:
+    index = torch.ops.fhelium_ckks_ops.table_slot_names(family, 0).index(name)
+    return cast(torch.Tensor, tables[index])
+
+
+@torch.library.register_fake("fhelium_ckks_ops::add_compressed_plaintext")
+def _fake_fhelium_ckks_ops_add__compressed__plaintext(
+    ciphertext: torch.Tensor,
+    compressed: torch.Tensor,
+    implicit: torch.Tensor | None,
+    parameters: torch.Tensor,
+    layout: str,
+    polynomial_domain: str,
+) -> torch.Tensor:
+    return torch.empty_like(ciphertext)
+
+
+@torch.library.register_fake("fhelium_ckks_ops::add_compressed_plaintext_")
+def _fake_fhelium_ckks_ops_add__compressed__plaintext__(
+    ciphertext: torch.Tensor,
+    compressed: torch.Tensor,
+    implicit: torch.Tensor | None,
+    parameters: torch.Tensor,
+    layout: str,
+    polynomial_domain: str,
+) -> torch.Tensor:
+    return ciphertext
+
+
+@torch.library.register_fake("fhelium_ckks_ops::add_compressed_plaintext_out")
+def _fake_fhelium_ckks_ops_add__compressed__plaintext__out(
+    ciphertext: torch.Tensor,
+    compressed: torch.Tensor,
+    implicit: torch.Tensor | None,
+    parameters: torch.Tensor,
+    layout: str,
+    polynomial_domain: str,
+    out: torch.Tensor,
+) -> None:
+    pass
 
 
 @torch.library.register_fake(
@@ -30,6 +75,18 @@ def _fake_fhelium_ckks_ops_add__contiguous__compressed__plaintext__component__(
 
 
 @torch.library.register_fake(
+    "fhelium_ckks_ops::add_contiguous_compressed_plaintext_component_out"
+)
+def _fake_fhelium_ckks_ops_add__contiguous__compressed__plaintext__component__out(
+    ciphertext_component: torch.Tensor,
+    compressed_plaintext: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake(
     "fhelium_ckks_ops::add_cyclic_compressed_plaintext_component"
 )
 def _fake_fhelium_ckks_ops_add__cyclic__compressed__plaintext__component(
@@ -47,6 +104,18 @@ def _fake_fhelium_ckks_ops_add__cyclic__compressed__plaintext__component__(
     ciphertext_component: torch.Tensor,
     compressed_plaintext: torch.Tensor,
     rns_params: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake(
+    "fhelium_ckks_ops::add_cyclic_compressed_plaintext_component_out"
+)
+def _fake_fhelium_ckks_ops_add__cyclic__compressed__plaintext__component__out(
+    ciphertext_component: torch.Tensor,
+    compressed_plaintext: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
 ) -> None:
     pass
 
@@ -84,6 +153,18 @@ def _fake_fhelium_ckks_ops_add__prepared__plaintext__component__(
 
 
 @torch.library.register_fake(
+    "fhelium_ckks_ops::add_prepared_plaintext_component_out"
+)
+def _fake_fhelium_ckks_ops_add__prepared__plaintext__component__out(
+    ciphertext_component: torch.Tensor,
+    prepared_plaintext: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake(
     "fhelium_ckks_ops::add_strided_plaintext_component"
 )
 def _fake_fhelium_ckks_ops_add__strided__plaintext__component(
@@ -108,6 +189,19 @@ def _fake_fhelium_ckks_ops_add__strided__plaintext__component__(
 
 
 @torch.library.register_fake(
+    "fhelium_ckks_ops::add_strided_plaintext_component_out"
+)
+def _fake_fhelium_ckks_ops_add__strided__plaintext__component__out(
+    ciphertext_component: torch.Tensor,
+    strided_plaintext: torch.Tensor,
+    implicit_plaintext: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake(
     "fhelium_ckks_ops::apply_coefficient_galois_automorphism"
 )
 def _fake_fhelium_ckks_ops_apply__coefficient__galois__automorphism(
@@ -119,11 +213,233 @@ def _fake_fhelium_ckks_ops_apply__coefficient__galois__automorphism(
     return torch.empty_like(residues)
 
 
+@torch.library.register_fake(
+    "fhelium_ckks_ops::apply_coefficient_galois_automorphism_out"
+)
+def _fake_fhelium_ckks_ops_apply__coefficient__galois__automorphism__out(
+    residues: torch.Tensor,
+    source_indices: torch.Tensor,
+    source_sign: torch.Tensor,
+    twice_modulus: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
 @torch.library.register_fake("fhelium_ckks_ops::apply_ntt_galois_automorphism")
 def _fake_fhelium_ckks_ops_apply__ntt__galois__automorphism(
     residues_ntt: torch.Tensor, source_indices: torch.Tensor
 ) -> torch.Tensor:
     return torch.empty_like(residues_ntt)
+
+
+@torch.library.register_fake(
+    "fhelium_ckks_ops::apply_ntt_galois_automorphism_out"
+)
+def _fake_fhelium_ckks_ops_apply__ntt__galois__automorphism__out(
+    residues_ntt: torch.Tensor, source_indices: torch.Tensor, out: torch.Tensor
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_ckks_ops::decode")
+def _fake_fhelium_ckks_ops_decode(
+    coefficients: torch.Tensor,
+    post: torch.Tensor,
+    skewer: torch.Tensor,
+    scale: float,
+    is_real: bool,
+) -> torch.Tensor:
+    return coefficients.new_empty(
+        (*coefficients.shape[:-1], coefficients.size(-1) // 2),
+        dtype=torch.float64 if is_real else torch.complex128,
+    )
+
+
+@torch.library.register_fake("fhelium_ckks_ops::decrypt")
+def _fake_fhelium_ckks_ops_decrypt(
+    ciphertext: torch.Tensor,
+    secret_key: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    key_row_start: int,
+    input_domain: str,
+) -> torch.Tensor:
+    return ciphertext.new_empty(
+        (*ciphertext.shape[1:-2], ciphertext.size(-1)), dtype=torch.float64
+    )
+
+
+@torch.library.register_fake("fhelium_ckks_ops::decrypt_phase")
+def _fake_fhelium_ckks_ops_decrypt__phase(
+    ciphertext: torch.Tensor,
+    secret_key: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    key_row_start: int,
+    input_domain: str,
+) -> torch.Tensor:
+    return ciphertext.new_empty(ciphertext.shape[1:])
+
+
+@torch.library.register_fake("fhelium_ckks_ops::encapsulated_modulus_raise")
+def _fake_fhelium_ckks_ops_encapsulated__modulus__raise(
+    source: torch.Tensor,
+    low_key: torch.Tensor,
+    return_key: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+    return_drop_count: int,
+    target_row_start: int,
+    q_count: int,
+) -> torch.Tensor:
+    return source.new_empty(
+        (
+            source.size(0),
+            *source.shape[1:-2],
+            q_count - target_row_start,
+            source.size(-1),
+        )
+    )
+
+
+@torch.library.register_fake("fhelium_ckks_ops::encode")
+def _fake_fhelium_ckks_ops_encode(
+    message: torch.Tensor,
+    pre: torch.Tensor,
+    twister: torch.Tensor,
+    seed: torch.Tensor,
+    scale: float,
+) -> torch.Tensor:
+    return message.new_empty(
+        (*message.shape[:-1], twister.size(-1)), dtype=torch.int64
+    )
+
+
+@torch.library.register_fake("fhelium_ckks_ops::encrypt")
+def _fake_fhelium_ckks_ops_encrypt(
+    coefficients: torch.Tensor,
+    public_key: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    seed: torch.Tensor,
+    cdt_table: torch.Tensor,
+    ntt_backend: str,
+    key_row_start: int,
+    output_domain: str,
+) -> torch.Tensor:
+    parameters = _table(tables, 'ring', 'forward_0')
+    return parameters.new_empty(
+        (2, *coefficients.shape[:-1], parameters.size(1), coefficients.size(-1))
+    )
+
+
+@torch.library.register_fake("fhelium_ckks_ops::grouped_rotation_weighted_sum")
+def _fake_fhelium_ckks_ops_grouped__rotation__weighted__sum(
+    source: torch.Tensor,
+    keys: list[torch.Tensor],
+    baby_steps: list[int],
+    galois: list[torch.Tensor | None],
+    plaintexts: list[torch.Tensor],
+    group_count: int,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+) -> torch.Tensor:
+    return source.new_empty((group_count, *source.shape))
+
+
+@torch.library.register_fake(
+    "fhelium_ckks_ops::grouped_rotation_weighted_sum_out"
+)
+def _fake_fhelium_ckks_ops_grouped__rotation__weighted__sum__out(
+    source: torch.Tensor,
+    keys: list[torch.Tensor],
+    baby_steps: list[int],
+    galois: list[torch.Tensor | None],
+    plaintexts: list[torch.Tensor],
+    group_count: int,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_ckks_ops::key_switch")
+def _fake_fhelium_ckks_ops_key__switch(
+    source: torch.Tensor,
+    key: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    conjugation: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+) -> torch.Tensor:
+    return torch.empty_like(source)
+
+
+@torch.library.register_fake("fhelium_ckks_ops::key_switch_out")
+def _fake_fhelium_ckks_ops_key__switch__out(
+    source: torch.Tensor,
+    key: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    conjugation: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+    out: torch.Tensor,
+) -> None:
+    pass
 
 
 @torch.library.register_fake(
@@ -172,6 +488,56 @@ def _fake_fhelium_ckks_ops_keyswitch__moddown__qp__to__q(
     return torch.empty_like(q_residues)
 
 
+@torch.library.register_fake("fhelium_ckks_ops::keyswitch_moddown_qp_to_q_out")
+def _fake_fhelium_ckks_ops_keyswitch__moddown__qp__to__q__out(
+    q_residues: torch.Tensor,
+    p_residues: torch.Tensor,
+    moddown_p_drop_inverses_montgomery: torch.Tensor,
+    rns_params: torch.Tensor,
+    moddown_half: torch.Tensor | None,
+    rounding: str,
+    out: torch.Tensor,
+    p_scratch: torch.Tensor | None = None,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_ckks_ops::multiply_compressed_plaintext")
+def _fake_fhelium_ckks_ops_multiply__compressed__plaintext(
+    ciphertext: torch.Tensor,
+    compressed: torch.Tensor,
+    implicit: torch.Tensor | None,
+    parameters: torch.Tensor,
+    layout: str,
+) -> torch.Tensor:
+    return torch.empty_like(ciphertext)
+
+
+@torch.library.register_fake("fhelium_ckks_ops::multiply_compressed_plaintext_")
+def _fake_fhelium_ckks_ops_multiply__compressed__plaintext__(
+    ciphertext: torch.Tensor,
+    compressed: torch.Tensor,
+    implicit: torch.Tensor | None,
+    parameters: torch.Tensor,
+    layout: str,
+) -> torch.Tensor:
+    return ciphertext
+
+
+@torch.library.register_fake(
+    "fhelium_ckks_ops::multiply_compressed_plaintext_out"
+)
+def _fake_fhelium_ckks_ops_multiply__compressed__plaintext__out(
+    ciphertext: torch.Tensor,
+    compressed: torch.Tensor,
+    implicit: torch.Tensor | None,
+    parameters: torch.Tensor,
+    layout: str,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
 @torch.library.register_fake(
     "fhelium_ckks_ops::multiply_two_component_ntt_montgomery"
 )
@@ -181,6 +547,454 @@ def _fake_fhelium_ckks_ops_multiply__two__component__ntt__montgomery(
     rns_params: torch.Tensor,
 ) -> torch.Tensor:
     return lhs_components.new_empty((3, *lhs_components.shape[1:]))
+
+
+@torch.library.register_fake(
+    "fhelium_ckks_ops::multiply_two_component_ntt_montgomery_out"
+)
+def _fake_fhelium_ckks_ops_multiply__two__component__ntt__montgomery__out(
+    lhs_components: torch.Tensor,
+    rhs_components: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_ckks_ops::prepare_periodic_plaintext")
+def _fake_fhelium_ckks_ops_prepare__periodic__plaintext(
+    message: torch.Tensor,
+    pre: torch.Tensor,
+    twister: torch.Tensor,
+    seed: torch.Tensor,
+    parameters: torch.Tensor,
+    twice_moduli: torch.Tensor,
+    even: torch.Tensor,
+    odd: torch.Tensor,
+    twiddles: torch.Tensor,
+    ring_dimension: int,
+    scale: float,
+    polynomial_domain: str,
+) -> list[torch.Tensor]:
+    residues = parameters.new_empty(
+        (*message.shape[:-1], parameters.size(1), 2 * pre.numel())
+    )
+    if polynomial_domain == 'coefficient':
+        return [residues, parameters.new_empty((*residues.shape[:-1], 1))]
+    return [residues]
+
+
+@torch.library.register_fake("fhelium_ckks_ops::reconstruct_q_coefficients")
+def _fake_fhelium_ckks_ops_reconstruct__q__coefficients(
+    residues: torch.Tensor,
+    source_parameters: torch.Tensor,
+    normalizers: torch.Tensor,
+    propagation: torch.Tensor,
+    half_digits: torch.Tensor,
+) -> torch.Tensor:
+    return residues.new_empty(
+        (*residues.shape[:-2], residues.size(-1)), dtype=torch.float64
+    )
+
+
+@torch.library.register_fake("fhelium_ckks_ops::relinearize")
+def _fake_fhelium_ckks_ops_relinearize(
+    source: torch.Tensor,
+    key: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+    rescale: bool,
+    q_count: int,
+    joint_drop_count: int,
+    joint_drop_is_prefix: bool,
+) -> torch.Tensor:
+    rows = (
+        _table(tables, 'key_switch', 'joint_remaining_parameters').size(1)
+        if rescale
+        else source.size(-2)
+    )
+    return source.new_empty((2, *source.shape[1:-2], rows, source.size(-1)))
+
+
+@torch.library.register_fake("fhelium_ckks_ops::relinearize_out")
+def _fake_fhelium_ckks_ops_relinearize__out(
+    source: torch.Tensor,
+    key: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+    rescale: bool,
+    q_count: int,
+    joint_drop_count: int,
+    joint_drop_is_prefix: bool,
+    out: torch.Tensor,
+    workspace: torch.Tensor | None = None,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_ckks_ops::rotate")
+def _fake_fhelium_ckks_ops_rotate(
+    source: torch.Tensor,
+    key: torch.Tensor,
+    galois: list[torch.Tensor | None],
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+) -> torch.Tensor:
+    return torch.empty_like(source)
+
+
+@torch.library.register_fake("fhelium_ckks_ops::rotate_hoisted")
+def _fake_fhelium_ckks_ops_rotate__hoisted(
+    c0: torch.Tensor,
+    hoisted_digits: torch.Tensor,
+    key: torch.Tensor,
+    galois: list[torch.Tensor | None],
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+) -> torch.Tensor:
+    return c0.new_empty((2, *c0.shape))
+
+
+@torch.library.register_fake("fhelium_ckks_ops::rotate_hoisted_out")
+def _fake_fhelium_ckks_ops_rotate__hoisted__out(
+    c0: torch.Tensor,
+    hoisted_digits: torch.Tensor,
+    key: torch.Tensor,
+    galois: list[torch.Tensor | None],
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+    out: torch.Tensor,
+    workspace: torch.Tensor | None = None,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_ckks_ops::rotate_many")
+def _fake_fhelium_ckks_ops_rotate__many(
+    source: torch.Tensor,
+    keys: list[torch.Tensor],
+    galois: list[torch.Tensor | None],
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+) -> list[torch.Tensor]:
+    return [source.new_empty(source.shape) for _ in range(len(galois) // 3)]
+
+
+@torch.library.register_fake("fhelium_ckks_ops::rotate_many_out")
+def _fake_fhelium_ckks_ops_rotate__many__out(
+    source: torch.Tensor,
+    keys: list[torch.Tensor],
+    galois: list[torch.Tensor | None],
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+    out: list[torch.Tensor],
+    workspace: torch.Tensor | None = None,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_ckks_ops::rotate_out")
+def _fake_fhelium_ckks_ops_rotate__out(
+    source: torch.Tensor,
+    key: torch.Tensor,
+    galois: list[torch.Tensor | None],
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_ckks_ops::rotation_digits")
+def _fake_fhelium_ckks_ops_rotation__digits(
+    component: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+) -> torch.Tensor:
+    rows = _table(tables, 'key_switch', 'qp_parameters').size(1)
+    return component.new_empty(
+        (len(digits) // 3, *component.shape[:-2], rows, component.size(-1))
+    )
+
+
+@torch.library.register_fake("fhelium_ckks_ops::rotation_digits_out")
+def _fake_fhelium_ckks_ops_rotation__digits__out(
+    component: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_ckks_ops::rotation_sum")
+def _fake_fhelium_ckks_ops_rotation__sum(
+    sources: list[torch.Tensor],
+    keys: list[torch.Tensor],
+    steps: list[int],
+    galois: list[torch.Tensor | None],
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+    remaining_q_count: int,
+) -> torch.Tensor:
+    source = sources[0]
+    return source.new_empty(
+        (
+            source.size(0),
+            *source.shape[1:-2],
+            remaining_q_count,
+            source.size(-1),
+        )
+    )
+
+
+@torch.library.register_fake("fhelium_ckks_ops::rotation_sum_add_")
+def _fake_fhelium_ckks_ops_rotation__sum__add__(
+    ordinary: torch.Tensor,
+    products: torch.Tensor,
+    source: torch.Tensor,
+    key: torch.Tensor | None,
+    galois: list[torch.Tensor | None],
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+    workspace: torch.Tensor | None = None,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_ckks_ops::rotation_sum_finish_")
+def _fake_fhelium_ckks_ops_rotation__sum__finish__(
+    ordinary: torch.Tensor,
+    products: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+    remaining_q_count: int,
+) -> torch.Tensor:
+    return ordinary.new_empty(
+        (
+            ordinary.size(0),
+            *ordinary.shape[1:-2],
+            remaining_q_count,
+            ordinary.size(-1),
+        )
+    )
+
+
+@torch.library.register_fake("fhelium_ckks_ops::rotation_sum_finish_out_")
+def _fake_fhelium_ckks_ops_rotation__sum__finish__out__(
+    ordinary: torch.Tensor,
+    products: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+    remaining_q_count: int,
+    out: torch.Tensor,
+    workspace: torch.Tensor | None = None,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_ckks_ops::rotation_sum_out")
+def _fake_fhelium_ckks_ops_rotation__sum__out(
+    sources: list[torch.Tensor],
+    keys: list[torch.Tensor],
+    steps: list[int],
+    galois: list[torch.Tensor | None],
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    digits: list[int],
+    key_row_start: int,
+    key_p_row_start: int,
+    key_q_rows: list[int],
+    basis_conversion: str,
+    p_count: int,
+    moddown_rounding: str,
+    input_domain: str,
+    output_domain: str,
+    key_seeds: list[torch.Tensor],
+    key_rounds: int,
+    remaining_q_count: int,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_ckks_ops::scalar_arithmetic")
+def _fake_fhelium_ckks_ops_scalar__arithmetic(
+    ciphertext: torch.Tensor,
+    parameters: torch.Tensor,
+    seed: torch.Tensor,
+    scalar: float,
+    scalar_scale: float,
+    add: bool,
+) -> torch.Tensor:
+    return torch.empty_like(ciphertext)
+
+
+@torch.library.register_fake("fhelium_ckks_ops::scalar_arithmetic_out")
+def _fake_fhelium_ckks_ops_scalar__arithmetic__out(
+    ciphertext: torch.Tensor,
+    parameters: torch.Tensor,
+    seed: torch.Tensor,
+    scalar: float,
+    scalar_scale: float,
+    add: bool,
+    out: torch.Tensor,
+) -> None:
+    pass
 
 
 @torch.library.register_fake(
@@ -306,6 +1120,18 @@ def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__compact__add__scaled__(
 
 
 @torch.library.register_fake(
+    "fhelium_ntt_ops::forward_ntt_to_montgomery_compact_out"
+)
+def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__compact__out(
+    standard_residues: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake(
     "fhelium_ntt_ops::forward_ntt_to_montgomery_indexed"
 )
 def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__indexed(
@@ -332,6 +1158,20 @@ def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__indexed__(
 
 
 @torch.library.register_fake(
+    "fhelium_ntt_ops::forward_ntt_to_montgomery_indexed_out"
+)
+def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__indexed__out(
+    standard_residues: torch.Tensor,
+    even_indices: torch.Tensor,
+    odd_indices: torch.Tensor,
+    forward_twiddles: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake(
     "fhelium_ntt_ops::forward_ntt_to_montgomery_power_of_two_radix_compact"
 )
 def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__power__of__two__radix__compact(
@@ -351,6 +1191,19 @@ def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__power__of__two__radix__c
     outer_twiddles: torch.Tensor,
     radix_root_powers: torch.Tensor,
     rns_params: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake(
+    "fhelium_ntt_ops::forward_ntt_to_montgomery_power_of_two_radix_compact_out"
+)
+def _fake_fhelium_ntt_ops_forward__ntt__to__montgomery__power__of__two__radix__compact__out(
+    standard_residues: torch.Tensor,
+    outer_twiddles: torch.Tensor,
+    radix_root_powers: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
 ) -> None:
     pass
 
@@ -495,6 +1348,26 @@ def _fake_fhelium_ntt_ops_inverse__ntt__to__standard__power__of__two__radix__com
     pass
 
 
+@torch.library.register_fake("fhelium_ntt_ops::transform")
+def _fake_fhelium_ntt_ops_transform(
+    residues: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    transition: str,
+) -> torch.Tensor:
+    return torch.empty_like(residues)
+
+
+@torch.library.register_fake("fhelium_ntt_ops::transform_")
+def _fake_fhelium_ntt_ops_transform__(
+    residues: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    transition: str,
+) -> None:
+    pass
+
+
 @torch.library.register_fake("fhelium_ntt_ops::validate_indexed_schedule")
 def _fake_fhelium_ntt_ops_validate__indexed__schedule(
     even_indices: torch.Tensor, odd_indices: torch.Tensor, ring_dimension: int
@@ -606,11 +1479,31 @@ def _fake_fhelium_rns_ops_add__lazy(
     return torch.empty_like(lhs)
 
 
+@torch.library.register_fake("fhelium_rns_ops::add_lazy_out")
+def _fake_fhelium_rns_ops_add__lazy__out(
+    lhs: torch.Tensor,
+    rhs: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
 @torch.library.register_fake("fhelium_rns_ops::add_lazy_with_twice_modulus")
 def _fake_fhelium_rns_ops_add__lazy__with__twice__modulus(
     lhs: torch.Tensor, rhs: torch.Tensor, twice_modulus: torch.Tensor
 ) -> torch.Tensor:
     return torch.empty_like(lhs)
+
+
+@torch.library.register_fake("fhelium_rns_ops::add_lazy_with_twice_modulus_out")
+def _fake_fhelium_rns_ops_add__lazy__with__twice__modulus__out(
+    lhs: torch.Tensor,
+    rhs: torch.Tensor,
+    twice_modulus: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
 
 
 @torch.library.register_fake("fhelium_rns_ops::add_standard")
@@ -627,9 +1520,37 @@ def _fake_fhelium_rns_ops_add__standard__(
     pass
 
 
+@torch.library.register_fake("fhelium_rns_ops::add_standard_out")
+def _fake_fhelium_rns_ops_add__standard__out(
+    lhs: torch.Tensor,
+    rhs: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
 @torch.library.register_fake("fhelium_rns_ops::center_residues_")
 def _fake_fhelium_rns_ops_center__residues__(
     standard_residues: torch.Tensor, rns_params: torch.Tensor
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_rns_ops::centered_basis_extend")
+def _fake_fhelium_rns_ops_centered__basis__extend(
+    source: torch.Tensor, tables: list[torch.Tensor | None]
+) -> torch.Tensor:
+    rows = _table(tables, 'basis_extension', 'target_parameters').size(1)
+    return source.new_empty((*source.shape[:-2], rows, source.size(-1)))
+
+
+@torch.library.register_fake("fhelium_rns_ops::centered_basis_extend_out")
+def _fake_fhelium_rns_ops_centered__basis__extend__out(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    out: torch.Tensor,
+    workspace: torch.Tensor | None = None,
 ) -> None:
     pass
 
@@ -654,8 +1575,8 @@ def _fake_fhelium_rns_ops_crt__basis__extend(
     )
 
 
-@torch.library.register_fake("fhelium_rns_ops::crt_basis_extend_out_")
-def _fake_fhelium_rns_ops_crt__basis__extend__out__(
+@torch.library.register_fake("fhelium_rns_ops::crt_basis_extend_out")
+def _fake_fhelium_rns_ops_crt__basis__extend__out(
     source_residues: torch.Tensor,
     source_parameters: torch.Tensor,
     target_parameters: torch.Tensor,
@@ -664,7 +1585,7 @@ def _fake_fhelium_rns_ops_crt__basis__extend__out__(
     source_normalizers: torch.Tensor | None,
     source_reciprocals: torch.Tensor | None,
     target_offsets: torch.Tensor | None,
-    output: torch.Tensor,
+    out: torch.Tensor,
 ) -> None:
     pass
 
@@ -672,6 +1593,28 @@ def _fake_fhelium_rns_ops_crt__basis__extend__out__(
 @torch.library.register_fake("fhelium_rns_ops::from_montgomery_")
 def _fake_fhelium_rns_ops_from__montgomery__(
     montgomery_residues: torch.Tensor, rns_params: torch.Tensor
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_rns_ops::hybrid_modup_digit")
+def _fake_fhelium_rns_ops_hybrid__modup__digit(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    digit_index: int,
+    digits: list[int],
+) -> torch.Tensor:
+    rows = _table(tables, 'key_switch', 'qp_parameters').size(1)
+    return source.new_empty((*source.shape[:-2], rows, source.size(-1)))
+
+
+@torch.library.register_fake("fhelium_rns_ops::hybrid_modup_digit_out")
+def _fake_fhelium_rns_ops_hybrid__modup__digit__out(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    digit_index: int,
+    digits: list[int],
+    out: torch.Tensor,
 ) -> None:
     pass
 
@@ -704,9 +1647,9 @@ def _fake_fhelium_rns_ops_mixed__radix__basis__extend__to__montgomery(
 
 
 @torch.library.register_fake(
-    "fhelium_rns_ops::mixed_radix_basis_extend_to_montgomery_out_"
+    "fhelium_rns_ops::mixed_radix_basis_extend_to_montgomery_out"
 )
-def _fake_fhelium_rns_ops_mixed__radix__basis__extend__to__montgomery__out__(
+def _fake_fhelium_rns_ops_mixed__radix__basis__extend__to__montgomery__out(
     mixed_radix_components: torch.Tensor,
     basis_extension_coefficients: torch.Tensor,
     rns_params: torch.Tensor,
@@ -729,8 +1672,8 @@ def _fake_fhelium_rns_ops_mixed__radix__decompose(
     return torch.empty_like(source_residues)
 
 
-@torch.library.register_fake("fhelium_rns_ops::mixed_radix_decompose_out_")
-def _fake_fhelium_rns_ops_mixed__radix__decompose__out__(
+@torch.library.register_fake("fhelium_rns_ops::mixed_radix_decompose_out")
+def _fake_fhelium_rns_ops_mixed__radix__decompose__out(
     source_residues: torch.Tensor,
     mixed_radix_normalizers: torch.Tensor,
     mixed_radix_propagation_coefficients: torch.Tensor,
@@ -759,13 +1702,95 @@ def _fake_fhelium_rns_ops_mixed__radix__modup__tiled(
     )
 
 
-@torch.library.register_fake("fhelium_rns_ops::mixed_radix_modup_tiled_out_")
-def _fake_fhelium_rns_ops_mixed__radix__modup__tiled__out__(
+@torch.library.register_fake("fhelium_rns_ops::mixed_radix_modup_tiled_out")
+def _fake_fhelium_rns_ops_mixed__radix__modup__tiled__out(
     source_residues: torch.Tensor,
     decomposition_tables: list[torch.Tensor],
     extension: torch.Tensor,
     parameters: torch.Tensor,
     out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_rns_ops::moddown_add_rescale")
+def _fake_fhelium_rns_ops_moddown__add__rescale(
+    products: torch.Tensor,
+    base: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    q_count: int,
+    joint_drop_count: int,
+    joint_drop_is_prefix: bool,
+    output_domain: str,
+) -> torch.Tensor:
+    rows = _table(tables, 'key_switch', 'joint_remaining_parameters').size(1)
+    return products.new_empty((*products.shape[:-2], rows, products.size(-1)))
+
+
+@torch.library.register_fake("fhelium_rns_ops::moddown_add_rescale_out")
+def _fake_fhelium_rns_ops_moddown__add__rescale__out(
+    products: torch.Tensor,
+    base: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    q_count: int,
+    joint_drop_count: int,
+    joint_drop_is_prefix: bool,
+    output_domain: str,
+    out: torch.Tensor,
+    workspace: torch.Tensor | None = None,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_rns_ops::moddown_ntt_qp_to_q")
+def _fake_fhelium_rns_ops_moddown__ntt__qp__to__q(
+    source: torch.Tensor,
+    coefficient_c0: torch.Tensor | None,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    p_count: int,
+    rounding: str,
+) -> torch.Tensor:
+    return source.new_empty(
+        (*source.shape[:-2], source.size(-2) - p_count, source.size(-1))
+    )
+
+
+@torch.library.register_fake("fhelium_rns_ops::moddown_ntt_qp_to_q_out")
+def _fake_fhelium_rns_ops_moddown__ntt__qp__to__q__out(
+    source: torch.Tensor,
+    coefficient_c0: torch.Tensor | None,
+    tables: list[torch.Tensor | None],
+    ntt_backend: str,
+    p_count: int,
+    rounding: str,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_rns_ops::moddown_qp_to_q")
+def _fake_fhelium_rns_ops_moddown__qp__to__q(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    p_count: int,
+    rounding: str,
+) -> torch.Tensor:
+    return source.new_empty(
+        (*source.shape[:-2], source.size(-2) - p_count, source.size(-1))
+    )
+
+
+@torch.library.register_fake("fhelium_rns_ops::moddown_qp_to_q_out")
+def _fake_fhelium_rns_ops_moddown__qp__to__q__out(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    p_count: int,
+    rounding: str,
+    out: torch.Tensor,
+    workspace: torch.Tensor | None = None,
 ) -> None:
     pass
 
@@ -787,12 +1812,46 @@ def _fake_fhelium_rns_ops_montgomery__mul__contiguous__compressed(
 
 
 @torch.library.register_fake(
+    "fhelium_rns_ops::montgomery_mul_contiguous_compressed_out"
+)
+def _fake_fhelium_rns_ops_montgomery__mul__contiguous__compressed__out(
+    lhs: torch.Tensor,
+    compressed_rhs: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake(
     "fhelium_rns_ops::montgomery_mul_cyclic_compressed"
 )
 def _fake_fhelium_rns_ops_montgomery__mul__cyclic__compressed(
     lhs: torch.Tensor, compressed_rhs: torch.Tensor, rns_params: torch.Tensor
 ) -> torch.Tensor:
     return torch.empty_like(lhs)
+
+
+@torch.library.register_fake(
+    "fhelium_rns_ops::montgomery_mul_cyclic_compressed_out"
+)
+def _fake_fhelium_rns_ops_montgomery__mul__cyclic__compressed__out(
+    lhs: torch.Tensor,
+    compressed_rhs: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_rns_ops::montgomery_mul_out")
+def _fake_fhelium_rns_ops_montgomery__mul__out(
+    lhs: torch.Tensor,
+    rhs: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
 
 
 @torch.library.register_fake("fhelium_rns_ops::montgomery_mul_row_scalars_")
@@ -811,6 +1870,18 @@ def _fake_fhelium_rns_ops_montgomery__mul__row__scalars__standard(
     return torch.empty_like(residues)
 
 
+@torch.library.register_fake(
+    "fhelium_rns_ops::montgomery_mul_row_scalars_standard_out"
+)
+def _fake_fhelium_rns_ops_montgomery__mul__row__scalars__standard__out(
+    residues: torch.Tensor,
+    row_scalars: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
 @torch.library.register_fake("fhelium_rns_ops::montgomery_weighted_sum")
 def _fake_fhelium_rns_ops_montgomery__weighted__sum(
     ciphertexts: list[torch.Tensor],
@@ -818,6 +1889,16 @@ def _fake_fhelium_rns_ops_montgomery__weighted__sum(
     rns_params: torch.Tensor,
 ) -> torch.Tensor:
     return ciphertexts[0].new_empty(ciphertexts[0].shape)
+
+
+@torch.library.register_fake("fhelium_rns_ops::montgomery_weighted_sum_out")
+def _fake_fhelium_rns_ops_montgomery__weighted__sum__out(
+    ciphertexts: list[torch.Tensor],
+    plaintexts: list[torch.Tensor],
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
 
 
 @torch.library.register_fake("fhelium_rns_ops::montgomery_weighted_sums")
@@ -832,9 +1913,88 @@ def _fake_fhelium_rns_ops_montgomery__weighted__sums(
     )
 
 
+@torch.library.register_fake("fhelium_rns_ops::montgomery_weighted_sums_out")
+def _fake_fhelium_rns_ops_montgomery__weighted__sums__out(
+    ciphertexts: list[torch.Tensor],
+    plaintexts: list[torch.Tensor],
+    group_count: int,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_rns_ops::negate_standard")
+def _fake_fhelium_rns_ops_negate__standard(
+    source: torch.Tensor, rns_params: torch.Tensor
+) -> torch.Tensor:
+    return torch.empty_like(source)
+
+
+@torch.library.register_fake("fhelium_rns_ops::negate_standard_")
+def _fake_fhelium_rns_ops_negate__standard__(
+    source: torch.Tensor, rns_params: torch.Tensor
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_rns_ops::negate_standard_out")
+def _fake_fhelium_rns_ops_negate__standard__out(
+    source: torch.Tensor, rns_params: torch.Tensor, out: torch.Tensor
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_rns_ops::rational_rescale")
+def _fake_fhelium_rns_ops_rational__rescale(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    input_domain: str,
+    ntt_backend: str,
+) -> torch.Tensor:
+    rows = _table(tables, 'rescale', 'target_parameters').size(1)
+    return source.new_empty((*source.shape[:-2], rows, source.size(-1)))
+
+
+@torch.library.register_fake("fhelium_rns_ops::rational_rescale_out")
+def _fake_fhelium_rns_ops_rational__rescale__out(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    input_domain: str,
+    ntt_backend: str,
+    out: torch.Tensor,
+    workspace: torch.Tensor | None = None,
+) -> None:
+    pass
+
+
 @torch.library.register_fake("fhelium_rns_ops::reduce_to_standard_")
 def _fake_fhelium_rns_ops_reduce__to__standard__(
     lazy_residues: torch.Tensor, rns_params: torch.Tensor
+) -> None:
+    pass
+
+
+@torch.library.register_fake("fhelium_rns_ops::rounded_trailing_quotient")
+def _fake_fhelium_rns_ops_rounded__trailing__quotient(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    drop_count: int,
+    rounding: str,
+) -> torch.Tensor:
+    return source.new_empty(
+        (*source.shape[:-2], source.size(-2) - drop_count, source.size(-1))
+    )
+
+
+@torch.library.register_fake("fhelium_rns_ops::rounded_trailing_quotient_out")
+def _fake_fhelium_rns_ops_rounded__trailing__quotient__out(
+    source: torch.Tensor,
+    tables: list[torch.Tensor | None],
+    drop_count: int,
+    rounding: str,
+    out: torch.Tensor,
+    workspace: torch.Tensor | None = None,
 ) -> None:
     pass
 
@@ -853,6 +2013,16 @@ def _fake_fhelium_rns_ops_sub__lazy(
     return torch.empty_like(lhs)
 
 
+@torch.library.register_fake("fhelium_rns_ops::sub_lazy_out")
+def _fake_fhelium_rns_ops_sub__lazy__out(
+    lhs: torch.Tensor,
+    rhs: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
 @torch.library.register_fake("fhelium_rns_ops::sub_standard")
 def _fake_fhelium_rns_ops_sub__standard(
     lhs: torch.Tensor, rhs: torch.Tensor, rns_params: torch.Tensor
@@ -867,11 +2037,28 @@ def _fake_fhelium_rns_ops_sub__standard__(
     pass
 
 
+@torch.library.register_fake("fhelium_rns_ops::sub_standard_out")
+def _fake_fhelium_rns_ops_sub__standard__out(
+    lhs: torch.Tensor,
+    rhs: torch.Tensor,
+    rns_params: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    pass
+
+
 @torch.library.register_fake("fhelium_rns_ops::sum_standard_batch")
 def _fake_fhelium_rns_ops_sum__standard__batch(
     source: torch.Tensor, dim: int, rns_params: torch.Tensor
 ) -> torch.Tensor:
     return source.new_empty((*source.shape[:dim], *source.shape[dim + 1 :]))
+
+
+@torch.library.register_fake("fhelium_rns_ops::sum_standard_batch_out")
+def _fake_fhelium_rns_ops_sum__standard__batch__out(
+    source: torch.Tensor, dim: int, rns_params: torch.Tensor, out: torch.Tensor
+) -> None:
+    pass
 
 
 @torch.library.register_fake("fhelium_rns_ops::to_montgomery_")

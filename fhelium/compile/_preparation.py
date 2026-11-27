@@ -12,8 +12,10 @@ from typing import TYPE_CHECKING, Any, cast
 import torch
 
 from xdsl.dialects.builtin import ArrayAttr, FloatAttr, StringAttr, f64
-from xdsl.ir import Attribute
+from xdsl.dialects import scf
+from xdsl.ir import Attribute, BlockArgument, OpResult, SSAValue
 from xdsl.rewriter import Rewriter
+from xdsl.traits import IsTerminator
 
 from fhelium.ir import Program
 from fhelium.ir.dialects import ckks
@@ -29,14 +31,15 @@ from .frontend._eager_values import state_attributes
 
 if TYPE_CHECKING:
     from fhelium.backend import OperationBackend, ProgramExecutable
+    from fhelium.backend.resources import BoundResource
     from fhelium.values import EvaluationKeySet
 
 
 @dataclass(frozen=True)
 class LinkArtifact:
-    """A persisted linked executable and the provider selections of its generated materials."""
+    """A linked executable recorded in a cache file and the provider selections of its generated materials."""
 
-    payload: bytes
+    record: Mapping[str, Any]
     selections: Mapping[str, Mapping[str, object] | None]
 
 
@@ -88,7 +91,10 @@ class Specialization:
 
     @cached_property
     def _execute(self):
-        """Adapt matched arguments and restore a fixed output structure."""
+        """Adapt matched arguments and restore a fixed output structure.
+
+        The returned function takes the argument values and, optionally, the executable entry point to call instead of ``executable._invoke``.
+        """
         from fhelium.backend.execution import (
             _boundary_kind,
             _prepare_compressed_output,
@@ -194,7 +200,8 @@ class Specialization:
         finally:
             # Release the recursive closure's reference to itself.
             output = cast(Any, None)
-        source = f"def execute(values):\n    result = invoke({', '.join(operands)})\n    return {expression}\n"
+        # ``invoke`` may be replaced by the executable's Graph route.
+        source = f"def execute(values, invoke=invoke):\n    result = invoke({', '.join(operands)})\n    return {expression}\n"
         exec(compile(source, "<fhelium-matched-call>", "exec"), namespace)
         return namespace.pop("execute")
 
@@ -249,6 +256,56 @@ def input_values(
     return field_values(input_fields(program), arguments)
 
 
+def _refine(value: SSAValue, refined: Attribute) -> None:
+    """Give ``value`` the refined input type and carry it to the values declared with the same type.
+
+    Structured control flow carries the type of a value through the iteration arguments, body arguments and results of ``scf.for``, and from a region terminator to the corresponding results of its operation and the iteration arguments of ``scf.for``. Any other operation without a further operand of the value's former type passes the refined type to its results and to its region arguments declared with that type, such as the combine arguments of an all-reduce.
+    """
+    pending = [(value, refined)]
+    while pending:
+        current, new_type = pending.pop()
+        old_type = current.type
+        # A value reached along two paths is replaced on the first.
+        if isinstance(current, OpResult):
+            live = current.op.results[current.index]
+        elif isinstance(current, BlockArgument):
+            live = current.block.args[current.index]
+        else:
+            live = current
+        if old_type == new_type or live is not current:
+            continue
+        current = Rewriter.replace_value_with_new_type(current, new_type)
+        carried: list[SSAValue] = []
+        for use in tuple(current.uses):
+            owner = use.operation
+            if isinstance(owner, scf.ForOp) and use.index >= 3:
+                position = use.index - 3
+                carried += [
+                    owner.body.block.args[position + 1],
+                    owner.results[position],
+                ]
+            elif owner.has_trait(IsTerminator):
+                parent = owner.parent_op()
+                if parent is not None and use.index < len(parent.results):
+                    carried.append(parent.results[use.index])
+                if isinstance(parent, scf.ForOp):
+                    carried.append(parent.body.block.args[use.index + 1])
+            elif not any(
+                operand is not current and operand.type == old_type
+                for operand in owner.operands
+            ):
+                carried += owner.results
+                carried += [
+                    argument
+                    for region in owner.regions
+                    if region.blocks.first is not None
+                    for argument in region.blocks.first.args
+                ]
+        pending += [
+            (item, new_type) for item in carried if item.type == old_type
+        ]
+
+
 def _input_specialization(
     compilation: Compilation, arguments: Mapping[str, object]
 ) -> Compilation:
@@ -288,9 +345,7 @@ def _input_specialization(
                     f"but this invocation has {value}"
                 )
         if updates:
-            Rewriter.replace_value_with_new_type(
-                argument, represented.with_state(updates)
-            )
+            _refine(argument, represented.with_state(updates))
     program.function().update_function_type()
     return Compilation(
         program,
@@ -353,6 +408,81 @@ def prepare_variant(
     )
 
 
+def captured_group_names(
+    workspace: CompileWorkspace,
+) -> dict[str, str | None] | None:
+    """Return the c10d registry names of the captured process groups by resource symbol; None names the default group."""
+    from .frontend._eager_capture import CAPTURED_GROUPS
+
+    groups = workspace.get(CAPTURED_GROUPS)
+    if not groups:
+        return None
+    return {
+        group.symbol: None
+        if (pg := cast(Any, group.value).group) is None
+        else pg.group_name
+        for group in groups
+    }
+
+
+def restored_groups(
+    names: Mapping[str, str | None],
+) -> tuple[BoundResource, ...]:
+    """Bind the recorded group symbols to the live c10d groups registered under the recorded names."""
+    from torch._C._distributed_c10d import _resolve_process_group
+
+    from fhelium.backend.distributed import ProcessGroupExecutionResource
+    from fhelium.backend.resources import BoundResource
+
+    return tuple(
+        BoundResource(
+            symbol,
+            "process-group",
+            ProcessGroupExecutionResource(
+                None
+                if name is None
+                else _resolve_process_group(cast(Any, name))
+            ),
+        )
+        for symbol, name in names.items()
+    )
+
+
+def _with_groups(
+    backend: OperationBackend, compilation: Compilation
+) -> OperationBackend:
+    """Add the process groups of captured collectives to the Backend's resources.
+
+    A Program restored from a cache entry names the default process group as ``world``, which is bound to the live default group.
+    """
+    from fhelium.backend.resources import BoundResource, ResourceBindings
+
+    from .frontend._eager_capture import CAPTURED_GROUPS
+
+    groups = compilation.workspace.get(CAPTURED_GROUPS)
+    if groups is None and torch.distributed.is_initialized():
+        from fhelium.backend.distributed import ProcessGroupExecutionResource
+
+        groups = (
+            BoundResource(
+                "world", "process-group", ProcessGroupExecutionResource()
+            ),
+        )
+    # Groups the Backend already binds keep their binding.
+    present = {
+        resource.symbol
+        for resource in backend.workspace.named_resources.resources
+    }
+    groups = tuple(
+        group for group in groups or () if group.symbol not in present
+    )
+    if not groups:
+        return backend
+    return backend.with_named_resources(
+        ResourceBindings(groups), override=False
+    )
+
+
 def bind_variant(
     variant: _CompiledVariant,
     backend: OperationBackend,
@@ -364,6 +494,7 @@ def bind_variant(
     With ``reload``, linking consumes the variant's Program in place and the returned Specialization obtains later Program requests from ``reload``.
     """
     compilation = variant.compilation
+    backend = _with_groups(backend, compilation)
     if variant.artifact is None:
         if reload is None:
             return Specialization(variant, backend, backend.link(compilation))
@@ -377,7 +508,8 @@ def bind_variant(
         return Specialization(
             replace(variant, compilation=deferred), backend, executable
         )
-    from fhelium.backend._artifact import restore_executable
+    from fhelium.backend._artifact import load_device, restore_executable
+    from fhelium.backend.runner import LoadedArtifact, group_name
 
     linked = []
 
@@ -394,11 +526,37 @@ def bind_variant(
             linked.append(backend.link(fresh, clone=False))
         return linked[0]
 
+    record = variant.artifact.record
+    executable = record["executable"]
+    try:
+        loaded = LoadedArtifact(record["path"], load_device(executable))
+    except RuntimeError as error:
+        if "identity mismatch" not in str(error):
+            raise
+        # Kernels and schedules from another native library or Triton
+        # version are relinked from the Program.
+        return Specialization(
+            replace(variant, artifact=None), backend, relink()
+        )
+    # Collectives run on the process groups the Backend binds to their symbols.
+    groups = {
+        resource.symbol: resource
+        for resource in backend.workspace.named_resources.resources
+    }
+    for symbol in sorted(
+        {
+            group["symbol"]
+            for entry in loaded.manifest["entries"].values()
+            for group in entry.get("groups", ())
+        }
+    ):
+        loaded.bind_group(symbol, group_name(groups[symbol]))
     return Specialization(
         variant,
         backend,
         restore_executable(
-            variant.artifact.payload,
+            loaded,
+            executable,
             backend,
             compilation.material_bindings,
             relink=relink,

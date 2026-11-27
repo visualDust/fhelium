@@ -43,17 +43,31 @@ def _rotate_bound_path(
         return ciphertext.clone()
     result = ciphertext
     for key in rotation_paths[normalized]:
-        result = engine.rotate_with_key(result, key, basis_conversion=basis_conversion)
+        result = engine.rotate_with_key(
+            result, key, basis_conversion=basis_conversion
+        )
     return result
+
+
+def _slot_period(values: np.ndarray) -> int:
+    """Return the smallest power-of-two period of a slot vector."""
+
+    period = values.size
+    while period > 1 and np.array_equal(
+        values[: period // 2], values[period // 2 : period]
+    ):
+        period //= 2
+    return period
 
 
 def _encode_diagonal(
     engine: Engine,
     cache: MutableMapping[
-        tuple[torch.device, int, int, int, int, float],
+        tuple[torch.device, tuple[int, str], int, int, int, float],
         Plaintext | CompressedPlaintext,
     ],
     *,
+    stage: tuple[int, str],
     device: torch.device,
     retain: bool,
     compress: bool = True,
@@ -72,12 +86,16 @@ def _encode_diagonal(
     engine integral dtype/device, NTT domain, Montgomery residues, Q basis,
     `prime_ids` for `depth`, and the supplied actual ``scale``. The cached plaintext
     may be returned by identity; callers must treat it as immutable. The input
-    NumPy array is not mutated. Automatic compression preserves the first
-    encoded sample and chooses the minimum contiguous repeated-block extent.
+    NumPy array is not mutated. With ``compress``, a diagonal whose smallest
+    power-of-two slot period $u$ is below the slot count is prepared from one
+    period as contiguous compressed NTT plaintext. The decision reads only the
+    cleartext diagonal, so it is the same in Eager execution and capture.
     Prepared execution reads the existing cache without encoding or probing.
+    Entries are keyed by ``stage``, the stage index and name, so a captured
+    call that sees the transform through another object reads the same entry.
     """
 
-    cache_key = (device, id(transform), offset, giant, depth, scale)
+    cache_key = (device, stage, offset, giant, depth, scale)
     plaintext = cache.get(cache_key) if prepare_materials else cache[cache_key]
     if plaintext is not None:
         return plaintext
@@ -87,25 +105,27 @@ def _encode_diagonal(
                 raise RuntimeError(
                     "Prepare Bootstrap core materials before CUDA Graph capture"
                 )
-    plaintext = engine.prepare_plaintext_for_multiplication(
-        engine.encode(
+    values = np.roll(diagonal, -giant)
+    period = _slot_period(values) if compress else values.size
+    if period < values.size:
+        plaintext = engine.prepare_compressed_plaintext(
             torch.as_tensor(
-                np.roll(diagonal, -giant),
-                dtype=torch.complex128,
-                device=device,
+                values[:period], dtype=torch.complex128, device=device
             ),
             depth=depth,
             scale=scale,
             device=device,
-        ),
-        modulus_basis='Q',
-    )
-    if compress:
-        compact = CompressedPlaintext._from_plaintext_if_representable(
-            plaintext, unique_count=None, compression_layout="contiguous"
         )
-        if compact is not None:
-            plaintext = compact
+    else:
+        plaintext = engine.prepare_plaintext_for_multiplication(
+            engine.encode(
+                torch.as_tensor(values, dtype=torch.complex128, device=device),
+                depth=depth,
+                scale=scale,
+                device=device,
+            ),
+            modulus_basis='Q',
+        )
     if retain:
         cache[cache_key] = plaintext
     return plaintext
@@ -119,10 +139,10 @@ def _apply_linear_transform(
     *,
     evaluation_keys: EvaluationKeySet | None,
     key_bindings: MutableMapping[
-        tuple[int, int, int], dict[int, tuple[RotationKey, ...]]
+        tuple[int, str, int], dict[int, tuple[RotationKey, ...]]
     ],
     diagonal_cache: MutableMapping[
-        tuple[torch.device, int, int, int, int, float],
+        tuple[torch.device, tuple[int, str], int, int, int, float],
         Plaintext | CompressedPlaintext,
     ],
     retain_diagonals: bool,
@@ -163,6 +183,7 @@ def _apply_linear_transform(
             retain=retain_diagonals,
             compress=compress_diagonals,
             prepare_materials=prepare_materials,
+            stage=stage,
             scale=arithmetic.plaintext_scale(result.scale, result.depth),
             **kwargs,
         )
@@ -170,10 +191,14 @@ def _apply_linear_transform(
     device = ciphertext.device
     result = ciphertext
     del ciphertext
-    from fhelium.bootstrap._keys import _select_rotation_paths, _stage_rotation_uses
+    from fhelium.bootstrap._keys import (
+        _select_rotation_paths,
+        _stage_rotation_uses,
+    )
 
-    for transform in stages:
-        binding = (id(evaluator), id(transform), result.depth)
+    for index, transform in enumerate(stages):
+        stage = (index, transform.name)
+        binding = (*stage, result.depth)
         if prepare_materials:
             assert evaluation_keys is not None
             stage_paths: dict[int, tuple[RotationKey, ...]] = {}

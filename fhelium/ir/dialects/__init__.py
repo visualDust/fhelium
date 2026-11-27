@@ -4,6 +4,7 @@ from . import (
     ckks,
     core,
     distributed,
+    exec,
     fusion,
     logical,
     memory,
@@ -15,6 +16,7 @@ from . import (
 from .ckks import FHEliumCkks
 from .core import FHElium
 from .distributed import FHEliumDistributed
+from .exec import Exec
 from .fusion import FHEliumFusion
 from .logical import FHEliumLogical
 from .memory import FHEliumMemory
@@ -38,6 +40,7 @@ REGISTERED_DIALECTS = (
 """All first-party dialects loaded by the permissive FHElium context."""
 
 __all__ = [
+    "Exec",
     "FHElium",
     "FHEliumCkks",
     "FHEliumDistributed",
@@ -52,6 +55,7 @@ __all__ = [
     "ckks",
     "core",
     "distributed",
+    "exec",
     "fusion",
     "logical",
     "memory",

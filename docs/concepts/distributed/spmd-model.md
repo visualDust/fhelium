@@ -7,12 +7,12 @@ Single Program, Multiple Data (SPMD) execution assigns each process a rank and a
 ```mermaid
 graph LR
     subgraph R0[rank 0 / process 0]
-      E0[Eager or prepared Program]
+      E0[Eager calls or compiled schedule]
       V0[rank-local Tensor storage]
       E0 <--> V0
     end
     subgraph R1[rank 1 / process 1]
-      E1[Eager or prepared Program]
+      E1[Eager calls or compiled schedule]
       V1[rank-local Tensor storage]
       E1 <--> V1
     end

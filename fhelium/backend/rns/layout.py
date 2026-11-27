@@ -102,7 +102,9 @@ class RnsLayout:
     def _build_digit_specs(self, depth: int) -> tuple[RnsDigitSpec, ...]:
         position = {
             prime_id: index
-            for index, prime_id in enumerate(self.chain.q_prime_ids_at_depth(depth))
+            for index, prime_id in enumerate(
+                self.chain.q_prime_ids_at_depth(depth)
+            )
         }
         return tuple(
             RnsDigitSpec(

@@ -25,7 +25,7 @@ from fhelium import (
     Preset,
 )
 from fhelium.eager import Engine
-from fhelium.errors import MaximumDepthError
+from fhelium.errors import MaximumDepthError, ScaleMismatchError, StateError
 
 
 _CODEC_ATOL = 1e-5
@@ -872,6 +872,27 @@ def test_multiply_rejects_coefficient_domain_inputs(engine: Engine) -> None:
     for left, right in ((coefficient, ntt), (ntt, coefficient)):
         with pytest.raises(ValueError, match="NTT/Montgomery"):
             engine.multiply(left, right)
+
+
+def test_additive_operations_reject_mismatched_operand_state(
+    engine: Engine,
+) -> None:
+    value = engine.encrypt_message(_message(engine), depth=1)
+    rescaled = engine.reinterpret_at_scale(value, 2 * value.scale)
+    deeper = engine.mod_switch_to_depth(value, 2)
+    plaintext = engine.prepare_plaintext_for_addition(
+        engine.encode(_message(engine), depth=1, scale=2 * value.scale)
+    )
+
+    for operation in (engine.add, engine.subtract):
+        with pytest.raises(ScaleMismatchError):
+            operation(value, rescaled)
+        with pytest.raises(StateError, match="depth"):
+            operation(value, deeper)
+    with pytest.raises(ScaleMismatchError):
+        engine.add_plaintext(value, plaintext)
+    with pytest.raises(ScaleMismatchError):
+        engine.sum_ciphertexts([value, value, rescaled])
 
 
 @pytest.mark.gpu

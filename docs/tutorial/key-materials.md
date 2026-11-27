@@ -2,7 +2,7 @@
 
 **Example source:** [`examples/02_eager_key_materials.py`](https://github.com/VisualDust/fhelium/blob/main/examples/02_eager_key_materials.py)
 
-Example 02 creates keys from one secret, installs selected evaluator capabilities, and inspects their layouts. File persistence and artifact generations are covered by [10](value-memory-and-persistence.md) and [11](artifact-store.md).
+Example 02 creates keys from one secret, installs selected evaluator capabilities, and inspects their layouts. File persistence and artifact generations are covered by [10](value-memory-and-persistence.md) and [11](value-store.md).
 
 ```bash
 python examples/02_eager_key_materials.py --preset slots8192-scale40-depth7 --rotations=-4,-1,1,2,4
@@ -87,5 +87,5 @@ pool.add(engine.create_conjugation_key(secret_key))
 ## Related concepts and guides
 
 - [Key lifecycle](../concepts/ckks/key-lifecycle.md)
-- [Serialization and artifacts](../concepts/execution/serialization-and-artifacts.md)
+- [Persistence and artifacts](../concepts/execution/serialization-and-artifacts.md)
 - [Provision the minimum required keyset](../how-to/provision-keyset.md)

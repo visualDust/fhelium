@@ -7,9 +7,9 @@
 #include <vector>
 
 #include "../../common/hip/kernel_support.hpp"
+#include "../../common/hip/repetition.hpp"
 #include "../../common/integer_lift.h"
 #include "../../common/montgomery.hpp"
-#include "../../common/hip/repetition.hpp"
 #include "../../common/rns_batch.h"
 #include "../../common/rns_parameters.h"
 
@@ -105,8 +105,7 @@ __global__ void rns_montgomery_weighted_sum_kernel(
                        params[RNS_PARAM_NEG_INV_MODULUS_HI][row]),
         twice_modulus);
   }
-  out[batch][row][coefficient] =
-      reduce_lazy_residue(value, twice_modulus);
+  out[batch][row][coefficient] = reduce_lazy_residue(value, twice_modulus);
 }
 
 template <typename scalar_t>
@@ -123,14 +122,13 @@ void launch_montgomery_weighted_sum(
             out.size(0));
   for (int64_t begin = 0; begin < ciphertexts.size();
        begin += kMaximumWeightedTermsPerLaunch) {
-    const int64_t count = std::min<int64_t>(
-        kMaximumWeightedTermsPerLaunch, ciphertexts.size() - begin);
+    const int64_t count = std::min<int64_t>(kMaximumWeightedTermsPerLaunch,
+                                            ciphertexts.size() - begin);
     WeightedSumPointers<scalar_t> pointers{};
     for (int64_t term = 0; term < count; ++term) {
       pointers.ciphertexts[term] =
           ciphertexts[begin + term].data_ptr<scalar_t>();
-      pointers.plaintexts[term] =
-          plaintexts[begin + term].data_ptr<scalar_t>();
+      pointers.plaintexts[term] = plaintexts[begin + term].data_ptr<scalar_t>();
     }
     const auto& ciphertext = ciphertexts[0];
     const auto& plaintext = plaintexts[0];
@@ -252,22 +250,22 @@ void launch_montgomery_weighted_sums(
   for (int term = 0; term < plaintexts.size(); ++term) {
     pointers.plaintexts[term] = plaintexts[term].data_ptr<scalar_t>();
   }
-#define FHELIUM_LAUNCH_WEIGHTED_SUMS(TERMS, GROUPS)                         \
-  rns_montgomery_weighted_sums_kernel<scalar_t, TERMS, GROUPS>             \
-      <<<grid, kHipBlockSize, 0, stream>>>(                                \
-          out.data_ptr<scalar_t>(),                                         \
-          pointers,                                                         \
-          FHELIUM_HIP_ACCESSOR32(params, scalar_t, 2),                      \
-          ciphertext.size(0),                                               \
-          component_count,                                                  \
-          ciphertext.size(1),                                               \
-          ciphertext.size(2),                                               \
-          ciphertext.stride(0),                                             \
-          ciphertext.stride(1),                                             \
-          ciphertext.stride(2),                                             \
-          plaintext.size(0),                                                \
-          plaintext.stride(0),                                              \
-          plaintext.stride(1),                                              \
+#define FHELIUM_LAUNCH_WEIGHTED_SUMS(TERMS, GROUPS)            \
+  rns_montgomery_weighted_sums_kernel<scalar_t, TERMS, GROUPS> \
+      <<<grid, kHipBlockSize, 0, stream>>>(                    \
+          out.data_ptr<scalar_t>(),                            \
+          pointers,                                            \
+          FHELIUM_HIP_ACCESSOR32(params, scalar_t, 2),         \
+          ciphertext.size(0),                                  \
+          component_count,                                     \
+          ciphertext.size(1),                                  \
+          ciphertext.size(2),                                  \
+          ciphertext.stride(0),                                \
+          ciphertext.stride(1),                                \
+          ciphertext.stride(2),                                \
+          plaintext.size(0),                                   \
+          plaintext.stride(0),                                 \
+          plaintext.stride(1),                                 \
           plaintext.stride(2))
   if (term_count == 16 && group_count == 16) {
     FHELIUM_LAUNCH_WEIGHTED_SUMS(16, 16);
@@ -324,11 +322,11 @@ void launch_binary(torch::Tensor out,
 }
 
 template <BinaryRnsOperation operation>
-torch::Tensor binary_rns(const torch::Tensor& lhs,
-                         const torch::Tensor& rhs,
-                         const torch::Tensor& params,
-                         const char* operation_name) {
-  auto out = torch::empty_like(lhs);
+void binary_rns_into(torch::Tensor out,
+                     const torch::Tensor& lhs,
+                     const torch::Tensor& rhs,
+                     const torch::Tensor& params,
+                     const char* operation_name) {
   const auto lhs_rows = view_rns_batch_3d(lhs, "lhs");
   const auto rhs_rows = view_rns_batch_3d(rhs, "rhs");
   auto out_rows = view_rns_batch_3d(out, "out");
@@ -337,7 +335,36 @@ torch::Tensor binary_rns(const torch::Tensor& lhs,
   AT_DISPATCH_INTEGRAL_TYPES(lhs.scalar_type(), "rns_binary", [&] {
     launch_binary<scalar_t, operation>(out_rows, lhs_rows, rhs_rows, params);
   });
+}
+
+template <BinaryRnsOperation operation>
+torch::Tensor binary_rns(const torch::Tensor& lhs,
+                         const torch::Tensor& rhs,
+                         const torch::Tensor& params,
+                         const char* operation_name) {
+  auto out = torch::empty_like(lhs);
+  binary_rns_into<operation>(out, lhs, rhs, params, operation_name);
   return out;
+}
+
+// Out forms write into a caller-owned Tensor, such as one slice of a
+// stacked result. `out` may coincide with an operand element by element.
+template <BinaryRnsOperation operation>
+void binary_rns_out(torch::Tensor out,
+                    const torch::Tensor& lhs,
+                    const torch::Tensor& rhs,
+                    const torch::Tensor& params,
+                    const char* operation_name) {
+  TORCH_CHECK(out.sizes() == lhs.sizes() &&
+                  out.scalar_type() == lhs.scalar_type() &&
+                  out.device() == lhs.device(),
+              operation_name,
+              " out must match the shape, dtype and device of lhs");
+  at::assert_no_internal_overlap(out);
+  at::assert_no_partial_overlap(out, lhs);
+  at::assert_no_partial_overlap(out, rhs);
+  at::assert_no_overlap(out, params);
+  binary_rns_into<operation>(out, lhs, rhs, params, operation_name);
 }
 
 template <typename scalar_t, UnaryRnsOperation operation>
@@ -478,16 +505,36 @@ void launch_lift_integer_coefficients(const torch::Tensor& coefficient_rows,
 }  // namespace
 
 torch::Tensor rns_montgomery_mul_hip(const torch::Tensor lhs,
-                                      const torch::Tensor rhs,
-                                      const torch::Tensor rns_params) {
+                                     const torch::Tensor rhs,
+                                     const torch::Tensor rns_params) {
   return binary_rns<BinaryRnsOperation::kMontgomeryMul>(
       lhs, rhs, rns_params, "rns_montgomery_mul");
 }
 
-torch::Tensor rns_montgomery_weighted_sum_hip(
-    const at::TensorList ciphertexts,
-    const at::TensorList plaintexts,
-    const torch::Tensor rns_params) {
+void rns_montgomery_mul_out_hip(const torch::Tensor lhs,
+                                const torch::Tensor rhs,
+                                const torch::Tensor rns_params,
+                                torch::Tensor out) {
+  binary_rns_out<BinaryRnsOperation::kMontgomeryMul>(
+      out, lhs, rhs, rns_params, "rns_montgomery_mul_out");
+}
+
+void rns_add_lazy_out_hip(const torch::Tensor lhs,
+                          const torch::Tensor rhs,
+                          const torch::Tensor rns_params,
+                          torch::Tensor out) {
+  binary_rns_out<BinaryRnsOperation::kAddLazy>(
+      out, lhs, rhs, rns_params, "rns_add_lazy_out");
+}
+
+namespace {
+
+// Writes the weighted sum of the terms to `out`, a Tensor shaped like
+// ciphertexts[0] with non-overlapping strides.
+void montgomery_weighted_sum_into(const at::TensorList ciphertexts,
+                                  const at::TensorList plaintexts,
+                                  const torch::Tensor rns_params,
+                                  const torch::Tensor& out) {
   constexpr const char* operation = "rns_montgomery_weighted_sum";
   TORCH_CHECK(!ciphertexts.empty(), operation, " requires at least one term");
   TORCH_CHECK(ciphertexts.size() == plaintexts.size(),
@@ -509,8 +556,7 @@ torch::Tensor rns_montgomery_weighted_sum_hip(
                     plaintexts[term].scalar_type() == reference.scalar_type(),
                 operation,
                 " requires one integral dtype");
-    auto ciphertext =
-        view_rns_batch_3d(ciphertexts[term], "ciphertext term");
+    auto ciphertext = view_rns_batch_3d(ciphertexts[term], "ciphertext term");
     auto plaintext = view_rns_batch_3d(plaintexts[term], "plaintext term");
     TORCH_CHECK(ciphertext.sizes() == reference.sizes() &&
                     ciphertext.strides() == reference.strides(),
@@ -536,7 +582,6 @@ torch::Tensor rns_montgomery_weighted_sum_hip(
               " RNS parameters must match the input device and dtype");
   check_rns_parameter_rows(reference, rns_params, operation);
 
-  auto out = torch::empty_like(ciphertexts[0]);
   auto output = view_rns_batch_3d(out, "out");
   at::assert_no_internal_overlap(output);
   AT_DISPATCH_INTEGRAL_TYPES(
@@ -544,14 +589,32 @@ torch::Tensor rns_montgomery_weighted_sum_hip(
         launch_montgomery_weighted_sum<scalar_t>(
             output, ciphertext_rows, plaintext_rows, rns_params);
       });
+}
+
+}  // namespace
+
+torch::Tensor rns_montgomery_weighted_sum_hip(const at::TensorList ciphertexts,
+                                              const at::TensorList plaintexts,
+                                              const torch::Tensor rns_params) {
+  TORCH_CHECK(!ciphertexts.empty(),
+              "rns_montgomery_weighted_sum requires at least one term");
+  auto out = torch::empty_like(ciphertexts[0]);
+  montgomery_weighted_sum_into(ciphertexts, plaintexts, rns_params, out);
   return out;
 }
 
-torch::Tensor rns_montgomery_weighted_sums_hip(
-    const at::TensorList ciphertexts,
-    const at::TensorList plaintexts,
-    const int64_t group_count,
-    const torch::Tensor rns_params) {
+void rns_montgomery_weighted_sum_out_hip(const at::TensorList ciphertexts,
+                                         const at::TensorList plaintexts,
+                                         const torch::Tensor rns_params,
+                                         torch::Tensor out) {
+  montgomery_weighted_sum_into(ciphertexts, plaintexts, rns_params, out);
+}
+
+void rns_montgomery_weighted_sums_hip(const at::TensorList ciphertexts,
+                                      const at::TensorList plaintexts,
+                                      const int64_t group_count,
+                                      const torch::Tensor rns_params,
+                                      torch::Tensor& out) {
   constexpr const char* operation = "rns_montgomery_weighted_sums";
   TORCH_CHECK(group_count > 0, operation, " requires at least one group");
   TORCH_CHECK(!ciphertexts.empty(), operation, " requires at least one term");
@@ -570,8 +633,7 @@ torch::Tensor rns_montgomery_weighted_sums_hip(
                     ciphertexts[term].scalar_type() == reference.scalar_type(),
                 operation,
                 " requires every ciphertext on one device and dtype");
-    auto ciphertext =
-        view_rns_batch_3d(ciphertexts[term], "ciphertext term");
+    auto ciphertext = view_rns_batch_3d(ciphertexts[term], "ciphertext term");
     TORCH_CHECK(ciphertext.sizes() == reference.sizes() &&
                     ciphertext.strides() == reference.strides(),
                 operation,
@@ -603,14 +665,6 @@ torch::Tensor rns_montgomery_weighted_sums_hip(
               " RNS parameters must match the input device and dtype");
   check_rns_parameter_rows(reference, rns_params, operation);
 
-  std::vector<int64_t> output_shape;
-  output_shape.reserve(ciphertexts[0].dim() + 1);
-  output_shape.push_back(ciphertexts[0].size(0));
-  output_shape.push_back(group_count);
-  output_shape.insert(output_shape.end(),
-                      ciphertexts[0].sizes().begin() + 1,
-                      ciphertexts[0].sizes().end());
-  auto out = torch::empty(output_shape, ciphertexts[0].options());
   const bool has_shared_kernel =
       (ciphertexts.size() == 16 && group_count == 16) ||
       (ciphertexts.size() == 8 && group_count == 8) ||
@@ -618,11 +672,14 @@ torch::Tensor rns_montgomery_weighted_sums_hip(
   if (has_shared_kernel) {
     AT_DISPATCH_INTEGRAL_TYPES(
         reference.scalar_type(), "rns_montgomery_weighted_sums_hip", [&] {
-          launch_montgomery_weighted_sums<scalar_t>(
-              out, ciphertext_rows, plaintext_rows, rns_params, group_count,
-              ciphertexts[0].size(0));
+          launch_montgomery_weighted_sums<scalar_t>(out,
+                                                    ciphertext_rows,
+                                                    plaintext_rows,
+                                                    rns_params,
+                                                    group_count,
+                                                    ciphertexts[0].size(0));
         });
-    return out;
+    return;
   }
 
   std::vector<torch::Tensor> group_plaintexts;
@@ -633,21 +690,30 @@ torch::Tensor rns_montgomery_weighted_sums_hip(
     for (int64_t term = 0; term < ciphertexts.size(); ++term) {
       group_plaintexts.push_back(plaintexts[first + term]);
     }
-    out.select(1, group).copy_(rns_montgomery_weighted_sum_hip(
-        ciphertexts, group_plaintexts, rns_params));
+    // A group row is written in place when its batch axes flatten to one
+    // axis; otherwise the sum is copied into it.
+    auto target = out.select(1, group);
+    int64_t batch_axes = 0;
+    for (int64_t axis = 0; axis < target.dim() - 2; ++axis)
+      batch_axes += target.size(axis) > 1;
+    if (batch_axes <= 1) {
+      montgomery_weighted_sum_into(
+          ciphertexts, group_plaintexts, rns_params, target);
+    } else {
+      target.copy_(rns_montgomery_weighted_sum_hip(
+          ciphertexts, group_plaintexts, rns_params));
+    }
   }
-  return out;
 }
 
 namespace {
 
 template <RepetitionLayout layout>
-torch::Tensor rns_montgomery_mul_compressed_hip(
-    const torch::Tensor lhs,
-    const torch::Tensor compressed_rhs,
-    const torch::Tensor rns_params,
-    const char* operation_name) {
-  auto out = torch::empty_like(lhs);
+void rns_montgomery_mul_compressed_hip(const torch::Tensor lhs,
+                                       const torch::Tensor compressed_rhs,
+                                       const torch::Tensor rns_params,
+                                       torch::Tensor out,
+                                       const char* operation_name) {
   const auto lhs_rows = view_rns_batch_3d(lhs, "lhs");
   const auto rhs_rows = view_rns_batch_3d(compressed_rhs, "compressed_rhs");
   auto out_rows = view_rns_batch_3d(out, "out");
@@ -673,27 +739,33 @@ torch::Tensor rns_montgomery_mul_compressed_hip(
                 unique_mask,
                 repeat_shift);
       });
-  return out;
 }
 
 }  // namespace
 
-torch::Tensor rns_montgomery_mul_cyclic_compressed_hip(
+void rns_montgomery_mul_cyclic_compressed_out_hip(
     const torch::Tensor lhs,
     const torch::Tensor compressed_rhs,
-    const torch::Tensor rns_params) {
-  return rns_montgomery_mul_compressed_hip<RepetitionLayout::kCyclic>(
-      lhs, compressed_rhs, rns_params, "rns_montgomery_mul_cyclic_compressed");
-}
-
-torch::Tensor rns_montgomery_mul_contiguous_compressed_hip(
-    const torch::Tensor lhs,
-    const torch::Tensor compressed_rhs,
-    const torch::Tensor rns_params) {
-  return rns_montgomery_mul_compressed_hip<RepetitionLayout::kContiguous>(
+    const torch::Tensor rns_params,
+    torch::Tensor out) {
+  rns_montgomery_mul_compressed_hip<RepetitionLayout::kCyclic>(
       lhs,
       compressed_rhs,
       rns_params,
+      out,
+      "rns_montgomery_mul_cyclic_compressed");
+}
+
+void rns_montgomery_mul_contiguous_compressed_out_hip(
+    const torch::Tensor lhs,
+    const torch::Tensor compressed_rhs,
+    const torch::Tensor rns_params,
+    torch::Tensor out) {
+  rns_montgomery_mul_compressed_hip<RepetitionLayout::kContiguous>(
+      lhs,
+      compressed_rhs,
+      rns_params,
+      out,
       "rns_montgomery_mul_contiguous_compressed");
 }
 
@@ -724,13 +796,13 @@ void rns_montgomery_mul_row_scalars_inplace_hip(
 }
 
 void rns_to_montgomery_inplace_hip(torch::Tensor standard_residues,
-                                    const torch::Tensor rns_params) {
+                                   const torch::Tensor rns_params) {
   unary_rns_inplace<UnaryRnsOperation::kToMontgomery>(
       standard_residues, rns_params, "standard_residues", "rns_to_montgomery");
 }
 
 void rns_from_montgomery_inplace_hip(torch::Tensor montgomery_residues,
-                                      const torch::Tensor rns_params) {
+                                     const torch::Tensor rns_params) {
   unary_rns_inplace<UnaryRnsOperation::kFromMontgomery>(montgomery_residues,
                                                         rns_params,
                                                         "montgomery_residues",
@@ -738,26 +810,20 @@ void rns_from_montgomery_inplace_hip(torch::Tensor montgomery_residues,
 }
 
 void rns_reduce_to_standard_inplace_hip(torch::Tensor lazy_residues,
-                                         const torch::Tensor rns_params) {
+                                        const torch::Tensor rns_params) {
   unary_rns_inplace<UnaryRnsOperation::kCanonicalize>(
       lazy_residues, rns_params, "lazy_residues", "rns_reduce_to_standard");
 }
 
-torch::Tensor rns_add_lazy_hip(const torch::Tensor lhs,
-                                const torch::Tensor rhs,
-                                const torch::Tensor rns_params) {
-  return binary_rns<BinaryRnsOperation::kAddLazy>(
-      lhs, rhs, rns_params, "rns_add_lazy");
-}
-
-torch::Tensor rns_add_lazy_with_twice_modulus_hip(
-    const torch::Tensor lhs,
-    const torch::Tensor rhs,
-    const torch::Tensor twice_modulus) {
-  auto out = torch::empty_like(lhs);
+void rns_add_lazy_with_twice_modulus_out_hip(const torch::Tensor lhs,
+                                             const torch::Tensor rhs,
+                                             const torch::Tensor twice_modulus,
+                                             torch::Tensor out) {
   const auto lhs_rows = view_rns_batch_3d(lhs, "lhs");
   const auto rhs_rows = view_rns_batch_3d(rhs, "rhs");
   auto out_rows = view_rns_batch_3d(out, "out");
+  at::assert_no_internal_overlap(out_rows);
+  at::assert_no_partial_overlap(out_rows, rhs_rows);
   check_rns_binary_3d(
       lhs_rows, rhs_rows, "rns_add_lazy_with_twice_modulus", true);
   check_rns_row_vector(twice_modulus,
@@ -779,18 +845,18 @@ torch::Tensor rns_add_lazy_with_twice_modulus_hip(
                 FHELIUM_HIP_ACCESSOR32(rhs_rows, scalar_t, 3),
                 FHELIUM_HIP_ACCESSOR32(twice_modulus, scalar_t, 1));
       });
-  return out;
 }
 
-torch::Tensor rns_sub_lazy_hip(const torch::Tensor lhs,
-                                const torch::Tensor rhs,
-                                const torch::Tensor rns_params) {
-  return binary_rns<BinaryRnsOperation::kSubLazy>(
-      lhs, rhs, rns_params, "rns_sub_lazy");
+void rns_sub_lazy_out_hip(const torch::Tensor lhs,
+                          const torch::Tensor rhs,
+                          const torch::Tensor rns_params,
+                          torch::Tensor out) {
+  binary_rns_out<BinaryRnsOperation::kSubLazy>(
+      out, lhs, rhs, rns_params, "rns_sub_lazy_out");
 }
 
 void rns_center_residues_inplace_hip(torch::Tensor standard_residues,
-                                      const torch::Tensor rns_params) {
+                                     const torch::Tensor rns_params) {
   unary_rns_inplace<UnaryRnsOperation::kCenter>(standard_residues,
                                                 rns_params,
                                                 "standard_residues",
@@ -798,7 +864,7 @@ void rns_center_residues_inplace_hip(torch::Tensor standard_residues,
 }
 
 void rns_shift_residues_positive_inplace_hip(torch::Tensor centered_residues,
-                                              const torch::Tensor rns_params) {
+                                             const torch::Tensor rns_params) {
   unary_rns_inplace<UnaryRnsOperation::kShiftPositive>(
       centered_residues,
       rns_params,
@@ -820,15 +886,14 @@ torch::Tensor rns_lift_integer_coefficients_hip(
   output_shape.push_back(coefficients.size(-1));
   auto out = twice_modulus.new_empty(output_shape);
   auto out_rows = view_rns_batch_3d(out, "out");
-  AT_DISPATCH_SWITCH(
-      twice_modulus.scalar_type(),
-      "rns_lift_integer_coefficients",
-      AT_DISPATCH_CASE(at::kInt, [&] {
-        launch_lift_integer_coefficients<scalar_t>(
-            coefficient_rows, twice_modulus, out_rows);
-      }) AT_DISPATCH_CASE(at::kLong, [&] {
-        launch_lift_integer_coefficients<scalar_t>(
-            coefficient_rows, twice_modulus, out_rows);
-      }));
+  AT_DISPATCH_SWITCH(twice_modulus.scalar_type(),
+                     "rns_lift_integer_coefficients",
+                     AT_DISPATCH_CASE(at::kInt, [&] {
+                       launch_lift_integer_coefficients<scalar_t>(
+                           coefficient_rows, twice_modulus, out_rows);
+                     }) AT_DISPATCH_CASE(at::kLong, [&] {
+                       launch_lift_integer_coefficients<scalar_t>(
+                           coefficient_rows, twice_modulus, out_rows);
+                     }));
   return out;
 }

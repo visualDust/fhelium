@@ -1,6 +1,6 @@
 """Persist prepared Programs and relocate current numerical materials.
 
-Entries contain encoded Programs and JSON metadata; Tensor payloads remain in the calling process. Source entries are keyed before capture and require pure Python expressions, static control flow, and supported Tensor and Engine operations. Trace entries are keyed by the captured Program and accept any captured source.
+Entries are artifact files that contain encoded Programs, JSON metadata and, once linked, the executable's entries and kernels; material Tensors remain in the calling process. Source entries are keyed before capture and require pure Python expressions, static control flow, and supported Tensor and Engine operations. Trace entries are keyed by the captured Program and accept any captured source.
 """
 
 from __future__ import annotations
@@ -9,20 +9,21 @@ import __future__
 import ast
 import builtins
 import hashlib
+import inspect
 import json
 import marshal
 import math
 import os
 import platform
+import struct
 import sys
 import sysconfig
-import tempfile
 import types
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
@@ -58,7 +59,7 @@ _LEAVES = (
     RelinearizationKey,
     ConjugationKey,
 )
-_SCHEMA = 8
+_SCHEMA = 10
 # Paths are JSON arrays of [operation, argument] steps, never Python expressions.
 _Path = list[list[object]]
 _PURE_BUILTINS = {
@@ -128,6 +129,16 @@ _TENSOR_METHODS = {
     "slice_batch",
     "slice_limbs",
 }
+
+
+# Class methods of value types called on the class, such as ``Ciphertext.stack_batch``.
+_VALUE_CONSTRUCTORS = {"stack_batch"}
+
+
+def _value_classes() -> tuple[type, ...]:
+    from fhelium.values import CompressedPlaintext, Ciphertext, Plaintext
+
+    return (Ciphertext, Plaintext, CompressedPlaintext)
 
 
 class CacheIneligible(Exception):
@@ -278,6 +289,10 @@ def _function_definition(function):
     )
 
 
+# Marks a function scanned without a bound instance.
+_NO_RECEIVER = object()
+
+
 class _Eligibility(ast.NodeVisitor):
     """Check a small expression/loop subset without evaluating user code."""
 
@@ -297,6 +312,7 @@ class _Eligibility(ast.NodeVisitor):
         ast.IfExp,
         ast.List,
         ast.Tuple,
+        ast.Starred,
         ast.Dict,
         ast.Subscript,
         ast.Slice,
@@ -310,8 +326,9 @@ class _Eligibility(ast.NodeVisitor):
         ast.expr_context,
     )
 
-    def __init__(self, function, path, scan):
+    def __init__(self, function, path, scan, receiver=_NO_RECEIVER):
         self.function, self.path, self.scan = function, path, scan
+        self.receiver = None
         self.environment = {
             name: (value, _step(path, "global", name))
             for name, value in function.__globals__.items()
@@ -325,6 +342,13 @@ class _Eligibility(ast.NodeVisitor):
                 )
             }
         )
+        if receiver is not _NO_RECEIVER:
+            # The bound instance is read only through its attributes.
+            self.receiver = function.__code__.co_varnames[0]
+            self.environment[self.receiver] = (
+                receiver,
+                _step(path, "self", None),
+            )
         self.locals = set(function.__code__.co_varnames)
         self.module_members: list[object] = []
         self.local_lists: set[str] = set()
@@ -336,6 +360,10 @@ class _Eligibility(ast.NodeVisitor):
         for node in ast.walk(definition):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
                 writes.setdefault(node.id, []).append(node)
+        if self.receiver in writes:
+            raise CacheIneligible(
+                "Assignments to the bound instance are not cached"
+            )
         for node in ast.walk(definition):
             if isinstance(node, ast.Assign) and isinstance(
                 node.value, ast.List
@@ -391,18 +419,23 @@ class _Eligibility(ast.NodeVisitor):
                 return vars(module)[node.attr], _step(
                     path, "module_attr", node.attr
                 )
+            if parent is not None and _instance(parent[0]):
+                owner, path = parent
+                member, step = _instance_attribute(owner, node.attr)
+                return member, _step(path, step, node.attr)
         return None
 
     def visit_Name(self, node):
         found = self._external(node)
-        if (
-            isinstance(node.ctx, ast.Load)
-            and found is not None
-            and isinstance(found[0], types.ModuleType)
-        ):
-            raise CacheIneligible(
-                "Modules must be used through static supported attributes"
-            )
+        if isinstance(node.ctx, ast.Load) and found is not None:
+            if isinstance(found[0], types.ModuleType):
+                raise CacheIneligible(
+                    "Modules must be used through static supported attributes"
+                )
+            if _instance(found[0]):
+                raise CacheIneligible(
+                    "Objects are read only through their attributes"
+                )
 
     def visit_Compare(self, node):
         operands = (node.left, *node.comparators)
@@ -464,7 +497,8 @@ class _Eligibility(ast.NodeVisitor):
             value, path = external
             if (
                 _primitive(value) is None
-                and type(value) is not types.FunctionType
+                and not _python_function(value)
+                and _compiled_source(value) is None
             ):
                 raise CacheIneligible("Unsupported external callable")
             self.module_members.append(self.scan.value(value, path))
@@ -487,6 +521,16 @@ class _Eligibility(ast.NodeVisitor):
                 pass
             elif node.func.attr in _TENSOR_METHODS:
                 self.visit(node.func.value)
+            elif (
+                receiver is not None
+                and node.func.attr in _VALUE_CONSTRUCTORS
+                and receiver[0] in _value_classes()
+            ):
+                # The class belongs to fhelium, whose sources the environment
+                # identity covers; its name identifies the call.
+                self.module_members.append(
+                    ["class", cast(type, receiver[0]).__qualname__]
+                )
             else:
                 raise CacheIneligible(
                     f"Unsupported method call: {node.func.attr}"
@@ -509,9 +553,10 @@ class _Scan:
         default_factory=dict
     )
     engines: dict[int, tuple[_Path, object]] = field(default_factory=dict)
-    seen: dict[int, int] = field(default_factory=dict)
-    active: set[int] = field(default_factory=set)
+    seen: dict[object, int] = field(default_factory=dict)
+    active: set[object] = field(default_factory=set)
     storages: dict[int, int] = field(default_factory=dict)
+    reads_rank: bool = False
 
     def value(self, value: object, path: _Path) -> object:
         if type(value) in _SCALARS:
@@ -525,11 +570,17 @@ class _Scan:
         if type(value) is types.ModuleType:
             # Every module use is checked separately by the syntax visitor.
             return ["module", value.__name__]
-        identity = id(value)
+        # Bound methods are created on each attribute read; they are
+        # identified by their function and instance.
+        identity = (
+            (id(value.__func__), id(value.__self__))
+            if type(value) is types.MethodType
+            else id(value)
+        )
         if identity in self.active:
             raise CacheIneligible("Reference cycles are not cached")
         if type(value) in _LEAVES:
-            self.materials.setdefault(identity, []).append((path, value))
+            self.materials.setdefault(id(value), []).append((path, value))
         if identity in self.seen:
             return ["alias", self.seen[identity]]
         reference = self.seen.setdefault(identity, len(self.seen))
@@ -612,15 +663,31 @@ class _Scan:
             ]
         if type(value) is CkksConfig:
             return ["config", value.dumps()]
-        if type(value) is types.FunctionType:
+        distributed = _distributed_function(value)
+        if distributed is not None:
+            return distributed(self)
+        if _python_function(value):
             return self.function(value, path)
+        source = _compiled_source(value)
+        if source is not None:
+            # Capture inlines the source function of a nested compiled
+            # function under the outer options, so its identity is that of
+            # the source function.
+            return self.function(source, _step(path, "compiled_source", None))
         raise CacheIneligible(
             f"{type(value).__name__} has no supported cache identity"
         )
 
-    def function(self, function: types.FunctionType, path: _Path) -> object:
+    def function(
+        self, function: types.FunctionType | types.MethodType, path: _Path
+    ) -> object:
+        # A bound method is its function with the instance attributes it
+        # reads; the path steps below read through the method to its function.
+        receiver = _NO_RECEIVER
+        if type(function) is types.MethodType:
+            receiver, function = function.__self__, function.__func__
         code = function.__code__
-        members = _Eligibility(function, path, self).check()
+        members = _Eligibility(function, path, self, receiver).check()
         globals_ = function.__globals__
         entry = {
             "code": hashlib.blake2b(
@@ -661,8 +728,111 @@ class _Scan:
                 for name in sorted(_global_reads(code))
             ],
             "members": members,
+            "bound": receiver is not _NO_RECEIVER,
         }
         return ["function", entry]
+
+
+def _distributed_function(value: object) -> Any:
+    """Return the identity of a process-group query or captured collective function.
+
+    Rank and group size enter the identity by their current values; the collectives that capture records are identified by name, and their sources are part of the environment identity. A process group is identified by its c10d registry name and global ranks, and a stored specialization binds the live group registered under that name.
+    """
+    import torch.distributed as torch_distributed
+
+    from fhelium.distributed import all_reduce_ciphertext, reduce_ciphertext
+
+    if (
+        value is torch_distributed.get_rank
+        or value is torch_distributed.get_world_size
+    ):
+        name = cast(Any, value).__name__
+
+        def observed(scan: _Scan) -> object:
+            if name == "get_rank":
+                scan.reads_rank = True
+            current = (
+                cast(Any, value)()
+                if torch_distributed.is_initialized()
+                else None
+            )
+            return ["distributed", name, current]
+
+        return observed
+    if value is all_reduce_ciphertext or value is reduce_ciphertext:
+        return lambda scan: ["collective", cast(Any, value).__name__]
+    if isinstance(value, torch_distributed.ProcessGroup):
+        return lambda scan: [
+            "process-group",
+            value.group_name,
+            torch_distributed.get_process_group_ranks(value),
+        ]
+    return None
+
+
+def _python_function(value: object) -> bool:
+    return type(value) is types.FunctionType or (
+        type(value) is types.MethodType
+        and type(value.__func__) is types.FunctionType
+    )
+
+
+def _compiled_source(
+    value: object,
+) -> types.FunctionType | types.MethodType | None:
+    """Return the source function or bound method of a compiled callable."""
+    from ._callable import CompiledCallable
+
+    if type(value) is CompiledCallable and _python_function(value._source):
+        return cast(Any, value._source)
+    return None
+
+
+def _callable_root(function: Any) -> Any:
+    """Identify a callable object as its class ``__call__`` bound to the object."""
+    if _python_function(function):
+        return function
+    method = inspect.getattr_static(type(function), "__call__", None)
+    if type(method) is types.FunctionType and _instance(function):
+        return types.MethodType(method, function)
+    return function
+
+
+def _instance(value: object) -> bool:
+    """Whether ``value`` is a user object whose attributes are read statically."""
+    from fhelium.config import CkksConfig
+    from fhelium.eager import Engine
+
+    from ._callable import CompiledCallable
+
+    kind = type(value)
+    return (
+        kind.__module__ != "builtins"
+        and kind not in _LEAVES
+        and kind not in (Engine, CkksConfig, CompiledCallable)
+        and not isinstance(value, (types.ModuleType, torch.Tensor))
+        and not _python_function(value)
+        and isinstance(getattr(value, "__dict__", None), dict)
+        and kind.__getattribute__ is object.__getattribute__
+        and inspect.getattr_static(kind, "__getattr__", None) is None
+    )
+
+
+def _instance_attribute(owner: object, name: str) -> tuple[object, str]:
+    """Read ``owner.name`` from the instance dictionary or bind a class function."""
+    from ._callable import CompiledCallable
+
+    member = inspect.getattr_static(type(owner), name, _NO_RECEIVER)
+    if type(member) is CompiledCallable:
+        # A compiled method is inlined as its source method.
+        member = _compiled_source(member)
+    elif hasattr(type(member), "__set__"):
+        raise CacheIneligible(f"Data descriptors are not cached: {name}")
+    elif name in vars(owner):
+        return vars(owner)[name], "attr"
+    if type(member) is types.FunctionType:
+        return types.MethodType(member, owner), "method"
+    raise CacheIneligible(f"Unsupported instance attribute: {name}")
 
 
 def _global_reads(code: types.CodeType) -> set[str]:
@@ -752,6 +922,8 @@ class SourceIdentity:
     key: str
     materials: dict[int, list[tuple[_Path, object]]]
     engines: dict[int, tuple[_Path, object]]
+    reads_rank: bool = False
+    """The source reads the process rank, so its Program may differ between ranks."""
 
 
 def source_identity(
@@ -759,8 +931,11 @@ def source_identity(
     *,
     material_names: Mapping[str, object] | None,
 ) -> SourceIdentity:
-    if type(function) is not types.FunctionType:
-        raise CacheIneligible("Only ordinary Python functions are cached")
+    function = _callable_root(function)
+    if not _python_function(function):
+        raise CacheIneligible(
+            "Only ordinary Python functions, bound methods and callable objects are cached"
+        )
     if material_names is not None and type(material_names) is not dict:
         raise CacheIneligible("Material names require an ordinary dictionary")
     scan = _Scan()
@@ -770,6 +945,7 @@ def source_identity(
         _digest([environment_identity(), root, names]),
         scan.materials,
         scan.engines,
+        scan.reads_rank,
     )
 
 
@@ -787,18 +963,40 @@ def runtime_cacheable(arguments: Mapping[str, object]) -> bool:
     return True
 
 
-def entry_key(identity: SourceIdentity, signature: CallSignature) -> str:
-    return _digest([identity.key, _signature_payload(signature)])
+def supplied_keys(keys: object) -> tuple[Any, ...]:
+    """The key objects of a ``keys`` argument: a mapping's values, a key set's keys or a sequence."""
+    return tuple(
+        keys.values() if isinstance(keys, Mapping) else cast(Any, keys)
+    )
+
+
+def key_inventory(keys: object) -> list[str]:
+    """Layouts of the supplied keys; compilation selects keys by these layouts."""
+    from ._materials import key_description
+
+    return sorted(
+        json.dumps(key_description(key), sort_keys=True)
+        for key in supplied_keys(keys)
+    )
+
+
+def entry_key(
+    identity: SourceIdentity, signature: CallSignature, keys: object = ()
+) -> str:
+    return _digest(
+        [identity.key, _signature_payload(signature), key_inventory(keys)]
+    )
 
 
 def trace_entry_key(
     program: Program,
     bindings: Mapping[str, torch.Tensor],
     signature: CallSignature,
+    keys: object = (),
 ) -> str:
     """Key a prepared Program by the captured Program it was compiled from.
 
-    The captured Program records every Tensor operation, Engine operation, material reference and type that the Python source produced for this call. Together with the layouts of the bound materials and the call signature it determines the pipeline result, independently of how the Python source computed it.
+    The captured Program records every Tensor operation, Engine operation, material reference and type that the Python source produced for this call. Together with the layouts of the bound materials, the call signature and the layouts of the keys supplied to the callable it determines the pipeline result, independently of how the Python source computed it.
     """
     from fhelium.ir._structure import program_digest
 
@@ -812,19 +1010,20 @@ def trace_entry_key(
                 [symbol, _tensor_layout(tensor)]
                 for symbol, tensor in bindings.items()
             ),
+            key_inventory(keys),
         ]
     )
 
 
-def artifact_key(entry: str, registry) -> str | None:
-    """Key the linked executable of a cached Program for one implementation registry.
+def artifact_key(registry) -> str | None:
+    """Key the linked executables of one implementation registry.
 
     Returns None when the registry contains implementations defined outside FHElium.
     """
     from fhelium.backend._artifact import registry_identity
 
     identity = registry_identity(registry)
-    return None if identity is None else _digest(["linked", entry, identity])
+    return None if identity is None else _digest(["linked", identity])
 
 
 def _leaf_tensors(leaf: object) -> dict[str, torch.Tensor]:
@@ -880,6 +1079,16 @@ def _resolve_path(roots: Mapping[str, object], path: _Path) -> object:
             value = vars(value)[argument]
         elif operation == "field":
             value = _leaf_tensors(value)[argument]
+        elif operation == "self":
+            value = value.__self__
+        elif operation == "attr":
+            value = vars(value)[argument]
+        elif operation == "method":
+            value = _instance_attribute(value, argument)[0]
+        elif operation == "compiled_source":
+            value = _compiled_source(value)
+            if value is None:
+                raise CacheIneligible("Compiled function root changed")
         elif operation == "engine_key":
             from fhelium.eager import Engine
 
@@ -963,7 +1172,7 @@ def relocate_materials(
     material_names: Mapping[str, object] | None = None,
 ) -> tuple[dict[str, torch.Tensor], list[tuple[Engine, torch.device]]]:
     """Resolve current material objects and providers for an instance Program."""
-    roots = {"fn": function, "names": material_names or {}}
+    roots = {"fn": _callable_root(function), "names": material_names or {}}
     bindings: dict[str, torch.Tensor] = {}
     providers: dict[tuple[int, str], tuple[Engine, torch.device]] = {}
     aliases: dict[int, torch.Tensor] = {}
@@ -1000,139 +1209,143 @@ def relocate_materials(
     return bindings, list(providers.values())
 
 
-class ArtifactRecord(TypedDict):
-    """A linked executable and the facts needed to restore its variant without the Program."""
-
-    payload: bytes
-    selections: Mapping[str, Mapping[str, object] | None]
-    input_names: tuple[str, ...]
-    output_structure: object | None
-    input_fields: dict[str, tuple[str, str]]
-
-
 @dataclass(frozen=True)
 class CacheEntry:
-    """One persisted specialization; ``source_encoding`` is decoded only when a caller needs the source Program.
+    """One persisted specialization.
 
-    ``program`` is a Program or its :meth:`Program.encode` payload.
+    ``program`` is the prepared Program, its :meth:`Program.encode` payload, or None when the file stores no Program text; linking from the Program is then unavailable. ``linked`` records the linked executable the file stores for one implementation registry: ``registry``, the provider ``selections`` of generated materials, ``keys`` (key descriptions by material symbol), ``input_fields`` and the ``executable`` record; ``path`` is added when the entry is loaded.
     """
 
-    program: Program | dict[str, object]
+    program: Program | dict[str, object] | None
     manifest: dict[str, object]
     output_structure: object | None
     input_names: tuple[str, ...]
-    source_encoding: dict[str, object] | None = None
     preparation: dict | None = None
+    linked: dict[str, Any] | None = None
+    groups: dict[str, str | None] | None = None
+    """c10d registry names of the captured process groups by resource symbol; None names the default group."""
+
+
+_PROGRAM = "cache.program"
 
 
 class CompileCache:
-    """Atomically publish one JSON document per input specialization."""
+    """Publish one artifact file per input specialization.
+
+    The manifest records the specialization under ``cache``: the relocation manifest of its materials, its output structure, input names, preparation descriptor and, when one was stored, its linked executable under ``linked``, whose entries, kernels, constants and material records are the artifact's. The prepared Program is stored as the byte tensor ``cache.program``, from which a specialization is linked again when the linked executable does not apply.
+    """
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory
 
     def _path(self, key: str) -> Path:
-        return self.directory / key[:2] / (key + ".json")
+        return self.directory / key[:2] / (key + ".fhelium")
 
     def load(self, key: str, *, decode: bool = True) -> CacheEntry | None:
         """Read one entry; ``decode=False`` leaves ``program`` as its encoded payload."""
         from fhelium.ir import Program
+        from fhelium.native.artifact import (
+            ARTIFACT_FORMAT,
+            read_container_header,
+        )
 
+        path = self._path(key)
         try:
-            payload = json.loads(self._path(key).read_text(encoding="utf-8"))
-            if payload["schema"] != _SCHEMA or payload["key"] != key:
+            metadata, header = read_container_header(path)
+            if metadata.get("fhelium.format") != ARTIFACT_FORMAT:
                 return None
-            materials, names = payload["materials"], payload["input_names"]
+            cache = json.loads(metadata["fhelium.manifest"])["cache"]
+            materials, names = cache["materials"], cache["input_names"]
             if (
-                not isinstance(materials, dict)
+                cache["schema"] != _SCHEMA
+                or cache["key"] != key
+                or not isinstance(materials, dict)
                 or not isinstance(names, list)
                 or any(not isinstance(name, str) for name in names)
             ):
                 return None
+            program = None
+            if _PROGRAM in header:
+                start, stop = header[_PROGRAM]["data_offsets"]
+                with open(path, "rb") as stream:
+                    (length,) = struct.unpack("<Q", stream.read(8))
+                    stream.seek(8 + length + start)
+                    program = json.loads(stream.read(stop - start))
+                if decode:
+                    # Linking verifies the Program it prepares from this entry.
+                    program = Program.decode(program, verify=False)
+            linked = cache.get("linked")
             return CacheEntry(
-                # Linking verifies the Program it prepares from this entry.
-                (
-                    Program.decode(payload["program"], verify=False)
-                    if decode
-                    else payload["program"]
-                ),
+                program,
                 materials,
-                payload["output_structure"],
+                cache["output_structure"],
                 tuple(names),
-                payload.get("source_program"),
-                payload.get("preparation"),
+                cache.get("preparation"),
+                {**linked, "path": str(path)} if linked is not None else None,
+                cache.get("groups"),
             )
         except Exception:
-            # Cache files are optional local artifacts; malformed JSON/IR is a miss.
+            # Cache files are optional local artifacts; malformed files are misses.
             return None
 
-    def store(self, key: str, entry: CacheEntry) -> None:
-        payload = {
-            "schema": _SCHEMA,
-            "key": key,
-            "program": (
+    def store(
+        self,
+        key: str,
+        entry: CacheEntry,
+        parts: Mapping[str, Any] | None = None,
+        tensors: Mapping[str, torch.Tensor] | None = None,
+    ) -> None:
+        """Write ``entry``; ``parts`` and ``tensors`` are the artifact manifest fields and Tensors of ``entry.linked``."""
+        from fhelium.native.artifact import save_artifact
+
+        stored = dict(tensors or {})
+        if entry.program is not None:
+            stored[_PROGRAM] = _json_tensor(
                 entry.program
                 if isinstance(entry.program, dict)
                 else entry.program.encode()
-            ),
-            "source_program": entry.source_encoding,
-            "preparation": entry.preparation,
-            "materials": entry.manifest,
-            "output_structure": entry.output_structure,
-            "input_names": list(entry.input_names),
-        }
-        self._publish(
-            self._path(key), json.dumps(payload, allow_nan=False).encode()
+            )
+        linked = (
+            None
+            if entry.linked is None
+            else {k: v for k, v in entry.linked.items() if k != "path"}
         )
-
-    def _artifact_path(self, key: str) -> Path:
-        return self.directory / key[:2] / (key + ".linked")
-
-    def load_artifact(self, key: str) -> ArtifactRecord | None:
-        """Return a linked-executable artifact record, or None when absent or unreadable."""
-        import pickle
-
-        try:
-            record = pickle.loads(self._artifact_path(key).read_bytes())
-        except Exception:
-            return None
-        if record.get("schema") != _SCHEMA or record.get("key") != key:
-            return None
-        return record
-
-    def store_artifact(self, key: str, record: ArtifactRecord) -> None:
-        import pickle
-
-        self._publish(
-            self._artifact_path(key),
-            pickle.dumps(
-                {"schema": _SCHEMA, "key": key, **record},
-                protocol=pickle.HIGHEST_PROTOCOL,
-            ),
-        )
-
-    @staticmethod
-    def _publish(path: Path, data: bytes) -> None:
+        path = self._path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                dir=path.parent,
-                prefix=path.name + ".",
-                suffix=".tmp",
-                delete=False,
-            ) as stream:
-                temporary = stream.name
-                stream.write(data)
-            os.replace(temporary, path)
-        finally:
-            if temporary is not None:
-                Path(temporary).unlink(missing_ok=True)
+        save_artifact(
+            path,
+            {
+                "entries": {},
+                "kernels": [],
+                "constants": [],
+                "materials": {},
+                "signatures": [],
+                "prepare": {},
+                **(parts or {}),
+                "cache": {
+                    "schema": _SCHEMA,
+                    "key": key,
+                    "preparation": entry.preparation,
+                    "materials": entry.manifest,
+                    "output_structure": entry.output_structure,
+                    "input_names": list(entry.input_names),
+                    "linked": linked,
+                    "groups": entry.groups,
+                },
+            },
+            stored,
+            overwrite=True,
+        )
+
+
+def _json_tensor(value: object) -> torch.Tensor:
+    return torch.frombuffer(
+        bytearray(json.dumps(value, allow_nan=False).encode()),
+        dtype=torch.uint8,
+    )
 
 
 __all__ = [
-    "ArtifactRecord",
     "CacheEntry",
     "artifact_key",
     "CacheIneligible",

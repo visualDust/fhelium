@@ -142,7 +142,9 @@ def replacement_state(source, data, implicit, updates, *, controlled):
 
     cls = source.__class__
     fields = {}
-    for field in dataclasses.fields(cls):
+    for field in (
+        dataclasses.fields(cls) if dataclasses.is_dataclass(cls) else ()
+    ):
         if field.name in {'data', 'implicit_data', 'message'}:
             continue
         if field.name in updates:
@@ -175,14 +177,17 @@ def replacement_state(source, data, implicit, updates, *, controlled):
             )
         return torch.empty(value.shape, **options)
 
-    with FakeTensorMode():
-        fields['data'] = fake(data)
-        if cls is Plaintext:
-            fields.setdefault('message', None)
-        if cls is CompressedPlaintext:
-            fields['implicit_data'] = fake(implicit)
-        value = cls._from_fields(**fields) if controlled else cls(**fields)
-        result = state_attributes(value)
+    if not dataclasses.is_dataclass(cls):
+        # An evaluation key keeps its layout fields; ``data`` supplies the
+        # tensor layout.
+        with FakeTensorMode():
+            tensor = fake(data)
+        result = {
+            **source.value.type.state.data,
+            **state_attributes(tensor),
+        }
+    else:
+        result = _dataclass_state(cls, fields, data, implicit, fake, controlled)
     # Fake allocation supplies a layout only to evaluate public metadata. An
     # unknown producer layout is not evidence of contiguous execution storage.
     physical = data._tensor_state()
@@ -190,3 +195,16 @@ def replacement_state(source, data, implicit, updates, *, controlled):
         if name not in physical:
             result.pop(name, None)
     return result
+
+
+def _dataclass_state(cls, fields, data, implicit, fake, controlled):
+    from torch._subclasses.fake_tensor import FakeTensorMode
+
+    with FakeTensorMode():
+        fields['data'] = fake(data)
+        if cls is Plaintext:
+            fields.setdefault('message', None)
+        if cls is CompressedPlaintext:
+            fields['implicit_data'] = fake(implicit)
+        value = cls._from_fields(**fields) if controlled else cls(**fields)
+        return state_attributes(value)

@@ -76,16 +76,16 @@ graph = expression.bind(layouts)
 step = _Step(tuple(_Endpoint(i, 0, 4, True, True, True) for i in range(groups)))
 schedules = (NttStages(None, ((0, 4, True),)),) * groups
 stores = tuple((value,) for value in graph.outputs)
-kernel = _source(graph, schedules, step, stores, ())
+kernel = _source(graph, schedules, step, stores, (), 2)
 outputs = tuple(torch.empty((2,1,n),dtype=torch.int64) for _ in range(groups))
 arguments = [*(data[i] for i in kernel.inputs), *outputs]
 for _ in range(groups):
     arguments.extend((twiddle_data, *twiddle_data.stride()))
 arguments.extend((parameters_data, *parameters_data.stride(), 62, n, 128, *kernel.scalars))
 compile_endpoint(kernel.source)[(1,1,1)](*arguments, num_warps=4)
-unchanged = _plan_steps(graph, schedules, (step,), stores, graph.outputs, kernel_cost(kernel.source))
+unchanged = _plan_steps(graph, schedules, (step,), stores, graph.outputs, kernel_cost(kernel.source), 2)
 assert unchanged[0] == (step,) and unchanged[4][0].source == kernel.source
-steps, writes, required, prior, kernels = _plan_steps(graph, schedules, (step,), stores, graph.outputs, (256, 1536, 12000))
+steps, writes, required, prior, kernels = _plan_steps(graph, schedules, (step,), stores, graph.outputs, (256, 1536, 12000), 2)
 assert len(steps) > 1 and not any(writes) and not any(prior)
 bounded = tuple(torch.empty_like(t) for t in outputs)
 for part, emitted in zip(steps, kernels, strict=True):
@@ -192,7 +192,7 @@ for loop in (False,True,"stacked"):
     graph = ExpressionGraph(weighted(loop, True)).bind(layouts)
     step = _Step((_Endpoint(0,0,4,True,True,True),))
     schedule = (NttStages(None, ((0, 4, True),)),)
-    kernel = _source(graph,schedule,step,((graph.outputs[0],),),())
+    kernel = _source(graph,schedule,step,((graph.outputs[0],),),(),2)
     target = torch.empty((2,1,n),dtype=torch.int64)
     args = [*(data[i] for i in kernel.inputs),target,twiddle_data,*twiddle_data.stride(),parameters_data,*parameters_data.stride(),62,n,128,*kernel.scalars]
     compile_endpoint(kernel.source)[(1,1,1)](*args,num_warps=4)

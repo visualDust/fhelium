@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import torch
 from fhelium.backend.rns.context import RnsContext
-from fhelium.native.wrapper import rns_ops
+from fhelium.native.wrapper import ckks_ops
 
 
 @dataclass(frozen=True)
@@ -42,20 +42,17 @@ class DecryptReconstructionTables:
             q_prime_ids = context.rns_layout.prime_ids(depth)
             source_prime_ids = tuple(q_prime_ids)
             source_prime_ids_by_depth.append(source_prime_ids)
-            source_moduli = [
-                int(context.montgomery_parameters.moduli[index])
-                for index in source_prime_ids
-            ]
-            normalizers, propagation, _ = rns_ops.mixed_radix_tables(
-                source_moduli, [], context.dtype
-            )
-            half_digits_by_depth.append(
-                rns_ops.half_product_digits(source_moduli, context.dtype).to(
-                    context.device
+            _, (_, normalizers, propagation, half_digits) = (
+                ckks_ops.reconstruction_table_set(
+                    context.rns_parameter_tensor,
+                    list(context.config.moduli),
+                    context.config.logN,
+                    list(source_prime_ids),
                 )
             )
-            normalizers_by_depth.append(normalizers.to(context.device))
-            propagation_by_depth.append(propagation.to(context.device))
+            half_digits_by_depth.append(half_digits)
+            normalizers_by_depth.append(normalizers)
+            propagation_by_depth.append(propagation)
         return cls(
             tuple(source_prime_ids_by_depth),
             tuple(normalizers_by_depth),

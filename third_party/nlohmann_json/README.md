@@ -1,0 +1,1 @@
+JSON for Modern C++ 3.11.3 (https://github.com/nlohmann/json), single-header distribution `single_include/nlohmann/json.hpp`, MIT license (`LICENSE.MIT`). libfhelium_torch compiles it privately into its container and artifact sources; installed SDK headers do not include it.

@@ -1,6 +1,6 @@
-# Visualize mixed-level IR
+# Inspect Program transformations
 
-`SvgGraphVisualizationPass` renders one selected `fhelium.ir.Program` function as an SSA/dataflow SVG. Use it to compare Program snapshots, inspect repeated operation patterns, examine lowering attributes, and trace producer-consumer relationships without executing or modifying IR.
+A Program can be inspected at any pipeline position as text (`program.to_text()`), as a rendered dataflow graph, or as equivalent Eager Python. `SvgGraphVisualizationPass` renders one selected `fhelium.ir.Program` function as an SSA/dataflow SVG. Use it to compare Program snapshots, inspect repeated operation patterns, examine lowering attributes, and trace producer-consumer relationships without executing or modifying IR.
 
 The pass owns entry traversal, SSA naming, dependency edges, Graphviz construction, and file handling. `SvgGraphPresentation` owns node records and tooltips; `SvgGraphTheme` owns colors and operation classification.
 
@@ -8,7 +8,7 @@ Visualization reads the Program in the current Compilation and publishes its out
 
 ## Prerequisites
 
-Install the Python `pydot` package and the system Graphviz `dot` executable. Choose the Program and function to inspect; [Build and transform a Program](build-program-pipeline.md) supplies manual and capture entry procedures.
+Install the Python `pydot` package and the system Graphviz `dot` executable. Choose the Program and function to inspect; [Build a Program pipeline and write passes](build-program-pipeline.md) supplies manual and capture entry procedures.
 
 ## 1. Obtain a Program snapshot
 
@@ -248,6 +248,39 @@ for filename, program_snapshot in (
 ```
 
 Stable color keys support visual comparison, while SSA names, operands, attributes, and user counts expose structural changes. The visualization pass returns the Program unchanged and reports the rendered operation count.
+
+## 8. Emit Eager Python
+
+`EmitEagerPythonPass` translates a CKKS-level Program into a Python function of public `Engine` calls and publishes the source in the workspace under `EagerPythonSource`. Place it after the passes that lower the Program to CKKS operations and assign depths and scales:
+
+```python
+from fhelium import compile as fh_compile
+
+ckks_compilation = fh_compile.Pipeline(
+    (
+        fh_compile.EliminateDeadValuesPass(),
+        fh_compile.LowerSemanticToLogicalPass(),
+        fh_compile.LowerLogicalToCkksPass(),
+        fh_compile.ResolveRotationKeyOperandsPass(),
+        fh_compile.AssignCkksDepthsPass(entry_depth=0),
+        fh_compile.AssignCkksScalesPass(entry_scale=config.scale_at(0)),
+        fh_compile.EmitEagerPythonPass(),
+    )
+).run(captured)
+print(ckks_compilation.workspace[fh_compile.EagerPythonSource])
+```
+
+For a captured `torch.roll(x, 3) + x`, the emitted function reads:
+
+```python
+def generated_eager(engine, x, *, materials, resources):
+    rotation_key = materials["rotation-key:3"]
+    rotated = engine.rotate_with_key(x, rotation_key)
+    result = engine.add(x, rotated)
+    return result
+```
+
+The source keeps the SSA names of the current Program, and materials and keys remain function inputs; it contains no Tensor payloads, devices, or contexts. The pass accepts flat CKKS operations with a public Engine equivalent, one-to-one boundary casts, material and resource references, constants, and `func.return`, leaves the Program unchanged, and reports the first operation outside that set. The emitted function runs the transformed computation operation by operation in Eager mode, which helps compare a pass's result with a reference Eager computation. `EmitBackendPythonPass` similarly publishes `BackendPythonSource`, a Python function that calls the Backend implementation of each operation at its pipeline position.
 
 ## Related documentation
 

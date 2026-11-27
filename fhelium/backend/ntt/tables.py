@@ -13,7 +13,7 @@ from fhelium.config.ntt import (
     IndexedRadix2Policy,
     NttBackendPolicy,
 )
-from fhelium.native.wrapper import ntt_ops, rns_ops
+from fhelium.native.wrapper import ntt_ops
 
 
 @dataclass(frozen=True)
@@ -71,70 +71,36 @@ def prepare_ntt_tables(
     moduli: Sequence[int],
     log_n: int,
     *,
-    device: torch.device,
     rns_params: torch.Tensor,
-    dtype: torch.dtype,
 ) -> NttTables:
     """Build execution-ready Tensor tables in the selected numerical layout.
 
-    libfhelium builds the standard-residue tables on the host with prime rows
-    in ``moduli`` order, which matches the columns of ``rns_params``.
-    Montgomery tables are converted on ``device`` with those parameters.
+    libfhelium builds the tables of the primes ``moduli``, whose order matches
+    the columns of ``rns_params``, and places them on the device of
+    ``rns_params``. Montgomery tables are converted with those parameters;
     Shoup32 pairs retain their standard roots and quotient words.
     """
-    moduli = list(moduli)
-    shoup32 = (
-        isinstance(policy, CompactRadix2Policy)
-        and policy.twiddle_encoding == "shoup32"
+    forward, inverse = ntt_ops.prepare_tables(
+        rns_params, list(moduli), log_n, policy.name
     )
-    if shoup32 and torch.version.hip is not None:
-        raise ValueError(
-            "Shoup32 NTT tables are not supported by the HIP backend"
-        )
-
-    def materialize_twiddles(table: torch.Tensor) -> torch.Tensor:
-        result = table.to(device)
-        if not shoup32:
-            rns_ops.to_montgomery_(result.view(result.size(0), -1), rns_params)
-        return result
-
     if isinstance(policy, CompactRadix2Policy):
-        forward, inverse = ntt_ops.compact_twiddles(
-            moduli, log_n, dtype, shoup32
-        )
         return CompactRadix2Tables(
-            forward_twiddles=materialize_twiddles(forward),
-            inverse_twiddles=materialize_twiddles(inverse),
+            forward_twiddles=forward[0], inverse_twiddles=inverse[0]
         )
-
     if isinstance(policy, IndexedRadix2Policy):
-        (
-            forward_indices,
-            forward_twiddles,
-            inverse_indices,
-            inverse_twiddles,
-        ) = ntt_ops.indexed_radix2_plan(moduli, log_n, dtype)
-        for indices in (forward_indices, inverse_indices):
-            ntt_ops.validate_indexed_schedule(
-                indices[0], indices[1], 1 << log_n
-            )
-        forward_indices = forward_indices.to(device)
-        inverse_indices = inverse_indices.to(device)
         return IndexedRadix2Tables(
-            forward_even_indices=forward_indices[0],
-            forward_odd_indices=forward_indices[1],
-            forward_twiddles=materialize_twiddles(forward_twiddles),
-            inverse_even_indices=inverse_indices[0],
-            inverse_odd_indices=inverse_indices[1],
-            inverse_twiddles=materialize_twiddles(inverse_twiddles),
+            forward_twiddles=forward[0],
+            forward_even_indices=forward[1],
+            forward_odd_indices=forward[2],
+            inverse_twiddles=inverse[0],
+            inverse_even_indices=inverse[1],
+            inverse_odd_indices=inverse[2],
         )
-
     if isinstance(policy, CompactFixedRadixPolicy):
-        tables = ntt_ops.power_of_two_radix_twiddles(
-            moduli, log_n, policy.radix, dtype
-        )
         return CompactPowerOfTwoRadixTables(
-            *(materialize_twiddles(table) for table in tables)
+            forward_outer_twiddles=forward[0],
+            inverse_outer_twiddles=inverse[0],
+            forward_radix_root_powers=forward[1],
+            inverse_radix_root_powers=inverse[1],
         )
-
     raise AssertionError(f"Unhandled NTT policy {policy}")

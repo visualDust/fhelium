@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../common/overlap.h"
 #include "ntt_execution_constants.h"
 
 #include <ATen/MemoryOverlap.h>
@@ -12,10 +13,9 @@ namespace fhelium::ntt {
 inline void validate_no_residue_overlap(const torch::Tensor& residues,
                                         const torch::Tensor& read_only,
                                         const char* read_only_name) {
-  // RestrictPtrTraits requires independent storage. Rejecting any storage
-  // alias is stricter than checking element-range overlap and
-  // remains reliable for non-contiguous active parameter views.
-  TORCH_CHECK(!residues.is_alias_of(read_only),
+  // RestrictPtrTraits requires disjoint memory; views of one storage qualify
+  // when their byte extents are disjoint.
+  TORCH_CHECK(fhelium::detail::storage_disjoint(residues, read_only),
               "NTT residues must not overlap ",
               read_only_name);
 }
@@ -107,8 +107,7 @@ inline void validate_compact_tables(const torch::Tensor& residues,
   const bool shoup32 = shoup32_supported && twiddles.dim() == 3 &&
                        twiddles.size(2) == 2 &&
                        residues.scalar_type() == at::kInt;
-  TORCH_CHECK((montgomery || shoup32) &&
-                  twiddles.size(1) == residues.size(-1),
+  TORCH_CHECK((montgomery || shoup32) && twiddles.size(1) == residues.size(-1),
               "Compact twiddles require [prime, N] Montgomery residues or, "
               "on supported CUDA int32 kernels, [prime, N, 2] Shoup32 pairs");
   // The int32 arithmetic ABI requires q < 2^30 and residues in [0, 2q).

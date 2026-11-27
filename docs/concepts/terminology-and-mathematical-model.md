@@ -11,7 +11,7 @@ FHElium implements the Cheon–Kim–Kim–Song (CKKS) approximate homomorphic e
 | $N=2^{\mathtt{logN}}$ | Polynomial-ring dimension | `config.N` |
 | $S=N/2$ | Complex slot capacity | `engine.num_slots` |
 | $q_0,\ldots,q_{L-1}$ | Ordered Q primes | `config.q_moduli` |
-| $B_d$ | Active Q basis at depth $d$, a contiguous interval of the Q order | `config.depth_bases[d]`, `config.q_prime_ids(d)` |
+| $B_d$ | Active Q basis at depth $d$, a set of Q prime IDs | `config.q_bases[d]`, `config.q_prime_ids(d)` |
 | $Q_d$ | Product of the primes in $B_d$ | `depth` plus Q `prime_ids` |
 | $D_d$, $R_d$ | Primes dropped and introduced by the rescale $d\to d+1$ | $B_d\setminus B_{d+1}$, $B_{d+1}\setminus B_d$ |
 | $\rho_d$ | Rescale ratio $\prod D_d/\prod R_d$ | `config.transition_ratio(d, d + 1)` |
@@ -508,10 +508,19 @@ Collective-decryption shares fuse into an output under the experimental module's
 | `TensorResident` | Protocol for a FHElium value whose declared Tensor fields move together, with device/byte inspection and functional `.to(...)`. |
 | Value signature | Device-independent description of a nested Tensor/value structure and stored state used to validate reusable copies and graph inputs. External key relations remain properties of the concrete values. |
 | `ReusableValueBuffer` | Fixed-address storage for one value-tree signature on one target device, used for eager streaming or CUDA Graph input staging. |
+| `DoubleBuffer` | A ring of `ReusableValueBuffer`s, two by default, filled in turn on a transfer stream while the current stream reads the others. |
 | `CopyHandle` | Handle for one reusable-buffer copy. It retains source storage and exposes event-based completion and stream-wait operations. |
 | Eager execution | Immediate operation dispatch using the supplied values and execution resources. |
-| CUDA Graph | Captured fixed GPU schedule replayed with stable addresses. `CudaGraphProgram` applies it to a deterministic process-local callable with fixed value signatures. |
-| Borrowed output | Output backed by storage retained and reused by another owner, such as a CUDA Graph program. A later replay may overwrite it; an owned copy is required for retention. |
+| CUDA Graph | Captured fixed GPU schedule replayed with stable addresses. A compiled specialization captures each Graph segment of its schedule; `CudaGraphProgram` captures a deterministic process-local callable with fixed value signatures. |
+| Exec schedule | The linked form of a Program: buffers with storage classes and static layouts, host registers, and instructions for operator calls, kernel launches, views, copies, collectives, calls, branches, and loops. |
+| Runner | The native executor of an exec schedule, available from Python and C++. |
+| Graph segment | A maximal run of capture-safe instructions at the top level of an exec schedule, captured and replayed as one CUDA Graph. |
+| Shared arena | One device buffer per CUDA device that holds the temporaries of every compiled function on that device at planned offsets. |
+| Output region | Runner-owned storage at fixed addresses that holds Graph results; a result the caller still references moves to fresh storage before the region is written again. |
+| Compiled execution memory | Device memory of the shared arena and the CUDA Graph pool, reported by `compiled_execution_bytes(device)` and counted in Residency budgets. |
+| Borrowed output | Output backed by storage retained and reused by a manual CUDA Graph program. A later replay may overwrite it; an owned copy is required for retention. |
+| Compiled artifact | A file written by `fhelium.compile.export` with the linked schedules, kernel images, constants, table recipes, and stored weights of a compiled callable's specializations. It is loaded with caller keys in Python or C++. |
+| Value store | A local repository, `fhelium.store.ValueStore`, of values and Compilations under logical names with immutable generations. |
 
 **Residency** is process-local management of logical FHElium values and their concrete storage locations. Reusable buffers and CUDA Graph programs retain ownership of their fixed storage.
 
@@ -535,9 +544,10 @@ Collective-decryption shares fuse into an output under the experimental module's
 | `Program` | Source-independent `fhelium.ir.Program` containing one structurally valid mixed-dialect xDSL module. Consumers separately check semantic completeness, CKKS consistency, Backend coverage, and executable readiness. |
 | `Compilation` | A Program together with a Compile workspace, ordered pass reports, and one `material_bindings` dictionary shared by successive passes. |
 | Material binding | An assignment from a Program symbol to a live Tensor payload. Descriptions communicate purpose; the binding supplies numerical data used by operations. |
-| Specialization | A prepared input variant containing its source and transformed Compilations, selected Backend, and linked executable. Compatible input metadata and immutable scalar parameters select its reuse; ordinary input Tensor contents may change. |
+| Specialization | A prepared input variant containing its source and transformed Compilations, selected Backend, and linked executable. Its call signature, made of input metadata, CKKS state, and Python scalar values, selects its reuse; ordinary input Tensor contents may change. |
 | Compile | Capture, Program transformation and callable preparation, with pass reports retained alongside the represented computation. |
-| JIT compilation | The Compile usage model that prepares reusable input specializations. `@fc.compile` returns a `CompiledCallable`; a call prepares a missing specialization before executing it and reuses the resident executable afterwards. |
+| Compiled callable | The result of `@fc.compile`: a `CompiledCallable` whose call prepares a missing specialization before executing it and reuses the resident executable afterwards. |
+| Compile cache | The on-disk store of prepared specializations, keyed by function source or captured Program, that lets a new process skip capture or linking. |
 | Pass / pipeline | A pass analyzes or transforms recognized Program patterns. A pipeline is a caller-selected ordered pass sequence; unmatched or extension operations may remain. |
 | Backend | `OperationBackend` owns an operation registry and an immutable resource workspace. Compile prepares and links the executable against those implementations and resources; `backend.link(compilation)` provides a direct entry to that linking procedure. Implementations may invoke native operations or generate kernels for selected fusion regions. |
 | Native operator stack | PyTorch dispatcher schemas, C++ registrations/bindings, CPU/CUDA implementations, and generated Python interfaces loaded by FHElium. |
@@ -547,7 +557,7 @@ Collective-decryption shares fuse into an output under the experimental module's
 
 The word **backend** needs a qualifier when ambiguity is possible: NTT backend policy selects an NTT implementation; a process-group communication backend such as NCCL or Gloo transports distributed data; a Python build backend drives package construction; and a compiler backend builds an executable for a covered Program. These are independent choices.
 
-See [Open compiler stack](open-compiler-stack.md) and [Neutral IR programs](neutral-ir-programs.md).
+See [The Compile lifecycle](open-compiler-stack.md), [Compiled execution](execution/compiled-execution.md), and [Neutral IR programs](neutral-ir-programs.md).
 
 ## Distinctions to retain
 

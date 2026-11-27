@@ -9,9 +9,11 @@ from xdsl.ir import Operation
 from fhelium.backend.implementation import OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.backend._native_operands import named_tables, seeded_key_operands
+from fhelium.native.tables import conjugation_slots, table_slots
 from fhelium.ir.dialects import ckks
 from fhelium.native.wrapper import ckks_ops
 
+from fhelium.backend.lowering import ExecBuilder
 from ._key_switch_preparation import (
     native_key_switch_requirements,
     prepare_native_key_switch,
@@ -43,24 +45,28 @@ class NativeKeySwitchImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources, in_place
+        del resources
         attributes = invocation.attributes
         options, end = seeded_key_operands(attributes, inputs, 2, 1)
         return (
             ckks_ops.key_switch(
                 inputs[0],
                 inputs[1],
-                *named_tables(attributes["parameter_names"], inputs[end:]),
+                named_tables(
+                    "key_switch", attributes["parameter_names"], inputs[end:]
+                ),
+                conjugation_slots(inputs[0].size(-1), inputs[0].device)
+                if invocation.operation_type is ckks.ConjugateOp
+                else [],
                 **options,
-                conjugate=invocation.operation_type is ckks.ConjugateOp,
             ),
         )
 
@@ -81,28 +87,28 @@ class NativeRelinearizeImplementation:
     ) -> tuple[ResourceRequirement, ...]:
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del resources, in_place
+        del resources
         attributes = invocation.attributes
         rescale = bool(attributes.get("rescale", False))
         options, end = seeded_key_operands(attributes, inputs, 2, 1)
-        names, tables = named_tables(attributes["parameter_names"], inputs[end:])
+        names = list(attributes["parameter_names"])
+        tensors = dict(zip(names, inputs[len(inputs) - len(names) :]))
         drop_count = attributes.get("joint_drop_count")
         if rescale and drop_count is None:
-            drop_count = tables[names.index("joint_drop_positions")].numel()
+            drop_count = tensors["joint_drop_positions"].numel()
         return (
             ckks_ops.relinearize(
                 inputs[0],
                 inputs[1],
-                names,
-                tables,
+                table_slots("key_switch", tensors),
                 **options,
                 rescale=rescale,
                 q_count=int(attributes.get("q_count", 0)),

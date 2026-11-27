@@ -64,14 +64,8 @@ def test_public_depth_limit_and_rescale_to_next_depth_queries_are_explicit(
     assert not hasattr(engine, "reinterpret_scale")
     assert not hasattr(engine, "reinterpret_scale_")
     assert dropped_prime == engine.config.rescale_divisor(0)
-    assert (
-        engine.rescale_divisor(depth=2)
-        == engine.config.rescale_divisor(2)
-    )
-    assert (
-        engine.rescale_output_scale(scale, depth=0)
-        == scale / dropped_prime
-    )
+    assert engine.rescale_divisor(depth=2) == engine.config.rescale_divisor(2)
+    assert engine.rescale_output_scale(scale, depth=0) == scale / dropped_prime
 
     with pytest.raises(TypeError, match="depth must be an integer"):
         engine.rescale_divisor(depth=True)
@@ -321,7 +315,7 @@ def test_mod_switch_selects_subset_rows_or_rescales_to_target_scale(
 
 
 @pytest.mark.gpu
-def test_add_executes_at_caller_metadata_and_reinterpretation_can_be_guarded(
+def test_add_requires_equal_scales_and_reinterpretation_aligns_them(
     engine: Engine,
 ) -> None:
     message = torch.linspace(-0.01, 0.01, 32, dtype=torch.float64)
@@ -329,13 +323,16 @@ def test_add_executes_at_caller_metadata_and_reinterpretation_can_be_guarded(
     right = engine.encrypt_message(message, scale=2.0**35)
     target_scale = math.nextafter(right.scale, math.inf)
 
-    reinterpreted = engine.reinterpret_at_scale(right, target_scale)
+    shifted = engine.reinterpret_at_scale(right, target_scale)
     assert right.scale == 2.0**35
-    assert reinterpreted.scale == target_scale
-    assert torch.equal(reinterpreted.data, right.data)
-    added = engine.add(left, reinterpreted)
-    assert added.scale == left.scale
-    assert torch.equal(added.data, engine.add(left, right).data)
+    assert shifted.scale == target_scale
+    assert torch.equal(shifted.data, right.data)
+    with pytest.raises(ScaleMismatchError):
+        engine.add(left, shifted)
+    aligned = engine.reinterpret_at_scale(shifted, left.scale)
+    assert torch.equal(
+        engine.add(left, aligned).data, engine.add(left, right).data
+    )
 
     addend = engine.prepare_plaintext_for_addition(
         engine.encode(
@@ -344,8 +341,8 @@ def test_add_executes_at_caller_metadata_and_reinterpretation_can_be_guarded(
             scale=target_scale,
         )
     )
-    plaintext_added = engine.add_plaintext(left, addend)
-    assert plaintext_added.scale == left.scale
+    with pytest.raises(ScaleMismatchError):
+        engine.add_plaintext(left, addend)
 
     guarded = engine.reinterpret_at_scale(
         right,

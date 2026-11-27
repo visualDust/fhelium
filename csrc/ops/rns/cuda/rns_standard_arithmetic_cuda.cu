@@ -7,7 +7,7 @@
 
 namespace {
 
-enum class StandardBinaryOperation : int { kAdd, kSubtract };
+enum class StandardBinaryOperation : int { kAdd, kSubtract, kNegate };
 
 template <typename scalar_t, StandardBinaryOperation operation>
 __global__ void rns_standard_binary_kernel(
@@ -27,10 +27,13 @@ __global__ void rns_standard_binary_kernel(
     value = add_lazy_residues(lhs[batch][row][coefficient],
                               rhs[rhs_batch][row][coefficient],
                               twice_modulus);
-  } else {
+  } else if constexpr (operation == StandardBinaryOperation::kSubtract) {
     value = sub_lazy_residues(lhs[batch][row][coefficient],
                               rhs[rhs_batch][row][coefficient],
                               twice_modulus);
+  } else {
+    value = sub_lazy_residues(
+        scalar_t(0), lhs[batch][row][coefficient], twice_modulus);
   }
   out[batch][row][coefficient] = reduce_lazy_residue(value, twice_modulus);
 }
@@ -75,6 +78,25 @@ void standard_binary_into(torch::Tensor out,
   });
 }
 
+void standard_negate_into(torch::Tensor out,
+                          const torch::Tensor source,
+                          const torch::Tensor params) {
+  constexpr const char* operation_name = "rns_negate_standard";
+  auto out_rows = view_rns_batch_3d(out, "out");
+  const auto source_rows = view_rns_batch_3d(source, "source");
+  TORCH_CHECK(out_rows.sizes() == source_rows.sizes(),
+              operation_name,
+              " output shape must match source");
+  check_rns_parameter_rows(source_rows, params, operation_name);
+  at::assert_no_internal_overlap(out_rows);
+  at::assert_no_partial_overlap(out_rows, source_rows);
+  at::assert_no_overlap(out_rows, params);
+  AT_DISPATCH_INTEGRAL_TYPES(source.scalar_type(), operation_name, [&] {
+    launch_standard_binary<scalar_t, StandardBinaryOperation::kNegate>(
+        out_rows, source_rows, source_rows, params);
+  });
+}
+
 template <typename scalar_t>
 __global__ void rns_montgomery_mul_row_scalars_standard_kernel(
     CudaTensorAccessor32<scalar_t, 3> out,
@@ -99,43 +121,33 @@ __global__ void rns_montgomery_mul_row_scalars_standard_kernel(
 
 }  // namespace
 
-torch::Tensor rns_add_standard_cuda(const torch::Tensor lhs,
-                                    const torch::Tensor rhs,
-                                    const torch::Tensor rns_params) {
-  auto out = torch::empty_like(lhs);
+void rns_add_standard_out_cuda(const torch::Tensor lhs,
+                               const torch::Tensor rhs,
+                               const torch::Tensor rns_params,
+                               torch::Tensor out) {
   standard_binary_into<StandardBinaryOperation::kAdd>(
       out, lhs, rhs, rns_params, "rns_add_standard");
-  return out;
 }
 
-void rns_add_standard_inplace_cuda(torch::Tensor lhs,
-                                   const torch::Tensor rhs,
-                                   const torch::Tensor rns_params) {
-  standard_binary_into<StandardBinaryOperation::kAdd>(
-      lhs, lhs, rhs, rns_params, "rns_add_standard");
-}
-
-torch::Tensor rns_sub_standard_cuda(const torch::Tensor lhs,
-                                    const torch::Tensor rhs,
-                                    const torch::Tensor rns_params) {
-  auto out = torch::empty_like(lhs);
+void rns_sub_standard_out_cuda(const torch::Tensor lhs,
+                               const torch::Tensor rhs,
+                               const torch::Tensor rns_params,
+                               torch::Tensor out) {
   standard_binary_into<StandardBinaryOperation::kSubtract>(
       out, lhs, rhs, rns_params, "rns_sub_standard");
-  return out;
 }
 
-void rns_sub_standard_inplace_cuda(torch::Tensor lhs,
-                                   const torch::Tensor rhs,
-                                   const torch::Tensor rns_params) {
-  standard_binary_into<StandardBinaryOperation::kSubtract>(
-      lhs, lhs, rhs, rns_params, "rns_sub_standard");
+void rns_negate_standard_out_cuda(const torch::Tensor source,
+                                  const torch::Tensor rns_params,
+                                  torch::Tensor out) {
+  standard_negate_into(out, source, rns_params);
 }
 
-torch::Tensor rns_montgomery_mul_row_scalars_standard_cuda(
+void rns_montgomery_mul_row_scalars_standard_out_cuda(
     const torch::Tensor residues,
     const torch::Tensor row_scalars,
-    const torch::Tensor rns_params) {
-  auto out = torch::empty_like(residues);
+    const torch::Tensor rns_params,
+    torch::Tensor out) {
   const auto residue_rows = view_rns_batch_3d(residues, "residues");
   auto out_rows = view_rns_batch_3d(out, "out");
   check_rns_parameter_rows(
@@ -159,7 +171,6 @@ torch::Tensor rns_montgomery_mul_row_scalars_standard_cuda(
                 FHELIUM_CUDA_ACCESSOR32(row_scalars, scalar_t, 1),
                 FHELIUM_CUDA_ACCESSOR32(rns_params, scalar_t, 2));
       });
-  return out;
 }
 
 template <typename scalar_t>
@@ -188,21 +199,18 @@ __global__ void rns_sum_standard_batch_kernel(
   out[plane][row][coefficient] = value;
 }
 
-torch::Tensor rns_sum_standard_batch_cuda(const torch::Tensor source,
-                                          const int64_t dim,
-                                          const torch::Tensor rns_params) {
+void rns_sum_standard_batch_out_cuda(const torch::Tensor source,
+                                     const int64_t dim,
+                                     const torch::Tensor rns_params,
+                                     torch::Tensor out) {
   constexpr const char* operation = "rns_sum_standard_batch";
   TORCH_CHECK(dim >= 0 && dim <= source.dim() - 3,
               operation,
               " dim must select a leading batch axis");
-  TORCH_CHECK(source.size(dim) > 0,
-              operation,
-              " cannot reduce an empty batch axis");
+  TORCH_CHECK(
+      source.size(dim) > 0, operation, " cannot reduce an empty batch axis");
   const auto source_rows = view_rns_batch_3d(source, "source");
   check_rns_parameter_rows(source_rows, rns_params, operation);
-  auto sizes = source.sizes().vec();
-  sizes.erase(sizes.begin() + dim);
-  auto out = torch::empty(sizes, source.options());
   auto out_rows = view_rns_batch_3d(out, "out");
   const int64_t count = source.size(dim);
   int64_t inner = 1;
@@ -228,5 +236,4 @@ torch::Tensor rns_sum_standard_batch_cuda(const torch::Tensor source,
             count,
             inner);
   });
-  return out;
 }

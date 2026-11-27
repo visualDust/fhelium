@@ -8,7 +8,6 @@ from functools import cache
 from typing import Any
 
 import torch
-import triton
 from xdsl.dialects.builtin import (
     ArrayAttr,
     IntegerAttr,
@@ -34,13 +33,6 @@ _INVERSE_TRANSFORMS = (
     ntt.NttMontgomeryToCoefficientStandardOp,
     ntt.NttMontgomeryToCoefficientMontgomeryOp,
 )
-
-# The LLVM SLP vectorizer bundled with Triton 3.7 miscompiles radix-62 NTT
-# endpoint kernels for CUDA devices below compute capability 9.0. Triton 3.8
-# generates correct code; with earlier Triton these transforms run natively.
-_INT64_NTT_MISCOMPILE = tuple(
-    int(part) for part in triton.__version__.split(".")[:2]
-) < (3, 8)
 
 from ._expressions import (
     component_axis,
@@ -404,8 +396,9 @@ class RegionMatcher:
     reset; missing facts and changing escaping boundaries remain retryable.
     """
 
-    def __init__(self, *, include_ntt: bool):
+    def __init__(self, *, include_ntt: bool, max_anchors: int | None = None):
         self.include_ntt = include_ntt
+        self.max_anchors = max_anchors
 
         self.analysis: OperationAnalysis | None = None
         self.layout = _layout_resolver()
@@ -623,14 +616,12 @@ class RegionMatcher:
     def _result(self) -> int | None:
         if self.invalid or self.count and self.parameter is None:
             return None
+        if self.max_anchors is not None and self.anchors > self.max_anchors:
+            return None
         if self.anchors and (
             self.bad_boundaries
             or len(self.extents) > 1
             or len(self.batches) > 1
-            or _INT64_NTT_MISCOMPILE
-            and self.known.get("dtype") == "int64"
-            and self.device is not None
-            and torch.cuda.get_device_capability(self.device) < (9, 0)
         ):
             return None
         return (
@@ -684,10 +675,13 @@ class RegionMatcher:
 
 
 def match_region(
-    operations: Sequence[Operation], *, include_ntt: bool
+    operations: Sequence[Operation],
+    *,
+    include_ntt: bool,
+    max_anchors: int | None = None,
 ) -> int | None:
     """Return supported computational-op count, zero for plumbing, or None."""
-    matcher = RegionMatcher(include_ntt=include_ntt)
+    matcher = RegionMatcher(include_ntt=include_ntt, max_anchors=max_anchors)
     for operation in operations:
         matcher.append(operation)
     return matcher._result()

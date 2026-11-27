@@ -11,6 +11,7 @@ from fhelium.backend.implementation import OperationInvocation
 from fhelium.backend.resources import BoundResource, ResourceRequirement
 from fhelium.ir.dialects import ckks
 from fhelium.native.wrapper import ckks_ops
+from fhelium.backend.lowering import ExecBuilder
 
 
 @dataclass(frozen=True)
@@ -49,15 +50,15 @@ class NativeCiphertextMultiplyImplementation:
         del invocation
         return ()
 
-    def execute(
+    def lower(
         self,
         invocation: OperationInvocation,
         inputs: tuple[torch.Tensor, ...],
         resources: tuple[BoundResource, ...],
-        *,
-        in_place: bool,
+        builder: ExecBuilder,
+        /,
     ) -> tuple[torch.Tensor, ...]:
-        del invocation, resources, in_place
+        del invocation, resources
         lhs, rhs, parameters = inputs
         return (
             ckks_ops.multiply_two_component_ntt_montgomery(
@@ -108,7 +109,14 @@ class NativeCompressedPlaintextImplementation:
     def resource_requirements(self, invocation):
         return ()
 
-    def execute(self, invocation, inputs, resources, *, in_place):
+    def lower(
+        self,
+        invocation: OperationInvocation,
+        inputs: tuple[torch.Tensor, ...],
+        resources: tuple[BoundResource, ...],
+        builder: ExecBuilder,
+        /,
+    ) -> tuple[torch.Tensor, ...]:
         del resources
         parameters = inputs[-1]
         ciphertext, compressed = inputs[:2]
@@ -120,7 +128,7 @@ class NativeCompressedPlaintextImplementation:
             )
             add = (
                 ckks_ops.add_compressed_plaintext_
-                if in_place
+                if invocation.in_place
                 else ckks_ops.add_compressed_plaintext
             )
             return (
@@ -130,7 +138,7 @@ class NativeCompressedPlaintextImplementation:
             )
         multiply = (
             ckks_ops.multiply_compressed_plaintext_
-            if in_place
+            if invocation.in_place
             else ckks_ops.multiply_compressed_plaintext
         )
         return (multiply(ciphertext, compressed, implicit, parameters, layout),)

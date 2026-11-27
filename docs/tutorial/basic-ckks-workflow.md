@@ -74,7 +74,7 @@ CKKS is approximate. Validate results with a chosen numerical tolerance appropri
 
 ## Related concepts and guides
 
-- [Scale and depth lifecycle](../concepts/ckks/scale-and-depth-lifecycle.md)
+- [Value-state transitions](../concepts/ckks/value-state-transitions.md)
 - [Value model and identity](../concepts/ckks/value-model-and-identity.md)
 - [Evaluator operation transitions](../concepts/ckks/evaluator-operation-transitions.md)
 - [Choose a preset and chain depth](../how-to/choose-preset-and-depth.md)

@@ -20,6 +20,10 @@ TORCH_LIBRARY_FRAGMENT(fhelium_ntt_ops, m) {
       "even_indices, Tensor odd_indices, Tensor forward_twiddles, Tensor "
       "rns_params) -> Tensor");
   m.def(
+      "forward_ntt_to_montgomery_indexed_out(Tensor standard_residues, Tensor "
+      "even_indices, Tensor odd_indices, Tensor forward_twiddles, Tensor "
+      "rns_params, Tensor(a!) out) -> ()");
+  m.def(
       "forward_ntt_montgomery_compact_(Tensor(a!) "
       "montgomery_residues, Tensor forward_twiddles, Tensor rns_params) -> ()");
   m.def(
@@ -27,7 +31,12 @@ TORCH_LIBRARY_FRAGMENT(fhelium_ntt_ops, m) {
       "standard_residues, Tensor forward_twiddles, Tensor rns_params) -> ()");
   m.def(
       "forward_ntt_to_montgomery_compact(Tensor "
-      "standard_residues, Tensor forward_twiddles, Tensor rns_params) -> Tensor");
+      "standard_residues, Tensor forward_twiddles, Tensor rns_params) -> "
+      "Tensor");
+  m.def(
+      "forward_ntt_to_montgomery_compact_out(Tensor "
+      "standard_residues, Tensor forward_twiddles, Tensor rns_params, "
+      "Tensor(a!) out) -> ()");
   m.def(
       "forward_ntt_to_montgomery_compact_add_scaled_(Tensor(a!) source, "
       "Tensor addend, Tensor multiplier, Tensor forward_twiddles, "
@@ -49,6 +58,10 @@ TORCH_LIBRARY_FRAGMENT(fhelium_ntt_ops, m) {
       "forward_ntt_to_montgomery_power_of_two_radix_compact(Tensor "
       "standard_residues, Tensor outer_twiddles, Tensor radix_root_powers, "
       "Tensor rns_params) -> Tensor");
+  m.def(
+      "forward_ntt_to_montgomery_power_of_two_radix_compact_out(Tensor "
+      "standard_residues, Tensor outer_twiddles, Tensor radix_root_powers, "
+      "Tensor rns_params, Tensor(a!) out) -> ()");
 }
 
 // Keep tuning overrides out of the production operator ABI. These operators
@@ -132,7 +145,8 @@ TORCH_LIBRARY_FRAGMENT(fhelium_ntt_ops, m) {
 TORCH_LIBRARY_FRAGMENT(fhelium_ntt_ops, m) {
   m.def(
       "validate_indexed_schedule(Tensor even_indices, Tensor odd_indices, "
-      "int ring_dimension) -> ()");
+      "int ring_dimension) -> ()",
+      {at::Tag::cudagraph_unsafe});
 }
 
 TORCH_LIBRARY_IMPL(fhelium_ntt_ops, CompositeExplicitAutograd, m) {
@@ -147,6 +161,8 @@ TORCH_LIBRARY_IMPL(fhelium_ntt_ops, CPU, m) {
          &fhelium::ntt::forward_ntt_to_montgomery_indexed_);
   m.impl("forward_ntt_to_montgomery_indexed",
          &fhelium::ntt::forward_ntt_to_montgomery_indexed);
+  m.impl("forward_ntt_to_montgomery_indexed_out",
+         &fhelium::ntt::forward_ntt_to_montgomery_indexed_out);
   m.impl("inverse_ntt_montgomery_indexed_",
          &fhelium::ntt::inverse_ntt_montgomery_indexed_);
   m.impl("inverse_ntt_to_standard_lazy_indexed_",
@@ -166,12 +182,16 @@ TORCH_LIBRARY_IMPL(fhelium_ntt_ops, CUDA, m) {
          &fhelium::ntt::forward_ntt_to_montgomery_indexed_);
   m.impl("forward_ntt_to_montgomery_indexed",
          &fhelium::ntt::forward_ntt_to_montgomery_indexed);
+  m.impl("forward_ntt_to_montgomery_indexed_out",
+         &fhelium::ntt::forward_ntt_to_montgomery_indexed_out);
   m.impl("forward_ntt_montgomery_compact_",
          &fhelium::ntt::forward_ntt_montgomery_compact_);
   m.impl("forward_ntt_to_montgomery_compact_",
          &fhelium::ntt::forward_ntt_to_montgomery_compact_);
   m.impl("forward_ntt_to_montgomery_compact",
          &fhelium::ntt::forward_ntt_to_montgomery_compact);
+  m.impl("forward_ntt_to_montgomery_compact_out",
+         &fhelium::ntt::forward_ntt_to_montgomery_compact_out);
   m.impl("forward_ntt_to_montgomery_compact_add_scaled_",
          &fhelium::ntt::forward_ntt_to_montgomery_compact_add_scaled_);
   m.impl("forward_ntt_montgomery_compact_keyswitch_accumulate_",
@@ -182,6 +202,9 @@ TORCH_LIBRARY_IMPL(fhelium_ntt_ops, CUDA, m) {
          &fhelium::ntt::forward_ntt_to_montgomery_power_of_two_radix_compact_);
   m.impl("forward_ntt_to_montgomery_power_of_two_radix_compact",
          &fhelium::ntt::forward_ntt_to_montgomery_power_of_two_radix_compact);
+  m.impl(
+      "forward_ntt_to_montgomery_power_of_two_radix_compact_out",
+      &fhelium::ntt::forward_ntt_to_montgomery_power_of_two_radix_compact_out);
   m.impl("inverse_ntt_montgomery_indexed_",
          &fhelium::ntt::inverse_ntt_montgomery_indexed_);
   m.impl("inverse_ntt_to_standard_lazy_indexed_",

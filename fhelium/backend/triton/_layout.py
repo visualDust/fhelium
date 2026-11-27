@@ -75,7 +75,9 @@ def result_layout(
     reduction = structure.reduction
     if reduction is not None and reduction.stacked is not None:
         # The leading term axis of a stacked operand is reduced away.
-        position = structure.operands("data", "compact").index(reduction.stacked)
+        position = structure.operands("data", "compact").index(
+            reduction.stacked
+        )
         stacked = shapes[position]
         shapes = list(shapes)
         shapes[position] = None if stacked is None else stacked[1:]

@@ -39,17 +39,31 @@ from ._types import (
 )
 
 
+GALOIS_TABLE_DTYPES = {
+    'ntt_indices': 'int32',
+    'coefficient_indices': 'int32',
+    'coefficient_signs': 'int8',
+}
+"""Slots of the native Galois table family of one element and their dtypes."""
+
+
 def galois_tables(
     compilation,
     operation: Operation,
     config: CkksConfig,
     galois_element: int,
     device: Attribute | None,
-) -> tuple[tuple[core.MaterialRefOp, ...], tuple[SSAValue, SSAValue]]:
-    """Declare the coefficient gather and sign Tensors of $\\sigma_g$."""
+    names: tuple[str, ...] = ('coefficient_indices', 'coefficient_signs'),
+) -> tuple[tuple[core.MaterialRefOp, ...], tuple[SSAValue, ...]]:
+    """Declare the Galois table Tensors ``names`` of $\\sigma_g$.
+
+    The NTT-domain permutation and the coefficient gather indices and signs
+    are the slots of the native ``galois`` table family.
+    """
     created: list[core.MaterialRefOp] = []
     values = []
-    for name, dtype in (('source_indices', 'int32'), ('source_sign', 'int8')):
+    for name in names:
+        dtype = GALOIS_TABLE_DTYPES[name]
         state: dict[str, Attribute] = {'dtype': StringAttr(f'torch.{dtype}')}
         if isinstance(device, StringAttr):
             state['device'] = device
@@ -68,7 +82,7 @@ def galois_tables(
         )
         created.extend(references)
         values.append(value)
-    return tuple(created), (values[0], values[1])
+    return tuple(created), tuple(values)
 
 
 class _KeySwitchLowering:
@@ -577,12 +591,13 @@ class _KeySwitchLowering:
     def rotation_components(self) -> tuple[SSAValue, SSAValue]:
         value = self.value
         if isinstance(self.operation, ckks.RotateOp):
+            element = rotation_galois_element(
+                self.config.N,
+                int(self.operation.rotation_step.value.data),
+                self.config.galois_generator,
+            )
             if self.operation.input_domain.data == 'ntt':
-                indices = self.tensors.get('rotation_indices')
-                if indices is None:
-                    raise ValueError(
-                        'NTT rotation lowering requires supplied permutation indices'
-                    )
+                (indices,) = self.galois(element, ('ntt_indices',))
                 value = self.emit(
                     ntt.AutomorphismOp(
                         value,
@@ -595,26 +610,22 @@ class _KeySwitchLowering:
                 return c0, self.transform(
                     c1, inverse=True, basis='q', typ=self.polynomial()
                 )
-            value = self.automorphism(
-                value,
-                rotation_galois_element(
-                    self.config.N,
-                    int(self.operation.rotation_step.value.data),
-                    self.config.galois_generator,
-                ),
-            )
+            value = self.automorphism(value, element)
         elif isinstance(self.operation, ckks.ConjugateOp):
             value = self.automorphism(value, 2 * self.config.N - 1)
         d0, d1 = (self.extract(value, i) for i in range(2))
         return (d0, d1)
 
-    def automorphism(self, value: SSAValue, galois_element: int) -> SSAValue:
-        created, (indices, sign) = galois_tables(
+    def galois(
+        self, galois_element: int, names: tuple[str, ...]
+    ) -> tuple[SSAValue, ...]:
+        created, values = galois_tables(
             self.compilation,
             self.operation,
             self.config,
             galois_element,
             self.source_type.state.data.get('device'),
+            names,
         )
         self.operations.extend(created)
         for reference in created:
@@ -623,6 +634,12 @@ class _KeySwitchLowering:
                 dict[str, object],
                 self.compilation.program.material_description(symbol),
             )
+        return values
+
+    def automorphism(self, value: SSAValue, galois_element: int) -> SSAValue:
+        indices, sign = self.galois(
+            galois_element, ('coefficient_indices', 'coefficient_signs')
+        )
         return self.emit(
             rns.CoefficientAutomorphismOp(
                 value,

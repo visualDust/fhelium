@@ -88,13 +88,13 @@ Do not benchmark only depth zero if production work mostly occurs near the end o
 Run:
 
 ```bash
-python examples/07_eager_batching.py \
+python examples/06_eager_batching.py \
   --preset slots32768-scale40-depth34 --depth 0 --batch-sizes 1,4,8
 
-python examples/07_eager_batching.py \
+python examples/06_eager_batching.py \
   --preset slots32768-scale40-depth34 --depth 20 --batch-sizes 1,4,8
 
-python examples/07_eager_batching.py \
+python examples/06_eager_batching.py \
   --preset slots32768-scale40-depth34 --depth 30 --batch-sizes 1,4,8
 ```
 
@@ -102,7 +102,7 @@ Repeat enough times for stable medians. If the production evaluator uses CUDA Gr
 
 ## Reference measurement: RTX PRO 6000 Blackwell
 
-The following data is a dated historical worked example for the measured platform and workload. It preserves the original FHElium 0.20-era values and configuration rather than representing the current benchmark catalog. The page does not retain the PRO 6000 run's source commit or complete software provenance, so use it as context and rerun the workload before making a deployment decision.
+The following data is a dated historical worked example for the measured platform and workload. It preserves the original FHElium 0.20-era values and configuration rather than representing the current benchmark catalog. Those runs evaluated the 8-by-8 product with one rotation per cyclic diagonal; the current example uses the baby-step giant-step schedule of `fhelium.algorithms.linear`, which needs fewer rotations. The page does not retain the PRO 6000 run's source commit or complete software provenance, so use it as context and rerun the workload before making a deployment decision.
 
 | Field | Reference value |
 | --- | --- |
@@ -256,4 +256,4 @@ Choose the smallest batch that meets the application’s throughput target witho
 - [Homogeneous batching tutorial](../tutorial/homogeneous-batching.md)
 - [CKKS workload cost model](../concepts/performance/cost-model.md)
 - [Benchmark methodology](/benchmarks/methodology)
-- [Optimize a workload systematically](optimize-workload.md)
+- [Measure and optimize a workload](measure-and-optimize.md)

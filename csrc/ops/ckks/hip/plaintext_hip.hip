@@ -17,9 +17,9 @@ namespace {
 // form supplies [*batch, limb] implicit values. rns_params is
 // [parameter, limb] in the same prime_ids order. The kernel computes
 // $c'_{0,i}=c_{0,i}+p_i\bmod q_i$ and returns standard residues in [0, q_i).
-// Functional output does not alias; underscore variants mutate only ciphertext
-// storage. Plaintext/tables are read-only. Only a genuinely unbatched plaintext
-// may broadcast across public batch; limb/coefficient axes never broadcast.
+// The output is the ciphertext component itself or storage-disjoint from it.
+// Plaintext/tables are read-only. Only a genuinely unbatched plaintext may
+// broadcast across public batch; limb/coefficient axes never broadcast.
 
 template <typename scalar_t>
 __device__ __forceinline__ scalar_t
@@ -145,11 +145,11 @@ void validate_add_prepared_plaintext(const torch::Tensor& ciphertext,
       ciphertext, params, "ckks_add_prepared_plaintext_component");
 }
 
-torch::Tensor ckks_add_prepared_plaintext_component_hip(
+void ckks_add_prepared_plaintext_component_out_hip(
     const torch::Tensor ciphertext_component,
     const torch::Tensor prepared_plaintext,
-    const torch::Tensor rns_params) {
-  auto out = torch::empty_like(ciphertext_component);
+    const torch::Tensor rns_params,
+    torch::Tensor out) {
   const auto ciphertext_rows =
       view_rns_batch_3d(ciphertext_component, "ciphertext_component");
   const auto plaintext_rows =
@@ -162,25 +162,6 @@ torch::Tensor ckks_add_prepared_plaintext_component_hip(
       [&] {
         launch_ckks_add_prepared_plaintext_component_hip<scalar_t>(
             out_rows, ciphertext_rows, plaintext_rows, rns_params);
-      });
-  return out;
-}
-
-void ckks_add_prepared_plaintext_component_inplace_hip(
-    torch::Tensor ciphertext_component,
-    const torch::Tensor prepared_plaintext,
-    const torch::Tensor rns_params) {
-  auto ciphertext_rows =
-      view_rns_batch_3d(ciphertext_component, "ciphertext_component");
-  const auto plaintext_rows =
-      view_rns_batch_3d(prepared_plaintext, "prepared_plaintext");
-  validate_add_prepared_plaintext(ciphertext_rows, plaintext_rows, rns_params);
-  AT_DISPATCH_INTEGRAL_TYPES(
-      ciphertext_component.scalar_type(),
-      "ckks_add_prepared_plaintext_component_inplace",
-      [&] {
-        launch_ckks_add_prepared_plaintext_component_hip<scalar_t>(
-            ciphertext_rows, ciphertext_rows, plaintext_rows, rns_params);
       });
 }
 
@@ -220,12 +201,12 @@ void launch_ckks_add_compressed_plaintext_component_hip(
 }
 
 template <RepetitionLayout layout>
-torch::Tensor add_compressed_plaintext_component(
+void add_compressed_plaintext_component_out(
     const torch::Tensor ciphertext_component,
     const torch::Tensor compressed_plaintext,
     const torch::Tensor rns_params,
+    torch::Tensor out,
     const char* operation_name) {
-  auto out = torch::empty_like(ciphertext_component);
   const auto ciphertext_rows =
       view_rns_batch_3d(ciphertext_component, "ciphertext_component");
   const auto plaintext_rows =
@@ -240,72 +221,32 @@ torch::Tensor add_compressed_plaintext_component(
         launch_ckks_add_compressed_plaintext_component_hip<scalar_t, layout>(
             out_rows, ciphertext_rows, plaintext_rows, rns_params);
       });
-  return out;
 }
 
-template <RepetitionLayout layout>
-void add_compressed_plaintext_component_inplace(
-    torch::Tensor ciphertext_component,
-    const torch::Tensor compressed_plaintext,
-    const torch::Tensor rns_params,
-    const char* operation_name) {
-  auto ciphertext_rows =
-      view_rns_batch_3d(ciphertext_component, "ciphertext_component");
-  const auto plaintext_rows =
-      view_rns_batch_3d(compressed_plaintext, "compressed_plaintext");
-  validate_add_compressed_plaintext(
-      ciphertext_rows, plaintext_rows, rns_params, operation_name);
-  AT_DISPATCH_INTEGRAL_TYPES(
-      ciphertext_component.scalar_type(),
-      "ckks_add_compressed_plaintext_component_inplace",
-      [&] {
-        launch_ckks_add_compressed_plaintext_component_hip<scalar_t, layout>(
-            ciphertext_rows, ciphertext_rows, plaintext_rows, rns_params);
-      });
-}
-
-torch::Tensor ckks_add_cyclic_compressed_plaintext_component_hip(
+void ckks_add_cyclic_compressed_plaintext_component_out_hip(
     const torch::Tensor ciphertext_component,
     const torch::Tensor compressed_plaintext,
-    const torch::Tensor rns_params) {
-  return add_compressed_plaintext_component<RepetitionLayout::kCyclic>(
+    const torch::Tensor rns_params,
+    torch::Tensor out) {
+  add_compressed_plaintext_component_out<RepetitionLayout::kCyclic>(
       ciphertext_component,
       compressed_plaintext,
       rns_params,
+      out,
       "ckks_add_cyclic_compressed_plaintext_component");
 }
 
-void ckks_add_cyclic_compressed_plaintext_component_inplace_hip(
-    torch::Tensor ciphertext_component,
-    const torch::Tensor compressed_plaintext,
-    const torch::Tensor rns_params) {
-  add_compressed_plaintext_component_inplace<RepetitionLayout::kCyclic>(
-      ciphertext_component,
-      compressed_plaintext,
-      rns_params,
-      "ckks_add_cyclic_compressed_plaintext_component_inplace");
-}
-
-torch::Tensor ckks_add_contiguous_compressed_plaintext_component_hip(
+void ckks_add_contiguous_compressed_plaintext_component_out_hip(
     const torch::Tensor ciphertext_component,
     const torch::Tensor compressed_plaintext,
-    const torch::Tensor rns_params) {
-  return add_compressed_plaintext_component<RepetitionLayout::kContiguous>(
+    const torch::Tensor rns_params,
+    torch::Tensor out) {
+  add_compressed_plaintext_component_out<RepetitionLayout::kContiguous>(
       ciphertext_component,
       compressed_plaintext,
       rns_params,
+      out,
       "ckks_add_contiguous_compressed_plaintext_component");
-}
-
-void ckks_add_contiguous_compressed_plaintext_component_inplace_hip(
-    torch::Tensor ciphertext_component,
-    const torch::Tensor compressed_plaintext,
-    const torch::Tensor rns_params) {
-  add_compressed_plaintext_component_inplace<RepetitionLayout::kContiguous>(
-      ciphertext_component,
-      compressed_plaintext,
-      rns_params,
-      "ckks_add_contiguous_compressed_plaintext_component_inplace");
 }
 
 void validate_add_strided_plaintext(const torch::Tensor& ciphertext,
@@ -363,12 +304,12 @@ void launch_ckks_add_strided_plaintext_component_hip(
           support_shift);
 }
 
-torch::Tensor ckks_add_strided_plaintext_component_hip(
+void ckks_add_strided_plaintext_component_out_hip(
     const torch::Tensor ciphertext_component,
     const torch::Tensor strided_plaintext,
     const torch::Tensor implicit_plaintext,
-    const torch::Tensor rns_params) {
-  auto out = torch::empty_like(ciphertext_component);
+    const torch::Tensor rns_params,
+    torch::Tensor out) {
   const auto ciphertext_rows =
       view_rns_batch_3d(ciphertext_component, "ciphertext_component");
   const auto plaintext_rows =
@@ -389,101 +330,49 @@ torch::Tensor ckks_add_strided_plaintext_component_hip(
             implicit_rows,
             rns_params);
       });
-  return out;
-}
-
-void ckks_add_strided_plaintext_component_inplace_hip(
-    torch::Tensor ciphertext_component,
-    const torch::Tensor strided_plaintext,
-    const torch::Tensor implicit_plaintext,
-    const torch::Tensor rns_params) {
-  auto ciphertext_rows =
-      view_rns_batch_3d(ciphertext_component, "ciphertext_component");
-  const auto plaintext_rows =
-      view_rns_batch_3d(strided_plaintext, "strided_plaintext");
-  const auto implicit_rows =
-      view_coefficient_batch_2d(implicit_plaintext, "implicit_plaintext");
-  validate_add_strided_plaintext(
-      ciphertext_rows, plaintext_rows, implicit_rows, rns_params);
-  AT_DISPATCH_INTEGRAL_TYPES(
-      ciphertext_component.scalar_type(),
-      "ckks_add_strided_plaintext_component_inplace",
-      [&] {
-        launch_ckks_add_strided_plaintext_component_hip<scalar_t>(
-            ciphertext_rows,
-            ciphertext_rows,
-            plaintext_rows,
-            implicit_rows,
-            rns_params);
-      });
 }
 
 }  // namespace
 
 namespace fhelium::ckks::gpu {
 
-at::Tensor add_prepared_plaintext_component(
+void add_prepared_plaintext_component_out(
     const at::Tensor& ciphertext_component,
     const at::Tensor& prepared_plaintext,
-    const at::Tensor& rns_params) {
-  return ::ckks_add_prepared_plaintext_component_hip(
-      ciphertext_component, prepared_plaintext, rns_params);
+    const at::Tensor& rns_params,
+    at::Tensor& out) {
+  ::ckks_add_prepared_plaintext_component_out_hip(
+      ciphertext_component, prepared_plaintext, rns_params, out);
 }
 
-void add_prepared_plaintext_component_(at::Tensor& ciphertext_component,
-                                       const at::Tensor& prepared_plaintext,
-                                       const at::Tensor& rns_params) {
-  ::ckks_add_prepared_plaintext_component_inplace_hip(
-      ciphertext_component, prepared_plaintext, rns_params);
-}
-
-at::Tensor add_cyclic_compressed_plaintext_component(
+void add_cyclic_compressed_plaintext_component_out(
     const at::Tensor& ciphertext_component,
     const at::Tensor& compressed_plaintext,
-    const at::Tensor& rns_params) {
-  return ::ckks_add_cyclic_compressed_plaintext_component_hip(
-      ciphertext_component, compressed_plaintext, rns_params);
+    const at::Tensor& rns_params,
+    at::Tensor& out) {
+  ::ckks_add_cyclic_compressed_plaintext_component_out_hip(
+      ciphertext_component, compressed_plaintext, rns_params, out);
 }
 
-void add_cyclic_compressed_plaintext_component_(
-    at::Tensor& ciphertext_component,
-    const at::Tensor& compressed_plaintext,
-    const at::Tensor& rns_params) {
-  ::ckks_add_cyclic_compressed_plaintext_component_inplace_hip(
-      ciphertext_component, compressed_plaintext, rns_params);
-}
-
-at::Tensor add_contiguous_compressed_plaintext_component(
+void add_contiguous_compressed_plaintext_component_out(
     const at::Tensor& ciphertext_component,
     const at::Tensor& compressed_plaintext,
-    const at::Tensor& rns_params) {
-  return ::ckks_add_contiguous_compressed_plaintext_component_hip(
-      ciphertext_component, compressed_plaintext, rns_params);
+    const at::Tensor& rns_params,
+    at::Tensor& out) {
+  ::ckks_add_contiguous_compressed_plaintext_component_out_hip(
+      ciphertext_component, compressed_plaintext, rns_params, out);
 }
 
-void add_contiguous_compressed_plaintext_component_(
-    at::Tensor& ciphertext_component,
-    const at::Tensor& compressed_plaintext,
-    const at::Tensor& rns_params) {
-  ::ckks_add_contiguous_compressed_plaintext_component_inplace_hip(
-      ciphertext_component, compressed_plaintext, rns_params);
-}
-
-at::Tensor add_strided_plaintext_component(
-    const at::Tensor& ciphertext_component,
-    const at::Tensor& strided_plaintext,
-    const at::Tensor& implicit_plaintext,
-    const at::Tensor& rns_params) {
-  return ::ckks_add_strided_plaintext_component_hip(
-      ciphertext_component, strided_plaintext, implicit_plaintext, rns_params);
-}
-
-void add_strided_plaintext_component_(at::Tensor& ciphertext_component,
-                                      const at::Tensor& strided_plaintext,
-                                      const at::Tensor& implicit_plaintext,
-                                      const at::Tensor& rns_params) {
-  ::ckks_add_strided_plaintext_component_inplace_hip(
-      ciphertext_component, strided_plaintext, implicit_plaintext, rns_params);
+void add_strided_plaintext_component_out(const at::Tensor& ciphertext_component,
+                                         const at::Tensor& strided_plaintext,
+                                         const at::Tensor& implicit_plaintext,
+                                         const at::Tensor& rns_params,
+                                         at::Tensor& out) {
+  ::ckks_add_strided_plaintext_component_out_hip(ciphertext_component,
+                                                 strided_plaintext,
+                                                 implicit_plaintext,
+                                                 rns_params,
+                                                 out);
 }
 
 }  // namespace fhelium::ckks::gpu

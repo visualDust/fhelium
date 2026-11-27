@@ -89,7 +89,9 @@ class ValueSignature:
             Device-independent value signature.
         """
 
-        return _value_signature_from_envelope(ValueEnvelope.from_value(value))
+        return _value_signature_from_envelope(
+            ValueEnvelope.from_value(value, compact_keys=False)
+        )
 
 
 def _value_signature_from_envelope(envelope: ValueEnvelope) -> ValueSignature:
@@ -190,7 +192,7 @@ def _build_value_tree_signature(
     """Compile one tree, optionally retaining its already-inspected leaves."""
 
     if isinstance(value, TensorResident):
-        envelope = ValueEnvelope.from_value(value)
+        envelope = ValueEnvelope.from_value(value, compact_keys=False)
         if not envelope.tensors:
             raise ValueError(
                 f"Dynamic {type(value).__name__} value has no resident tensors"
@@ -253,7 +255,7 @@ def _collect_matching_tensors(
     if signature.kind == "value":
         if not isinstance(value, TensorResident):
             _structure_mismatch(path, signature, value)
-        envelope = ValueEnvelope.from_value(value)
+        envelope = ValueEnvelope.from_value(value, compact_keys=False)
         expected = signature.leaf
         if not isinstance(expected, ValueSignature):
             raise RuntimeError("Value tree has an invalid value signature")

@@ -19,7 +19,6 @@ __pycache__/
 
 # C extensions
 *.so
-/fhelium/native/torchops/_ops*.pyd
 /fhelium/native/cuda/cuda_info*.pyd
 fhelium/native/torchops/_build_manifest.*.json
 

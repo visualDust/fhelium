@@ -12,7 +12,7 @@ The Developer Guide explains FHElium's implementation mechanisms: public value s
   />
   <DocCard
     title="Source tree and ownership"
-    description="Locate the source owner for a mechanism, including material preparation, host execution, arithmetic, runtime, and persistence."
+    description="Locate the source owner for a mechanism, including material preparation, linking and the Runner, arithmetic, runtime, and persistence."
     href="/developer/source-tree"
   />
 </DocGrid>
@@ -22,15 +22,14 @@ The Developer Guide explains FHElium's implementation mechanisms: public value s
 | Implementation question | Article |
 | --- | --- |
 | How does an immediate operation update CKKS state and dispatch Tensor payloads? | [Values, operation semantics, and Eager dispatch](compiler-state-and-eager-execution.md) |
-| How are computation, partial state, effects, and captured Python represented? | [IR, capture, effects, and open state](compiler-stack-internals.md) |
-| What does each pass receive, and how is the common pipeline composed? | [Compilation state and pass composition](compilation-and-passes.md) |
+| How are computation, partial state, effects, and captured Python represented, and how are passes composed over them? | [IR, capture, and passes](ir-capture-and-passes.md) |
 | How are keys, tables, and execution handles prepared and bound? | [Tensor materials and operation preparation](materials-and-preparation.md) |
 | How do operation declarations, lowerings, and implementation choices connect? | [Operation registration and implementation selection](operation-registration-and-selection.md) |
-| How does linking generate host calls, and how do callable specializations reuse them? | [Linking and prepared host execution](prepared-host-execution.md) |
+| How does linking build exec schedules and Runners, and how do callable specializations reuse them? | [Linking, exec schedules, and the Runner](linking-and-runner.md) |
 | How are SSA regions transformed into pointwise and NTT kernels? | [Generated kernels, fusion, and NTT execution](compiled-execution-and-kernels.md) |
 | Where is an operation family's numerical implementation? | [IR operations and implementations](ir-operation-implementation-index.md) |
 
-For executable tasks, use [evaluate CKKS data](../how-to/evaluate-ckks-data.md), [build a Program pipeline](../how-to/build-program-pipeline.md), or [compile a callable](../how-to/compile-callable.md). These routes share the mechanisms documented here.
+For executable tasks, use [the basic CKKS workflow](../tutorial/basic-ckks-workflow.md), [build a Program pipeline](../how-to/build-program-pipeline.md), or [compile a callable](../how-to/compile-callable.md). These routes share the mechanisms documented here.
 
 ## Security
 
@@ -50,9 +49,10 @@ For executable tasks, use [evaluate CKKS data](../how-to/evaluate-ckks-data.md),
 
 | Implementation question | Article |
 | --- | --- |
-| What Program and Tensor state survives serialization, and what must be rebound? | [Compilation persistence and rebinding](compilation-persistence.md) |
-| How are persistent values cataloged, published, recovered, and retired? | [ArtifactStore internals](artifact-store-v1.md) |
-| How are stable buffers, asynchronous copies, and CUDA Graph output lifetimes managed? | [Execution buffers and CUDA Graphs](execution-buffers-and-cuda-graphs.md) |
+| What Program and Tensor state survives serialization, and how does the compile cache store specializations? | [Program files and the compile cache](compilation-persistence.md) |
+| How does an exported artifact encode schedules, kernels, and materials? | [Compiled artifact format](compiled-artifact-format.md) |
+| How are persistent values cataloged, published, recovered, and retired? | [ValueStore format](value-store-v1.md) |
+| How do Runners plan Graph segments, arenas, and result storage, and how are stable buffers and manual captures managed? | [Execution buffers and CUDA Graphs](execution-buffers-and-cuda-graphs.md) |
 | How are live values, replicas, reconstruction sources, and ownership represented? | [Residency state and ownership](residency-state-and-ownership.md) |
 | How do leases, reservations, plans, and admission decisions become transitions? | [Residency plans and execution](residency-plans-and-execution.md) |
 | How do rank-local IR, descriptors, payload transport, and reductions execute? | [Distributed internals](distributed-internals.md) |
