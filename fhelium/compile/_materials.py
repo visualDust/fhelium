@@ -929,6 +929,16 @@ def _resolve_key_layouts(
 
     if references is None:
         references = _collect_key_references(compilation.program)
+    if symbols is not None:
+        # A caller resolving one operation's materials selects a few symbols out
+        # of every key reference in the Program. Selecting before the loop keeps
+        # that call proportional to the requested symbols instead of to the
+        # whole reference index.
+        references = {
+            symbol: candidates
+            for symbol, candidates in references.items()
+            if symbol in symbols
+        }
     changed = 0
     for symbol, candidates in references.items():
         if symbols is not None and symbol not in symbols:
