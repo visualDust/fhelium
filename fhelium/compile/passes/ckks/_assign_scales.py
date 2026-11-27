@@ -15,8 +15,9 @@ from ..._pipeline import (
 
 import math
 from dataclasses import dataclass, field
+from functools import lru_cache
 
-from xdsl.dialects.builtin import Float64Type, FloatAttr, IntegerAttr
+from xdsl.dialects.builtin import FloatAttr, IntegerAttr
 from xdsl.dialects.func import ReturnOp
 from xdsl.dialects.builtin import UnrealizedConversionCastOp
 from xdsl.ir import Attribute, SSAValue
@@ -25,7 +26,11 @@ from xdsl.rewriter import Rewriter
 from fhelium.config import CkksConfig
 from fhelium.ir import value_role
 from fhelium.ir.dialects import ckks
-from fhelium.ir.dialects._common import OpenStateType
+from fhelium.ir.dialects._common import (
+    OpenStateType,
+    attribute_key,
+    interned_attribute,
+)
 from ._transition_state import is_same_dialect_ckks_cast
 
 
@@ -66,8 +71,19 @@ def _positive_scale(value: object, *, label: str) -> float:
     return scale
 
 
+@lru_cache(maxsize=4096)
 def _scale_attribute(scale: float) -> FloatAttr:
-    return FloatAttr(scale, Float64Type())
+    """Return one shared FloatAttr for a validated actual scale.
+
+    A Program reuses few distinct scales, so interning keeps repeated state
+    updates equal to directly constructed attributes without re-verifying a
+    Float64 attribute for every operand.
+    """
+
+    attribute = interned_attribute(attribute_key(scale))
+    if not isinstance(attribute, FloatAttr):
+        raise TypeError("CKKS scale must be represented by a float attribute")
+    return attribute
 
 
 def _replace_scale(

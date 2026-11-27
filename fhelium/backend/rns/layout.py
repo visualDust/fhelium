@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 
 from fhelium.config.ckks import CkksConfig
 
@@ -89,14 +90,12 @@ class RnsLayout:
     def from_config(cls, config: CkksConfig) -> RnsLayout:
         """Build Q depth bases and hybrid digits from CKKS parameters."""
 
-        chain = RnsChain(
-            num_q_primes=config.num_q_primes,
-            num_p_primes=config.num_p_primes,
-            basis_rows=config.q_bases,
-        )
-        return cls(
-            chain,
-            HybridRnsDecomposition(chain, config.q_moduli, config.p_moduli),
+        return _layout_for_parameters(
+            config.num_q_primes,
+            config.num_p_primes,
+            tuple(config.q_bases),
+            tuple(config.q_moduli),
+            tuple(config.p_moduli),
         )
 
     def _build_digit_specs(self, depth: int) -> tuple[RnsDigitSpec, ...]:
@@ -219,3 +218,30 @@ class RnsLayout:
         )
 
     __repr__ = __str__
+
+
+@lru_cache(maxsize=32)
+def _layout_for_parameters(
+    num_q_primes: int,
+    num_p_primes: int,
+    basis_rows: tuple[tuple[int, ...], ...],
+    q_moduli: tuple[int, ...],
+    p_moduli: tuple[int, ...],
+) -> RnsLayout:
+    """Build one immutable layout from the chain parameters it derives from.
+
+    A layout depends only on these values, and callers that repeat a
+    placement-independent derivation (material resolution does so once per
+    operation) would otherwise rebuild the same chain and hybrid digits. The
+    result is immutable after construction, so sharing one instance is safe.
+    """
+
+    chain = RnsChain(
+        num_q_primes=num_q_primes,
+        num_p_primes=num_p_primes,
+        basis_rows=basis_rows,
+    )
+    return RnsLayout(
+        chain,
+        HybridRnsDecomposition(chain, q_moduli, p_moduli),
+    )

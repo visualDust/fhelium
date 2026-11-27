@@ -14,6 +14,7 @@ from ..._pipeline import (
 )
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 from xdsl.dialects.builtin import (
     ArrayAttr,
@@ -27,7 +28,11 @@ from xdsl.rewriter import Rewriter
 from fhelium.config import CkksConfig
 from fhelium.ir import value_role
 from fhelium.ir.dialects import ckks
-from fhelium.ir.dialects._common import OpenStateType
+from fhelium.ir.dialects._common import (
+    OpenStateType,
+    attribute_key,
+    interned_attribute,
+)
 from ._transition_state import is_same_dialect_ckks_cast
 
 
@@ -70,13 +75,30 @@ def _prime_ids(config: CkksConfig, depth: int) -> tuple[int, ...]:
     return config.q_prime_ids(depth)
 
 
-def _depth_state(config: CkksConfig, depth: int) -> dict[str, Attribute]:
-    return {
-        "depth": IntegerAttr(depth, 64),
-        "prime_ids": ArrayAttr(
-            IntegerAttr(prime_id, 64) for prime_id in _prime_ids(config, depth)
+@lru_cache(maxsize=256)
+def _depth_attributes(
+    q_bases: tuple[tuple[int, ...], ...], depth: int
+) -> tuple[Attribute, ...]:
+    """Return the shared depth and active-prime attributes of one chain depth.
+
+    Every assignment of a given depth represents the same two facts. The cache
+    is keyed by the depth bases themselves rather than by a ``CkksConfig``
+    instance: configurations compare by identity, so separate parses of equal
+    parameters would each miss while pinning their configuration alive forever.
+    Entries are built through :func:`interned_attribute`, which makes them equal
+    to directly constructed attributes while avoiding IRDL verification on
+    every reuse.
+    """
+
+    return (
+        interned_attribute(attribute_key(depth)),
+        ArrayAttr(
+            tuple(
+                interned_attribute(attribute_key(prime_id))
+                for prime_id in q_bases[depth]
+            )
         ),
-    }
+    )
 
 
 def _type_with_depth(
@@ -90,10 +112,14 @@ def _type_with_depth(
         raise TypeError(
             f"CKKS depth cannot be represented on {value_type.name!r}"
         )
+    depth_attribute, prime_ids = _depth_attributes(
+        tuple(config.q_bases), depth
+    )
     return value_type.with_state(
         {
             **({} if copied_state is None else copied_state),
-            **_depth_state(config, depth),
+            "depth": depth_attribute,
+            "prime_ids": prime_ids,
         }
     )
 
@@ -318,7 +344,9 @@ class AssignCkksDepthsPass:
                             target_depth,
                         ),
                         attributes={
-                            "target_depth": IntegerAttr(target_depth, 64)
+                            "target_depth": interned_attribute(
+                                attribute_key(target_depth)
+                            )
                         },
                     )
                     switched.result.name_hint = (
